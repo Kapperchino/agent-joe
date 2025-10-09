@@ -1,6 +1,7 @@
 use ra_ap_hir::sym::bool;
 use reqwest::{Client, StatusCode, header};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::time::Duration;
 use thiserror::Error;
 
@@ -111,6 +112,45 @@ pub enum ContentBlock {
     MessageBlock(MessageBlock),
     ThinkingBlock(ThinkingBlock),
 }
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct Tool {
+    pub name: String,
+    pub description: String,
+    pub input_schema: ToolSchemaDTO,
+}
+
+// a list of this gets converted to hashmap
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct ToolSchemaDTO {
+    #[serde(rename = "type")]
+    pub tool_type: String,
+    pub properties: HashMap<String, ToolPropertyDTO>,
+    pub required: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ToolSchema {
+    pub name: String,
+    pub tool_type: String,
+    pub properties: Vec<ToolProperty>,
+}
+
+// a list of this gets converted to hashmap
+#[derive(Debug, Clone)]
+pub struct ToolProperty {
+    pub name: String,
+    pub prop_type: String,
+    pub description: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct ToolPropertyDTO {
+    #[serde(rename = "type")]
+    pub prop_type: String,
+    pub description: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct ClaudeConfig {
     pub api_key: String,
@@ -118,6 +158,7 @@ pub struct ClaudeConfig {
     pub max_tokens: u32,
     pub temperature: Option<f32>,
     pub timeout: Duration,
+    pub tools: Vec<Tool>,
 }
 
 impl Default for ClaudeConfig {
@@ -128,6 +169,7 @@ impl Default for ClaudeConfig {
             max_tokens: 30000,
             temperature: Some(1.0),
             timeout: Duration::from_secs(60),
+            tools: vec![],
         }
     }
 }
