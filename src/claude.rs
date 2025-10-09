@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use std::time::Duration;
 use thiserror::Error;
 
-/// Claude API client errors
 #[derive(Error, Debug)]
 pub enum ClaudeError {
     #[error("HTTP request failed: {0}")]
@@ -54,6 +53,8 @@ pub struct ChatRequest {
     pub temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<Thinking>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<Tool>,
 }
 #[derive(Debug, Serialize)]
 pub struct Thinking {
@@ -105,12 +106,22 @@ pub struct ThinkingBlock {
     #[serde(rename = "type")]
     pub content_type: String,
     pub thinking: String,
+    pub signature: String,
+}
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct ToolBlock {
+    #[serde(rename = "type")]
+    pub content_type: String,
+    pub id: String,
+    pub name: String,
+    pub input: HashMap<String, String>,
 }
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(untagged)]
 pub enum ContentBlock {
     MessageBlock(MessageBlock),
     ThinkingBlock(ThinkingBlock),
+    ToolBlock(ToolBlock),
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -120,12 +131,13 @@ pub struct Tool {
     pub input_schema: ToolSchemaDTO,
 }
 
-// a list of this gets converted to hashmap
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ToolSchemaDTO {
+    #[serde(skip)]
+    pub name: String,
     #[serde(rename = "type")]
     pub tool_type: String,
-    pub properties: HashMap<String, ToolPropertyDTO>,
+    pub properties: HashMap<String, ToolProperty>,
     pub required: Vec<String>,
 }
 
@@ -134,18 +146,13 @@ pub struct ToolSchema {
     pub name: String,
     pub tool_type: String,
     pub properties: Vec<ToolProperty>,
-}
-
-// a list of this gets converted to hashmap
-#[derive(Debug, Clone)]
-pub struct ToolProperty {
-    pub name: String,
-    pub prop_type: String,
-    pub description: String,
+    pub required: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct ToolPropertyDTO {
+pub struct ToolProperty {
+    #[serde(skip)]
+    pub name: String,
     #[serde(rename = "type")]
     pub prop_type: String,
     pub description: String,
@@ -180,63 +187,13 @@ pub struct ClaudeClient {
     config: ClaudeConfig,
     base_url: String,
 }
-impl ChatRequest {
-    fn new(messages: Vec<Message>, model: String, max_tokens: u32) -> ChatRequest {
-        ChatRequest {
-            model,
-            max_tokens,
-            messages,
-            system: None,
-            temperature: None,
-            thinking: None,
-        }
-    }
-
-    fn with_model(self, model: String) -> ChatRequest {
-        ChatRequest {
-            model,
-            max_tokens: self.max_tokens,
-            messages: self.messages,
-            system: self.system,
-            temperature: self.temperature,
-            thinking: self.thinking,
-        }
-    }
-
-    fn with_system(self, system: Option<String>) -> ChatRequest {
-        ChatRequest {
-            model: self.model,
-            max_tokens: self.max_tokens,
-            messages: self.messages,
-            system,
-            temperature: self.temperature,
-            thinking: self.thinking,
-        }
-    }
-
-    fn with_thinking(self, think: bool) -> ChatRequest {
-        ChatRequest {
-            model: self.model,
-            max_tokens: self.max_tokens,
-            messages: self.messages,
-            system: self.system,
-            temperature: self.temperature,
-            thinking: match think {
-                true => Some(Thinking {
-                    thinking_type: ThinkingType::Enabled,
-                    budget_tokens: 1024,
-                }),
-                false => None,
-            },
-        }
-    }
-}
 
 pub struct ClientRequest {
     messages: Vec<Message>,
     thinking: bool,
     system: Option<String>,
     model: Option<String>,
+    tools: Vec<Tool>,
 }
 
 impl ClientRequest {
@@ -246,6 +203,7 @@ impl ClientRequest {
             thinking: false,
             system: None,
             model: None,
+            tools: vec![],
         }
     }
 
@@ -255,15 +213,27 @@ impl ClientRequest {
             thinking: true,
             system: self.system,
             model: self.model,
+            tools: self.tools,
         }
     }
 
     pub fn with_model(self, model: String) -> ClientRequest {
         ClientRequest {
             messages: self.messages,
-            thinking: true,
+            thinking: self.thinking,
             system: self.system,
             model: Some(model),
+            tools: self.tools,
+        }
+    }
+
+    pub fn with_tools(self, tools: Vec<Tool>) -> ClientRequest {
+        ClientRequest {
+            messages: self.messages,
+            thinking: self.thinking,
+            system: self.system,
+            model: self.model,
+            tools,
         }
     }
 }
@@ -303,14 +273,22 @@ impl ClaudeClient {
         })
     }
     pub async fn chat(&self, req: ClientRequest) -> ClaudeResult<ChatResponse> {
-        let chat_req = ChatRequest::new(
-            req.messages,
-            req.model.unwrap_or(self.config.model.clone()),
-            self.config.max_tokens,
-        )
-        .with_system(req.system)
-        .with_thinking(req.thinking);
-        self.send_request(chat_req).await
+        let inner_req = ChatRequest {
+            model: req.model.unwrap_or(self.config.model.clone()),
+            max_tokens: self.config.max_tokens,
+            messages: req.messages,
+            system: req.system,
+            temperature: self.config.temperature,
+            thinking: match req.thinking {
+                true => Some(Thinking {
+                    thinking_type: ThinkingType::Enabled,
+                    budget_tokens: 1024,
+                }),
+                false => None,
+            },
+            tools: req.tools,
+        };
+        self.send_request(inner_req).await
     }
 
     async fn send_request(&self, request: ChatRequest) -> ClaudeResult<ChatResponse> {

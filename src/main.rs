@@ -1,13 +1,16 @@
-mod actor;
 mod claude;
 mod tools;
 
-use crate::claude::{ClaudeClient, ClaudeConfig, ClientRequest, Message, Role};
+use crate::claude::{
+    ClaudeClient, ClaudeConfig, ClientRequest, Message, Role, Tool, ToolProperty, ToolSchema,
+    ToolSchemaDTO,
+};
 use log::LevelFilter;
 use ra_ap_ide::AnalysisHost;
 use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
 use ra_ap_project_model::CargoConfig;
 use simplelog::{ColorChoice, CombinedLogger, Config, TermLogger, TerminalMode};
+use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
 use tokio::main;
@@ -49,8 +52,26 @@ async fn main() {
     })
     .unwrap();
 
-    let req =
-        ClientRequest::new(vec![Message::new("Say Hellow world!".to_string())]).with_thinking();
+    let req = ClientRequest::new(vec![Message::new("Get me the temperature of Dubai please".to_string())])
+        .with_thinking()
+        .with_tools(vec![Tool {
+            name: "temperature".to_string(),
+            description: "get the temperature of the input city".to_string(),
+            input_schema: ToolSchemaDTO {
+                name: "city".to_string(),
+                tool_type: "object".to_string(),
+                properties: HashMap::from([(
+                    "city".to_string(),
+                    ToolProperty {
+                        name: "".to_string(),
+                        prop_type: "string".to_string(),
+                        description: "The city to get the temperature of, eg: Ashburn,VA"
+                            .to_string(),
+                    },
+                )]),
+                required: vec!["city".to_string()],
+            },
+        }]);
     let res = client.chat(req).await.unwrap();
     println!("{:?}", res)
     // actor::run().await
