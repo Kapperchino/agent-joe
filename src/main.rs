@@ -1,19 +1,18 @@
+mod actor;
 mod claude;
 mod tools;
 
-use crate::claude::{
-    ClaudeClient, ClaudeConfig, ClientRequest, Message, Role, Tool, ToolProperty, ToolSchema,
-    ToolSchemaDTO,
-};
+use crate::claude::{ClaudeClient, ClaudeConfig, ClientRequest, Delta, Message, StreamEvent};
 use log::LevelFilter;
 use ra_ap_ide::AnalysisHost;
-use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
+use ra_ap_load_cargo::{load_workspace_at, LoadCargoConfig, ProcMacroServerChoice};
 use ra_ap_project_model::CargoConfig;
 use simplelog::{ColorChoice, CombinedLogger, Config, TermLogger, TerminalMode};
-use std::collections::HashMap;
 use std::env;
+use std::io::Write;
 use std::path::PathBuf;
 use tokio::main;
+use tokio_stream::StreamExt;
 
 pub struct Project {
     pub host: AnalysisHost,
@@ -52,27 +51,31 @@ async fn main() {
     })
     .unwrap();
 
-    let req = ClientRequest::new(vec![Message::new("Get me the temperature of Dubai please".to_string())])
-        .with_thinking()
-        .with_tools(vec![Tool {
-            name: "temperature".to_string(),
-            description: "get the temperature of the input city".to_string(),
-            input_schema: ToolSchemaDTO {
-                name: "city".to_string(),
-                tool_type: "object".to_string(),
-                properties: HashMap::from([(
-                    "city".to_string(),
-                    ToolProperty {
-                        name: "".to_string(),
-                        prop_type: "string".to_string(),
-                        description: "The city to get the temperature of, eg: Ashburn,VA"
-                            .to_string(),
-                    },
-                )]),
-                required: vec!["city".to_string()],
+    let req = ClientRequest::new(vec![Message::new(
+        "Write me a funny story about rust".to_string(),
+    )]);
+
+    let mut stream = std::pin::pin!(client.chat_stream(req));
+
+    while let Some(event_result) = stream.next().await {
+        match event_result {
+            Ok(event) => match event {
+                StreamEvent::ContentBlockDelta { delta, .. } => {
+                    if let Delta::TextDelta { text } = delta {
+                        print!("{}", text);
+                        std::io::stdout().flush().unwrap();
+                    }
+                }
+                StreamEvent::MessageStop => {
+                    println!("\n\n[Stream complete]");
+                    break;
+                }
+                _ => {}
             },
-        }]);
-    let res = client.chat(req).await.unwrap();
-    println!("{:?}", res)
-    // actor::run().await
+            Err(e) => {
+                eprintln!("\nError: {:?}", e);
+                break;
+            }
+        }
+    }
 }

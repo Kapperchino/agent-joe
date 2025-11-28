@@ -1,9 +1,11 @@
-use ra_ap_hir::sym::bool;
-use reqwest::{Client, StatusCode, header};
+use async_stream::try_stream;
+use futures_core::Stream;
+use reqwest::{Client, header};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 use thiserror::Error;
+use tokio_stream::StreamExt;
 
 #[derive(Error, Debug)]
 pub enum ClaudeError {
@@ -56,6 +58,23 @@ pub struct ChatRequest {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<Tool>,
 }
+
+#[derive(Debug, Serialize)]
+struct ChatRequestStream {
+    pub model: String,
+    pub max_tokens: u32,
+    pub messages: Vec<Message>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<Thinking>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<Tool>,
+    pub stream: bool,
+}
+
 #[derive(Debug, Serialize)]
 pub struct Thinking {
     #[serde(rename = "type")]
@@ -122,6 +141,79 @@ pub enum ContentBlock {
     MessageBlock(MessageBlock),
     ThinkingBlock(ThinkingBlock),
     ToolBlock(ToolBlock),
+}
+
+// Streaming types
+#[derive(Debug, Deserialize, Clone)]
+#[serde(tag = "type")]
+pub enum StreamEvent {
+    #[serde(rename = "message_start")]
+    MessageStart { message: StreamMessage },
+    #[serde(rename = "content_block_start")]
+    ContentBlockStart {
+        index: usize,
+        content_block: ContentBlockInfo,
+    },
+    #[serde(rename = "content_block_delta")]
+    ContentBlockDelta { index: usize, delta: Delta },
+    #[serde(rename = "content_block_stop")]
+    ContentBlockStop { index: usize },
+    #[serde(rename = "message_delta")]
+    MessageDelta {
+        delta: MessageDeltaContent,
+        usage: UsageDelta,
+    },
+    #[serde(rename = "message_stop")]
+    MessageStop,
+    #[serde(rename = "ping")]
+    Ping,
+    #[serde(rename = "error")]
+    Error { error: ApiErrorDetail },
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct StreamMessage {
+    pub id: String,
+    pub model: String,
+    pub role: Role,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ContentBlockInfo {
+    #[serde(rename = "type")]
+    pub block_type: String,
+    #[serde(default)]
+    pub text: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(tag = "type")]
+pub enum Delta {
+    #[serde(rename = "text_delta")]
+    TextDelta { text: String },
+    #[serde(rename = "thinking_delta")]
+    ThinkingDelta { thinking: String },
+    #[serde(rename = "input_json_delta")]
+    InputJsonDelta { partial_json: String },
+    #[serde(rename = "signature_delta")]
+    SignatureDelta { signature: String },
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct MessageDeltaContent {
+    pub stop_reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct UsageDelta {
+    pub output_tokens: u32,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ApiErrorDetail {
+    #[serde(rename = "type")]
+    pub error_type: String,
+    pub message: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -297,5 +389,92 @@ impl ClaudeClient {
         let response = self.client.post(&url).json(&request).send().await?;
         let chat_response: ChatResponse = response.json().await?;
         Ok(chat_response)
+    }
+
+    pub fn chat_stream(
+        &self,
+        req: ClientRequest,
+    ) -> impl Stream<Item = ClaudeResult<StreamEvent>> + Send + 'static {
+        let url = format!("{}/messages", self.base_url);
+        let client = self.client.clone();
+
+        let request = ChatRequestStream {
+            model: req.model.unwrap_or_else(|| self.config.model.clone()),
+            max_tokens: self.config.max_tokens,
+            messages: req.messages,
+            system: req.system,
+            temperature: self.config.temperature,
+            thinking: if req.thinking {
+                Some(Thinking {
+                    thinking_type: ThinkingType::Enabled,
+                    budget_tokens: 1024,
+                })
+            } else {
+                None
+            },
+            tools: req.tools,
+            stream: true,
+        };
+
+        try_stream! {
+            let response = client
+                .post(&url)
+                .json(&request)
+                .send()
+                .await?;
+
+
+            let mut stream = response.bytes_stream();
+            let mut buffer = String::new();
+
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk?;
+                buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+                // Process complete SSE events from buffer
+                loop{
+                    let event = extract_sse_event(&mut buffer);
+
+                    if let Some(stream_event) = event? {
+                        yield stream_event;
+                    } else{
+                        break;
+                    }
+                };
+
+            }
+        }
+    }
+}
+
+fn extract_sse_event(buffer: &mut String) -> ClaudeResult<Option<StreamEvent>> {
+    let delimiter_pos = match buffer.find("\n\n") {
+        Some(pos) => pos,
+        None => return Ok(None),
+    };
+
+    let event_text = buffer[..delimiter_pos].to_string();
+    buffer.drain(..=delimiter_pos + 1);
+
+    let data_line = event_text.lines().fold(String::new(), |mut acc, line| {
+        let line = line.trim();
+        if let Some(data) = line.strip_prefix("data: ") {
+            acc.push_str(data);
+        }
+        acc
+    });
+
+    let data = match data_line.is_empty() {
+        true => return Ok(None),
+        false => data_line,
+    };
+
+    if data == "[DONE]" {
+        return Ok(None);
+    }
+
+    match serde_json::from_str::<StreamEvent>(data.as_str()) {
+        Ok(event) => Ok(Some(event)),
+        Err(e) => Err(ClaudeError::Serialization(e)),
     }
 }
