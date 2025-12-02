@@ -431,17 +431,9 @@ impl ClaudeClient {
                 let chunk = chunk?;
                 buffer.push_str(&String::from_utf8_lossy(&chunk));
 
-                // Process complete SSE events from buffer
-                loop{
-                    let event = extract_sse_event(&mut buffer);
-
-                    if let Some(stream_event) = event? {
-                        yield stream_event;
-                    } else{
-                        break;
-                    }
-                };
-
+                while let Some(stream_event) = extract_sse_event(&mut buffer)?{
+                    yield stream_event;
+                }
             }
         }
     }

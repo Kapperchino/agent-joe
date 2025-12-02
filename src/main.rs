@@ -2,12 +2,18 @@ mod actor;
 mod claude;
 mod tools;
 
-use crate::claude::{ClaudeClient, ClaudeConfig, ClientRequest, Delta, Message, StreamEvent};
+use crate::actor::{Dependency, Message, Worker};
+use crate::claude::{
+    ClaudeClient, ClaudeConfig, ClientRequest, Delta, StreamEvent, Tool, ToolProperty,
+    ToolSchemaDTO,
+};
 use log::LevelFilter;
 use ra_ap_ide::AnalysisHost;
-use ra_ap_load_cargo::{load_workspace_at, LoadCargoConfig, ProcMacroServerChoice};
+use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
 use ra_ap_project_model::CargoConfig;
+use ractor::Actor;
 use simplelog::{ColorChoice, CombinedLogger, Config, TermLogger, TerminalMode};
+use std::collections::HashMap;
 use std::env;
 use std::io::Write;
 use std::path::PathBuf;
@@ -51,31 +57,13 @@ async fn main() {
     })
     .unwrap();
 
-    let req = ClientRequest::new(vec![Message::new(
-        "Write me a funny story about rust".to_string(),
-    )]);
+    let prompt =
+        "You are an agent, given a file tools.rs, read the file and implement the enum members ";
 
-    let mut stream = std::pin::pin!(client.chat_stream(req));
-
-    while let Some(event_result) = stream.next().await {
-        match event_result {
-            Ok(event) => match event {
-                StreamEvent::ContentBlockDelta { delta, .. } => {
-                    if let Delta::TextDelta { text } = delta {
-                        print!("{}", text);
-                        std::io::stdout().flush().unwrap();
-                    }
-                }
-                StreamEvent::MessageStop => {
-                    println!("\n\n[Stream complete]");
-                    break;
-                }
-                _ => {}
-            },
-            Err(e) => {
-                eprintln!("\nError: {:?}", e);
-                break;
-            }
-        }
-    }
+    let (joe, actor_handle) = Actor::spawn(None, Worker {}, Dependency { claude: client })
+        .await
+        .expect("Failed to start actor");
+    joe.send_message(Message::StartWork(prompt.to_string()))
+        .unwrap();
+    actor_handle.await.expect("Actor failed to exit cleanly");
 }
