@@ -1,4 +1,7 @@
-use crate::claude::{ClaudeClient, ClientRequest, Tool, ToolProperty, ToolSchemaDTO};
+use crate::claude::{
+    ClaudeClient, ClientRequest, Delta, StreamEvent, StreamMessage, Tool, ToolProperty,
+    ToolSchemaDTO,
+};
 use anyhow::{Error, anyhow};
 use log::{info, log};
 use ractor::ActorRef;
@@ -37,8 +40,7 @@ impl<T, E: std::fmt::Display> IntoActorErr<T> for Result<T, E> {
 }
 
 // Base unit for the agent, should be given context and then simply do the work
-pub struct Worker {
-}
+pub struct Worker {}
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -63,6 +65,12 @@ pub enum State {
     Stopped,
 }
 impl Message {}
+
+#[derive(Debug)]
+enum StreamBuffer {
+    String(String),
+    Json(String),
+}
 
 #[cfg_attr(feature = "async-trait", ractor::async_trait)]
 impl Actor for Worker {
@@ -123,18 +131,64 @@ impl Actor for Worker {
                     }]);
 
                 let mut stream = std::pin::pin!(state.claude.chat_stream(req));
+                let mut map: HashMap<usize, Vec<Delta>> = HashMap::new();
                 while let Some(event_result) = stream.next().await {
                     match event_result {
-                        Ok(event) => {
-                            println!("{:?}", event)
-                        }
+                        Ok(event) => match event {
+                            StreamEvent::ContentBlockDelta { index, delta } => {
+                                match map.get_mut(&index) {
+                                    None => {
+                                        map.insert(index, vec![delta]);
+                                    }
+                                    Some(vec) => vec.push(delta),
+                                }
+                            }
+                            StreamEvent::ContentBlockStop { index } => {
+                                let joe: Option<StreamBuffer> =
+                                    map.remove(&index).and_then(|buf| {
+                                        buf.into_iter()
+                                            .filter_map(|delta| match delta {
+                                                Delta::TextDelta { text } => {
+                                                    Some(StreamBuffer::String(text))
+                                                }
+                                                Delta::InputJsonDelta { partial_json } => {
+                                                    Some(StreamBuffer::Json(partial_json))
+                                                }
+                                                _ => None,
+                                            })
+                                            .reduce(|mut acc, delta| {
+                                                match (&mut acc, delta) {
+                                                    (
+                                                        StreamBuffer::String(buffer),
+                                                        StreamBuffer::String(delta),
+                                                    ) => buffer.push_str(&delta),
+                                                    (
+                                                        StreamBuffer::Json(buffer),
+                                                        StreamBuffer::Json(delta),
+                                                    ) => buffer.push_str(&delta),
+                                                    _ => {
+                                                        unreachable!(
+                                                            "mixed Text and InputJson deltas"
+                                                        )
+                                                    }
+                                                }
+                                                acc
+                                            })
+                                    });
+                                println!("{:?}",joe)
+                            }
+                            StreamEvent::MessageStop{} =>{
+                                myself.stop(None)
+                            }
+                            StreamEvent::Error { .. } => {}
+                            _ => {}
+                        },
                         Err(e) => {
                             eprintln!("\nError: {:?}", e);
                             break;
                         }
                     }
                 }
-                myself.stop(None)
             }
             Message::UseTool(_) => {}
             Message::ContinueWork() => {}
