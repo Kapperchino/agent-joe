@@ -1,7 +1,4 @@
-use crate::claude::{
-    ClaudeClient, ClientRequest, Delta, StreamEvent, StreamMessage, Tool, ToolProperty,
-    ToolSchemaDTO,
-};
+use crate::claude::{ClaudeClient, ClientRequest, ContentBlockInfo, Delta, StreamEvent, StreamMessage, Tool, ToolProperty, ToolSchemaDTO};
 use anyhow::{Error, anyhow};
 use log::{info, log};
 use ractor::ActorRef;
@@ -112,7 +109,7 @@ impl Actor for Worker {
                 let req = ClientRequest::new(vec![crate::claude::Message::new(prompt)])
                     .with_thinking()
                     .with_tools(vec![Tool {
-                        name: "pwd".to_string(),
+                        name: "read_file".to_string(),
                         description: "".to_string(),
                         input_schema: ToolSchemaDTO {
                             name: "read_file".to_string(),
@@ -142,6 +139,9 @@ impl Actor for Worker {
                                     }
                                     Some(vec) => vec.push(delta),
                                 }
+                            }
+                            StreamEvent::ContentBlockStart { index, ref content_block } =>{
+                               println!("{:?}",event)
                             }
                             StreamEvent::ContentBlockStop { index } => {
                                 let joe: Option<StreamBuffer> =

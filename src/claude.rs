@@ -179,11 +179,18 @@ pub struct StreamMessage {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct ContentBlockInfo {
-    #[serde(rename = "type")]
-    pub block_type: String,
-    #[serde(default)]
-    pub text: Option<String>,
+#[serde(tag = "type")]
+pub enum ContentBlockInfo {
+    #[serde(rename = "tool_use")]
+    ToolUse {
+        id: String,
+        name: String,
+        input: HashMap<String, String>,
+    },
+    #[serde(rename = "thinking")]
+    Thinking { thinking: String },
+    #[serde(rename = "text")]
+    Text { text: String },
 }
 
 #[derive(Debug, Deserialize, Clone)]
