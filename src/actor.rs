@@ -1,4 +1,7 @@
-use crate::claude::{ClaudeClient, ClientRequest, ContentBlockInfo, Delta, StreamEvent, StreamMessage, Tool, ToolProperty, ToolSchemaDTO};
+use crate::claude::{
+    ClaudeClient, ClientRequest, ContentBlockInfo, Delta, StreamEvent, StreamMessage, Tool,
+    ToolProperty, ToolSchemaDTO,
+};
 use anyhow::{Error, anyhow};
 use log::{info, log};
 use ractor::ActorRef;
@@ -64,9 +67,10 @@ pub enum State {
 impl Message {}
 
 #[derive(Debug)]
-enum StreamBuffer {
+enum StreamAccu {
     String(String),
     Json(String),
+    Tool(String),
 }
 
 #[cfg_attr(feature = "async-trait", ractor::async_trait)]
@@ -129,6 +133,7 @@ impl Actor for Worker {
 
                 let mut stream = std::pin::pin!(state.claude.chat_stream(req));
                 let mut map: HashMap<usize, Vec<Delta>> = HashMap::new();
+                let mut acc_map: HashMap<usize, Vec<StreamAccu>> = HashMap::new();
                 while let Some(event_result) = stream.next().await {
                     match event_result {
                         Ok(event) => match event {
@@ -140,31 +145,42 @@ impl Actor for Worker {
                                     Some(vec) => vec.push(delta),
                                 }
                             }
-                            StreamEvent::ContentBlockStart { index, ref content_block } =>{
-                               println!("{:?}",event)
-                            }
+                            StreamEvent::ContentBlockStart {
+                                index,
+                                content_block,
+                            } => match content_block {
+                                ContentBlockInfo::ToolUse { id, input, name } => {
+                                    match acc_map.get_mut(&index) {
+                                        None => {
+                                            acc_map.insert(index, vec![StreamAccu::Tool(name)]);
+                                        }
+                                        Some(vec) => vec.push(StreamAccu::Tool(name)),
+                                    }
+                                }
+                                _ => {}
+                            },
                             StreamEvent::ContentBlockStop { index } => {
-                                let joe: Option<StreamBuffer> =
-                                    map.remove(&index).and_then(|buf| {
+                                map.remove(&index)
+                                    .and_then(|buf| {
                                         buf.into_iter()
                                             .filter_map(|delta| match delta {
                                                 Delta::TextDelta { text } => {
-                                                    Some(StreamBuffer::String(text))
+                                                    Some(StreamAccu::String(text))
                                                 }
                                                 Delta::InputJsonDelta { partial_json } => {
-                                                    Some(StreamBuffer::Json(partial_json))
+                                                    Some(StreamAccu::Json(partial_json))
                                                 }
                                                 _ => None,
                                             })
                                             .reduce(|mut acc, delta| {
                                                 match (&mut acc, delta) {
                                                     (
-                                                        StreamBuffer::String(buffer),
-                                                        StreamBuffer::String(delta),
+                                                        StreamAccu::String(buffer),
+                                                        StreamAccu::String(delta),
                                                     ) => buffer.push_str(&delta),
                                                     (
-                                                        StreamBuffer::Json(buffer),
-                                                        StreamBuffer::Json(delta),
+                                                        StreamAccu::Json(buffer),
+                                                        StreamAccu::Json(delta),
                                                     ) => buffer.push_str(&delta),
                                                     _ => {
                                                         unreachable!(
@@ -174,12 +190,18 @@ impl Actor for Worker {
                                                 }
                                                 acc
                                             })
+                                    })
+                                    .map(|buf| match acc_map.get_mut(&index) {
+                                        Some(vec) => vec.push(buf),
+                                        None => {
+                                            acc_map.insert(index, vec![buf]);
+                                        }
                                     });
-                                println!("{:?}",joe)
                             }
-                            StreamEvent::MessageStop{} =>{
+                            StreamEvent::MessageStop {} => {
+                                println!("{:?}",acc_map);
                                 myself.stop(None)
-                            }
+                            },
                             StreamEvent::Error { .. } => {}
                             _ => {}
                         },
