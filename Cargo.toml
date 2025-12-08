@@ -3,6 +3,7 @@ name = "turbo-code"
 version = "0.1.0"
 edition = "2024"
 
+
 [dependencies]
 ra_ap_load-cargo = "0.0.300"
 ra_ap_project_model = "0.0.300"
@@ -18,7 +19,7 @@ tokio = { version = "1.0", features = ["full"] }
 tokio-stream = "0.1"
 thiserror = "1.0"
 async-stream = "0.3.6"
-futures-core = "0.3"
+futures = "0.3"
 bytes = "1.0"
 url = "2.4"
 uuid = { version = "1.0", features = ["v4", "serde"] }

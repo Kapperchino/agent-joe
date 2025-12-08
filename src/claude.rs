@@ -1,11 +1,10 @@
 use async_stream::try_stream;
-use futures_core::Stream;
 use reqwest::{Client, header};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 use thiserror::Error;
-use tokio_stream::StreamExt;
+use tokio_stream::{Stream, StreamExt};
 
 #[derive(Error, Debug)]
 pub enum ClaudeError {
@@ -35,6 +34,18 @@ impl Message {
     pub fn new(message: String) -> Self {
         Message {
             role: Role::User,
+            content: vec![
+                (ContentBlock::MessageBlock(MessageBlock {
+                    content_type: "text".to_string(),
+                    text: message,
+                })),
+            ],
+        }
+    }
+
+    pub fn new_assistant(message: String) -> Self {
+        Message {
+            role: Role::Assistant,
             content: vec![
                 (ContentBlock::MessageBlock(MessageBlock {
                     content_type: "text".to_string(),

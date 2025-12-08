@@ -7,6 +7,7 @@ use crate::claude::{
     ClaudeClient, ClaudeConfig, ClientRequest, Delta, StreamEvent, Tool, ToolProperty,
     ToolSchemaDTO,
 };
+use crate::tools::ReadFile;
 use log::LevelFilter;
 use ra_ap_ide::AnalysisHost;
 use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
@@ -60,9 +61,18 @@ async fn main() {
     let prompt =
         "You are an agent, given a file tools.rs, read the file and implement the enum members ";
 
-    let (joe, actor_handle) = Actor::spawn(None, Worker {}, Dependency { claude: client })
-        .await
-        .expect("Failed to start actor");
+    let (joe, actor_handle) = Actor::spawn(
+        None,
+        Worker {},
+        Dependency {
+            claude: client,
+            tools: vec![tools::Tool::ReadFile(ReadFile {
+                file_path: String::new(),
+            })],
+        },
+    )
+    .await
+    .expect("Failed to start actor");
     joe.send_message(Message::StartWork(prompt.to_string()))
         .unwrap();
     actor_handle.await.expect("Actor failed to exit cleanly");
