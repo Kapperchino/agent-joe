@@ -45,12 +45,23 @@ impl ToolTrait for Tool {
             }
         }
     }
+
+    fn id(&self) -> String {
+        match self {
+            Tool::ReadFile(file) => file.id.clone(),
+        }
+    }
 }
 
 #[derive(Default, Serialize, Deserialize, Debug, Clone)]
 pub struct ReadFile {
-    pub(crate) file_path: String,
+    pub input: ReadFileInput,
     pub id: String,
+}
+
+#[derive(Default, Serialize, Deserialize, Debug, Clone)]
+pub struct ReadFileInput {
+    pub(crate) file_path: String,
 }
 #[derive(Debug)]
 pub enum ToolResult {
@@ -62,6 +73,7 @@ pub trait ToolTrait {
     fn description(&self) -> String;
     fn field_properties(&self) -> HashMap<String, ToolProperty>;
     fn required_fields(&self) -> Vec<String>;
+    fn id(&self) -> String;
 }
 
 impl ToolResult {
@@ -80,7 +92,7 @@ impl Tool {
     pub async fn use_tool(&self, id: String) -> Result<ToolResult, anyhow::Error> {
         match self {
             Tool::ReadFile(path) => {
-                let result = fs::read_to_string(&path.file_path).await?;
+                let result = fs::read_to_string(&path.input.file_path).await?;
                 Ok(ToolResult::ReadFileResult {
                     res: result,
                     tool: self.clone(),
@@ -113,7 +125,7 @@ impl Tool {
     pub fn to_req(&self) -> HashMap<String, String> {
         match self {
             Tool::ReadFile(path) => {
-                HashMap::from([("file_path".to_string(), path.file_path.to_string())])
+                HashMap::from([("file_path".to_string(), path.input.file_path.to_string())])
             }
         }
     }

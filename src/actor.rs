@@ -2,7 +2,8 @@ use crate::claude::{
     ClaudeClient, ClaudeResult, ClientRequest, ContentBlock, ContentBlockInfo, Delta, Role,
     StreamEvent, StreamMessage, Tool, ToolBlock, ToolProperty, ToolSchemaDTO,
 };
-use crate::tools::{ReadFile, ToolResult, ToolTrait};
+use crate::tools::Tool::ReadFile;
+use crate::tools::{ReadFileInput, ToolResult, ToolTrait};
 use crate::{claude, tools};
 use anyhow::{Error, anyhow};
 use futures::future;
@@ -15,8 +16,13 @@ use ractor::{ActorErr, ActorProcessingErr};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
+use std::fmt::Display;
+use std::ops::Add;
 use std::path::PathBuf;
 use thiserror::Error;
+use tokio::fs;
+use tokio::fs::{DirEntry, ReadDir};
+use tokio_stream::wrappers::ReadDirStream;
 use tokio_stream::{Stream, StreamExt};
 use uuid::Uuid;
 
@@ -56,8 +62,13 @@ pub enum Message {
     ContinueWork(),
 }
 
-pub struct ActorState {
+pub struct CurContext {
     cur_dir: PathBuf,
+    cur_files: Vec<DirEntry>,
+}
+
+pub struct ActorState {
+    cur_context: CurContext,
     cur_state: State,
     history: Vec<claude::Message>,
     claude: ClaudeClient,
@@ -100,13 +111,16 @@ impl Actor for Worker {
         _: ActorRef<Self::Msg>,
         dependency: Dependency,
     ) -> Result<Self::State, ActorProcessingErr> {
-        let current_dir = env::current_dir()?;
-
+        let cur_context = CurContext::get_cur_context().await?;
+        let cur_context_str = cur_context.to_string().await;
         // startup the event processing
         Ok(ActorState {
-            cur_dir: current_dir,
+            cur_context,
             cur_state: State::Ready,
-            history: vec![],
+            history: vec![claude::Message::new(
+                "This is the inital context in the enviornment: \n".to_owned()
+                    + cur_context_str.as_str(),
+            )],
             claude: dependency.claude,
             tools: dependency.tools,
         })
@@ -132,7 +146,7 @@ impl Actor for Worker {
             Message::StartWork(prompt) => {
                 state.history.push(claude::Message::new(prompt.clone()));
                 let tools: Vec<_> = state.tools.iter().map(|t| t.to_json()).collect();
-                let req = ClientRequest::new(vec![crate::claude::Message::new(prompt.clone())])
+                let req = ClientRequest::new(state.history.clone())
                     .with_thinking()
                     .with_tools(tools);
 
@@ -145,44 +159,21 @@ impl Actor for Worker {
                 myself.send_message(Message::UseTool(vec))?;
             }
             Message::UseTool(vec) => {
-                let futures: Vec<_> = vec
-                    .into_iter()
-                    .map(
-                        async |(_, a_vec): (usize, Vec<StreamAccu>)| match a_vec.first() {
-                            Some(accu) => match accu {
-                                StreamAccu::String(str) => Ok(StreamRes::String(str.clone())),
-                                StreamAccu::Tool { id, name } => {
-                                    let tool_res =
-                                        Worker::tool_use(&a_vec, name.to_string(), id.to_string())
-                                            .await?;
-                                    Ok(StreamRes::Tool(tool_res))
-                                }
-                                _ => Err(anyhow::Error::msg("No valid tool")),
-                            },
-                            None => Err(anyhow::Error::msg("No valid tool")),
-                        },
-                    )
-                    .collect();
-
-                let res = future::join_all(futures).await;
+                let res = Worker::process_tools(vec).await;
                 res.into_iter().for_each(|res| match res {
                     Ok(stream_res) => match stream_res {
                         StreamRes::String(str) => {
                             state.history.push(claude::Message::new_assistant(str))
                         }
-                        StreamRes::Tool(tool_res) => {
-                            let uuid = Uuid::new_v4();
-                            let tool_id = format!("tool_use_{uuid}");
-                            state.history.push(claude::Message {
-                                role: Role::Assistant,
-                                content: vec![ContentBlock::ToolBlock(ToolBlock {
-                                    content_type: "tool_use".to_string(),
-                                    id: tool_id,
-                                    name: tool_res.tool().name(),
-                                    input: tool_res.tool().to_req(),
-                                })],
-                            })
-                        }
+                        StreamRes::Tool(tool_res) => state.history.push(claude::Message {
+                            role: Role::Assistant,
+                            content: vec![ContentBlock::ToolBlock(ToolBlock {
+                                content_type: "tool_use".to_string(),
+                                id: tool_res.tool().id(),
+                                name: tool_res.tool().name(),
+                                input: tool_res.tool().to_req(),
+                            })],
+                        }),
                     },
                     Err(err) => {
                         println!("{:?}", err)
@@ -201,8 +192,71 @@ impl Actor for Worker {
 struct ToolInput {
     map: HashMap<String, String>,
 }
+
+impl CurContext {
+    async fn get_cur_context() -> Result<CurContext, anyhow::Error> {
+        let current_dir = env::current_dir()?;
+        let read_dir = fs::read_dir(current_dir.clone()).await?;
+        let read_dir_stream = ReadDirStream::new(read_dir);
+        let files = read_dir_stream
+            .fold(vec![], |mut acc, item| {
+                match item {
+                    Ok(entry) => {
+                        acc.push(entry);
+                    }
+                    Err(_) => {
+                        println!("error with getting files")
+                    }
+                };
+                acc
+            })
+            .await;
+        Ok(CurContext {
+            cur_dir: current_dir,
+            cur_files: files,
+        })
+    }
+
+    async fn to_string(&self) -> String {
+        let dir = self.cur_dir.to_str().unwrap_or("");
+        let files: Vec<_> = self
+            .cur_files
+            .iter()
+            .map(async |file| {
+                let path = file.path();
+                let file_type = match file.file_type().await {
+                    Ok(f_type) => {
+                        if f_type.is_dir() {
+                            Some("type: dir")
+                        } else if f_type.is_file() {
+                            Some("type: file")
+                        } else if f_type.is_symlink() {
+                            Some("type: symlink")
+                        } else {
+                            None
+                        }
+                    }
+                    Err(_) => None,
+                };
+                if let Some(f_type) = file_type
+                    && let Some(p_str) = path.to_str()
+                {
+                    Some(format!("path: {p_str}, {f_type}\n").to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let res: String = future::join_all(files)
+            .await
+            .into_iter()
+            .flatten()
+            .fold(String::new(), |acc, s| format!("{acc}{s}").to_string());
+        format!("Current Context: \ncurrent directory: {dir}\ncurrent files:\n{res}")
+    }
+}
 impl Worker {
-    pub async fn process_stream(
+    async fn process_stream(
         &self,
         stream: impl Stream<Item = ClaudeResult<StreamEvent>> + Send + 'static,
     ) -> HashMap<usize, Vec<StreamAccu>> {
@@ -278,7 +332,7 @@ impl Worker {
         }
         acc_map
     }
-    pub async fn tool_use(
+    async fn tool_use(
         a_vec: &Vec<StreamAccu>,
         name: String,
         id: String,
@@ -287,12 +341,38 @@ impl Worker {
             tools::Tool::ReadFile(_) => {
                 match a_vec.get(1).ok_or(anyhow::Error::msg("doesn't work"))? {
                     StreamAccu::Json(json) => {
-                        let rf: ReadFile = serde_json::from_str::<_>(json)?;
+                        let input: ReadFileInput = serde_json::from_str::<_>(json)?;
+                        let rf = tools::ReadFile {
+                            id: id.clone(),
+                            input,
+                        };
                         Ok(tools::Tool::ReadFile(rf).use_tool(id).await?)
                     }
                     _ => Err(anyhow::Error::msg("doesn't work")),
                 }
             }
         }
+    }
+
+    async fn process_tools(vec: Vec<(usize, Vec<StreamAccu>)>) -> Vec<Result<StreamRes, Error>> {
+        let futures: Vec<_> = vec
+            .into_iter()
+            .map(
+                async |(_, a_vec): (usize, Vec<StreamAccu>)| match a_vec.first() {
+                    Some(accu) => match accu {
+                        StreamAccu::String(str) => Ok(StreamRes::String(str.clone())),
+                        StreamAccu::Tool { id, name } => {
+                            let tool_res =
+                                Worker::tool_use(&a_vec, name.to_string(), id.to_string()).await?;
+                            Ok(StreamRes::Tool(tool_res))
+                        }
+                        _ => Err(anyhow::Error::msg("No valid tool")),
+                    },
+                    None => Err(anyhow::Error::msg("No valid tool")),
+                },
+            )
+            .collect();
+
+        future::join_all(futures).await
     }
 }
