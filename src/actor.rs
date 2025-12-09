@@ -3,6 +3,7 @@ use crate::claude::{
     StreamEvent,
 };
 use crate::tools::{ReadFileInput, ToolResult, ToolTrait};
+use crate::tui::UiEvent;
 use crate::{claude, tools};
 use anyhow::Error;
 use futures::future;
@@ -12,11 +13,11 @@ use ractor::ActorRef;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
-use std::fmt::Display;
 use std::path::PathBuf;
 use thiserror::Error;
 use tokio::fs;
 use tokio::fs::DirEntry;
+use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReadDirStream;
 use tokio_stream::{Stream, StreamExt};
 
@@ -67,11 +68,13 @@ pub struct ActorState {
     history: Vec<claude::Message>,
     claude: ClaudeClient,
     tools: Vec<tools::Tool>,
+    ui_tx: mpsc::UnboundedSender<UiEvent>,
 }
 
 pub struct Dependency {
     pub(crate) claude: ClaudeClient,
     pub tools: Vec<tools::Tool>,
+    pub ui_tx: mpsc::UnboundedSender<UiEvent>,
 }
 
 pub enum State {
@@ -119,6 +122,7 @@ impl Actor for Worker {
             )],
             claude: dependency.claude,
             tools: dependency.tools,
+            ui_tx: dependency.ui_tx,
         })
     }
 
@@ -150,25 +154,17 @@ impl Actor for Worker {
 
                 let stream = state.claude.chat_stream(req).await?;
 
-                let acc_map = self.process_stream(stream).await;
+                let acc_map = self.process_stream(stream, &state.ui_tx).await;
 
                 let mut vec: Vec<(usize, Vec<StreamAccu>)> = acc_map.into_iter().collect();
-                // vec.iter().for_each(|(_, acc)| {
-                //     acc.iter().for_each(|s_acc| match s_acc {
-                //         StreamAccu::String(joe) => {
-                //             println!("{joe}")
-                //         }
-                //         StreamAccu::Json(_) => {}
-                //         StreamAccu::Tool { .. } => {}
-                //     })
-                // });
                 vec.sort_by(|(i1, _), (i2, _)| i1.cmp(i2));
                 if let Some(StreamAccu::Tool { .. }) =
                     vec.last().and_then(|(_, v)| v.first().cloned())
                 {
                     myself.send_message(Message::UseTool(vec))?;
-                } else {    
-                    myself.stop(None);
+                } else {
+                    // No more tools to use, notify UI we're done
+                    let _ = state.ui_tx.send(UiEvent::Done);
                 }
             }
             Message::UseTool(vec) => {
@@ -191,6 +187,17 @@ impl Actor for Worker {
                             });
                         }
                         StreamRes::Tool(tool_res) => {
+                            // Notify UI about tool result
+                            let tool_name = tool_res.tool().name();
+                            if let claude::ContentBlock::ToolResult { content, .. } =
+                                tool_res.to_res_json()
+                            {
+                                let _ = state.ui_tx.send(UiEvent::ToolResult {
+                                    name: tool_name.clone(),
+                                    result: content,
+                                });
+                            }
+
                             state.history.push(claude::Message {
                                 role: Role::Assistant,
                                 content: vec![ContentBlock::ToolBlock {
@@ -206,7 +213,7 @@ impl Actor for Worker {
                         }
                     },
                     Err(err) => {
-                        println!("{:?}", err)
+                        let _ = state.ui_tx.send(UiEvent::Error(err.to_string()));
                     }
                 });
                 // if tool result was the last value, then we can loop
@@ -214,8 +221,9 @@ impl Actor for Worker {
                     state.history.last().and_then(|msg| msg.content.last())
                 {
                     myself.send_message(Message::StartWork(None))?;
+                } else {
+                    let _ = state.ui_tx.send(UiEvent::Done);
                 }
-                println!("{:?}", state.history);
             }
             Message::ContinueWork() => {}
         }
@@ -294,6 +302,7 @@ impl Worker {
     async fn process_stream(
         &self,
         stream: impl Stream<Item = ClaudeResult<StreamEvent>> + Send + 'static,
+        ui_tx: &mpsc::UnboundedSender<UiEvent>,
     ) -> HashMap<usize, Vec<StreamAccu>> {
         let mut stream = std::pin::pin!(stream);
         let mut map: HashMap<usize, Vec<Delta>> = HashMap::new();
@@ -301,23 +310,42 @@ impl Worker {
         while let Some(event_result) = stream.next().await {
             match event_result {
                 Ok(event) => match event {
-                    StreamEvent::ContentBlockDelta { index, delta } => match map.get_mut(&index) {
-                        None => {
-                            map.insert(index, vec![delta]);
+                    StreamEvent::ContentBlockDelta { index, delta } => {
+                        // Send real-time updates to the UI
+                        match &delta {
+                            Delta::TextDelta { text } => {
+                                let _ = ui_tx.send(UiEvent::TextDelta(text.clone()));
+                            }
+                            Delta::ThinkingDelta { thinking } => {
+                                let _ = ui_tx.send(UiEvent::ThinkingDelta(thinking.clone()));
+                            }
+                            _ => {}
                         }
-                        Some(vec) => vec.push(delta),
-                    },
+                        match map.get_mut(&index) {
+                            None => {
+                                map.insert(index, vec![delta]);
+                            }
+                            Some(vec) => vec.push(delta),
+                        }
+                    }
                     StreamEvent::ContentBlockStart {
                         index,
                         content_block,
                     } => match content_block {
-                        ContentBlockInfo::ToolUse { id, input, name } => {
+                        ContentBlockInfo::ToolUse { id, input: _, name } => {
+                            let _ = ui_tx.send(UiEvent::ToolStart {
+                                name: name.clone(),
+                                id: id.clone(),
+                            });
                             match acc_map.get_mut(&index) {
                                 None => {
                                     acc_map.insert(index, vec![StreamAccu::Tool { id, name }]);
                                 }
                                 Some(vec) => vec.push(StreamAccu::Tool { id, name }),
                             }
+                        }
+                        ContentBlockInfo::Thinking { .. } => {
+                            let _ = ui_tx.send(UiEvent::ThinkingStart);
                         }
                         _ => {}
                     },
@@ -374,21 +402,34 @@ impl Worker {
                                         acc
                                     })
                             })
-                            .map(|buf| match acc_map.get_mut(&index) {
-                                Some(vec) => vec.push(buf),
-                                None => {
-                                    acc_map.insert(index, vec![buf]);
+                            .map(|buf| {
+                                // Send completion events to UI
+                                match &buf {
+                                    StreamAccu::String(text) => {
+                                        let _ = ui_tx.send(UiEvent::TextComplete(text.clone()));
+                                    }
+                                    StreamAccu::Thinking { thinking, .. } => {
+                                        let _ =
+                                            ui_tx.send(UiEvent::ThinkingComplete(thinking.clone()));
+                                    }
+                                    _ => {}
+                                }
+                                match acc_map.get_mut(&index) {
+                                    Some(vec) => vec.push(buf),
+                                    None => {
+                                        acc_map.insert(index, vec![buf]);
+                                    }
                                 }
                             });
                     }
                     StreamEvent::MessageStop {} => {}
                     StreamEvent::Error { error } => {
-                        println!("{:?}", error)
+                        let _ = ui_tx.send(UiEvent::Error(error.message.clone()));
                     }
                     _ => {}
                 },
                 Err(e) => {
-                    eprintln!("\nError: {:?}", e);
+                    let _ = ui_tx.send(UiEvent::Error(e.to_string()));
                     break;
                 }
             }
