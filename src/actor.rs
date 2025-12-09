@@ -6,9 +6,9 @@ use crate::tools::{ReadFileInput, ToolResult, ToolTrait};
 use crate::{claude, tools};
 use anyhow::Error;
 use futures::future;
-use ractor::ActorRef;
 use ractor::Actor;
 use ractor::ActorProcessingErr;
+use ractor::ActorRef;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
@@ -163,8 +163,13 @@ impl Actor for Worker {
                 //     })
                 // });
                 vec.sort_by(|(i1, _), (i2, _)| i1.cmp(i2));
-
-                myself.send_message(Message::UseTool(vec))?;
+                if let Some(StreamAccu::Tool { .. }) =
+                    vec.last().and_then(|(_, v)| v.first().cloned())
+                {
+                    myself.send_message(Message::UseTool(vec))?;
+                } else {    
+                    myself.stop(None);
+                }
             }
             Message::UseTool(vec) => {
                 let res = Worker::process_tools(vec).await;
