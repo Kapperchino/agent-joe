@@ -14,11 +14,11 @@ use ractor::{Actor, MessagingErr};
 use ractor::{ActorErr, ActorProcessingErr};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::env;
+use std::path::PathBuf;
 use thiserror::Error;
 use tokio_stream::{Stream, StreamExt};
 use uuid::Uuid;
-
-const INITIAL_PROMPT: &str = "You are an agent making code changes to a rust codebase";
 
 #[derive(Error, Debug)]
 pub enum WorkerError {
@@ -57,6 +57,7 @@ pub enum Message {
 }
 
 pub struct ActorState {
+    cur_dir: PathBuf,
     cur_state: State,
     history: Vec<claude::Message>,
     claude: ClaudeClient,
@@ -79,7 +80,7 @@ impl Message {}
 pub enum StreamAccu {
     String(String),
     Json(String),
-    Tool(String),
+    Tool { id: String, name: String },
 }
 
 #[derive(Debug)]
@@ -99,8 +100,11 @@ impl Actor for Worker {
         _: ActorRef<Self::Msg>,
         dependency: Dependency,
     ) -> Result<Self::State, ActorProcessingErr> {
+        let current_dir = env::current_dir()?;
+
         // startup the event processing
         Ok(ActorState {
+            cur_dir: current_dir,
             cur_state: State::Ready,
             history: vec![],
             claude: dependency.claude,
@@ -147,9 +151,11 @@ impl Actor for Worker {
                         async |(_, a_vec): (usize, Vec<StreamAccu>)| match a_vec.first() {
                             Some(accu) => match accu {
                                 StreamAccu::String(str) => Ok(StreamRes::String(str.clone())),
-                                StreamAccu::Tool(tool) => {
-                                    let joe = Worker::tool_use(&a_vec, tool.to_string()).await?;
-                                    Ok(StreamRes::Tool(joe))
+                                StreamAccu::Tool { id, name } => {
+                                    let tool_res =
+                                        Worker::tool_use(&a_vec, name.to_string(), id.to_string())
+                                            .await?;
+                                    Ok(StreamRes::Tool(tool_res))
                                 }
                                 _ => Err(anyhow::Error::msg("No valid tool")),
                             },
@@ -159,7 +165,7 @@ impl Actor for Worker {
                     .collect();
 
                 let res = future::join_all(futures).await;
-                let _ = res.into_iter().map(|res| match res {
+                res.into_iter().for_each(|res| match res {
                     Ok(stream_res) => match stream_res {
                         StreamRes::String(str) => {
                             state.history.push(claude::Message::new_assistant(str))
@@ -178,8 +184,11 @@ impl Actor for Worker {
                             })
                         }
                     },
-                    Err(_) => {}
+                    Err(err) => {
+                        println!("{:?}", err)
+                    }
                 });
+                println!("{:?}", state.history);
                 myself.stop(None);
             }
             Message::ContinueWork() => {}
@@ -216,9 +225,9 @@ impl Worker {
                         ContentBlockInfo::ToolUse { id, input, name } => {
                             match acc_map.get_mut(&index) {
                                 None => {
-                                    acc_map.insert(index, vec![StreamAccu::Tool(name)]);
+                                    acc_map.insert(index, vec![StreamAccu::Tool { id, name }]);
                                 }
-                                Some(vec) => vec.push(StreamAccu::Tool(name)),
+                                Some(vec) => vec.push(StreamAccu::Tool { id, name }),
                             }
                         }
                         _ => {}
@@ -272,13 +281,14 @@ impl Worker {
     pub async fn tool_use(
         a_vec: &Vec<StreamAccu>,
         name: String,
+        id: String,
     ) -> Result<ToolResult, anyhow::Error> {
         match tools::Tool::from_str(name.as_str())? {
             tools::Tool::ReadFile(_) => {
                 match a_vec.get(1).ok_or(anyhow::Error::msg("doesn't work"))? {
                     StreamAccu::Json(json) => {
                         let rf: ReadFile = serde_json::from_str::<_>(json)?;
-                        Ok(tools::Tool::ReadFile(rf).use_tool().await?)
+                        Ok(tools::Tool::ReadFile(rf).use_tool(id).await?)
                     }
                     _ => Err(anyhow::Error::msg("doesn't work")),
                 }

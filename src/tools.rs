@@ -7,7 +7,7 @@ use tokio::fs;
 use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Tool {
     ReadFile(ReadFile),
 }
@@ -50,10 +50,11 @@ impl ToolTrait for Tool {
 #[derive(Default, Serialize, Deserialize, Debug, Clone)]
 pub struct ReadFile {
     pub(crate) file_path: String,
+    pub id: String,
 }
 #[derive(Debug)]
 pub enum ToolResult {
-    ReadFileResult(String, Tool),
+    ReadFileResult { res: String, tool: Tool, id: String },
 }
 
 pub trait ToolTrait {
@@ -66,17 +67,25 @@ pub trait ToolTrait {
 impl ToolResult {
     pub fn tool(&self) -> Tool {
         match self {
-            ToolResult::ReadFileResult(_, tool) => tool.clone(),
+            ToolResult::ReadFileResult {
+                res: _res,
+                tool,
+                id: _id,
+            } => tool.clone(),
         }
     }
 }
 
 impl Tool {
-    pub async fn use_tool(&self) -> Result<ToolResult, anyhow::Error> {
+    pub async fn use_tool(&self, id: String) -> Result<ToolResult, anyhow::Error> {
         match self {
             Tool::ReadFile(path) => {
                 let result = fs::read_to_string(&path.file_path).await?;
-                Ok(ToolResult::ReadFileResult(result, self.clone()))
+                Ok(ToolResult::ReadFileResult {
+                    res: result,
+                    tool: self.clone(),
+                    id,
+                })
             }
         }
     }

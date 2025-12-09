@@ -66,9 +66,7 @@ async fn main() {
         Worker {},
         Dependency {
             claude: client,
-            tools: vec![tools::Tool::ReadFile(ReadFile {
-                file_path: String::new(),
-            })],
+            tools: vec![tools::Tool::ReadFile(ReadFile::default())],
         },
     )
     .await
