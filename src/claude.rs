@@ -1,5 +1,6 @@
+use anyhow::anyhow;
 use async_stream::try_stream;
-use reqwest::{Client, header};
+use reqwest::{header, Client};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -34,24 +35,14 @@ impl Message {
     pub fn new(message: String) -> Self {
         Message {
             role: Role::User,
-            content: vec![
-                (ContentBlock::MessageBlock(MessageBlock {
-                    content_type: "text".to_string(),
-                    text: message,
-                })),
-            ],
+            content: vec![(ContentBlock::MessageBlock { text: message })],
         }
     }
 
     pub fn new_assistant(message: String) -> Self {
         Message {
             role: Role::Assistant,
-            content: vec![
-                (ContentBlock::MessageBlock(MessageBlock {
-                    content_type: "text".to_string(),
-                    text: message,
-                })),
-            ],
+            content: vec![(ContentBlock::MessageBlock { text: message })],
         }
     }
 }
@@ -131,27 +122,30 @@ pub struct MessageBlock {
     pub content_type: String,
     pub text: String,
 }
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct ThinkingBlock {
-    #[serde(rename = "type")]
-    pub content_type: String,
-    pub thinking: String,
-    pub signature: String,
-}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ToolBlock {
     #[serde(rename = "type")]
     pub content_type: String,
-    pub id: String,
-    pub name: String,
-    pub input: HashMap<String, String>,
 }
 #[derive(Debug, Deserialize, Serialize, Clone)]
-#[serde(untagged)]
+#[serde(tag = "type")]
 pub enum ContentBlock {
-    MessageBlock(MessageBlock),
-    ThinkingBlock(ThinkingBlock),
-    ToolBlock(ToolBlock),
+    #[serde(rename = "text")]
+    MessageBlock { text: String },
+    #[serde(rename = "thinking")]
+    ThinkingBlock { thinking: String, signature: String },
+    #[serde(rename = "tool_use")]
+    ToolBlock {
+        id: String,
+        name: String,
+        input: HashMap<String, String>,
+    },
+    #[serde(rename = "tool_result")]
+    ToolResult {
+        tool_use_id: String,
+        content: String,
+    },
 }
 
 // Streaming types
@@ -409,10 +403,10 @@ impl ClaudeClient {
         Ok(chat_response)
     }
 
-    pub fn chat_stream(
+    pub async fn chat_stream(
         &self,
         req: ClientRequest,
-    ) -> impl Stream<Item = ClaudeResult<StreamEvent>> + Send + 'static {
+    ) -> Result<impl Stream<Item = ClaudeResult<StreamEvent>> + Send + 'static, anyhow::Error> {
         let url = format!("{}/messages", self.base_url);
         let client = self.client.clone();
 
@@ -434,25 +428,38 @@ impl ClaudeClient {
             stream: true,
         };
 
-        try_stream! {
-            let response = client
-                .post(&url)
-                .json(&request)
-                .send()
-                .await?;
+        match client.post(&url).json(&request).send().await {
+            Ok(res) => match res.status().is_success() {
+                true => {
+                    let stream = try_stream! {
+                        let response = client
+                            .post(&url)
+                            .json(&request)
+                            .send()
+                            .await?;
 
+                        let mut stream = response.bytes_stream();
+                        let mut buffer = String::new();
 
-            let mut stream = response.bytes_stream();
-            let mut buffer = String::new();
+                        while let Some(chunk) = stream.next().await {
+                            let chunk = chunk?;
+                            buffer.push_str(&String::from_utf8_lossy(&chunk));
 
-            while let Some(chunk) = stream.next().await {
-                let chunk = chunk?;
-                buffer.push_str(&String::from_utf8_lossy(&chunk));
-
-                while let Some(stream_event) = extract_sse_event(&mut buffer)?{
-                    yield stream_event;
+                            while let Some(stream_event) = extract_sse_event(&mut buffer)?{
+                                yield stream_event;
+                            }
+                        }
+                    };
+                    Ok(stream)
                 }
-            }
+                false => {
+                    let status = res.status();
+                    let body = res.text().await.unwrap_or_default();
+                    println!("Error {status}: {body}");
+                    Err(anyhow!("API error {status}: {body}"))
+                }
+            },
+            Err(err) => Err(anyhow!(err)),
         }
     }
 }

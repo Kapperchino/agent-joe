@@ -1,30 +1,24 @@
 use crate::claude::{
     ClaudeClient, ClaudeResult, ClientRequest, ContentBlock, ContentBlockInfo, Delta, Role,
-    StreamEvent, StreamMessage, Tool, ToolBlock, ToolProperty, ToolSchemaDTO,
+    StreamEvent,
 };
-use crate::tools::Tool::ReadFile;
 use crate::tools::{ReadFileInput, ToolResult, ToolTrait};
 use crate::{claude, tools};
-use anyhow::{Error, anyhow};
+use anyhow::Error;
 use futures::future;
-use futures::future::try_join_all;
-use log::{info, log};
-use ra_ap_syntax::ast::make::name;
 use ractor::ActorRef;
-use ractor::{Actor, MessagingErr};
-use ractor::{ActorErr, ActorProcessingErr};
+use ractor::Actor;
+use ractor::ActorProcessingErr;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
 use std::fmt::Display;
-use std::ops::Add;
 use std::path::PathBuf;
 use thiserror::Error;
 use tokio::fs;
-use tokio::fs::{DirEntry, ReadDir};
+use tokio::fs::DirEntry;
 use tokio_stream::wrappers::ReadDirStream;
 use tokio_stream::{Stream, StreamExt};
-use uuid::Uuid;
 
 #[derive(Error, Debug)]
 pub enum WorkerError {
@@ -57,7 +51,7 @@ pub struct Worker {}
 
 #[derive(Debug, Clone)]
 pub enum Message {
-    StartWork(String),
+    StartWork(Option<String>),
     UseTool(Vec<(usize, Vec<StreamAccu>)>),
     ContinueWork(),
 }
@@ -91,12 +85,14 @@ impl Message {}
 pub enum StreamAccu {
     String(String),
     Json(String),
+    Thinking { thinking: String, signature: String },
     Tool { id: String, name: String },
 }
 
 #[derive(Debug)]
 enum StreamRes {
     String(String),
+    Thinking { thinking: String, signature: String },
     Tool(tools::ToolResult),
 }
 
@@ -144,17 +140,29 @@ impl Actor for Worker {
 
         match message {
             Message::StartWork(prompt) => {
-                state.history.push(claude::Message::new(prompt.clone()));
+                prompt.map(|p| {
+                    state.history.push(claude::Message::new(p));
+                });
                 let tools: Vec<_> = state.tools.iter().map(|t| t.to_json()).collect();
                 let req = ClientRequest::new(state.history.clone())
                     .with_thinking()
                     .with_tools(tools);
 
-                let acc_map = self.process_stream(state.claude.chat_stream(req)).await;
+                let stream = state.claude.chat_stream(req).await?;
+
+                let acc_map = self.process_stream(stream).await;
 
                 let mut vec: Vec<(usize, Vec<StreamAccu>)> = acc_map.into_iter().collect();
+                // vec.iter().for_each(|(_, acc)| {
+                //     acc.iter().for_each(|s_acc| match s_acc {
+                //         StreamAccu::String(joe) => {
+                //             println!("{joe}")
+                //         }
+                //         StreamAccu::Json(_) => {}
+                //         StreamAccu::Tool { .. } => {}
+                //     })
+                // });
                 vec.sort_by(|(i1, _), (i2, _)| i1.cmp(i2));
-                println!("{:?}", vec);
 
                 myself.send_message(Message::UseTool(vec))?;
             }
@@ -165,22 +173,44 @@ impl Actor for Worker {
                         StreamRes::String(str) => {
                             state.history.push(claude::Message::new_assistant(str))
                         }
-                        StreamRes::Tool(tool_res) => state.history.push(claude::Message {
-                            role: Role::Assistant,
-                            content: vec![ContentBlock::ToolBlock(ToolBlock {
-                                content_type: "tool_use".to_string(),
-                                id: tool_res.tool().id(),
-                                name: tool_res.tool().name(),
-                                input: tool_res.tool().to_req(),
-                            })],
-                        }),
+                        StreamRes::Thinking {
+                            thinking,
+                            signature,
+                        } => {
+                            state.history.push(claude::Message {
+                                role: Role::Assistant,
+                                content: vec![ContentBlock::ThinkingBlock {
+                                    thinking,
+                                    signature,
+                                }],
+                            });
+                        }
+                        StreamRes::Tool(tool_res) => {
+                            state.history.push(claude::Message {
+                                role: Role::Assistant,
+                                content: vec![ContentBlock::ToolBlock {
+                                    id: tool_res.tool().id(),
+                                    name: tool_res.tool().name(),
+                                    input: tool_res.tool().to_req(),
+                                }],
+                            });
+                            state.history.push(claude::Message {
+                                role: Role::User,
+                                content: vec![tool_res.to_res_json()],
+                            });
+                        }
                     },
                     Err(err) => {
                         println!("{:?}", err)
                     }
                 });
+                // if tool result was the last value, then we can loop
+                if let Some(ContentBlock::ToolResult { .. }) =
+                    state.history.last().and_then(|msg| msg.content.last())
+                {
+                    myself.send_message(Message::StartWork(None))?;
+                }
                 println!("{:?}", state.history);
-                myself.stop(None);
             }
             Message::ContinueWork() => {}
         }
@@ -295,7 +325,18 @@ impl Worker {
                                         Delta::InputJsonDelta { partial_json } => {
                                             Some(StreamAccu::Json(partial_json))
                                         }
-                                        _ => None,
+                                        Delta::ThinkingDelta { thinking } => {
+                                            Some(StreamAccu::Thinking {
+                                                thinking,
+                                                signature: "".to_string(),
+                                            })
+                                        }
+                                        Delta::SignatureDelta { signature } => {
+                                            Some(StreamAccu::Thinking {
+                                                thinking: "".to_string(),
+                                                signature,
+                                            })
+                                        }
                                     })
                                     .reduce(|mut acc, delta| {
                                         match (&mut acc, delta) {
@@ -303,6 +344,21 @@ impl Worker {
                                                 StreamAccu::String(buffer),
                                                 StreamAccu::String(delta),
                                             ) => buffer.push_str(&delta),
+                                            (
+                                                StreamAccu::Thinking {
+                                                    thinking: think_buf,
+                                                    signature: sig,
+                                                },
+                                                StreamAccu::Thinking {
+                                                    thinking,
+                                                    signature,
+                                                },
+                                            ) => {
+                                                think_buf.push_str(&thinking);
+                                                if !signature.is_empty() {
+                                                    sig.push_str(&signature)
+                                                }
+                                            }
                                             (StreamAccu::Json(buffer), StreamAccu::Json(delta)) => {
                                                 buffer.push_str(&delta)
                                             }
@@ -321,7 +377,9 @@ impl Worker {
                             });
                     }
                     StreamEvent::MessageStop {} => {}
-                    StreamEvent::Error { .. } => {}
+                    StreamEvent::Error { error } => {
+                        println!("{:?}", error)
+                    }
                     _ => {}
                 },
                 Err(e) => {
@@ -366,6 +424,13 @@ impl Worker {
                                 Worker::tool_use(&a_vec, name.to_string(), id.to_string()).await?;
                             Ok(StreamRes::Tool(tool_res))
                         }
+                        StreamAccu::Thinking {
+                            thinking,
+                            signature,
+                        } => Ok(StreamRes::Thinking {
+                            thinking: thinking.clone(),
+                            signature: signature.clone(),
+                        }),
                         _ => Err(anyhow::Error::msg("No valid tool")),
                     },
                     None => Err(anyhow::Error::msg("No valid tool")),

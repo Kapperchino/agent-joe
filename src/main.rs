@@ -4,17 +4,16 @@ mod tools;
 
 use crate::actor::{Dependency, Message, Worker};
 use crate::claude::{
-    ClaudeClient, ClaudeConfig, ClientRequest, Delta, StreamEvent, Tool, ToolProperty,
-    ToolSchemaDTO,
+    ClaudeClient, ClaudeConfig
+    ,
 };
 use crate::tools::ReadFile;
 use log::LevelFilter;
 use ra_ap_ide::AnalysisHost;
-use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
+use ra_ap_load_cargo::{load_workspace_at, LoadCargoConfig, ProcMacroServerChoice};
 use ra_ap_project_model::CargoConfig;
 use ractor::Actor;
 use simplelog::{ColorChoice, CombinedLogger, Config, TermLogger, TerminalMode};
-use std::collections::HashMap;
 use std::env;
 use std::io::Write;
 use std::path::PathBuf;
@@ -71,7 +70,7 @@ async fn main() {
     )
     .await
     .expect("Failed to start actor");
-    joe.send_message(Message::StartWork(prompt.to_string()))
+    joe.send_message(Message::StartWork(Some(prompt.to_string())))
         .unwrap();
     actor_handle.await.expect("Actor failed to exit cleanly");
 }

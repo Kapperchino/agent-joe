@@ -4,8 +4,6 @@ use anyhow::Error;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tokio::fs;
-use tokio::fs::File;
-use tokio::io::{AsyncBufReadExt, BufReader};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Tool {
@@ -84,6 +82,15 @@ impl ToolResult {
                 tool,
                 id: _id,
             } => tool.clone(),
+        }
+    }
+
+    pub fn to_res_json(&self) -> claude::ContentBlock {
+        match self {
+            ToolResult::ReadFileResult { res, tool: _, id } => claude::ContentBlock::ToolResult {
+                tool_use_id: id.to_string(),
+                content: res.to_string(),
+            },
         }
     }
 }
