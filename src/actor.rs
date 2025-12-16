@@ -1,14 +1,16 @@
 use crate::claude::{
-    ClaudeClient, ClaudeResult, ClientRequest, ContentBlock, ContentBlockInfo, Delta, Role,
-    StreamEvent,
+    ClaudeClient, ClaudeError, ClaudeResult, ClientRequest, ContentBlock, ContentBlockInfo, Delta,
+    Role, StreamEvent,
 };
 use crate::tools::{ReadFileInput, ToolResult, ToolTrait};
 use crate::{claude, tools};
 use anyhow::Error;
 use futures::future;
-use ractor::Actor;
 use ractor::ActorProcessingErr;
 use ractor::ActorRef;
+use ractor::SupervisionEvent;
+use ractor::{Actor, ActorCell};
+use ractor_actors::streams::spawn_stream_pump;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
@@ -46,14 +48,21 @@ impl<T, E: std::fmt::Display> IntoActorErr<T> for Result<T, E> {
     }
 }
 
+#[derive(Debug)]
+pub enum StreamItem {
+    Item(StreamEvent),
+    Err(ClaudeError),
+    Finished(),
+}
+
 // Base unit for the agent, should be given context and then simply do the work
 pub struct Worker {}
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum Message {
     StartWork(Option<String>),
     UseTool(Vec<(usize, Vec<StreamAccu>)>),
-    ContinueWork(),
+    ProcessStreamItem(StreamItem),
 }
 
 pub struct CurContext {
@@ -63,10 +72,13 @@ pub struct CurContext {
 
 pub struct ActorState {
     cur_context: CurContext,
+    stream_actor: Option<ActorCell>,
     cur_state: State,
     history: Vec<claude::Message>,
     claude: ClaudeClient,
     tools: Vec<tools::Tool>,
+    acc_map: HashMap<usize, Vec<StreamAccu>>,
+    delta_buf: HashMap<usize, Vec<Delta>>,
 }
 
 pub struct Dependency {
@@ -119,6 +131,9 @@ impl Actor for Worker {
             )],
             claude: dependency.claude,
             tools: dependency.tools,
+            acc_map: Default::default(),
+            delta_buf: Default::default(),
+            stream_actor: None,
         })
     }
 
@@ -150,26 +165,22 @@ impl Actor for Worker {
 
                 let stream = state.claude.chat_stream(req).await?;
 
-                let acc_map = self.process_stream(stream).await;
+                //TODO: error handling for spawned actor
+                let actor = spawn_stream_pump(
+                    stream,
+                    myself,
+                    |event| match event {
+                        None => Message::ProcessStreamItem(StreamItem::Finished()),
+                        Some(res) => match res {
+                            Ok(item) => Message::ProcessStreamItem(StreamItem::Item(item)),
+                            Err(err) => Message::ProcessStreamItem(StreamItem::Err(err)),
+                        },
+                    },
+                    None,
+                )
+                .await?;
 
-                let mut vec: Vec<(usize, Vec<StreamAccu>)> = acc_map.into_iter().collect();
-                // vec.iter().for_each(|(_, acc)| {
-                //     acc.iter().for_each(|s_acc| match s_acc {
-                //         StreamAccu::String(joe) => {
-                //             println!("{joe}")
-                //         }
-                //         StreamAccu::Json(_) => {}
-                //         StreamAccu::Tool { .. } => {}
-                //     })
-                // });
-                vec.sort_by(|(i1, _), (i2, _)| i1.cmp(i2));
-                if let Some(StreamAccu::Tool { .. }) =
-                    vec.last().and_then(|(_, v)| v.first().cloned())
-                {
-                    myself.send_message(Message::UseTool(vec))?;
-                } else {    
-                    myself.stop(None);
-                }
+                state.stream_actor = Some(actor)
             }
             Message::UseTool(vec) => {
                 let res = Worker::process_tools(vec).await;
@@ -217,7 +228,51 @@ impl Actor for Worker {
                 }
                 println!("{:?}", state.history);
             }
-            Message::ContinueWork() => {}
+            Message::ProcessStreamItem(item) => match item {
+                StreamItem::Item(event) => Self::process_stream_event(event, state),
+                StreamItem::Err(err) => {
+                    eprintln!("\nError: {:?}", err);
+                }
+                StreamItem::Finished() => {
+                    let mut vec: Vec<(usize, Vec<StreamAccu>)> =
+                        state.acc_map.drain().into_iter().collect();
+
+                    vec.sort_by(|(i1, _), (i2, _)| i1.cmp(i2));
+                    if let Some(StreamAccu::Tool { .. }) =
+                        vec.last().and_then(|(_, v)| v.first().cloned())
+                    {
+                        myself.send_message(Message::UseTool(vec))?;
+                    } else {
+                        println!("joe biden")
+                        // myself.stop(None);
+                    }
+                }
+            },
+        }
+        Ok(())
+    }
+
+    async fn handle_supervisor_evt(
+        &self,
+        _myself: ActorRef<Self::Msg>,
+        message: SupervisionEvent,
+        state: &mut Self::State,
+    ) -> Result<(), ActorProcessingErr> {
+        match message {
+            SupervisionEvent::ActorTerminated(who, _, _) => {
+                if state
+                    .stream_actor
+                    .as_ref()
+                    .map(|t| t.get_id() == who.get_id())
+                    .unwrap_or(false)
+                {
+                    state.stream_actor = None;
+                }
+            }
+            SupervisionEvent::ActorFailed(who, reason) => {
+                eprintln!("Child actor {:?} failed: {:?}", who.get_id(), reason);
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -291,109 +346,95 @@ impl CurContext {
     }
 }
 impl Worker {
-    async fn process_stream(
-        &self,
-        stream: impl Stream<Item = ClaudeResult<StreamEvent>> + Send + 'static,
-    ) -> HashMap<usize, Vec<StreamAccu>> {
-        let mut stream = std::pin::pin!(stream);
-        let mut map: HashMap<usize, Vec<Delta>> = HashMap::new();
-        let mut acc_map: HashMap<usize, Vec<StreamAccu>> = HashMap::new();
-        while let Some(event_result) = stream.next().await {
-            match event_result {
-                Ok(event) => match event {
-                    StreamEvent::ContentBlockDelta { index, delta } => match map.get_mut(&index) {
-                        None => {
-                            map.insert(index, vec![delta]);
-                        }
-                        Some(vec) => vec.push(delta),
-                    },
-                    StreamEvent::ContentBlockStart {
-                        index,
-                        content_block,
-                    } => match content_block {
-                        ContentBlockInfo::ToolUse { id, input, name } => {
-                            match acc_map.get_mut(&index) {
-                                None => {
-                                    acc_map.insert(index, vec![StreamAccu::Tool { id, name }]);
-                                }
-                                Some(vec) => vec.push(StreamAccu::Tool { id, name }),
-                            }
-                        }
-                        _ => {}
-                    },
-                    StreamEvent::ContentBlockStop { index } => {
-                        map.remove(&index)
-                            .and_then(|buf| {
-                                buf.into_iter()
-                                    .filter_map(|delta| match delta {
-                                        Delta::TextDelta { text } => Some(StreamAccu::String(text)),
-                                        Delta::InputJsonDelta { partial_json } => {
-                                            Some(StreamAccu::Json(partial_json))
-                                        }
-                                        Delta::ThinkingDelta { thinking } => {
-                                            Some(StreamAccu::Thinking {
-                                                thinking,
-                                                signature: "".to_string(),
-                                            })
-                                        }
-                                        Delta::SignatureDelta { signature } => {
-                                            Some(StreamAccu::Thinking {
-                                                thinking: "".to_string(),
-                                                signature,
-                                            })
-                                        }
-                                    })
-                                    .reduce(|mut acc, delta| {
-                                        match (&mut acc, delta) {
-                                            (
-                                                StreamAccu::String(buffer),
-                                                StreamAccu::String(delta),
-                                            ) => buffer.push_str(&delta),
-                                            (
-                                                StreamAccu::Thinking {
-                                                    thinking: think_buf,
-                                                    signature: sig,
-                                                },
-                                                StreamAccu::Thinking {
-                                                    thinking,
-                                                    signature,
-                                                },
-                                            ) => {
-                                                think_buf.push_str(&thinking);
-                                                if !signature.is_empty() {
-                                                    sig.push_str(&signature)
-                                                }
-                                            }
-                                            (StreamAccu::Json(buffer), StreamAccu::Json(delta)) => {
-                                                buffer.push_str(&delta)
-                                            }
-                                            _ => {
-                                                unreachable!("mixed Text and InputJson deltas")
-                                            }
-                                        }
-                                        acc
-                                    })
-                            })
-                            .map(|buf| match acc_map.get_mut(&index) {
-                                Some(vec) => vec.push(buf),
-                                None => {
-                                    acc_map.insert(index, vec![buf]);
-                                }
-                            });
+    fn process_stream_event(item: StreamEvent, state: &mut ActorState) {
+        match item {
+            StreamEvent::ContentBlockDelta { index, delta } => {
+                match state.delta_buf.get_mut(&index) {
+                    None => {
+                        state.delta_buf.insert(index, vec![delta]);
                     }
-                    StreamEvent::MessageStop {} => {}
-                    StreamEvent::Error { error } => {
-                        println!("{:?}", error)
-                    }
-                    _ => {}
-                },
-                Err(e) => {
-                    eprintln!("\nError: {:?}", e);
-                    break;
+                    Some(vec) => vec.push(delta),
                 }
             }
+            StreamEvent::ContentBlockStart {
+                index,
+                content_block,
+            } => match content_block {
+                ContentBlockInfo::ToolUse { id, input, name } => {
+                    match state.acc_map.get_mut(&index) {
+                        None => {
+                            state
+                                .acc_map
+                                .insert(index, vec![StreamAccu::Tool { id, name }]);
+                        }
+                        Some(vec) => vec.push(StreamAccu::Tool { id, name }),
+                    }
+                }
+                _ => {}
+            },
+            StreamEvent::ContentBlockStop { index } => {
+                state
+                    .delta_buf
+                    .remove(&index)
+                    .and_then(|buf| {
+                        buf.into_iter()
+                            .filter_map(|delta| match delta {
+                                Delta::TextDelta { text } => Some(StreamAccu::String(text)),
+                                Delta::InputJsonDelta { partial_json } => {
+                                    Some(StreamAccu::Json(partial_json))
+                                }
+                                Delta::ThinkingDelta { thinking } => Some(StreamAccu::Thinking {
+                                    thinking,
+                                    signature: "".to_string(),
+                                }),
+                                Delta::SignatureDelta { signature } => Some(StreamAccu::Thinking {
+                                    thinking: "".to_string(),
+                                    signature,
+                                }),
+                            })
+                            .reduce(|mut acc, delta| {
+                                match (&mut acc, delta) {
+                                    (StreamAccu::String(buffer), StreamAccu::String(delta)) => {
+                                        buffer.push_str(&delta)
+                                    }
+                                    (
+                                        StreamAccu::Thinking {
+                                            thinking: think_buf,
+                                            signature: sig,
+                                        },
+                                        StreamAccu::Thinking {
+                                            thinking,
+                                            signature,
+                                        },
+                                    ) => {
+                                        think_buf.push_str(&thinking);
+                                        if !signature.is_empty() {
+                                            sig.push_str(&signature)
+                                        }
+                                    }
+                                    (StreamAccu::Json(buffer), StreamAccu::Json(delta)) => {
+                                        buffer.push_str(&delta)
+                                    }
+                                    _ => {
+                                        unreachable!("mixed Text and InputJson deltas")
+                                    }
+                                }
+                                acc
+                            })
+                    })
+                    .map(|buf| match state.acc_map.get_mut(&index) {
+                        Some(vec) => vec.push(buf),
+                        None => {
+                            state.acc_map.insert(index, vec![buf]);
+                        }
+                    });
+            }
+            StreamEvent::MessageStop {} => {}
+            StreamEvent::Error { error } => {
+                println!("{:?}", error)
+            }
+            _ => {}
         }
-        acc_map
     }
     async fn tool_use(
         a_vec: &Vec<StreamAccu>,
