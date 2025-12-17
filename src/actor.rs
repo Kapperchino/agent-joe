@@ -1,16 +1,13 @@
 use crate::actor_state::ActorState;
-use crate::claude::{
-    ClaudeClient, ClaudeError, ClientRequest, ContentBlock,
-    Role, StreamEvent,
-};
+use crate::claude::{ClaudeClient, ClaudeError, ClientRequest, ContentBlock, Role, StreamEvent};
 use crate::cur_context::CurContext;
 use crate::tools::ToolTrait;
 use crate::worker::Worker;
 use crate::{claude, tools};
+use ractor::Actor;
 use ractor::ActorProcessingErr;
 use ractor::ActorRef;
 use ractor::SupervisionEvent;
-use ractor::Actor;
 use ractor_actors::streams::spawn_stream_pump;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -159,42 +156,8 @@ impl Actor for Worker {
             Message::UseTool(vec) => {
                 let res = Worker::process_tools(vec).await;
                 state.change_state(State::ToolStart);
-                res.into_iter().for_each(|res| match res {
-                    Ok(stream_res) => match stream_res {
-                        StreamRes::String(str) => {
-                            state.history.push(claude::Message::new_assistant(str))
-                        }
-                        StreamRes::Thinking {
-                            thinking,
-                            signature,
-                        } => {
-                            state.history.push(claude::Message {
-                                role: Role::Assistant,
-                                content: vec![ContentBlock::ThinkingBlock {
-                                    thinking,
-                                    signature,
-                                }],
-                            });
-                        }
-                        StreamRes::Tool(tool_res) => {
-                            state.history.push(claude::Message {
-                                role: Role::Assistant,
-                                content: vec![ContentBlock::ToolBlock {
-                                    id: tool_res.tool().id(),
-                                    name: tool_res.tool().name(),
-                                    input: tool_res.tool().to_req(),
-                                }],
-                            });
-                            state.history.push(claude::Message {
-                                role: Role::User,
-                                content: vec![tool_res.to_res_json()],
-                            });
-                        }
-                    },
-                    Err(err) => {
-                        println!("{:?}", err)
-                    }
-                });
+                state.save_history(res);
+                state.change_state(State::ToolStop);
                 // if tool result was the last value, then we can loop
                 if let Some(ContentBlock::ToolResult { .. }) =
                     state.history.last().and_then(|msg| msg.content.last())
@@ -221,6 +184,8 @@ impl Actor for Worker {
                     {
                         myself.send_message(Message::UseTool(vec))?;
                     } else {
+                        let res = Worker::process_tools(vec).await;
+                        state.save_history(res);
                         println!("joe biden")
                         // myself.stop(None);
                     }

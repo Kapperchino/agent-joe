@@ -1,9 +1,10 @@
-use crate::actor::{State, StreamAccu};
-use crate::claude::{ClaudeClient, ContentBlockInfo, Delta, StreamEvent};
+use crate::actor::{State, StreamAccu, StreamRes};
+use crate::claude::{ClaudeClient, ContentBlock, ContentBlockInfo, Delta, Role, StreamEvent};
 use crate::cur_context::CurContext;
 use crate::{claude, tools};
 use ractor::ActorCell;
 use std::collections::HashMap;
+use crate::tools::ToolTrait;
 
 pub struct ActorState {
     pub(crate) cur_context: CurContext,
@@ -17,6 +18,44 @@ pub struct ActorState {
 }
 
 impl ActorState {
+    pub fn save_history(&mut self, vec: Vec<Result<StreamRes, anyhow::Error>>) {
+        vec.into_iter().for_each(|res| match res {
+            Ok(stream_res) => match stream_res {
+                StreamRes::String(str) => {
+                    self.history.push(claude::Message::new_assistant(str))
+                }
+                StreamRes::Thinking {
+                    thinking,
+                    signature,
+                } => {
+                    self.history.push(claude::Message {
+                        role: Role::Assistant,
+                        content: vec![ContentBlock::ThinkingBlock {
+                            thinking,
+                            signature,
+                        }],
+                    });
+                }
+                StreamRes::Tool(tool_res) => {
+                    self.history.push(claude::Message {
+                        role: Role::Assistant,
+                        content: vec![ContentBlock::ToolBlock {
+                            id: tool_res.tool().id(),
+                            name: tool_res.tool().name(),
+                            input: tool_res.tool().to_req(),
+                        }],
+                    });
+                    self.history.push(claude::Message {
+                        role: Role::User,
+                        content: vec![tool_res.to_res_json()],
+                    });
+                }
+            },
+            Err(err) => {
+                println!("{:?}", err)
+            }
+        });
+    }
     pub fn change_state(&mut self, new_state: State) {
         self.cur_state = new_state.clone();
         println!("{:?}", new_state)

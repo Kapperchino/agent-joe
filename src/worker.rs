@@ -29,7 +29,7 @@ impl Worker {
         }
     }
 
-    pub(crate) async fn process_tools(
+    pub async fn process_tools(
         vec: Vec<(usize, Vec<StreamAccu>)>,
     ) -> Vec<Result<crate::actor::StreamRes, Error>> {
         let futures: Vec<_> = vec
