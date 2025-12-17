@@ -1,25 +1,21 @@
+use crate::actor_state::ActorState;
 use crate::claude::{
-    ClaudeClient, ClaudeError, ClaudeResult, ClientRequest, ContentBlock, ContentBlockInfo, Delta,
+    ClaudeClient, ClaudeError, ClientRequest, ContentBlock,
     Role, StreamEvent,
 };
-use crate::tools::{ReadFileInput, ToolResult, ToolTrait};
+use crate::cur_context::CurContext;
+use crate::tools::ToolTrait;
+use crate::worker::Worker;
 use crate::{claude, tools};
-use anyhow::Error;
-use futures::future;
 use ractor::ActorProcessingErr;
 use ractor::ActorRef;
 use ractor::SupervisionEvent;
-use ractor::{Actor, ActorCell};
+use ractor::Actor;
 use ractor_actors::streams::spawn_stream_pump;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::env;
 use std::fmt::Display;
-use std::path::PathBuf;
 use thiserror::Error;
-use tokio::fs;
-use tokio::fs::DirEntry;
-use tokio_stream::wrappers::ReadDirStream;
 use tokio_stream::{Stream, StreamExt};
 
 #[derive(Error, Debug)]
@@ -55,9 +51,6 @@ pub enum StreamItem {
     Finished(),
 }
 
-// Base unit for the agent, should be given context and then simply do the work
-pub struct Worker {}
-
 #[derive(Debug)]
 pub enum Message {
     StartWork(Option<String>),
@@ -65,30 +58,22 @@ pub enum Message {
     ProcessStreamItem(StreamItem),
 }
 
-pub struct CurContext {
-    cur_dir: PathBuf,
-    cur_files: Vec<DirEntry>,
-}
-
-pub struct ActorState {
-    cur_context: CurContext,
-    stream_actor: Option<ActorCell>,
-    cur_state: State,
-    history: Vec<claude::Message>,
-    claude: ClaudeClient,
-    tools: Vec<tools::Tool>,
-    acc_map: HashMap<usize, Vec<StreamAccu>>,
-    delta_buf: HashMap<usize, Vec<Delta>>,
-}
-
 pub struct Dependency {
-    pub(crate) claude: ClaudeClient,
+    pub claude: ClaudeClient,
     pub tools: Vec<tools::Tool>,
 }
 
+#[derive(Debug, Clone)]
 pub enum State {
     Ready,
-    Working,
+    StreamStart,
+    StreamStop,
+    ThinkingStart,
+    ThinkingStop,
+    MessageStart,
+    MessageStop,
+    ToolStart,
+    ToolStop,
     Stopped,
 }
 impl Message {}
@@ -102,7 +87,7 @@ pub enum StreamAccu {
 }
 
 #[derive(Debug)]
-enum StreamRes {
+pub(crate) enum StreamRes {
     String(String),
     Thinking { thinking: String, signature: String },
     Tool(tools::ToolResult),
@@ -143,16 +128,6 @@ impl Actor for Worker {
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
-        match state.cur_state {
-            State::Working => {
-                if let Message::StartWork(_) = message {
-                    return Err(WorkerError::WIP).actor_err();
-                }
-            }
-            State::Stopped => return Err(ActorProcessingErr::from(WorkerError::Ended.to_string())),
-            _ => {}
-        };
-
         match message {
             Message::StartWork(prompt) => {
                 prompt.map(|p| {
@@ -165,7 +140,6 @@ impl Actor for Worker {
 
                 let stream = state.claude.chat_stream(req).await?;
 
-                //TODO: error handling for spawned actor
                 let actor = spawn_stream_pump(
                     stream,
                     myself,
@@ -184,6 +158,7 @@ impl Actor for Worker {
             }
             Message::UseTool(vec) => {
                 let res = Worker::process_tools(vec).await;
+                state.change_state(State::ToolStart);
                 res.into_iter().for_each(|res| match res {
                     Ok(stream_res) => match stream_res {
                         StreamRes::String(str) => {
@@ -229,7 +204,10 @@ impl Actor for Worker {
                 println!("{:?}", state.history);
             }
             Message::ProcessStreamItem(item) => match item {
-                StreamItem::Item(event) => Self::process_stream_event(event, state),
+                StreamItem::Item(event) => {
+                    state.handle_stream_state(event.clone());
+                    state.process_stream_event(event);
+                }
                 StreamItem::Err(err) => {
                     eprintln!("\nError: {:?}", err);
                 }
@@ -281,209 +259,4 @@ impl Actor for Worker {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 struct ToolInput {
     map: HashMap<String, String>,
-}
-
-impl CurContext {
-    async fn get_cur_context() -> Result<CurContext, anyhow::Error> {
-        let current_dir = env::current_dir()?;
-        let read_dir = fs::read_dir(current_dir.clone()).await?;
-        let read_dir_stream = ReadDirStream::new(read_dir);
-        let files = read_dir_stream
-            .fold(vec![], |mut acc, item| {
-                match item {
-                    Ok(entry) => {
-                        acc.push(entry);
-                    }
-                    Err(_) => {
-                        println!("error with getting files")
-                    }
-                };
-                acc
-            })
-            .await;
-        Ok(CurContext {
-            cur_dir: current_dir,
-            cur_files: files,
-        })
-    }
-
-    async fn to_string(&self) -> String {
-        let dir = self.cur_dir.to_str().unwrap_or("");
-        let files: Vec<_> = self
-            .cur_files
-            .iter()
-            .map(async |file| {
-                let path = file.path();
-                let file_type = match file.file_type().await {
-                    Ok(f_type) => {
-                        if f_type.is_dir() {
-                            Some("type: dir")
-                        } else if f_type.is_file() {
-                            Some("type: file")
-                        } else if f_type.is_symlink() {
-                            Some("type: symlink")
-                        } else {
-                            None
-                        }
-                    }
-                    Err(_) => None,
-                };
-                if let Some(f_type) = file_type
-                    && let Some(p_str) = path.to_str()
-                {
-                    Some(format!("path: {p_str}, {f_type}\n").to_string())
-                } else {
-                    None
-                }
-            })
-            .collect();
-        let res: String = future::join_all(files)
-            .await
-            .into_iter()
-            .flatten()
-            .fold(String::new(), |acc, s| format!("{acc}{s}").to_string());
-        format!("Current Context: \ncurrent directory: {dir}\ncurrent files:\n{res}")
-    }
-}
-impl Worker {
-    fn process_stream_event(item: StreamEvent, state: &mut ActorState) {
-        match item {
-            StreamEvent::ContentBlockDelta { index, delta } => {
-                match state.delta_buf.get_mut(&index) {
-                    None => {
-                        state.delta_buf.insert(index, vec![delta]);
-                    }
-                    Some(vec) => vec.push(delta),
-                }
-            }
-            StreamEvent::ContentBlockStart {
-                index,
-                content_block,
-            } => match content_block {
-                ContentBlockInfo::ToolUse { id, input, name } => {
-                    match state.acc_map.get_mut(&index) {
-                        None => {
-                            state
-                                .acc_map
-                                .insert(index, vec![StreamAccu::Tool { id, name }]);
-                        }
-                        Some(vec) => vec.push(StreamAccu::Tool { id, name }),
-                    }
-                }
-                _ => {}
-            },
-            StreamEvent::ContentBlockStop { index } => {
-                state
-                    .delta_buf
-                    .remove(&index)
-                    .and_then(|buf| {
-                        buf.into_iter()
-                            .filter_map(|delta| match delta {
-                                Delta::TextDelta { text } => Some(StreamAccu::String(text)),
-                                Delta::InputJsonDelta { partial_json } => {
-                                    Some(StreamAccu::Json(partial_json))
-                                }
-                                Delta::ThinkingDelta { thinking } => Some(StreamAccu::Thinking {
-                                    thinking,
-                                    signature: "".to_string(),
-                                }),
-                                Delta::SignatureDelta { signature } => Some(StreamAccu::Thinking {
-                                    thinking: "".to_string(),
-                                    signature,
-                                }),
-                            })
-                            .reduce(|mut acc, delta| {
-                                match (&mut acc, delta) {
-                                    (StreamAccu::String(buffer), StreamAccu::String(delta)) => {
-                                        buffer.push_str(&delta)
-                                    }
-                                    (
-                                        StreamAccu::Thinking {
-                                            thinking: think_buf,
-                                            signature: sig,
-                                        },
-                                        StreamAccu::Thinking {
-                                            thinking,
-                                            signature,
-                                        },
-                                    ) => {
-                                        think_buf.push_str(&thinking);
-                                        if !signature.is_empty() {
-                                            sig.push_str(&signature)
-                                        }
-                                    }
-                                    (StreamAccu::Json(buffer), StreamAccu::Json(delta)) => {
-                                        buffer.push_str(&delta)
-                                    }
-                                    _ => {
-                                        unreachable!("mixed Text and InputJson deltas")
-                                    }
-                                }
-                                acc
-                            })
-                    })
-                    .map(|buf| match state.acc_map.get_mut(&index) {
-                        Some(vec) => vec.push(buf),
-                        None => {
-                            state.acc_map.insert(index, vec![buf]);
-                        }
-                    });
-            }
-            StreamEvent::MessageStop {} => {}
-            StreamEvent::Error { error } => {
-                println!("{:?}", error)
-            }
-            _ => {}
-        }
-    }
-    async fn tool_use(
-        a_vec: &Vec<StreamAccu>,
-        name: String,
-        id: String,
-    ) -> Result<ToolResult, anyhow::Error> {
-        match tools::Tool::from_str(name.as_str())? {
-            tools::Tool::ReadFile(_) => {
-                match a_vec.get(1).ok_or(anyhow::Error::msg("doesn't work"))? {
-                    StreamAccu::Json(json) => {
-                        let input: ReadFileInput = serde_json::from_str::<_>(json)?;
-                        let rf = tools::ReadFile {
-                            id: id.clone(),
-                            input,
-                        };
-                        Ok(tools::Tool::ReadFile(rf).use_tool(id).await?)
-                    }
-                    _ => Err(anyhow::Error::msg("doesn't work")),
-                }
-            }
-        }
-    }
-
-    async fn process_tools(vec: Vec<(usize, Vec<StreamAccu>)>) -> Vec<Result<StreamRes, Error>> {
-        let futures: Vec<_> = vec
-            .into_iter()
-            .map(
-                async |(_, a_vec): (usize, Vec<StreamAccu>)| match a_vec.first() {
-                    Some(accu) => match accu {
-                        StreamAccu::String(str) => Ok(StreamRes::String(str.clone())),
-                        StreamAccu::Tool { id, name } => {
-                            let tool_res =
-                                Worker::tool_use(&a_vec, name.to_string(), id.to_string()).await?;
-                            Ok(StreamRes::Tool(tool_res))
-                        }
-                        StreamAccu::Thinking {
-                            thinking,
-                            signature,
-                        } => Ok(StreamRes::Thinking {
-                            thinking: thinking.clone(),
-                            signature: signature.clone(),
-                        }),
-                        _ => Err(anyhow::Error::msg("No valid tool")),
-                    },
-                    None => Err(anyhow::Error::msg("No valid tool")),
-                },
-            )
-            .collect();
-
-        future::join_all(futures).await
-    }
 }
