@@ -4,6 +4,7 @@ mod cur_context;
 mod tools;
 mod worker;
 mod actor_state;
+mod tui;
 
 use crate::actor::{Dependency, Message};
 use crate::claude::{ClaudeClient, ClaudeConfig};
@@ -33,20 +34,26 @@ async fn main() {
     })
     .unwrap();
 
-    let prompt =
-        "You are an agent, given a file tools.rs, read the file and implement the enum members ";
+    // let prompt =
+    //     "You are an agent, given a file tools.rs, read the file and implement the enum members ";
+    //
+    // let (joe, actor_handle) = Actor::spawn(
+    //     None,
+    //     Worker {},
+    //     Dependency {
+    //         claude: client,
+    //         tools: vec![tools::Tool::ReadFile(ReadFile::default())],
+    //     },
+    // )
+    // .await
+    // .expect("Failed to start actor");
+    // joe.send_message(Message::StartWork(Some(prompt.to_string())))
+    //     .unwrap();
+    // actor_handle.await.expect("Actor failed to exit cleanly");
 
-    let (joe, actor_handle) = Actor::spawn(
-        None,
-        Worker {},
-        Dependency {
-            claude: client,
-            tools: vec![tools::Tool::ReadFile(ReadFile::default())],
-        },
-    )
-    .await
-    .expect("Failed to start actor");
-    joe.send_message(Message::StartWork(Some(prompt.to_string())))
-        .unwrap();
-    actor_handle.await.expect("Actor failed to exit cleanly");
+    color_eyre::install().unwrap();
+    let terminal = ratatui::init();
+    let app_result = crate::tui::App::default().run(terminal).unwrap();
+    ratatui::restore();
+
 }
