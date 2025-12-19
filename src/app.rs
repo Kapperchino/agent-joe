@@ -1,9 +1,10 @@
 #![warn(clippy::pedantic)]
 
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use color_eyre::Result;
 use crossterm::event::EventStream;
+use crossterm::event::KeyCode::Insert;
 use ratatui::layout::Position;
 use ratatui::widgets::{List, ListItem, ListState, Wrap};
 use ratatui::{
@@ -17,7 +18,6 @@ use ratatui::{
 };
 use tokio_stream::StreamExt;
 
-#[derive(Default)]
 pub(crate) struct App {
     pub vertical_scroll_state: ScrollbarState,
     pub horizontal_scroll_state: ScrollbarState,
@@ -29,6 +29,8 @@ pub(crate) struct App {
     messages: Vec<String>,
     input_mode: InputMode,
     do_quit: bool,
+    auto_scroll: bool,
+    msg_area_height: usize,
 }
 #[derive(Default)]
 enum InputMode {
@@ -38,6 +40,34 @@ enum InputMode {
 }
 
 impl App {
+    pub fn new() -> Self {
+        Self {
+            vertical_scroll_state: Default::default(),
+            horizontal_scroll_state: Default::default(),
+            vertical_scroll: 0,
+            horizontal_scroll: 0,
+            list_state: Default::default(),
+            character_index: 0,
+            input: "".to_string(),
+            messages: vec![],
+            input_mode: Default::default(),
+            do_quit: false,
+            auto_scroll: true,
+            msg_area_height: 0,
+        }
+    }
+
+    fn max_scroll(&self) -> usize {
+        let visible_lines = self.msg_area_height.saturating_sub(2);
+        self.messages.len().saturating_sub(visible_lines)
+    }
+
+    fn scroll_to_bottom(&mut self) {
+        self.vertical_scroll = self.max_scroll();
+        self.vertical_scroll_state = self.vertical_scroll_state.position(self.vertical_scroll);
+        *self.list_state.offset_mut() = self.vertical_scroll;
+    }
+
     fn move_cursor_left(&mut self) {
         let cursor_moved_left = self.character_index.saturating_sub(1);
         self.character_index = self.clamp_cursor(cursor_moved_left);
@@ -97,6 +127,9 @@ impl App {
             self.messages.push(self.input.clone());
             self.input.clear();
             self.reset_cursor();
+            if self.auto_scroll {
+                self.scroll_to_bottom();
+            }
         }
     }
 
@@ -124,16 +157,19 @@ impl App {
                     }
                     KeyCode::Char('q') => self.do_quit = true,
                     KeyCode::Char('j') | KeyCode::Down => {
-                        self.vertical_scroll = self.vertical_scroll.saturating_add(1);
+                        let max = self.max_scroll();
+                        self.vertical_scroll = self.vertical_scroll.saturating_add(1).min(max);
                         self.vertical_scroll_state =
                             self.vertical_scroll_state.position(self.vertical_scroll);
                         *self.list_state.offset_mut() = self.vertical_scroll;
+                        self.auto_scroll = false;
                     }
                     KeyCode::Char('k') | KeyCode::Up => {
                         self.vertical_scroll = self.vertical_scroll.saturating_sub(1);
                         self.vertical_scroll_state =
                             self.vertical_scroll_state.position(self.vertical_scroll);
                         *self.list_state.offset_mut() = self.vertical_scroll;
+                        self.auto_scroll = false;
                     }
                     KeyCode::Char('h') | KeyCode::Left => {
                         self.horizontal_scroll = self.horizontal_scroll.saturating_sub(1);
@@ -146,6 +182,10 @@ impl App {
                         self.horizontal_scroll_state = self
                             .horizontal_scroll_state
                             .position(self.horizontal_scroll);
+                    }
+                    KeyCode::Char('G') => {
+                        self.auto_scroll = true;
+                        self.scroll_to_bottom();
                     }
                     _ => {}
                 },
@@ -178,6 +218,12 @@ impl App {
         ]);
 
         let [top_bar_area, msg_area, input_area] = chunks.areas(frame.area());
+
+        self.msg_area_height = msg_area.height as usize;
+
+        if self.auto_scroll {
+            self.scroll_to_bottom();
+        }
 
         let input = Paragraph::new(self.input.as_str())
             .style(match self.input_mode {

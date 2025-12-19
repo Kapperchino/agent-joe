@@ -53,7 +53,7 @@ async fn main() {
 
     color_eyre::install().unwrap();
     let terminal = ratatui::init();
-    let app_result = crate::app::App::default().run(terminal).await.unwrap();
+    let app_result = crate::app::App::new().run(terminal).await.unwrap();
     ratatui::restore();
 
 }
