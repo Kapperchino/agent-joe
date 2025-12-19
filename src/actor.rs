@@ -58,6 +58,7 @@ pub enum Message {
     StartWork(Option<String>),
     UseTool(Vec<(usize, Vec<StreamAccu>)>),
     ProcessStreamItem(StreamItem),
+    KYS
 }
 
 pub struct Dependency {
@@ -198,6 +199,7 @@ impl Actor for Worker {
                     }
                 }
             },
+            Message::KYS => myself.kill()
         }
         Ok(())
     }

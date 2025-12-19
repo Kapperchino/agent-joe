@@ -63,11 +63,10 @@ impl ActorState {
         let _ = chan.blocking_send(ActorToTui::StateChanged(new_state.clone()));
         println!("{:?}", new_state);
     }
-    pub fn send_delta(&mut self, str: String) {
-        let chan = self.tui_tx.clone();
-        let _ = chan.blocking_send(ActorToTui::Data(str));
+    pub async fn send_delta(&mut self, str: String) {
+        let _ = self.tui_tx.send(ActorToTui::Data(str)).await;
     }
-    pub fn handle_stream_state(&mut self, item: StreamEvent) {
+    pub async fn handle_stream_state(&mut self, item: StreamEvent) {
         match item {
             StreamEvent::MessageStart { .. } => self.change_state(State::StreamStart),
             StreamEvent::ContentBlockStart {
@@ -79,8 +78,8 @@ impl ActorState {
                 ContentBlockInfo::Text { .. } => self.change_state(State::MessageStart),
             },
             StreamEvent::ContentBlockDelta { index, delta } => match delta {
-                Delta::TextDelta { text } => self.send_delta(text),
-                Delta::ThinkingDelta { thinking } => self.send_delta(thinking),
+                Delta::TextDelta { text } => self.send_delta(text).await,
+                Delta::ThinkingDelta { thinking } => self.send_delta(thinking).await,
                 Delta::InputJsonDelta { .. } => {}
                 Delta::SignatureDelta { .. } => {}
             },

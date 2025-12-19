@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use color_eyre::Result;
 use crossterm::event::EventStream;
+use ractor::{ActorRef, MessagingErr};
 use ratatui::layout::Position;
 use ratatui::widgets::{List, ListItem, ListState};
 use ratatui::{
@@ -14,7 +15,10 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
+use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
+
+use crate::actor::{ActorToTui, Message};
 
 pub(crate) struct App {
     pub vertical_scroll_state: ScrollbarState,
@@ -29,6 +33,7 @@ pub(crate) struct App {
     do_quit: bool,
     auto_scroll: bool,
     msg_area_height: usize,
+    actor_ref: ActorRef<Message>,
 }
 #[derive(Default)]
 enum InputMode {
@@ -38,7 +43,7 @@ enum InputMode {
 }
 
 impl App {
-    pub fn new() -> Self {
+    pub fn new(actor_ref: ActorRef<Message>) -> Self {
         Self {
             vertical_scroll_state: Default::default(),
             horizontal_scroll_state: Default::default(),
@@ -46,15 +51,16 @@ impl App {
             horizontal_scroll: 0,
             list_state: Default::default(),
             character_index: 0,
-            input: "".to_string(),
+            input: String::new(),
             messages: vec![],
             input_mode: Default::default(),
             do_quit: false,
             auto_scroll: true,
             msg_area_height: 0,
+            actor_ref,
         }
     }
-    
+
     fn max_scroll(&self) -> usize {
         let visible_lines = self.msg_area_height.saturating_sub(2);
         self.messages.len().saturating_sub(visible_lines)
@@ -122,6 +128,15 @@ impl App {
 
     fn submit_message(&mut self) {
         if !self.input.is_empty() {
+            match self
+                .actor_ref
+                .send_message(Message::StartWork(Some(self.input.to_string())))
+            {
+                Ok(_) => {}
+                Err(_) => {
+                    eprintln!("it's joever")
+                }
+            };
             self.messages.push(self.input.clone());
             self.input.clear();
             self.reset_cursor();
@@ -160,7 +175,11 @@ impl App {
             .position(self.horizontal_scroll);
     }
 
-    pub(crate) async fn run(mut self, mut terminal: DefaultTerminal) -> Result<()> {
+    pub(crate) async fn run(
+        mut self,
+        mut terminal: DefaultTerminal,
+        mut actor_rx: mpsc::Receiver<ActorToTui>,
+    ) -> Result<()> {
         let mut events = EventStream::new();
 
         let period = Duration::from_secs_f32(1.0 / 120.0);
@@ -170,9 +189,21 @@ impl App {
             tokio::select! {
                 _ = interval.tick() => { terminal.draw(|frame| self.draw(frame))?; },
                 Some(Ok(event)) = events.next() => self.handle_term_event(&event),
+                Some(actor_msg) = actor_rx.recv() => self.handle_actor_msg(actor_msg),
             }
         }
         Ok(())
+    }
+
+    fn handle_actor_msg(&mut self, msg: ActorToTui) {
+        match msg {
+            ActorToTui::StateChanged(state) => {
+                self.messages.push(format!("State: {state:?}"));
+            }
+            ActorToTui::Data(data) => {
+                self.messages.push(data);
+            }
+        }
     }
 
     fn handle_term_event(&mut self, event: &Event) -> () {
@@ -182,7 +213,13 @@ impl App {
                     KeyCode::Char('i') => {
                         self.input_mode = InputMode::Editing;
                     }
-                    KeyCode::Char('q') => self.do_quit = true,
+                    KeyCode::Char('q') => {
+                        self.do_quit = true;
+                        match self.actor_ref.send_message(Message::KYS) {
+                            Ok(_) => {}
+                            Err(_) => {}
+                        }
+                    }
                     KeyCode::Char('j') | KeyCode::Down => self.scroll_down(),
                     KeyCode::Char('k') | KeyCode::Up => self.scroll_up(),
                     KeyCode::Char('h') | KeyCode::Left => self.scroll_left(),
@@ -196,7 +233,7 @@ impl App {
                 InputMode::Editing => match key.code {
                     KeyCode::Enter => {
                         self.submit_message();
-                        self.input_mode = InputMode::Normal
+                        self.input_mode = InputMode::Normal;
                     }
                     KeyCode::Char(to_insert) => self.enter_char(to_insert),
                     KeyCode::Backspace => self.delete_char(),

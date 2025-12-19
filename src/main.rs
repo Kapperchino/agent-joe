@@ -1,10 +1,10 @@
 mod actor;
+mod actor_state;
+mod app;
 mod claude;
 mod cur_context;
 mod tools;
 mod worker;
-mod actor_state;
-mod app;
 
 use crate::claude::{ClaudeClient, ClaudeConfig};
 use log::LevelFilter;
@@ -13,7 +13,11 @@ use simplelog::{ColorChoice, CombinedLogger, Config, TermLogger, TerminalMode};
 use std::env;
 use std::io::Write;
 use tokio::main;
+use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
+use crate::actor::Dependency;
+use crate::tools::ReadFile;
+use crate::worker::Worker;
 
 #[main]
 async fn main() {
@@ -31,26 +35,24 @@ async fn main() {
     })
     .unwrap();
 
-    // let prompt =
-    //     "You are an agent, given a file tools.rs, read the file and implement the enum members ";
-    //
-    // let (joe, actor_handle) = Actor::spawn(
-    //     None,
-    //     Worker {},
-    //     Dependency {
-    //         claude: client,
-    //         tools: vec![tools::Tool::ReadFile(ReadFile::default())],
-    //     },
-    // )
-    // .await
-    // .expect("Failed to start actor");
-    // joe.send_message(Message::StartWork(Some(prompt.to_string())))
-    //     .unwrap();
-    // actor_handle.await.expect("Actor failed to exit cleanly");
+    let (tx, rx) = mpsc::channel(32);
+
+    let (joe, actor_handle) = Actor::spawn(
+        None,
+        Worker {},
+        Dependency {
+            claude: client,
+            tools: vec![tools::Tool::ReadFile(ReadFile::default())],
+            tui_tx: tx,
+        },
+    )
+    .await
+    .expect("Failed to start actor");
 
     color_eyre::install().unwrap();
     let terminal = ratatui::init();
-    let app_result = crate::app::App::new().run(terminal).await.unwrap();
+    let app = crate::app::App::new(joe);
+    let app_result = app.run(terminal, rx).await.unwrap();
+    actor_handle.await.expect("Actor failed to exit cleanly");
     ratatui::restore();
-
 }
