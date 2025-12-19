@@ -1,20 +1,19 @@
 #![warn(clippy::pedantic)]
 
-use std::time::{Duration, Instant, SystemTime};
+use std::time::Duration;
 
 use color_eyre::Result;
 use crossterm::event::EventStream;
-use crossterm::event::KeyCode::Insert;
 use ratatui::layout::Position;
-use ratatui::widgets::{List, ListItem, ListState, Wrap};
+use ratatui::widgets::{List, ListItem, ListState};
 use ratatui::{
-    DefaultTerminal, Frame,
-    crossterm::event::{self, Event, KeyCode},
-    layout::{Alignment, Constraint, Layout, Margin},
+    crossterm::event::{Event, KeyCode}, layout::{Alignment, Constraint, Layout},
     style::{Color, Style, Stylize},
-    symbols::scrollbar,
-    text::{Line, Masked, Span},
-    widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
+    text::{Line, Span},
+    widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState}
+    ,
+    DefaultTerminal,
+    Frame,
 };
 use tokio_stream::StreamExt;
 
@@ -142,13 +141,13 @@ impl App {
         while !self.do_quit {
             tokio::select! {
                 _ = interval.tick() => { terminal.draw(|frame| self.draw(frame))?; },
-                Some(Ok(event)) = events.next() => self.handleTermEvent(&event),
+                Some(Ok(event)) = events.next() => self.handle_term_event(&event),
             }
         }
         Ok(())
     }
 
-    fn handleTermEvent(&mut self, event: &Event) -> () {
+    fn handle_term_event(&mut self, event: &Event) -> () {
         if let Event::Key(key) = event {
             match self.input_mode {
                 InputMode::Normal => match key.code {
@@ -221,6 +220,10 @@ impl App {
 
         self.msg_area_height = msg_area.height as usize;
 
+        if self.vertical_scroll >= self.max_scroll() {
+            self.auto_scroll = true;
+        }
+
         if self.auto_scroll {
             self.scroll_to_bottom();
         }
@@ -272,11 +275,7 @@ impl App {
             .title("Use h j k l or ◄ ▲ ▼ ► to scroll ".bold());
         frame.render_widget(title, top_bar_area);
 
-        // let paragraph = Paragraph::new(text.clone())
-        //     .gray()
-        //     .block(create_block("Vertical scrollbar with arrows"))
-        //     .scroll((self.vertical_scroll as u16, 0))
-        //     .wrap(Wrap { trim: false });
+
         frame.render_stateful_widget(messages, msg_area, &mut self.list_state);
         frame.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalRight)

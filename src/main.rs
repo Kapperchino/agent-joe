@@ -6,10 +6,7 @@ mod worker;
 mod actor_state;
 mod app;
 
-use crate::actor::{Dependency, Message};
 use crate::claude::{ClaudeClient, ClaudeConfig};
-use crate::tools::ReadFile;
-use crate::worker::Worker;
 use log::LevelFilter;
 use ractor::Actor;
 use simplelog::{ColorChoice, CombinedLogger, Config, TermLogger, TerminalMode};
