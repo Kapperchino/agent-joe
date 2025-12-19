@@ -7,13 +7,12 @@ use crossterm::event::EventStream;
 use ratatui::layout::Position;
 use ratatui::widgets::{List, ListItem, ListState};
 use ratatui::{
-    crossterm::event::{Event, KeyCode}, layout::{Alignment, Constraint, Layout},
+    DefaultTerminal, Frame,
+    crossterm::event::{Event, KeyCode},
+    layout::{Alignment, Constraint, Layout},
     style::{Color, Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState}
-    ,
-    DefaultTerminal,
-    Frame,
+    widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
 use tokio_stream::StreamExt;
 
@@ -55,7 +54,7 @@ impl App {
             msg_area_height: 0,
         }
     }
-
+    
     fn max_scroll(&self) -> usize {
         let visible_lines = self.msg_area_height.saturating_sub(2);
         self.messages.len().saturating_sub(visible_lines)
@@ -132,6 +131,35 @@ impl App {
         }
     }
 
+    fn scroll_up(&mut self) {
+        self.vertical_scroll = self.vertical_scroll.saturating_sub(1);
+        self.vertical_scroll_state = self.vertical_scroll_state.position(self.vertical_scroll);
+        *self.list_state.offset_mut() = self.vertical_scroll;
+        self.auto_scroll = false;
+    }
+
+    fn scroll_down(&mut self) {
+        let max = self.max_scroll();
+        self.vertical_scroll = self.vertical_scroll.saturating_add(1).min(max);
+        self.vertical_scroll_state = self.vertical_scroll_state.position(self.vertical_scroll);
+        *self.list_state.offset_mut() = self.vertical_scroll;
+        self.auto_scroll = false;
+    }
+
+    fn scroll_left(&mut self) {
+        self.horizontal_scroll = self.horizontal_scroll.saturating_sub(1);
+        self.horizontal_scroll_state = self
+            .horizontal_scroll_state
+            .position(self.horizontal_scroll);
+    }
+
+    fn scroll_right(&mut self) {
+        self.horizontal_scroll = self.horizontal_scroll.saturating_add(1);
+        self.horizontal_scroll_state = self
+            .horizontal_scroll_state
+            .position(self.horizontal_scroll);
+    }
+
     pub(crate) async fn run(mut self, mut terminal: DefaultTerminal) -> Result<()> {
         let mut events = EventStream::new();
 
@@ -151,37 +179,14 @@ impl App {
         if let Event::Key(key) = event {
             match self.input_mode {
                 InputMode::Normal => match key.code {
-                    KeyCode::Char('e') => {
+                    KeyCode::Char('i') => {
                         self.input_mode = InputMode::Editing;
                     }
                     KeyCode::Char('q') => self.do_quit = true,
-                    KeyCode::Char('j') | KeyCode::Down => {
-                        let max = self.max_scroll();
-                        self.vertical_scroll = self.vertical_scroll.saturating_add(1).min(max);
-                        self.vertical_scroll_state =
-                            self.vertical_scroll_state.position(self.vertical_scroll);
-                        *self.list_state.offset_mut() = self.vertical_scroll;
-                        self.auto_scroll = false;
-                    }
-                    KeyCode::Char('k') | KeyCode::Up => {
-                        self.vertical_scroll = self.vertical_scroll.saturating_sub(1);
-                        self.vertical_scroll_state =
-                            self.vertical_scroll_state.position(self.vertical_scroll);
-                        *self.list_state.offset_mut() = self.vertical_scroll;
-                        self.auto_scroll = false;
-                    }
-                    KeyCode::Char('h') | KeyCode::Left => {
-                        self.horizontal_scroll = self.horizontal_scroll.saturating_sub(1);
-                        self.horizontal_scroll_state = self
-                            .horizontal_scroll_state
-                            .position(self.horizontal_scroll);
-                    }
-                    KeyCode::Char('l') | KeyCode::Right => {
-                        self.horizontal_scroll = self.horizontal_scroll.saturating_add(1);
-                        self.horizontal_scroll_state = self
-                            .horizontal_scroll_state
-                            .position(self.horizontal_scroll);
-                    }
+                    KeyCode::Char('j') | KeyCode::Down => self.scroll_down(),
+                    KeyCode::Char('k') | KeyCode::Up => self.scroll_up(),
+                    KeyCode::Char('h') | KeyCode::Left => self.scroll_left(),
+                    KeyCode::Char('l') | KeyCode::Right => self.scroll_right(),
                     KeyCode::Char('G') => {
                         self.auto_scroll = true;
                         self.scroll_to_bottom();
@@ -189,7 +194,10 @@ impl App {
                     _ => {}
                 },
                 InputMode::Editing => match key.code {
-                    KeyCode::Enter => self.submit_message(),
+                    KeyCode::Enter => {
+                        self.submit_message();
+                        self.input_mode = InputMode::Normal
+                    }
                     KeyCode::Char(to_insert) => self.enter_char(to_insert),
                     KeyCode::Backspace => self.delete_char(),
                     KeyCode::Left => self.move_cursor_left(),
@@ -265,7 +273,9 @@ impl App {
 
         let messages = List::new(messages).block(Block::bordered().title("Messages"));
 
-        self.vertical_scroll_state = self.vertical_scroll_state.content_length(vert_len);
+        self.vertical_scroll_state = self
+            .vertical_scroll_state
+            .content_length(self.max_scroll().into());
         self.horizontal_scroll_state = self.horizontal_scroll_state.content_length(messages.len());
 
         let create_block = |title: &'static str| Block::bordered().gray().title(title.bold());
@@ -274,7 +284,6 @@ impl App {
             .title_alignment(Alignment::Center)
             .title("Use h j k l or ◄ ▲ ▼ ► to scroll ".bold());
         frame.render_widget(title, top_bar_area);
-
 
         frame.render_stateful_widget(messages, msg_area, &mut self.list_state);
         frame.render_stateful_widget(
