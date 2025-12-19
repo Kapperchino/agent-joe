@@ -1,10 +1,12 @@
-use crate::actor::{State, StreamAccu, StreamRes};
+use crate::actor::{ActorToTui, State, StreamAccu, StreamRes};
 use crate::claude::{ClaudeClient, ContentBlock, ContentBlockInfo, Delta, Role, StreamEvent};
 use crate::cur_context::CurContext;
+use crate::tools::ToolTrait;
 use crate::{claude, tools};
+use futures::TryFutureExt;
 use ractor::ActorCell;
 use std::collections::HashMap;
-use crate::tools::ToolTrait;
+use tokio::sync::mpsc;
 
 pub struct ActorState {
     pub(crate) cur_context: CurContext,
@@ -15,15 +17,14 @@ pub struct ActorState {
     pub(crate) tools: Vec<tools::Tool>,
     pub acc_map: HashMap<usize, Vec<StreamAccu>>,
     pub delta_buf: HashMap<usize, Vec<Delta>>,
+    pub(crate) tui_tx: mpsc::Sender<ActorToTui>,
 }
 
 impl ActorState {
     pub fn save_history(&mut self, vec: Vec<Result<StreamRes, anyhow::Error>>) {
         vec.into_iter().for_each(|res| match res {
             Ok(stream_res) => match stream_res {
-                StreamRes::String(str) => {
-                    self.history.push(claude::Message::new_assistant(str))
-                }
+                StreamRes::String(str) => self.history.push(claude::Message::new_assistant(str)),
                 StreamRes::Thinking {
                     thinking,
                     signature,
@@ -58,20 +59,31 @@ impl ActorState {
     }
     pub fn change_state(&mut self, new_state: State) {
         self.cur_state = new_state.clone();
-        println!("{:?}", new_state)
+        let chan = self.tui_tx.clone();
+        let _ = chan.blocking_send(ActorToTui::StateChanged(new_state.clone()));
+        println!("{:?}", new_state);
+    }
+    pub fn send_delta(&mut self, str: String) {
+        let chan = self.tui_tx.clone();
+        let _ = chan.blocking_send(ActorToTui::Data(str));
     }
     pub fn handle_stream_state(&mut self, item: StreamEvent) {
         match item {
             StreamEvent::MessageStart { .. } => self.change_state(State::StreamStart),
             StreamEvent::ContentBlockStart {
-                index,
+                index: _,
                 content_block,
             } => match content_block {
                 ContentBlockInfo::ToolUse { .. } => {}
                 ContentBlockInfo::Thinking { .. } => self.change_state(State::ThinkingStart),
                 ContentBlockInfo::Text { .. } => self.change_state(State::MessageStart),
             },
-            StreamEvent::ContentBlockDelta { .. } => {}
+            StreamEvent::ContentBlockDelta { index, delta } => match delta {
+                Delta::TextDelta { text } => self.send_delta(text),
+                Delta::ThinkingDelta { thinking } => self.send_delta(thinking),
+                Delta::InputJsonDelta { .. } => {}
+                Delta::SignatureDelta { .. } => {}
+            },
             StreamEvent::ContentBlockStop { index } => {
                 self.delta_buf
                     .get(&index)

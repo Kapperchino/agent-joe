@@ -4,7 +4,7 @@ mod cur_context;
 mod tools;
 mod worker;
 mod actor_state;
-mod tui;
+mod app;
 
 use crate::actor::{Dependency, Message};
 use crate::claude::{ClaudeClient, ClaudeConfig};
@@ -53,7 +53,7 @@ async fn main() {
 
     color_eyre::install().unwrap();
     let terminal = ratatui::init();
-    let app_result = crate::tui::App::default().run(terminal).unwrap();
+    let app_result = crate::app::App::default().run(terminal).await.unwrap();
     ratatui::restore();
 
 }

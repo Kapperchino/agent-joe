@@ -3,6 +3,7 @@
 use std::time::{Duration, Instant};
 
 use color_eyre::Result;
+use crossterm::event::EventStream;
 use ratatui::layout::Position;
 use ratatui::widgets::{List, ListItem, ListState, Wrap};
 use ratatui::{
@@ -14,6 +15,7 @@ use ratatui::{
     text::{Line, Masked, Span},
     widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
+use tokio_stream::StreamExt;
 
 #[derive(Default)]
 pub(crate) struct App {
@@ -26,6 +28,7 @@ pub(crate) struct App {
     input: String,
     messages: Vec<String>,
     input_mode: InputMode,
+    do_quit: bool,
 }
 #[derive(Default)]
 enum InputMode {
@@ -90,70 +93,74 @@ impl App {
     }
 
     fn submit_message(&mut self) {
-        self.messages.push(self.input.clone());
-        self.input.clear();
-        self.reset_cursor();
-    }
-
-    pub(crate) fn run(mut self, mut terminal: DefaultTerminal) -> Result<()> {
-        let tick_rate = Duration::from_millis(250);
-        let mut last_tick = Instant::now();
-        loop {
-            terminal.draw(|frame| self.draw(frame))?;
-
-            let timeout = tick_rate.saturating_sub(last_tick.elapsed());
-            if event::poll(timeout)? {
-                if let Event::Key(key) = event::read()? {
-                    match self.input_mode {
-                        InputMode::Normal => match key.code {
-                            KeyCode::Char('e') => {
-                                self.input_mode = InputMode::Editing;
-                            }
-                            KeyCode::Char('q') => return Ok(()),
-                            KeyCode::Char('j') | KeyCode::Down => {
-                                self.vertical_scroll = self.vertical_scroll.saturating_add(1);
-                                self.vertical_scroll_state =
-                                    self.vertical_scroll_state.position(self.vertical_scroll);
-                                *self.list_state.offset_mut() = self.vertical_scroll;
-                            }
-                            KeyCode::Char('k') | KeyCode::Up => {
-                                self.vertical_scroll = self.vertical_scroll.saturating_sub(1);
-                                self.vertical_scroll_state =
-                                    self.vertical_scroll_state.position(self.vertical_scroll);
-                                *self.list_state.offset_mut() = self.vertical_scroll;
-                            }
-                            KeyCode::Char('h') | KeyCode::Left => {
-                                self.horizontal_scroll = self.horizontal_scroll.saturating_sub(1);
-                                self.horizontal_scroll_state = self
-                                    .horizontal_scroll_state
-                                    .position(self.horizontal_scroll);
-                            }
-                            KeyCode::Char('l') | KeyCode::Right => {
-                                self.horizontal_scroll = self.horizontal_scroll.saturating_add(1);
-                                self.horizontal_scroll_state = self
-                                    .horizontal_scroll_state
-                                    .position(self.horizontal_scroll);
-                            }
-                            _ => {}
-                        },
-                        InputMode::Editing => match key.code {
-                            KeyCode::Enter => self.submit_message(),
-                            KeyCode::Char(to_insert) => self.enter_char(to_insert),
-                            KeyCode::Backspace => self.delete_char(),
-                            KeyCode::Left => self.move_cursor_left(),
-                            KeyCode::Right => self.move_cursor_right(),
-                            KeyCode::Esc => self.input_mode = InputMode::Normal,
-                            _ => {}
-                        },
-                    }
-                }
-            }
-            if last_tick.elapsed() >= tick_rate {
-                last_tick = Instant::now();
-            }
+        if !self.input.is_empty() {
+            self.messages.push(self.input.clone());
+            self.input.clear();
+            self.reset_cursor();
         }
     }
 
+    pub(crate) async fn run(mut self, mut terminal: DefaultTerminal) -> Result<()> {
+        let mut events = EventStream::new();
+
+        let period = Duration::from_secs_f32(1.0 / 120.0);
+        let mut interval = tokio::time::interval(period);
+
+        while !self.do_quit {
+            tokio::select! {
+                _ = interval.tick() => { terminal.draw(|frame| self.draw(frame))?; },
+                Some(Ok(event)) = events.next() => self.handleTermEvent(&event),
+            }
+        }
+        Ok(())
+    }
+
+    fn handleTermEvent(&mut self, event: &Event) -> () {
+        if let Event::Key(key) = event {
+            match self.input_mode {
+                InputMode::Normal => match key.code {
+                    KeyCode::Char('e') => {
+                        self.input_mode = InputMode::Editing;
+                    }
+                    KeyCode::Char('q') => self.do_quit = true,
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        self.vertical_scroll = self.vertical_scroll.saturating_add(1);
+                        self.vertical_scroll_state =
+                            self.vertical_scroll_state.position(self.vertical_scroll);
+                        *self.list_state.offset_mut() = self.vertical_scroll;
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        self.vertical_scroll = self.vertical_scroll.saturating_sub(1);
+                        self.vertical_scroll_state =
+                            self.vertical_scroll_state.position(self.vertical_scroll);
+                        *self.list_state.offset_mut() = self.vertical_scroll;
+                    }
+                    KeyCode::Char('h') | KeyCode::Left => {
+                        self.horizontal_scroll = self.horizontal_scroll.saturating_sub(1);
+                        self.horizontal_scroll_state = self
+                            .horizontal_scroll_state
+                            .position(self.horizontal_scroll);
+                    }
+                    KeyCode::Char('l') | KeyCode::Right => {
+                        self.horizontal_scroll = self.horizontal_scroll.saturating_add(1);
+                        self.horizontal_scroll_state = self
+                            .horizontal_scroll_state
+                            .position(self.horizontal_scroll);
+                    }
+                    _ => {}
+                },
+                InputMode::Editing => match key.code {
+                    KeyCode::Enter => self.submit_message(),
+                    KeyCode::Char(to_insert) => self.enter_char(to_insert),
+                    KeyCode::Backspace => self.delete_char(),
+                    KeyCode::Left => self.move_cursor_left(),
+                    KeyCode::Right => self.move_cursor_right(),
+                    KeyCode::Esc => self.input_mode = InputMode::Normal,
+                    _ => {}
+                },
+            }
+        }
+    }
     #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
     fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
@@ -205,9 +212,7 @@ impl App {
             })
             .collect();
 
-        let vert_len = messages.iter().fold(0,|acc, x| {
-            acc + x.height()
-        });
+        let vert_len = messages.iter().fold(0, |acc, x| acc + x.height());
 
         let messages = List::new(messages).block(Block::bordered().title("Messages"));
 

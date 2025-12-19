@@ -13,8 +13,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Display;
 use thiserror::Error;
+use tokio::sync::mpsc;
 use tokio_stream::{Stream, StreamExt};
 
+#[derive(Debug, Clone)]
+pub enum ActorToTui {
+    StateChanged(State),
+    Data(String),
+}
 #[derive(Error, Debug)]
 pub enum WorkerError {
     #[error("Claude API error: {0}")]
@@ -58,6 +64,7 @@ pub enum Message {
 pub struct Dependency {
     pub claude: ClaudeClient,
     pub tools: Vec<tools::Tool>,
+    pub tui_tx: mpsc::Sender<ActorToTui>,
 }
 
 #[derive(Debug, Clone)]
@@ -116,6 +123,7 @@ impl Actor for Worker {
             acc_map: Default::default(),
             delta_buf: Default::default(),
             stream_actor: None,
+            tui_tx: dependency.tui_tx,
         })
     }
 
