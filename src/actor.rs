@@ -172,7 +172,6 @@ impl Actor for Worker {
                 {
                     myself.send_message(Message::StartWork(None))?;
                 }
-                println!("{:?}", state.history);
             }
             Message::ProcessStreamItem(item) => match item {
                 StreamItem::Item(event) => {
@@ -194,8 +193,6 @@ impl Actor for Worker {
                     } else {
                         let res = Worker::process_tools(vec).await;
                         state.save_history(res);
-                        println!("joe biden")
-                        // myself.stop(None);
                     }
                 }
             },

@@ -1,19 +1,22 @@
 #![warn(clippy::pedantic)]
 
+use std::borrow::Cow;
 use std::time::Duration;
 
 use color_eyre::Result;
-use crossterm::event::EventStream;
+use crossterm::event::{EventStream, KeyEvent};
 use ractor::{ActorRef, MessagingErr};
 use ratatui::layout::Position;
+use ratatui::prelude::Text;
+use ratatui::text::Span;
 use ratatui::widgets::{List, ListItem, ListState};
 use ratatui::{
     DefaultTerminal, Frame,
     crossterm::event::{Event, KeyCode},
     layout::{Alignment, Constraint, Layout},
     style::{Color, Style, Stylize},
-    text::{Line, Span},
-    widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
+    text::Line,
+    widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
 };
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -34,6 +37,7 @@ pub(crate) struct App {
     do_quit: bool,
     auto_scroll: bool,
     msg_area_height: usize,
+    msg_area_width: usize,
     actor_ref: ActorRef<Message>,
     actor_state: State,
 }
@@ -59,6 +63,7 @@ impl App {
             do_quit: false,
             auto_scroll: true,
             msg_area_height: 0,
+            msg_area_width: 0,
             actor_ref,
             actor_state: State::Ready,
         }
@@ -89,6 +94,12 @@ impl App {
         let index = self.byte_index();
         self.input.insert(index, new_char);
         self.move_cursor_right();
+    }
+
+    fn paste(&mut self, string: &String) {
+        self.input.push_str(string);
+        let cursor_moved_right = self.character_index.saturating_add(string.len());
+        self.character_index = self.clamp_cursor(cursor_moved_right);
     }
 
     fn byte_index(&self) -> usize {
@@ -140,13 +151,21 @@ impl App {
                     eprintln!("it's joever")
                 }
             };
-            self.messages.push(self.input.clone());
+
+            self.messages.append(&mut self.wrap_str(&self.input));
             self.input.clear();
             self.reset_cursor();
             if self.auto_scroll {
                 self.scroll_to_bottom();
             }
         }
+    }
+
+    fn wrap_str(&self, string: &String) -> Vec<String> {
+        textwrap::wrap(string.as_str(), textwrap::Options::new(self.msg_area_width))
+            .into_iter()
+            .map(|x| x.to_string())
+            .collect()
     }
 
     fn scroll_up(&mut self) {
@@ -212,15 +231,37 @@ impl App {
                 State::Ready => {}
                 State::StreamStart => {}
                 State::StreamStop => {}
-                State::ThinkingStart => match self.messages.last_mut() {
-                    None => self.messages.push(data),
-                    Some(buff) => buff.push_str(data.as_str()),
-                },
+                State::ThinkingStart => {
+                    let last = self.messages.last_mut().cloned();
+                    match last {
+                        None => {
+                            let mut wrapped = self.wrap_str(&data);
+                            self.messages.append(&mut wrapped);
+                        }
+                        Some(mut buff) => {
+                            buff.push_str(data.as_str());
+                            let mut wrapped = self.wrap_str(&buff);
+                            self.messages.pop();
+                            self.messages.append(&mut wrapped)
+                        }
+                    }
+                }
                 State::ThinkingStop => {}
-                State::MessageStart => match self.messages.last_mut() {
-                    None => self.messages.push(data),
-                    Some(buff) => buff.push_str(data.as_str()),
-                },
+                State::MessageStart => {
+                    let last = self.messages.last_mut().cloned();
+                    match last {
+                        None => {
+                            let mut wrapped = self.wrap_str(&data);
+                            self.messages.append(&mut wrapped);
+                        }
+                        Some(mut buff) => {
+                            buff.push_str(data.as_str());
+                            let mut wrapped = self.wrap_str(&buff);
+                            self.messages.pop();
+                            self.messages.append(&mut wrapped)
+                        }
+                    }
+                }
                 State::MessageStop => {}
                 State::ToolStart => {}
                 State::ToolStop => {}
@@ -229,45 +270,59 @@ impl App {
         }
     }
 
-    fn handle_term_event(&mut self, event: &Event) -> () {
-        if let Event::Key(key) = event {
-            match self.input_mode {
-                InputMode::Normal => match key.code {
-                    KeyCode::Char('i') => {
-                        self.input_mode = InputMode::Editing;
-                    }
-                    KeyCode::Char('q') => {
-                        self.do_quit = true;
-                        match self.actor_ref.send_message(Message::KYS) {
-                            Ok(_) => {}
-                            Err(_) => {}
-                        }
-                    }
-                    KeyCode::Char('j') | KeyCode::Down => self.scroll_down(),
-                    KeyCode::Char('k') | KeyCode::Up => self.scroll_up(),
-                    KeyCode::Char('h') | KeyCode::Left => self.scroll_left(),
-                    KeyCode::Char('l') | KeyCode::Right => self.scroll_right(),
-                    KeyCode::Char('G') => {
-                        self.auto_scroll = true;
-                        self.scroll_to_bottom();
-                    }
-                    _ => {}
-                },
-                InputMode::Editing => match key.code {
-                    KeyCode::Enter => {
-                        self.submit_message();
-                        self.input_mode = InputMode::Normal;
-                    }
-                    KeyCode::Char(to_insert) => self.enter_char(to_insert),
-                    KeyCode::Backspace => self.delete_char(),
-                    KeyCode::Left => self.move_cursor_left(),
-                    KeyCode::Right => self.move_cursor_right(),
-                    KeyCode::Esc => self.input_mode = InputMode::Normal,
-                    _ => {}
-                },
+    fn handle_term_event(&mut self, event: &Event) {
+        match event {
+            Event::FocusGained => {}
+            Event::FocusLost => {}
+            Event::Key(key) => self.handle_key_event(key),
+            Event::Mouse(_) => {}
+            Event::Paste(text) => {
+                if let InputMode::Editing = self.input_mode {
+                    self.paste(text)
+                }
             }
+            Event::Resize(_, _) => {}
         }
     }
+
+    fn handle_key_event(&mut self, key: &KeyEvent) {
+        match self.input_mode {
+            InputMode::Normal => match key.code {
+                KeyCode::Char('i') => {
+                    self.input_mode = InputMode::Editing;
+                }
+                KeyCode::Char('q') => {
+                    self.do_quit = true;
+                    match self.actor_ref.send_message(Message::KYS) {
+                        Ok(_) => {}
+                        Err(_) => {}
+                    }
+                }
+                KeyCode::Char('j') | KeyCode::Down => self.scroll_down(),
+                KeyCode::Char('k') | KeyCode::Up => self.scroll_up(),
+                KeyCode::Char('h') | KeyCode::Left => self.scroll_left(),
+                KeyCode::Char('l') | KeyCode::Right => self.scroll_right(),
+                KeyCode::Char('G') => {
+                    self.auto_scroll = true;
+                    self.scroll_to_bottom();
+                }
+                _ => {}
+            },
+            InputMode::Editing => match key.code {
+                KeyCode::Enter => {
+                    self.submit_message();
+                    self.input_mode = InputMode::Normal;
+                }
+                KeyCode::Char(to_insert) => self.enter_char(to_insert),
+                KeyCode::Backspace => self.delete_char(),
+                KeyCode::Left => self.move_cursor_left(),
+                KeyCode::Right => self.move_cursor_right(),
+                KeyCode::Esc => self.input_mode = InputMode::Normal,
+                _ => {}
+            },
+        }
+    }
+
     #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
     fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
@@ -287,6 +342,7 @@ impl App {
         let [top_bar_area, msg_area, input_area] = chunks.areas(frame.area());
 
         self.msg_area_height = msg_area.height as usize;
+        self.msg_area_width = msg_area.width as usize;
 
         if self.vertical_scroll >= self.max_scroll() {
             self.auto_scroll = true;
@@ -319,6 +375,7 @@ impl App {
             )),
         }
 
+        // Account for borders and ensure minimum width of 1 to avoid panic
         let messages: Vec<ListItem> = self
             .messages
             .iter()
