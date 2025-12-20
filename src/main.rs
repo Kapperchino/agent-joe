@@ -35,7 +35,7 @@ async fn main() {
     })
     .unwrap();
 
-    let (tx, rx) = mpsc::channel(32);
+    let (tx, rx) = mpsc::unbounded_channel();
 
     let (joe, actor_handle) = Actor::spawn(
         None,

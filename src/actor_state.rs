@@ -17,7 +17,7 @@ pub struct ActorState {
     pub(crate) tools: Vec<tools::Tool>,
     pub acc_map: HashMap<usize, Vec<StreamAccu>>,
     pub delta_buf: HashMap<usize, Vec<Delta>>,
-    pub(crate) tui_tx: mpsc::Sender<ActorToTui>,
+    pub(crate) tui_tx: mpsc::UnboundedSender<ActorToTui>,
 }
 
 impl ActorState {
@@ -59,14 +59,12 @@ impl ActorState {
     }
     pub fn change_state(&mut self, new_state: State) {
         self.cur_state = new_state.clone();
-        let chan = self.tui_tx.clone();
-        let _ = chan.blocking_send(ActorToTui::StateChanged(new_state.clone()));
-        println!("{:?}", new_state);
+        let _ = self.tui_tx.send(ActorToTui::StateChanged(new_state.clone()));
     }
-    pub async fn send_delta(&mut self, str: String) {
-        let _ = self.tui_tx.send(ActorToTui::Data(str)).await;
+    pub fn send_delta(&mut self, str: String) {
+        let _ = self.tui_tx.send(ActorToTui::Data(str));
     }
-    pub async fn handle_stream_state(&mut self, item: StreamEvent) {
+    pub fn handle_stream_state(&mut self, item: StreamEvent) {
         match item {
             StreamEvent::MessageStart { .. } => self.change_state(State::StreamStart),
             StreamEvent::ContentBlockStart {
@@ -78,8 +76,8 @@ impl ActorState {
                 ContentBlockInfo::Text { .. } => self.change_state(State::MessageStart),
             },
             StreamEvent::ContentBlockDelta { index, delta } => match delta {
-                Delta::TextDelta { text } => self.send_delta(text).await,
-                Delta::ThinkingDelta { thinking } => self.send_delta(thinking).await,
+                Delta::TextDelta { text } => self.send_delta(text),
+                Delta::ThinkingDelta { thinking } => self.send_delta(thinking),
                 Delta::InputJsonDelta { .. } => {}
                 Delta::SignatureDelta { .. } => {}
             },

@@ -16,9 +16,10 @@ use ratatui::{
     widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_stream::StreamExt;
 
-use crate::actor::{ActorToTui, Message};
+use crate::actor::{ActorToTui, Message, State};
 
 pub(crate) struct App {
     pub vertical_scroll_state: ScrollbarState,
@@ -34,6 +35,7 @@ pub(crate) struct App {
     auto_scroll: bool,
     msg_area_height: usize,
     actor_ref: ActorRef<Message>,
+    actor_state: State,
 }
 #[derive(Default)]
 enum InputMode {
@@ -58,6 +60,7 @@ impl App {
             auto_scroll: true,
             msg_area_height: 0,
             actor_ref,
+            actor_state: State::Ready,
         }
     }
 
@@ -178,7 +181,7 @@ impl App {
     pub(crate) async fn run(
         mut self,
         mut terminal: DefaultTerminal,
-        mut actor_rx: mpsc::Receiver<ActorToTui>,
+        mut actor_rx: UnboundedReceiver<ActorToTui>,
     ) -> Result<()> {
         let mut events = EventStream::new();
 
@@ -198,11 +201,31 @@ impl App {
     fn handle_actor_msg(&mut self, msg: ActorToTui) {
         match msg {
             ActorToTui::StateChanged(state) => {
-                self.messages.push(format!("State: {state:?}"));
+                self.actor_state = state;
+                match self.actor_state {
+                    State::MessageStop => self.messages.push("\n".to_string()),
+                    State::ThinkingStop => self.messages.push("\n".to_string()),
+                    _ => {}
+                }
             }
-            ActorToTui::Data(data) => {
-                self.messages.push(data);
-            }
+            ActorToTui::Data(data) => match self.actor_state {
+                State::Ready => {}
+                State::StreamStart => {}
+                State::StreamStop => {}
+                State::ThinkingStart => match self.messages.last_mut() {
+                    None => self.messages.push(data),
+                    Some(buff) => buff.push_str(data.as_str()),
+                },
+                State::ThinkingStop => {}
+                State::MessageStart => match self.messages.last_mut() {
+                    None => self.messages.push(data),
+                    Some(buff) => buff.push_str(data.as_str()),
+                },
+                State::MessageStop => {}
+                State::ToolStart => {}
+                State::ToolStop => {}
+                State::Stopped => {}
+            },
         }
     }
 

@@ -64,7 +64,7 @@ pub enum Message {
 pub struct Dependency {
     pub claude: ClaudeClient,
     pub tools: Vec<tools::Tool>,
-    pub tui_tx: mpsc::Sender<ActorToTui>,
+    pub tui_tx: mpsc::UnboundedSender<ActorToTui>,
 }
 
 #[derive(Debug, Clone)]
