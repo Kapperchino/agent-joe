@@ -225,6 +225,8 @@ impl App {
             ActorToTui::StateChanged(state) => {
                 self.actor_state = state;
                 match self.actor_state {
+                    State::ThinkingStart => self.messages.push("\n".to_string()),
+                    State::MessageStart => self.messages.push("\n".to_string()),
                     State::MessageStop => self.messages.push("\n".to_string()),
                     State::ThinkingStop => self.messages.push("\n".to_string()),
                     _ => {}
@@ -328,14 +330,6 @@ impl App {
 
     #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
     fn draw(&mut self, frame: &mut Frame) {
-        let area = frame.area();
-
-        // Words made "loooong" to demonstrate line breaking.
-        let s =
-            "Veeeeeeeeeeeeeeeery    loooooooooooooooooong   striiiiiiiiiiiiiiiiiiiiiiiiiing.   ";
-        let mut long_line = s.repeat(usize::from(area.width) / s.len() + 4);
-        long_line.push('\n');
-
         let chunks = Layout::vertical([
             Constraint::Min(1),
             Constraint::Percentage(100),
@@ -384,12 +378,10 @@ impl App {
             .iter()
             .enumerate()
             .map(|(i, m)| {
-                let content = Line::from(Span::raw(format!("{i}: {m}")));
+                let content = Line::from(Span::raw(m));
                 ListItem::new(content)
             })
             .collect();
-
-        let vert_len = messages.iter().fold(0, |acc, x| acc + x.height());
 
         let messages = List::new(messages).block(Block::bordered().title("Messages"));
 
@@ -397,8 +389,6 @@ impl App {
             .vertical_scroll_state
             .content_length(self.max_scroll().into());
         self.horizontal_scroll_state = self.horizontal_scroll_state.content_length(messages.len());
-
-        let create_block = |title: &'static str| Block::bordered().gray().title(title.bold());
 
         let title = Block::new()
             .title_alignment(Alignment::Center)
