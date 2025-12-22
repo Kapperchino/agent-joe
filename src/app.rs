@@ -162,10 +162,13 @@ impl App {
     }
 
     fn wrap_str(&self, string: &String) -> Vec<String> {
-        textwrap::wrap(string.as_str(), textwrap::Options::new(self.msg_area_width))
-            .into_iter()
-            .map(|x| x.to_string())
-            .collect()
+        textwrap::wrap(
+            string.as_str(),
+            textwrap::Options::new(self.msg_area_width - 5),
+        )
+        .into_iter()
+        .map(|x| x.to_string())
+        .collect()
     }
 
     fn scroll_up(&mut self) {
