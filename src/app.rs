@@ -1,24 +1,21 @@
 #![warn(clippy::pedantic)]
 
-use std::borrow::Cow;
 use std::time::Duration;
 
 use color_eyre::Result;
 use crossterm::event::{EventStream, KeyEvent};
-use ractor::{ActorRef, MessagingErr};
+use ractor::ActorRef;
 use ratatui::layout::Position;
-use ratatui::prelude::Text;
 use ratatui::text::Span;
 use ratatui::widgets::{List, ListItem, ListState};
 use ratatui::{
-    DefaultTerminal, Frame,
-    crossterm::event::{Event, KeyCode},
-    layout::{Alignment, Constraint, Layout},
+    crossterm::event::{Event, KeyCode}, layout::{Alignment, Constraint, Layout},
     style::{Color, Style, Stylize},
     text::Line,
-    widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
+    widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
+    DefaultTerminal,
+    Frame,
 };
-use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_stream::StreamExt;
 

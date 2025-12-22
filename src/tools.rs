@@ -1,12 +1,12 @@
 use crate::claude;
 use crate::claude::{ToolProperty, ToolSchemaDTO};
+use crate::utils::Utils;
 use anyhow::Error;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use tokio::fs;
 use tokio::fs::DirEntry;
-use tokio_stream::wrappers::ReadDirStream;
-use tokio_stream::{self as stream, StreamExt};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Tool {
@@ -153,21 +153,8 @@ impl Tool {
                 })
             }
             Tool::ListFiles(path) => {
-                let read_dir = fs::read_dir(path.input.dir_path.clone()).await?;
-                let read_dir_stream = ReadDirStream::new(read_dir);
-                let entires = read_dir_stream
-                    .fold(vec![], |mut acc, item| {
-                        match item {
-                            Ok(entry) => {
-                                acc.push(entry);
-                            }
-                            Err(_) => {
-                                println!("error with getting files")
-                            }
-                        };
-                        acc
-                    })
-                    .await;
+                let entires =
+                    Utils::get_dir_files(&PathBuf::from(path.input.dir_path.clone())).await?;
 
                 let mut dirs: Vec<String> = vec![];
                 let mut files: Vec<String> = vec![];

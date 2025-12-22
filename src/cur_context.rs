@@ -1,10 +1,8 @@
+use crate::utils::Utils;
 use futures::future;
 use std::env;
 use std::path::PathBuf;
-use tokio::fs;
 use tokio::fs::DirEntry;
-use tokio_stream::wrappers::ReadDirStream;
-use tokio_stream::StreamExt;
 
 pub struct CurContext {
     cur_dir: PathBuf,
@@ -13,21 +11,7 @@ pub struct CurContext {
 impl CurContext {
     pub async fn get_cur_context() -> Result<CurContext, anyhow::Error> {
         let current_dir = env::current_dir()?;
-        let read_dir = fs::read_dir(current_dir.clone()).await?;
-        let read_dir_stream = ReadDirStream::new(read_dir);
-        let files = read_dir_stream
-            .fold(vec![], |mut acc, item| {
-                match item {
-                    Ok(entry) => {
-                        acc.push(entry);
-                    }
-                    Err(_) => {
-                        println!("error with getting files")
-                    }
-                };
-                acc
-            })
-            .await;
+        let files = Utils::get_dir_files(&current_dir).await?;
         Ok(CurContext {
             cur_dir: current_dir,
             cur_files: files,

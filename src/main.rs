@@ -5,6 +5,7 @@ mod claude;
 mod cur_context;
 mod tools;
 mod worker;
+mod utils;
 
 use crate::actor::Dependency;
 use crate::claude::{ClaudeClient, ClaudeConfig};
@@ -16,7 +17,7 @@ use log::LevelFilter;
 use ractor::Actor;
 use simplelog::{ColorChoice, CombinedLogger, Config, TermLogger, TerminalMode};
 use std::env;
-use std::io::{Write, stdout};
+use std::io::{stdout, Write};
 use tokio::main;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
