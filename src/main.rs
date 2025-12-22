@@ -6,20 +6,20 @@ mod cur_context;
 mod tools;
 mod worker;
 
+use crate::actor::Dependency;
 use crate::claude::{ClaudeClient, ClaudeConfig};
+use crate::tools::{ListFiles, ReadFile};
+use crate::worker::Worker;
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::execute;
 use log::LevelFilter;
 use ractor::Actor;
 use simplelog::{ColorChoice, CombinedLogger, Config, TermLogger, TerminalMode};
 use std::env;
-use std::io::{stdout, Write};
+use std::io::{Write, stdout};
 use tokio::main;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
-use crate::actor::Dependency;
-use crate::tools::ReadFile;
-use crate::worker::Worker;
 
 #[main]
 async fn main() {
@@ -44,7 +44,10 @@ async fn main() {
         Worker {},
         Dependency {
             claude: client,
-            tools: vec![tools::Tool::ReadFile(ReadFile::default())],
+            tools: vec![
+                tools::Tool::ReadFile(ReadFile::default()),
+                tools::Tool::ListFiles(ListFiles::default()),
+            ],
             tui_tx: tx,
         },
     )

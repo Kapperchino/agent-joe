@@ -1,6 +1,6 @@
 use crate::actor::StreamAccu;
 use crate::tools;
-use crate::tools::{ReadFileInput, ToolResult};
+use crate::tools::{ListFilesInput, ReadFileInput, ToolResult};
 use anyhow::Error;
 use futures::future;
 
@@ -22,6 +22,19 @@ impl Worker {
                             input,
                         };
                         Ok(tools::Tool::ReadFile(rf).use_tool(id).await?)
+                    }
+                    _ => Err(anyhow::Error::msg("doesn't work")),
+                }
+            }
+            tools::Tool::ListFiles(_) => {
+                match a_vec.get(1).ok_or(anyhow::Error::msg("doesn't work"))? {
+                    StreamAccu::Json(json) => {
+                        let input: ListFilesInput = serde_json::from_str::<_>(json)?;
+                        let rf = tools::ListFiles {
+                            id: id.clone(),
+                            input,
+                        };
+                        Ok(tools::Tool::ListFiles(rf).use_tool(id).await?)
                     }
                     _ => Err(anyhow::Error::msg("doesn't work")),
                 }
