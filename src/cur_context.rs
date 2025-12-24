@@ -1,10 +1,15 @@
 use crate::utils::Utils;
 use futures::future;
-use ra_ap_ide_db::RootDatabase;
+use ra_ap_hir::db::DefDatabase;
+use ra_ap_ide::{Analysis, AnalysisHost, Cancellable, FileChange};
+use ra_ap_ide_db::base_db::{RootQueryDb, SourceDatabase};
+use ra_ap_ide_db::{ChangeWithProcMacros, RootDatabase};
 use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
 use ra_ap_project_model::CargoConfig;
-use ra_ap_vfs::Vfs;
+use ra_ap_vfs::{FileId, Vfs, VfsPath};
+use std::collections::HashMap;
 use std::env;
+use std::hash::Hash;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::fs::DirEntry;
@@ -15,8 +20,9 @@ pub struct CurContext {
     rust_proj: RustProject,
 }
 pub struct RustProject {
-    pub db: Arc<Mutex<RootDatabase>>,
+    pub analysis_host: Arc<Mutex<AnalysisHost>>,
     pub vfs: Vfs,
+    pub files: HashMap<FileId, VfsPath>,
 }
 impl CurContext {
     pub async fn get_cur_context() -> Result<CurContext, anyhow::Error> {
@@ -68,19 +74,125 @@ impl CurContext {
         format!("Current Context: \ncurrent directory: {dir}\ncurrent files:\n{res}")
     }
 
-    pub fn load_rust_project(cur_dir: &PathBuf) -> Result<RustProject, anyhow::Error> {
+    fn load_rust_project(cur_dir: &PathBuf) -> Result<RustProject, anyhow::Error> {
         let cargo_config = CargoConfig::default();
         let load_config = LoadCargoConfig {
-            load_out_dirs_from_check: true,
+            load_out_dirs_from_check: false,
             with_proc_macro_server: ProcMacroServerChoice::Sysroot,
-            prefill_caches: true,
+            prefill_caches: false,
         };
 
         let (db, vfs, _proc_macro_client) =
             load_workspace_at(cur_dir, &cargo_config, &load_config, &|msg| {})?;
 
-        let db = Arc::new(Mutex::new(db));
+        let anal_host = AnalysisHost::with_database(db.clone());
 
-        Ok(RustProject { db, vfs })
+        let anal_host = Arc::new(Mutex::new(anal_host));
+
+        let proj = RustProject {
+            analysis_host: anal_host,
+            vfs,
+            files: HashMap::new(),
+        };
+
+        Ok(proj)
+    }
+}
+
+pub struct FileInfo {
+    pub id: FileId,
+    pub path: VfsPath,
+}
+
+#[derive(Debug)]
+pub struct CrateInfo {
+    pub name: String,
+    pub version: String,
+    pub file_id: FileId,
+}
+
+pub struct AnalysisSession<'a> {
+    analysis: Analysis,
+    proj: &'a RustProject,
+}
+
+impl AnalysisSession<'_> {
+    fn get_work_files(&self) -> Vec<FileInfo> {
+        self.proj
+            .vfs
+            .iter()
+            .filter(|(id, _path)| {
+                self.analysis
+                    .source_root_id(id.clone())
+                    .and_then(|t| self.analysis.is_local_source_root(t))
+                    .unwrap_or(false)
+            })
+            .map(|(id, path)| FileInfo {
+                id,
+                path: path.clone(),
+            })
+            .collect()
+    }
+
+    fn get_dependenceis(&self) -> Vec<CrateInfo> {
+        self.analysis
+            .fetch_crates()
+            .unwrap()
+            .iter()
+            .map(|c| CrateInfo {
+                name: c.name.clone().unwrap_or("".to_string()),
+                version: c.version.clone().unwrap_or("".to_string()),
+                file_id: c.root_file_id,
+            })
+            .collect()
+    }
+}
+
+impl RustProject {
+    fn new_analysis(&'_ self) -> AnalysisSession<'_> {
+        let analysis = self.analysis_host.lock().unwrap().analysis();
+        AnalysisSession {
+            analysis,
+            proj: self,
+        }
+    }
+    fn modify_file(&self) {
+        let joe = self.analysis_host.lock().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_work_files() {
+        let cur_dir = env::current_dir().expect("Failed to get current directory");
+        let project = CurContext::load_rust_project(&cur_dir).expect("Failed to load rust project");
+
+        let session = project.new_analysis();
+        let work_files = session.get_work_files();
+
+        println!("\n=== Work Files ({} total) ===", work_files.len());
+        for file_info in &work_files {
+            println!("FileId: {:?}, Path: {}", file_info.id, file_info.path);
+        }
+        println!("=== End Work Files ===\n");
+
+        assert!(!work_files.is_empty(), "Expected at least one work file");
+    }
+
+    #[test]
+    fn test_get_dependencies() {
+        let cur_dir = env::current_dir().expect("Failed to get current directory");
+        let project = CurContext::load_rust_project(&cur_dir).expect("Failed to load rust project");
+        let session = project.new_analysis();
+        let dependencies = session.get_dependenceis();
+
+        println!("\n=== Crate Graph ===");
+        println!("{:?}", dependencies);
+        println!("=== End Crate Graph ===\n");
+
+        assert!(!dependencies.is_empty(), "Expected non-empty crate graph");
     }
 }

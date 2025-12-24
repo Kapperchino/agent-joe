@@ -268,6 +268,15 @@ dependencies = [
 
 [[package]]
 name = "cargo-platform"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e35af189006b9c0f00a064685c727031e3ed2d8020f7ba284d78cc2671bd36ea"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "cargo-platform"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "87a0c0e6148f11f01f32650a2ea02d532b2ad4e81d8bd41e6e565b5adc5e6082"
@@ -278,12 +287,26 @@ dependencies = [
 
 [[package]]
 name = "cargo_metadata"
+version = "0.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d886547e41f740c616ae73108f6eb70afe6d940c7bc697cb30f13daec073037"
+dependencies = [
+ "camino",
+ "cargo-platform 0.1.9",
+ "semver",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "cargo_metadata"
 version = "0.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ef987d17b0a113becdd19d3d0022d04d7ef41f9efe4f3fb63ac44ba61df3ade9"
 dependencies = [
  "camino",
- "cargo-platform",
+ "cargo-platform 0.3.2",
  "semver",
  "serde",
  "serde_json",
@@ -2771,7 +2794,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d1f16d3e6d65dbac99a2b1fe69d87efb6d4e8da291e2cca189ac8d481329cd33"
 dependencies = [
  "anyhow",
- "cargo_metadata",
+ "cargo_metadata 0.23.1",
  "itertools 0.14.0",
  "la-arena",
  "ra_ap_base_db",
@@ -4252,14 +4275,17 @@ dependencies = [
  "anyhow",
  "async-stream",
  "bytes",
+ "cargo_metadata 0.18.1",
  "color-eyre",
  "crossterm 0.29.0",
  "futures",
  "log",
+ "ra_ap_hir",
  "ra_ap_ide",
  "ra_ap_ide_db",
  "ra_ap_load-cargo",
  "ra_ap_project_model",
+ "ra_ap_syntax",
  "ra_ap_vfs",
  "ractor",
  "ractor_actors",
