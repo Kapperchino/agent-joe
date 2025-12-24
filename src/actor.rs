@@ -58,7 +58,7 @@ pub enum Message {
     StartWork(Option<String>),
     UseTool(Vec<(usize, Vec<StreamAccu>)>),
     ProcessStreamItem(StreamItem),
-    KYS
+    KYS,
 }
 
 pub struct Dependency {
@@ -108,23 +108,7 @@ impl Actor for Worker {
         _: ActorRef<Self::Msg>,
         dependency: Dependency,
     ) -> Result<Self::State, ActorProcessingErr> {
-        let cur_context = CurContext::get_cur_context().await?;
-        let cur_context_str = cur_context.to_string().await;
-        // startup the event processing
-        Ok(ActorState {
-            cur_context,
-            cur_state: State::Ready,
-            history: vec![claude::Message::new(
-                "This is the inital context in the enviornment: \n".to_owned()
-                    + cur_context_str.as_str(),
-            )],
-            claude: dependency.claude,
-            tools: dependency.tools,
-            acc_map: Default::default(),
-            delta_buf: Default::default(),
-            stream_actor: None,
-            tui_tx: dependency.tui_tx,
-        })
+        ActorState::new(dependency).await.actor_err()
     }
 
     async fn handle(
@@ -138,7 +122,7 @@ impl Actor for Worker {
                 prompt.map(|p| {
                     state.history.push(claude::Message::new(p));
                 });
-                let tools: Vec<_> = state.tools.iter().map(|t| t.to_json()).collect();
+                let tools = state.tools_json.clone();
                 let req = ClientRequest::new(state.history.clone())
                     .with_thinking()
                     .with_tools(tools);
@@ -196,7 +180,7 @@ impl Actor for Worker {
                     }
                 }
             },
-            Message::KYS => myself.kill()
+            Message::KYS => myself.kill(),
         }
         Ok(())
     }

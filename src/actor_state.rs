@@ -1,26 +1,51 @@
-use crate::actor::{ActorToTui, State, StreamAccu, StreamRes};
+use crate::actor::{ActorToTui, Dependency, State, StreamAccu, StreamRes};
 use crate::claude::{ClaudeClient, ContentBlock, ContentBlockInfo, Delta, Role, StreamEvent};
 use crate::cur_context::CurContext;
 use crate::tools::ToolTrait;
 use crate::{claude, tools};
-use futures::TryFutureExt;
 use ractor::ActorCell;
 use std::collections::HashMap;
+use std::sync::{LazyLock, OnceLock};
 use tokio::sync::mpsc;
 
 pub struct ActorState {
-    pub(crate) cur_context: CurContext,
-    pub(crate) stream_actor: Option<ActorCell>,
-    pub(crate) cur_state: State,
-    pub(crate) history: Vec<claude::Message>,
-    pub(crate) claude: ClaudeClient,
-    pub(crate) tools: Vec<tools::Tool>,
+    pub cur_context: CurContext,
+    pub stream_actor: Option<ActorCell>,
+    pub cur_state: State,
+    pub history: Vec<claude::Message>,
+    pub claude: ClaudeClient,
+    pub tools: Vec<tools::Tool>,
+    pub tools_json: Vec<claude::Tool>,
     pub acc_map: HashMap<usize, Vec<StreamAccu>>,
     pub delta_buf: HashMap<usize, Vec<Delta>>,
-    pub(crate) tui_tx: mpsc::UnboundedSender<ActorToTui>,
+    pub tui_tx: mpsc::UnboundedSender<ActorToTui>,
 }
 
 impl ActorState {
+    pub async fn new(dependency: Dependency) -> Result<Self, anyhow::Error> {
+        let cur_context = CurContext::get_cur_context().await?;
+        let cur_context_str = cur_context.to_string().await;
+
+        let computed_tools: Vec<claude::Tool> =
+            dependency.tools.iter().map(|t| t.to_json()).collect();
+
+        Ok(Self {
+            cur_context,
+            cur_state: State::Ready,
+            history: vec![claude::Message::new(
+                "This is the initial context in the environment: \n".to_owned()
+                    + cur_context_str.as_str(),
+            )],
+            claude: dependency.claude,
+            tools: dependency.tools,
+            tools_json: computed_tools,
+            acc_map: Default::default(),
+            delta_buf: Default::default(),
+            stream_actor: None,
+            tui_tx: dependency.tui_tx,
+        })
+    }
+
     pub fn save_history(&mut self, vec: Vec<Result<StreamRes, anyhow::Error>>) {
         vec.into_iter().for_each(|res| match res {
             Ok(stream_res) => match stream_res {
@@ -59,11 +84,14 @@ impl ActorState {
     }
     pub fn change_state(&mut self, new_state: State) {
         self.cur_state = new_state.clone();
-        let _ = self.tui_tx.send(ActorToTui::StateChanged(new_state.clone()));
+        let _ = self
+            .tui_tx
+            .send(ActorToTui::StateChanged(new_state.clone()));
     }
     pub fn send_delta(&mut self, str: String) {
         let _ = self.tui_tx.send(ActorToTui::Data(str));
     }
+
     pub fn handle_stream_state(&mut self, item: StreamEvent) {
         match item {
             StreamEvent::MessageStart { .. } => self.change_state(State::StreamStart),
