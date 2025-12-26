@@ -146,7 +146,7 @@ impl Actor for Worker {
                 state.stream_actor = Some(actor)
             }
             Message::UseTool(vec) => {
-                let res = Worker::process_tools(vec).await;
+                let res = state.process_tools(vec).await;
                 state.change_state(State::ToolStart);
                 state.save_history(res);
                 state.change_state(State::ToolStop);
@@ -175,7 +175,7 @@ impl Actor for Worker {
                     {
                         myself.send_message(Message::UseTool(vec))?;
                     } else {
-                        let res = Worker::process_tools(vec).await;
+                        let res = state.process_tools(vec).await;
                         state.save_history(res);
                     }
                 }

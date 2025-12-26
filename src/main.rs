@@ -4,13 +4,12 @@ mod app;
 mod claude;
 mod cur_context;
 mod tools;
-mod worker;
 mod utils;
+mod worker;
 
 use crate::actor::Dependency;
 use crate::claude::{ClaudeClient, ClaudeConfig};
 use crate::tools::{ListFiles, ReadFile};
-use crate::worker::Worker;
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::execute;
 use log::LevelFilter;
@@ -21,6 +20,7 @@ use std::io::{stdout, Write};
 use tokio::main;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
+use crate::worker::Worker;
 
 #[main]
 async fn main() {

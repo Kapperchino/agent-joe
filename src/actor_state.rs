@@ -1,8 +1,11 @@
 use crate::actor::{ActorToTui, Dependency, State, StreamAccu, StreamRes};
 use crate::claude::{ClaudeClient, ContentBlock, ContentBlockInfo, Delta, Role, StreamEvent};
 use crate::cur_context::CurContext;
-use crate::tools::ToolTrait;
+use crate::tools::{ListFilesInput, ReadFileInput, Tool, ToolResult, ToolTrait};
+use crate::worker::Worker;
 use crate::{claude, tools};
+use anyhow::Error;
+use futures::future;
 use ractor::ActorCell;
 use std::collections::HashMap;
 use std::sync::{LazyLock, OnceLock};
@@ -214,5 +217,70 @@ impl ActorState {
             }
             _ => {}
         }
+    }
+
+    async fn tool_use(
+        &self,
+        a_vec: &Vec<StreamAccu>,
+        name: String,
+        id: String,
+    ) -> Result<ToolResult, anyhow::Error> {
+        match Tool::from_str(name.as_str())? {
+            Tool::ReadFile(_) => match a_vec.get(1).ok_or(anyhow::Error::msg("doesn't work"))? {
+                StreamAccu::Json(json) => {
+                    let input: ReadFileInput = serde_json::from_str::<_>(json)?;
+                    let rf = tools::ReadFile {
+                        id: id.clone(),
+                        input,
+                    };
+                    Ok(Tool::ReadFile(rf).use_tool(id).await?)
+                }
+                _ => Err(anyhow::Error::msg("doesn't work")),
+            },
+            Tool::ListFiles(_) => match a_vec.get(1).ok_or(anyhow::Error::msg("doesn't work"))? {
+                StreamAccu::Json(json) => {
+                    let input: ListFilesInput = serde_json::from_str::<_>(json)?;
+                    let rf = tools::ListFiles {
+                        id: id.clone(),
+                        input,
+                    };
+                    Ok(Tool::ListFiles(rf).use_tool(id).await?)
+                }
+                _ => Err(Error::msg("doesn't work")),
+            },
+        }
+    }
+
+    pub async fn process_tools(
+        &self,
+        vec: Vec<(usize, Vec<StreamAccu>)>,
+    ) -> Vec<Result<crate::actor::StreamRes, Error>> {
+        let futures: Vec<_> = vec
+            .into_iter()
+            .map(
+                async |(_, a_vec): (usize, Vec<StreamAccu>)| match a_vec.first() {
+                    Some(accu) => match accu {
+                        StreamAccu::String(str) => Ok(crate::actor::StreamRes::String(str.clone())),
+                        StreamAccu::Tool { id, name } => {
+                            let tool_res = self
+                                .tool_use(&a_vec, name.to_string(), id.to_string())
+                                .await?;
+                            Ok(crate::actor::StreamRes::Tool(tool_res))
+                        }
+                        StreamAccu::Thinking {
+                            thinking,
+                            signature,
+                        } => Ok(crate::actor::StreamRes::Thinking {
+                            thinking: thinking.clone(),
+                            signature: signature.clone(),
+                        }),
+                        _ => Err(anyhow::Error::msg("No valid tool")),
+                    },
+                    None => Err(anyhow::Error::msg("No valid tool")),
+                },
+            )
+            .collect();
+
+        future::join_all(futures).await
     }
 }

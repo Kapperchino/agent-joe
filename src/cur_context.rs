@@ -1,7 +1,9 @@
 use crate::utils::Utils;
 use futures::future;
 use ra_ap_hir::db::DefDatabase;
-use ra_ap_ide::{Analysis, AnalysisHost, Cancellable, FileChange};
+use ra_ap_ide::{
+    Analysis, AnalysisHost, Cancellable, FileChange, FileStructureConfig, StructureNode,
+};
 use ra_ap_ide_db::base_db::{RootQueryDb, SourceDatabase};
 use ra_ap_ide_db::{ChangeWithProcMacros, RootDatabase};
 use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
@@ -146,6 +148,29 @@ impl AnalysisSession<'_> {
             })
             .collect()
     }
+
+    fn get_syntax_tree(&self, file_id: FileId) -> String {
+        self.analysis
+            .view_syntax_tree(file_id)
+            .unwrap_or("".to_string())
+    }
+
+    fn get_file_structure(&self, file_id: FileId) -> Vec<StructureNode> {
+        self.analysis
+            .file_structure(
+                &FileStructureConfig {
+                    exclude_locals: false,
+                },
+                file_id,
+            )
+            .unwrap_or(vec![])
+    }
+
+    fn get_item_tree(&self, file_id: FileId) -> String {
+        self.analysis
+            .view_item_tree(file_id)
+            .unwrap_or(String::default())
+    }
 }
 
 impl RustProject {
@@ -194,5 +219,84 @@ mod tests {
         println!("=== End Crate Graph ===\n");
 
         assert!(!dependencies.is_empty(), "Expected non-empty crate graph");
+    }
+
+    #[test]
+    fn test_get_syntax_tree() {
+        let cur_dir = env::current_dir().expect("Failed to get current directory");
+        let project = CurContext::load_rust_project(&cur_dir).expect("Failed to load rust project");
+        let session = project.new_analysis();
+
+        let work_files = session.get_work_files();
+        assert!(!work_files.is_empty(), "Expected at least one work file");
+
+        // Get syntax tree for the first file
+        let actor_state = work_files
+            .iter()
+            .find(|x| {
+                x.path.as_path().unwrap() == "/Users/kamranorhun/Dev/turbo-code/src/actor_state.rs"
+            })
+            .unwrap();
+        let syntax_tree = session.get_syntax_tree(actor_state.id);
+
+        println!("\n=== Syntax Tree for {} ===", actor_state.path);
+        println!("{}", syntax_tree);
+        println!("=== End Syntax Tree ===\n");
+
+        assert!(!syntax_tree.is_empty(), "Expected non-empty syntax tree");
+    }
+
+    #[test]
+    fn test_get_file_structure() {
+        let cur_dir = env::current_dir().expect("Failed to get current directory");
+        let project = CurContext::load_rust_project(&cur_dir).expect("Failed to load rust project");
+        let session = project.new_analysis();
+
+        let work_files = session.get_work_files();
+        assert!(!work_files.is_empty(), "Expected at least one work file");
+
+        let actor_state = work_files
+            .iter()
+            .find(|x| {
+                x.path.as_path().unwrap() == "/Users/kamranorhun/Dev/turbo-code/src/actor_state.rs"
+            })
+            .unwrap();
+        let file_structure = session.get_file_structure(actor_state.id);
+
+        println!("\n=== File Structure for {} ===", actor_state.path);
+        for node in &file_structure {
+            println!("{:?}", node);
+        }
+        println!("=== End File Structure ===\n");
+
+        assert!(
+            !file_structure.is_empty(),
+            "Expected non-empty file structure"
+        );
+    }
+
+    #[test]
+    fn test_get_item_tree() {
+        let cur_dir = env::current_dir().expect("Failed to get current directory");
+        let project = CurContext::load_rust_project(&cur_dir).expect("Failed to load rust project");
+        let session = project.new_analysis();
+
+        let work_files = session.get_work_files();
+        assert!(!work_files.is_empty(), "Expected at least one work file");
+
+        let actor_state = work_files
+            .iter()
+            .find(|x| {
+                x.path.as_path().unwrap() == "/Users/kamranorhun/Dev/turbo-code/src/actor_state.rs"
+            })
+            .unwrap();
+        let file_structure = session.get_item_tree(actor_state.id);
+
+        println!("{}", file_structure);
+
+        assert!(
+            !file_structure.is_empty(),
+            "Expected non-empty file structure"
+        );
     }
 }
