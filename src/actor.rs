@@ -65,6 +65,7 @@ pub struct Dependency {
     pub claude: ClaudeClient,
     pub tools: Vec<tools::Tool>,
     pub tui_tx: mpsc::UnboundedSender<ActorToTui>,
+    pub db_env: heed::Env
 }
 
 #[derive(Debug, Clone)]

@@ -6,6 +6,8 @@ use crate::worker::Worker;
 use crate::{claude, tools};
 use anyhow::Error;
 use futures::future;
+use heed::Database;
+use heed::types::Str;
 use ractor::ActorCell;
 use std::collections::HashMap;
 use std::sync::{LazyLock, OnceLock};
@@ -26,7 +28,7 @@ pub struct ActorState {
 
 impl ActorState {
     pub async fn new(dependency: Dependency) -> Result<Self, anyhow::Error> {
-        let cur_context = CurContext::get_cur_context().await?;
+        let cur_context = CurContext::new(dependency.db_env).await?;
         let cur_context_str = cur_context.to_string().await;
 
         let computed_tools: Vec<claude::Tool> =

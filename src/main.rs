@@ -10,17 +10,18 @@ mod worker;
 use crate::actor::Dependency;
 use crate::claude::{ClaudeClient, ClaudeConfig};
 use crate::tools::{ListFiles, ReadFile};
+use crate::worker::Worker;
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::execute;
+use heed::EnvOpenOptions;
 use log::LevelFilter;
 use ractor::Actor;
 use simplelog::{ColorChoice, CombinedLogger, Config, TermLogger, TerminalMode};
 use std::env;
-use std::io::{stdout, Write};
-use tokio::main;
+use std::io::{ErrorKind, Write, stdout};
 use tokio::sync::mpsc;
+use tokio::{fs, main};
 use tokio_stream::StreamExt;
-use crate::worker::Worker;
 
 #[main]
 async fn main() {
@@ -30,6 +31,24 @@ async fn main() {
         TerminalMode::Mixed,
         ColorChoice::Auto,
     )])
+    .unwrap();
+
+    match fs::create_dir("~/.turbo-code/").await {
+        Ok(_) => Ok(()),
+        Err(err) => {
+            if err.kind() != ErrorKind::AlreadyExists {
+                Err(err)
+            } else {
+                Ok(())
+            }
+        }
+    }
+    .unwrap();
+
+    let env = unsafe {
+        EnvOpenOptions::new() // 100 MiB
+            .open(&"~/.turbo-code/")
+    }
     .unwrap();
 
     let client = ClaudeClient::new(ClaudeConfig {
@@ -50,6 +69,7 @@ async fn main() {
                 tools::Tool::ListFiles(ListFiles::default()),
             ],
             tui_tx: tx,
+            db_env: env,
         },
     )
     .await
