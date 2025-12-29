@@ -6,6 +6,7 @@ mod cur_context;
 mod tools;
 mod utils;
 mod worker;
+mod analysis;
 
 use crate::actor::Dependency;
 use crate::claude::{ClaudeClient, ClaudeConfig};
