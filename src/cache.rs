@@ -1,7 +1,9 @@
 use crate::analysis::SymbolInfo;
 use heed::types::{SerdeJson, Str};
 use heed::{Database, Env, EnvOpenOptions, RwTxn};
+use std::io::ErrorKind;
 use std::path::PathBuf;
+use tokio::fs;
 
 pub trait CacheKey: serde::Serialize + for<'de> serde::Deserialize<'de> {
     fn get_key(&self) -> String;
@@ -24,8 +26,19 @@ pub struct TypedCache<K: CacheKey, V: CacheVal> {
 }
 
 impl<K: CacheKey, V: CacheVal + 'static> TypedCache<K, V> {
-    pub fn new(path: Option<PathBuf>) -> Self {
-        let path = path.unwrap_or("~/.turbo-code/".into());
+    pub async fn new(path: Option<PathBuf>) -> Self {
+        let path = path.unwrap_or("/Users/kamranorhun/.turbo-code/".into());
+        match fs::create_dir(path.clone()).await {
+            Ok(_) => Ok(()),
+            Err(err) => {
+                if err.kind() != ErrorKind::AlreadyExists {
+                    Err(err)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+        .unwrap();
         let env = unsafe { EnvOpenOptions::new().open(&path) }.unwrap();
         Self {
             env,

@@ -1,11 +1,9 @@
 use crate::cache::TypedCache;
 use crate::cur_context::RustProject;
 use anyhow::anyhow;
-use heed::types::{SerdeJson, Str};
-use heed::{Database, Env};
 use ra_ap_ide::{Analysis, FileStructureConfig, StructureNode};
-use ra_ap_ide_db::SymbolKind;
 use ra_ap_ide_db::symbol_index::Query;
+use ra_ap_ide_db::SymbolKind;
 use ra_ap_vfs::{FileId, VfsPath};
 use serde::{Deserialize, Serialize};
 
@@ -126,7 +124,7 @@ impl<'a> AnalysisSession<'a> {
             .unwrap_or(vec![])
     }
 
-    fn get_symboles(&mut self) -> anyhow::Result<Vec<SymbolInfo>> {
+    pub fn get_symboles(&mut self) -> anyhow::Result<Vec<SymbolInfo>> {
         self.symbol_cache.transaction(|db| {
             if db.is_empty()? {
                 let mut q = Query::new("".to_string());
@@ -162,11 +160,11 @@ impl<'a> AnalysisSession<'a> {
         })
     }
 
-    pub fn new(analysis: Analysis, proj: &'a RustProject) -> Self {
+    pub async fn new(analysis: Analysis, proj: &'a RustProject) -> Self {
         Self {
             analysis,
             proj,
-            symbol_cache: TypedCache::new(None),
+            symbol_cache: TypedCache::new(None).await,
         }
     }
 }
@@ -174,26 +172,17 @@ impl<'a> AnalysisSession<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cur_context::CurContext;
-    use heed::EnvOpenOptions;
     use ra_ap_ide_db::SymbolKind::Function;
     use std::env;
-    use std::io::{ErrorKind, SeekFrom};
-    use tokio::fs;
+    use std::io::SeekFrom;
     use tokio::fs::File;
     use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
-    #[test]
-    fn test_get_dependencies() {
+    #[tokio::test]
+    async fn test_get_dependencies() {
         let cur_dir = env::current_dir().expect("Failed to get current directory");
-        let env = unsafe {
-            EnvOpenOptions::new() // 100 MiB
-                .open(&"/Users/kamranorhun/")
-        }
-        .unwrap();
-        let project = CurContext::load_rust_project(&cur_dir, env.clone())
-            .expect("Failed to load rust project");
-        let session = project.new_analysis();
+        let project = RustProject::new(&cur_dir).expect("Failed to load rust project");
+        let session = project.new_analysis().await;
         let dependencies = session.get_dependenceis();
 
         println!("\n=== Crate Graph ===");
@@ -203,13 +192,11 @@ mod tests {
         assert!(!dependencies.is_empty(), "Expected non-empty crate graph");
     }
 
-    #[test]
-    fn test_get_file_structure() {
+    #[tokio::test]
+    async fn test_get_file_structure() {
         let cur_dir = env::current_dir().expect("Failed to get current directory");
-        let env = unsafe { EnvOpenOptions::new().open(&"~/.turbo-code/") }.unwrap();
-        let project = CurContext::load_rust_project(&cur_dir, env.clone())
-            .expect("Failed to load rust project");
-        let session = project.new_analysis();
+        let project = RustProject::new(&cur_dir).expect("Failed to load rust project");
+        let session = project.new_analysis().await;
 
         let work_files = session.get_work_files();
         assert!(!work_files.is_empty(), "Expected at least one work file");
@@ -236,26 +223,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_item_tree() {
-        match fs::create_dir("/Users/kamranorhun/.turbo-code/").await {
-            Ok(_) => Ok(()),
-            Err(err) => {
-                if err.kind() != ErrorKind::AlreadyExists {
-                    Err(err)
-                } else {
-                    Ok(())
-                }
-            }
-        }
-        .unwrap();
         let cur_dir = env::current_dir().expect("Failed to get current directory");
-        let env = unsafe {
-            EnvOpenOptions::new() // 100 MiB
-                .open(&"/Users/kamranorhun/.turbo-code/")
-        }
-        .unwrap();
-        let project = CurContext::load_rust_project(&cur_dir, env.clone())
-            .expect("Failed to load rust project");
-        let mut session = project.new_analysis();
+        let project = RustProject::new(&cur_dir).expect("Failed to load rust project");
+        let mut session = project.new_analysis().await;
 
         let file_structure = session.get_symboles().unwrap();
 

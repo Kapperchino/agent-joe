@@ -24,7 +24,7 @@ pub struct ActorState {
 
 impl ActorState {
     pub async fn new(dependency: Dependency) -> Result<Self, anyhow::Error> {
-        let cur_context = CurContext::new(dependency.db_env).await?;
+        let cur_context = CurContext::new().await?;
         let cur_context_str = cur_context.to_string().await;
 
         let computed_tools: Vec<claude::Tool> =
