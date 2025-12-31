@@ -1,27 +1,12 @@
 use crate::analysis::AnalysisSession;
 use crate::utils::Utils;
-use anyhow::anyhow;
-use futures::future;
-use futures::future::err;
-use heed::types::{SerdeJson, Str};
-use heed::{Database, Env};
-use ra_ap_hir::db::DefDatabase;
-use ra_ap_hir::sym::{as_str, usize};
-use ra_ap_ide::{
-    Analysis, AnalysisHost, Cancellable, FileChange, FileStructureConfig, NavigationTarget,
-    StructureNode, TextRange,
-};
-use ra_ap_ide_db::base_db::{RootQueryDb, SourceDatabase};
-use ra_ap_ide_db::documentation::Documentation;
-use ra_ap_ide_db::symbol_index::Query;
-use ra_ap_ide_db::{ChangeWithProcMacros, RootDatabase, SymbolKind};
-use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
+use heed::Env;
+use ra_ap_ide::AnalysisHost;
+use ra_ap_load_cargo::{load_workspace_at, LoadCargoConfig, ProcMacroServerChoice};
 use ra_ap_project_model::CargoConfig;
 use ra_ap_vfs::{FileId, Vfs, VfsPath};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
-use std::hash::Hash;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::fs::DirEntry;
@@ -91,7 +76,7 @@ impl CurContext {
 impl RustProject {
     pub(crate) fn new_analysis(&'_ self) -> AnalysisSession<'_> {
         let analysis = self.analysis_host.lock().unwrap().analysis();
-        AnalysisSession::new(analysis, self.db_env.clone(), self)
+        AnalysisSession::new(analysis, self)
     }
     fn modify_file(&self) {
         let joe = self.analysis_host.lock().unwrap();

@@ -2,15 +2,11 @@ use crate::actor::{ActorToTui, Dependency, State, StreamAccu, StreamRes};
 use crate::claude::{ClaudeClient, ContentBlock, ContentBlockInfo, Delta, Role, StreamEvent};
 use crate::cur_context::CurContext;
 use crate::tools::{ListFilesInput, ReadFileInput, Tool, ToolResult, ToolTrait};
-use crate::worker::Worker;
 use crate::{claude, tools};
 use anyhow::Error;
 use futures::future;
-use heed::Database;
-use heed::types::Str;
 use ractor::ActorCell;
 use std::collections::HashMap;
-use std::sync::{LazyLock, OnceLock};
 use tokio::sync::mpsc;
 
 pub struct ActorState {

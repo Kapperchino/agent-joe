@@ -1,3 +1,4 @@
+use crate::cache::TypedCache;
 use crate::cur_context::RustProject;
 use anyhow::anyhow;
 use heed::types::{SerdeJson, Str};
@@ -22,7 +23,7 @@ pub struct CrateInfo {
 
 pub struct AnalysisSession<'a> {
     analysis: Analysis,
-    db_env: Env,
+    symbol_cache: TypedCache<SymbolInfo, SymbolInfo>,
     proj: &'a RustProject,
 }
 
@@ -77,20 +78,6 @@ pub struct SymbolInfo {
     pub docs: Option<String>,
 }
 
-impl SymbolInfo {
-    pub fn get_key(&self) -> String {
-        let SymbolInfo {
-            rpath,
-            name,
-            kind,
-            container_name,
-            ..
-        } = self;
-        let container_name = container_name.clone().unwrap_or("self".to_string());
-        format!("{rpath}-{container_name}-{:?}-{name}", kind)
-    }
-}
-
 impl<'a> AnalysisSession<'a> {
     pub(crate) fn get_work_files(&self) -> Vec<FileInfo> {
         self.proj
@@ -139,48 +126,48 @@ impl<'a> AnalysisSession<'a> {
             .unwrap_or(vec![])
     }
 
-    fn get_symboles(&self) -> anyhow::Result<Vec<SymbolInfo>> {
-        let mut wtxn = self.db_env.write_txn()?;
-        let db: Database<Str, SerdeJson<SymbolInfo>> =
-            self.db_env.create_database(&mut wtxn, None)?;
-        if db.is_empty(&wtxn)? {
-            let mut q = Query::new("".to_string());
-            q.exclude_imports();
-            let search_res = self.analysis.symbol_search(q, usize::MAX)?;
-            let res: Vec<SymbolInfo> = search_res
-                .into_iter()
-                .map(|n| SymbolInfo {
-                    rpath: self.proj.vfs.file_path(n.file_id).to_string(),
-                    full_range: Range {
-                        start: n.full_range.start().into(),
-                        end: n.full_range.end().into(),
-                    },
-                    name: n.name.to_string(),
-                    kind: n.kind.unwrap(),
-                    container_name: n.container_name.map(|s| s.to_string()),
-                    docs: n.docs.map(|d| d.as_str().to_string()),
-                })
-                .collect();
-            let (_, errs): (Vec<_>, Vec<_>) = res
-                .iter()
-                .map(|i| db.put(&mut wtxn, i.get_key().as_str(), &i))
-                .partition(|r| r.is_ok());
-            // report on this
-            let errs: Vec<_> = errs.into_iter().flat_map(|x1| x1.err()).collect();
-            println!("{:?}", errs);
-            if !errs.is_empty() {
-                return Err(anyhow!("Error while wrriting to DB! {:?}", errs));
+    fn get_symboles(&mut self) -> anyhow::Result<Vec<SymbolInfo>> {
+        self.symbol_cache.transaction(|db| {
+            if db.is_empty()? {
+                let mut q = Query::new("".to_string());
+                q.exclude_imports();
+                let search_res = self.analysis.symbol_search(q, usize::MAX)?;
+                let res: Vec<SymbolInfo> = search_res
+                    .into_iter()
+                    .map(|n| SymbolInfo {
+                        rpath: self.proj.vfs.file_path(n.file_id).to_string(),
+                        full_range: Range {
+                            start: n.full_range.start().into(),
+                            end: n.full_range.end().into(),
+                        },
+                        name: n.name.to_string(),
+                        kind: n.kind.unwrap(),
+                        container_name: n.container_name.map(|s| s.to_string()),
+                        docs: n.docs.map(|d| d.as_str().to_string()),
+                    })
+                    .collect();
+                let (_, errs): (Vec<_>, Vec<_>) =
+                    res.iter().map(|i| db.put(i, i)).partition(|r| r.is_ok());
+                // report on this
+                let errs: Vec<_> = errs.into_iter().flat_map(|x1| x1.err()).collect();
+                println!("{:?}", errs);
+                if !errs.is_empty() {
+                    return Err(anyhow!("Error while wrriting to DB! {:?}", errs));
+                }
+                Ok(res)
+            } else {
+                let res: Vec<_> = db.iter()?.collect();
+                Ok(res)
             }
-            wtxn.commit()?;
-            Ok(res)
-        } else {
-            let res: Vec<_> = db.iter(&wtxn)?.flat_map(|x| x.ok().map(|t| t.1)).collect();
-            Ok(res)
-        }
+        })
     }
 
-    pub fn new(analysis: Analysis, db_env: Env, proj: &'a RustProject) -> Self {
-        Self { analysis, db_env, proj }
+    pub fn new(analysis: Analysis, proj: &'a RustProject) -> Self {
+        Self {
+            analysis,
+            proj,
+            symbol_cache: TypedCache::new(None),
+        }
     }
 }
 
@@ -201,7 +188,7 @@ mod tests {
         let cur_dir = env::current_dir().expect("Failed to get current directory");
         let env = unsafe {
             EnvOpenOptions::new() // 100 MiB
-                .open(&"~/.turbo-code/")
+                .open(&"/Users/kamranorhun/")
         }
         .unwrap();
         let project = CurContext::load_rust_project(&cur_dir, env.clone())
@@ -268,7 +255,7 @@ mod tests {
         .unwrap();
         let project = CurContext::load_rust_project(&cur_dir, env.clone())
             .expect("Failed to load rust project");
-        let session = project.new_analysis();
+        let mut session = project.new_analysis();
 
         let file_structure = session.get_symboles().unwrap();
 

@@ -1,6 +1,5 @@
 use crate::actor_state::ActorState;
 use crate::claude::{ClaudeClient, ClaudeError, ClientRequest, ContentBlock, StreamEvent};
-use crate::cur_context::CurContext;
 use crate::worker::Worker;
 use crate::{claude, tools};
 use ractor::Actor;
