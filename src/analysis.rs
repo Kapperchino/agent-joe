@@ -1,10 +1,13 @@
 use crate::cache::TypedCache;
 use crate::cur_context::RustProject;
 use anyhow::anyhow;
-use ra_ap_ide::{Analysis, FileStructureConfig, StructureNode};
-use ra_ap_ide_db::symbol_index::Query;
+use ra_ap_ide::{
+    Analysis, FilePosition, FileStructureConfig, GotoDefinitionConfig, GotoImplementationConfig,
+    NavigationTarget, RangeInfo, StructureNode, TextSize,
+};
 use ra_ap_ide_db::SymbolKind;
-use ra_ap_vfs::{FileId, VfsPath};
+use ra_ap_ide_db::symbol_index::Query;
+use ra_ap_vfs::{FileId, Vfs, VfsPath};
 use serde::{Deserialize, Serialize};
 
 pub struct FileInfo {
@@ -21,13 +24,12 @@ pub struct CrateInfo {
 
 pub struct AnalysisSession<'a> {
     analysis: Analysis,
-    symbol_cache: TypedCache<SymbolInfo, SymbolInfo>,
     proj: &'a RustProject,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Range {
-    start: u32,
+    pub(crate) start: u32,
     end: u32,
 }
 
@@ -65,15 +67,65 @@ enum SymbolKindDef {
     Variant,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SymbolInfo {
     pub rpath: String,
     pub full_range: Range,
+    pub focus_range: Option<Range>,
     pub name: String,
     #[serde(with = "SymbolKindDef")]
     pub kind: SymbolKind,
     pub container_name: Option<String>,
     pub docs: Option<String>,
+}
+pub struct EnumMeta {
+    pub rpath: String,
+    pub full_range: Range,
+    pub name: String,
+    pub variants: Vec<EVariantMeta>,
+}
+
+pub struct EVariantMeta {
+    pub rpath: String,
+    pub full_range: Range,
+    pub name: String,
+}
+pub struct StructMeta {
+    pub rpath: String,
+    pub full_range: Range,
+    pub name: String,
+    pub functions: Vec<FunctionMeta>,
+}
+pub struct FunctionMeta {
+    pub rpath: String,
+    pub full_range: Range,
+    pub name: String,
+}
+
+pub struct TypeAliasMeta {
+    pub rpath: String,
+    pub full_range: Range,
+    pub name: String,
+}
+
+impl SymbolInfo {
+    fn from_nav(n: NavigationTarget, vfs: &Vfs) -> Self {
+        SymbolInfo {
+            rpath: vfs.file_path(n.file_id).to_string(),
+            full_range: Range {
+                start: n.full_range.start().into(),
+                end: n.full_range.end().into(),
+            },
+            focus_range: n.focus_range.map(|t| Range {
+                start: t.start().into(),
+                end: t.end().into(),
+            }),
+            name: n.name.to_string(),
+            kind: n.kind.unwrap(),
+            container_name: n.container_name.map(|s| s.to_string()),
+            docs: n.docs.map(|d| d.as_str().to_string()),
+        }
+    }
 }
 
 impl<'a> AnalysisSession<'a> {
@@ -124,47 +176,42 @@ impl<'a> AnalysisSession<'a> {
             .unwrap_or(vec![])
     }
 
-    pub fn get_symboles(&mut self) -> anyhow::Result<Vec<SymbolInfo>> {
-        self.symbol_cache.transaction(|db| {
-            if db.is_empty()? {
-                let mut q = Query::new("".to_string());
-                q.exclude_imports();
-                let search_res = self.analysis.symbol_search(q, usize::MAX)?;
-                let res: Vec<SymbolInfo> = search_res
-                    .into_iter()
-                    .map(|n| SymbolInfo {
-                        rpath: self.proj.vfs.file_path(n.file_id).to_string(),
-                        full_range: Range {
-                            start: n.full_range.start().into(),
-                            end: n.full_range.end().into(),
-                        },
-                        name: n.name.to_string(),
-                        kind: n.kind.unwrap(),
-                        container_name: n.container_name.map(|s| s.to_string()),
-                        docs: n.docs.map(|d| d.as_str().to_string()),
-                    })
-                    .collect();
-                let (_, errs): (Vec<_>, Vec<_>) =
-                    res.iter().map(|i| db.put(i, i)).partition(|r| r.is_ok());
-                // report on this
-                let errs: Vec<_> = errs.into_iter().flat_map(|x1| x1.err()).collect();
-                println!("{:?}", errs);
-                if !errs.is_empty() {
-                    return Err(anyhow!("Error while wrriting to DB! {:?}", errs));
-                }
-                Ok(res)
-            } else {
-                let res: Vec<_> = db.iter()?.collect();
-                Ok(res)
-            }
-        })
+    pub fn go_to_impl(
+        &self,
+        file_id: FileId,
+        offset: TextSize,
+    ) -> anyhow::Result<Option<Vec<SymbolInfo>>> {
+        let res = self.analysis.goto_implementation(
+            &GotoImplementationConfig {
+                filter_adjacent_derive_implementations: false,
+            },
+            FilePosition { file_id, offset },
+        )?;
+        let res = res.map(|rinfo| {
+            rinfo
+                .info
+                .into_iter()
+                .map(|n| SymbolInfo::from_nav(n, &self.proj.vfs))
+                .collect()
+        });
+        Ok(res)
+    }
+
+    pub fn get_symboles(&self) -> anyhow::Result<Vec<SymbolInfo>> {
+        let mut q = Query::new("".to_string());
+        q.exclude_imports();
+        let search_res = self.analysis.symbol_search(q, usize::MAX)?;
+        let res: Vec<_> = search_res
+            .into_iter()
+            .map(|n| SymbolInfo::from_nav(n, &self.proj.vfs))
+            .collect();
+        Ok(res)
     }
 
     pub async fn new(analysis: Analysis, proj: &'a RustProject) -> Self {
         Self {
             analysis,
             proj,
-            symbol_cache: TypedCache::new(None).await,
         }
     }
 }
@@ -172,7 +219,9 @@ impl<'a> AnalysisSession<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use itertools::Itertools;
     use ra_ap_ide_db::SymbolKind::Function;
+    use std::collections::HashMap;
     use std::env;
     use std::io::SeekFrom;
     use tokio::fs::File;
@@ -229,17 +278,74 @@ mod tests {
 
         let file_structure = session.get_symboles().unwrap();
 
-        for nav in file_structure {
-            if let Function | SymbolKind::Struct = nav.kind {
-                let mut file = File::open(nav.rpath.clone()).await.unwrap();
-                file.seek(SeekFrom::Start((u32::from(nav.full_range.start) as u64)))
-                    .await
-                    .unwrap();
-                let mut contents =
-                    vec![0u8; u32::from(nav.full_range.end - nav.full_range.start) as usize];
-                file.read_exact(&mut contents).await.unwrap();
-                println!("name {:?},printout {:?}", nav, String::from_utf8(contents));
-            }
-        }
+        let traits: Vec<_> = file_structure
+            .iter()
+            .filter(|info| info.kind == SymbolKind::Trait)
+            .cloned()
+            .collect();
+
+        let tjoe: Vec<_> = traits
+            .into_iter()
+            .flat_map(|info| {
+                info.focus_range.clone().map(|t| {
+                    session
+                        .go_to_impl(
+                            project
+                                .vfs
+                                .file_id(&VfsPath::new_real_path(info.rpath))
+                                .unwrap()
+                                .0,
+                            TextSize::new(t.start),
+                        )
+                        .ok()
+                })
+            })
+            .flatten()
+            .flatten()
+            .map(|info| info)
+            .collect();
+
+        println!("{:?}", tjoe);
+
+        // for nav in tjoe.iter() {
+        //     if let Function | SymbolKind::Struct = nav.kind {
+        //         let mut file = File::open(nav.rpath.clone()).await.unwrap();
+        //         file.seek(SeekFrom::Start((u32::from(nav.full_range.start) as u64)))
+        //             .await
+        //             .unwrap();
+        //         let mut contents =
+        //             vec![0u8; u32::from(nav.full_range.end - nav.full_range.start) as usize];
+        //         file.read_exact(&mut contents).await.unwrap();
+        //         println!("name {:?},printout {:?}", nav, String::from_utf8(contents));
+        //     }
+        // }
+
+        let joe = file_structure
+            .into_iter()
+            .into_group_map_by(|x| x.rpath.clone());
+
+        joe.iter().for_each(|(k, v)| {
+            let total = v
+                .iter()
+                .map(|s| {
+                    let SymbolInfo {
+                        rpath,
+                        full_range,
+                        name,
+                        kind,
+                        container_name,
+                        docs,
+                        focus_range,
+                    } = s;
+                    format!(
+                        "     {name}  {:?}  {:?}  {:?}",
+                        kind, container_name, focus_range
+                    )
+                })
+                .reduce(|acc, x1| format!("{acc}\n{x1}"))
+                .unwrap();
+            println!("path:{k}");
+            print!("{total}\n")
+        });
     }
 }
