@@ -3,7 +3,6 @@ use crate::claude::{ClaudeClient, ContentBlock, ContentBlockInfo, Delta, Role, S
 use crate::cur_context::CurContext;
 use crate::tools::{ListFilesInput, ReadFileInput, Tool, ToolResult, ToolTrait};
 use crate::{claude, tools};
-use anyhow::Error;
 use futures::future;
 use ractor::ActorCell;
 use std::collections::HashMap;
@@ -23,7 +22,7 @@ pub struct ActorState {
 }
 
 impl ActorState {
-    pub async fn new(dependency: Dependency) -> Result<Self, anyhow::Error> {
+    pub async fn new(dependency: Dependency) -> anyhow::Result<Self> {
         let cur_context = CurContext::new().await?;
         let cur_context_str = cur_context.to_string().await;
 
@@ -47,7 +46,7 @@ impl ActorState {
         })
     }
 
-    pub fn save_history(&mut self, vec: Vec<Result<StreamRes, anyhow::Error>>) {
+    pub fn save_history(&mut self, vec: Vec<anyhow::Result<StreamRes>>) {
         vec.into_iter().for_each(|res| match res {
             Ok(stream_res) => match stream_res {
                 StreamRes::String(str) => self.history.push(claude::Message::new_assistant(str)),
@@ -222,7 +221,7 @@ impl ActorState {
         a_vec: &Vec<StreamAccu>,
         name: String,
         id: String,
-    ) -> Result<ToolResult, anyhow::Error> {
+    ) -> anyhow::Result<ToolResult> {
         match Tool::from_str(name.as_str())? {
             Tool::ReadFile(_) => match a_vec.get(1).ok_or(anyhow::Error::msg("doesn't work"))? {
                 StreamAccu::Json(json) => {
@@ -244,7 +243,7 @@ impl ActorState {
                     };
                     Ok(Tool::ListFiles(rf).use_tool(id).await?)
                 }
-                _ => Err(Error::msg("doesn't work")),
+                _ => Err(anyhow::Error::msg("doesn't work")),
             },
         }
     }
@@ -252,23 +251,23 @@ impl ActorState {
     pub async fn process_tools(
         &self,
         vec: Vec<(usize, Vec<StreamAccu>)>,
-    ) -> Vec<Result<crate::actor::StreamRes, Error>> {
+    ) -> Vec<anyhow::Result<StreamRes>> {
         let futures: Vec<_> = vec
             .into_iter()
             .map(
                 async |(_, a_vec): (usize, Vec<StreamAccu>)| match a_vec.first() {
                     Some(accu) => match accu {
-                        StreamAccu::String(str) => Ok(crate::actor::StreamRes::String(str.clone())),
+                        StreamAccu::String(str) => Ok(StreamRes::String(str.clone())),
                         StreamAccu::Tool { id, name } => {
                             let tool_res = self
                                 .tool_use(&a_vec, name.to_string(), id.to_string())
                                 .await?;
-                            Ok(crate::actor::StreamRes::Tool(tool_res))
+                            Ok(StreamRes::Tool(tool_res))
                         }
                         StreamAccu::Thinking {
                             thinking,
                             signature,
-                        } => Ok(crate::actor::StreamRes::Thinking {
+                        } => Ok(StreamRes::Thinking {
                             thinking: thinking.clone(),
                             signature: signature.clone(),
                         }),

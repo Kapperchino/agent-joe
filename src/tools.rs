@@ -142,7 +142,7 @@ impl ToolResult {
 }
 
 impl Tool {
-    pub async fn use_tool(&self, id: String) -> Result<ToolResult, anyhow::Error> {
+    pub async fn use_tool(&self, id: String) -> anyhow::Result<ToolResult> {
         match self {
             Tool::ReadFile(path) => {
                 let result = fs::read_to_string(&path.input.file_path).await?;
@@ -190,7 +190,7 @@ impl Tool {
         }
     }
 
-    pub fn from_str(name: &str) -> Result<Self, anyhow::Error> {
+    pub fn from_str(name: &str) -> anyhow::Result<Self> {
         match name {
             "read_file" => Ok(Tool::ReadFile(ReadFile::default())),
             "read_dir" => Ok(Tool::ListFiles(ListFiles::default())),

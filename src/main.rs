@@ -35,24 +35,6 @@ async fn main() {
     )])
     .unwrap();
 
-    match fs::create_dir("~/.turbo-code/").await {
-        Ok(_) => Ok(()),
-        Err(err) => {
-            if err.kind() != ErrorKind::AlreadyExists {
-                Err(err)
-            } else {
-                Ok(())
-            }
-        }
-    }
-    .unwrap();
-
-    let env = unsafe {
-        EnvOpenOptions::new() // 100 MiB
-            .open(&"~/.turbo-code/")
-    }
-    .unwrap();
-
     let client = ClaudeClient::new(ClaudeConfig {
         api_key: env::var("CLAUDE_API").unwrap(),
         ..Default::default()
@@ -71,7 +53,6 @@ async fn main() {
                 tools::Tool::ListFiles(ListFiles::default()),
             ],
             tui_tx: tx,
-            db_env: env,
         },
     )
     .await

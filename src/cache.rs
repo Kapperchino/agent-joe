@@ -5,7 +5,7 @@ use std::io::ErrorKind;
 use std::path::PathBuf;
 use tokio::fs;
 
-pub trait CacheKey: serde::Serialize + for<'de> serde::Deserialize<'de> {
+pub trait CacheKey {
     fn get_key(&self) -> String;
 }
 impl CacheKey for SymbolInfo {
@@ -82,7 +82,7 @@ impl<K: CacheKey, V: CacheVal> TypedCacheDb<'_, '_, K, V> {
         Ok(self.db.is_empty(self.txn)?)
     }
 
-    pub fn iter(&self) -> anyhow::Result<impl Iterator<Item = V> + '_> {
+    pub fn iter(&self) -> anyhow::Result<impl Iterator<Item = V> > {
         Ok(self
             .db
             .iter(self.txn)?
