@@ -78,35 +78,6 @@ pub struct SymbolInfo {
     pub container_name: Option<String>,
     pub docs: Option<String>,
 }
-pub struct EnumMeta {
-    pub rpath: String,
-    pub full_range: Range,
-    pub name: String,
-    pub variants: Vec<EVariantMeta>,
-}
-
-pub struct EVariantMeta {
-    pub rpath: String,
-    pub full_range: Range,
-    pub name: String,
-}
-pub struct StructMeta {
-    pub rpath: String,
-    pub full_range: Range,
-    pub name: String,
-    pub functions: Vec<FunctionMeta>,
-}
-pub struct FunctionMeta {
-    pub rpath: String,
-    pub full_range: Range,
-    pub name: String,
-}
-
-pub struct TypeAliasMeta {
-    pub rpath: String,
-    pub full_range: Range,
-    pub name: String,
-}
 
 impl SymbolInfo {
     fn from_nav(n: NavigationTarget, vfs: &Vfs) -> Self {
@@ -268,84 +239,5 @@ mod tests {
             !file_structure.is_empty(),
             "Expected non-empty file structure"
         );
-    }
-
-    #[tokio::test]
-    async fn test_get_item_tree() {
-        let cur_dir = env::current_dir().expect("Failed to get current directory");
-        let project = RustProject::new(&cur_dir).expect("Failed to load rust project");
-        let mut session = project.new_analysis().await;
-
-        let file_structure = session.get_symboles().unwrap();
-
-        let traits: Vec<_> = file_structure
-            .iter()
-            .filter(|info| info.kind == SymbolKind::Trait)
-            .cloned()
-            .collect();
-
-        let tjoe: Vec<_> = traits
-            .into_iter()
-            .flat_map(|info| {
-                info.focus_range.clone().map(|t| {
-                    session
-                        .go_to_impl(
-                            project
-                                .vfs
-                                .file_id(&VfsPath::new_real_path(info.rpath))
-                                .unwrap()
-                                .0,
-                            TextSize::new(t.start),
-                        )
-                        .ok()
-                })
-            })
-            .flatten()
-            .flatten()
-            .map(|info| info)
-            .collect();
-
-        println!("{:?}", tjoe);
-
-        // for nav in tjoe.iter() {
-        //     if let Function | SymbolKind::Struct = nav.kind {
-        //         let mut file = File::open(nav.rpath.clone()).await.unwrap();
-        //         file.seek(SeekFrom::Start((u32::from(nav.full_range.start) as u64)))
-        //             .await
-        //             .unwrap();
-        //         let mut contents =
-        //             vec![0u8; u32::from(nav.full_range.end - nav.full_range.start) as usize];
-        //         file.read_exact(&mut contents).await.unwrap();
-        //         println!("name {:?},printout {:?}", nav, String::from_utf8(contents));
-        //     }
-        // }
-
-        let joe = file_structure
-            .into_iter()
-            .into_group_map_by(|x| x.rpath.clone());
-
-        joe.iter().for_each(|(k, v)| {
-            let total = v
-                .iter()
-                .map(|s| {
-                    let SymbolInfo {
-                        rpath,
-                        full_range,
-                        name,
-                        kind,
-                        container_name,
-                        docs,
-                        focus_range,
-                    } = s;
-                    format!(
-                        "     {name}  {:?}  {:?}  {:?}",
-                        kind, container_name, focus_range
-                    )
-                })
-                .reduce(|acc, x1| format!("{acc}\n{x1}"))
-                .unwrap();
-            println!("path:{k}");
-            print!("{total}\n")
-        });
     }
 }

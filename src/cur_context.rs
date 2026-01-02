@@ -1,4 +1,4 @@
-use crate::analysis::{AnalysisSession, SymbolInfo};
+use crate::analysis::{AnalysisSession, Range, SymbolInfo};
 use crate::cache::{TypedCache, TypedCacheDb};
 use crate::utils::Utils;
 use anyhow::anyhow;
@@ -24,6 +24,48 @@ pub struct RustProject {
     pub analysis_host: Arc<Mutex<AnalysisHost>>,
     pub vfs: Vfs,
     pub files: HashMap<FileId, VfsPath>,
+}
+
+pub struct FileMeta {
+    pub rpath: String,
+    pub enums: Vec<EnumMeta>,
+    pub structs: Vec<StructMeta>,
+    pub functions: Vec<FunctionMeta>,
+    pub type_alias: Vec<TypeAliasMeta>,
+    pub traits: Vec<TraitMeta>,
+}
+
+pub struct EnumMeta {
+    pub rpath: String,
+    pub full_range: Range,
+    pub name: String,
+    pub variants: Vec<EVariantMeta>,
+}
+pub struct EVariantMeta {
+    pub rpath: String,
+    pub full_range: Range,
+    pub name: String,
+}
+pub struct StructMeta {
+    pub rpath: String,
+    pub full_range: Range,
+    pub name: String,
+    pub functions: Vec<FunctionMeta>,
+}
+pub struct FunctionMeta {
+    pub rpath: String,
+    pub full_range: Range,
+    pub name: String,
+}
+pub struct TypeAliasMeta {
+    pub rpath: String,
+    pub full_range: Range,
+    pub name: String,
+}
+pub struct TraitMeta {
+    pub rpath: String,
+    pub full_range: Range,
+    pub name: String,
 }
 impl CurContext {
     pub async fn new() -> Result<CurContext, anyhow::Error> {
@@ -56,8 +98,51 @@ impl CurContext {
         let grouped = symbols.into_iter().into_group_map_by(|x| x.rpath.clone());
 
         let res_vec: Vec<_> = grouped
-            .iter()
+            .into_iter()
             .map(|(k, v)| {
+                let mut fileMeta = FileMeta {
+                    rpath: k.clone(),
+                    enums: vec![],
+                    structs: vec![],
+                    functions: vec![],
+                    type_alias: vec![],
+                    traits: vec![],
+                };
+                let joe = v.iter().into_group_map_by(|x2| x2.kind.clone());
+                let structs = joe
+                    .get(&SymbolKind::Struct)
+                    .map(|t| {
+                        let res: HashMap<_, _> = t
+                            .into_iter()
+                            .cloned()
+                            .map(|info| (info.name.clone(), info.clone()))
+                            .collect();
+                        res
+                    })
+                    .unwrap_or_default();
+
+                let (functions, stand_alone): (Vec<_>, _) = joe
+                    .get(&SymbolKind::Function)
+                    .map(|t| {
+                        let res: Vec<_> =
+                            t.into_iter().cloned().map(|info| (info.clone())).collect();
+                        res
+                    })
+                    .unwrap_or_default()
+                    .into_iter()
+                    .partition(|info| info.container_name.is_none());
+
+                let stand_alone_func: Vec<_> = stand_alone
+                    .into_iter()
+                    .map(|i| FunctionMeta {
+                        rpath: i.rpath,
+                        full_range: i.full_range,
+                        name: i.name,
+                    })
+                    .collect();
+
+                fileMeta.functions = stand_alone_func;
+
                 let total = v
                     .iter()
                     .map(|s| {
@@ -113,9 +198,11 @@ impl RustProject {
         let analysis = self.analysis_host.lock().unwrap().analysis();
         AnalysisSession::new(analysis, self).await
     }
+
     fn modify_file(&self) {
         let joe = self.analysis_host.lock().unwrap();
     }
+
     pub async fn get_all_proj_symbols(
         &self,
         symbol_cache: &mut TypedCache<SymbolInfo, SymbolInfo>,
@@ -181,7 +268,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_analytical_context() {
-        let mut ctx = CurContext::new().await.expect("Failed to create CurContext");
+        let mut ctx = CurContext::new()
+            .await
+            .expect("Failed to create CurContext");
         let context = ctx
             .get_analytical_context()
             .await
