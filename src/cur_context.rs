@@ -159,22 +159,23 @@ impl CurContext {
         let cache = &mut self.symbol_cache;
         let symbols = self.rust_proj.get_all_proj_symbols(cache).await?;
         let grouped = symbols.into_iter().into_group_map_by(|x| x.rpath.clone());
+        let res_vec: Vec<_> = Self::get_file_metas(grouped);
+        Ok("".to_string())
+    }
 
-        let res_vec: Vec<_> = grouped
+    fn get_file_metas(grouped: HashMap<String, Vec<SymbolInfo>>) -> Vec<FileMeta> {
+        grouped
             .into_iter()
             .map(|(k, v)| {
-                let mut file_meta = FileMeta {
-                    rpath: k.clone(),
-                    enums: vec![],
-                    structs: vec![],
-                    functions: vec![],
-                    type_alias: vec![],
-                    traits: vec![],
-                };
                 let joe = v.iter().into_group_map_by(|x2| x2.kind.clone());
                 let structs = Self::get_symbol_map(&joe, &SymbolKind::Struct);
                 let enums = Self::get_symbol_map(&joe, &SymbolKind::Enum);
                 let variants = Self::get_symbol_map(&joe, &SymbolKind::Variant);
+                let traits = Self::get_symbol_map(&joe, &SymbolKind::Trait);
+                let type_alias = Self::get_symbol_map(&joe, &SymbolKind::TypeAlias);
+
+                let traits_metas: HashMap<String, TraitMeta> = Self::into_meta(&traits);
+                let type_alias_metas: HashMap<String, TypeAliasMeta> = Self::into_meta(&type_alias);
 
                 let (stand_alone, functions): (Vec<_>, _) =
                     Self::get_symbol_map(&joe, &SymbolKind::Function)
@@ -182,8 +183,6 @@ impl CurContext {
                         .partition(|info| info.container_name.is_none());
 
                 let stand_alone_func: Vec<_> = stand_alone.into_iter().map(|i| i.into()).collect();
-
-                file_meta.functions = stand_alone_func;
 
                 let mut struct_metas: HashMap<String, StructMeta> = Self::into_meta(&structs);
 
@@ -234,10 +233,18 @@ impl CurContext {
                     })
                     .reduce(|acc, x1| format!("{acc}\n{x1}"))
                     .unwrap();
-                format!("path:{k}\n{total}\n")
+                format!("path:{k}\n{total}\n");
+
+                FileMeta {
+                    rpath: k.clone(),
+                    enums: enum_metas.into_values().collect(),
+                    structs: struct_metas.into_values().collect(),
+                    functions: stand_alone_func,
+                    type_alias: type_alias_metas.into_values().collect(),
+                    traits: traits_metas.into_values().collect(),
+                }
             })
-            .collect();
-        Ok(res_vec.join(""))
+            .collect()
     }
 
     fn get_symbol_map(
