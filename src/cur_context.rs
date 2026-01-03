@@ -67,6 +67,69 @@ pub struct TraitMeta {
     pub full_range: Range,
     pub name: String,
 }
+
+impl From<SymbolInfo> for EnumMeta {
+    fn from(info: SymbolInfo) -> Self {
+        Self {
+            rpath: info.rpath,
+            full_range: info.full_range,
+            name: info.name,
+            variants: vec![],
+        }
+    }
+}
+
+impl From<SymbolInfo> for EVariantMeta {
+    fn from(info: SymbolInfo) -> Self {
+        Self {
+            rpath: info.rpath,
+            full_range: info.full_range,
+            name: info.name,
+        }
+    }
+}
+
+impl From<SymbolInfo> for StructMeta {
+    fn from(info: SymbolInfo) -> Self {
+        Self {
+            rpath: info.rpath,
+            full_range: info.full_range,
+            name: info.name,
+            functions: vec![],
+        }
+    }
+}
+
+impl From<SymbolInfo> for FunctionMeta {
+    fn from(info: SymbolInfo) -> Self {
+        Self {
+            rpath: info.rpath,
+            full_range: info.full_range,
+            name: info.name,
+        }
+    }
+}
+
+impl From<SymbolInfo> for TypeAliasMeta {
+    fn from(info: SymbolInfo) -> Self {
+        Self {
+            rpath: info.rpath,
+            full_range: info.full_range,
+            name: info.name,
+        }
+    }
+}
+
+impl From<SymbolInfo> for TraitMeta {
+    fn from(info: SymbolInfo) -> Self {
+        Self {
+            rpath: info.rpath,
+            full_range: info.full_range,
+            name: info.name,
+        }
+    }
+}
+
 impl CurContext {
     pub async fn new() -> Result<CurContext, anyhow::Error> {
         let current_dir = env::current_dir()?;
@@ -100,7 +163,7 @@ impl CurContext {
         let res_vec: Vec<_> = grouped
             .into_iter()
             .map(|(k, v)| {
-                let mut fileMeta = FileMeta {
+                let mut file_meta = FileMeta {
                     rpath: k.clone(),
                     enums: vec![],
                     structs: vec![],
@@ -109,39 +172,48 @@ impl CurContext {
                     traits: vec![],
                 };
                 let joe = v.iter().into_group_map_by(|x2| x2.kind.clone());
-                let structs = joe
-                    .get(&SymbolKind::Struct)
-                    .map(|t| {
-                        let res: HashMap<_, _> = t
-                            .into_iter()
-                            .cloned()
-                            .map(|info| (info.name.clone(), info.clone()))
-                            .collect();
-                        res
-                    })
-                    .unwrap_or_default();
+                let structs = Self::get_symbol_map(&joe, &SymbolKind::Struct);
+                let enums = Self::get_symbol_map(&joe, &SymbolKind::Enum);
+                let variants = Self::get_symbol_map(&joe, &SymbolKind::Variant);
 
-                let (functions, stand_alone): (Vec<_>, _) = joe
-                    .get(&SymbolKind::Function)
-                    .map(|t| {
-                        let res: Vec<_> =
-                            t.into_iter().cloned().map(|info| (info.clone())).collect();
-                        res
-                    })
-                    .unwrap_or_default()
+                let (stand_alone, functions): (Vec<_>, _) =
+                    Self::get_symbol_map(&joe, &SymbolKind::Function)
+                        .into_values()
+                        .partition(|info| info.container_name.is_none());
+
+                let stand_alone_func: Vec<_> = stand_alone.into_iter().map(|i| i.into()).collect();
+
+                file_meta.functions = stand_alone_func;
+
+                let mut struct_metas: HashMap<String, StructMeta> = Self::into_meta(&structs);
+
+                let inner_funcs: HashMap<String, Vec<FunctionMeta>> = functions
                     .into_iter()
-                    .partition(|info| info.container_name.is_none());
-
-                let stand_alone_func: Vec<_> = stand_alone
+                    .into_group_map_by(|v| v.container_name.clone().unwrap())
                     .into_iter()
-                    .map(|i| FunctionMeta {
-                        rpath: i.rpath,
-                        full_range: i.full_range,
-                        name: i.name,
-                    })
-                    .collect();
+                    .map(|(k, v)| (k, v.into_iter().map(|i| i.into()).collect()))
+                    .collect::<HashMap<String, Vec<FunctionMeta>>>();
 
-                fileMeta.functions = stand_alone_func;
+                inner_funcs.into_iter().for_each(|(k, v)| {
+                    if let Some(s_meta) = struct_metas.get_mut(&k) {
+                        s_meta.functions = v
+                    }
+                });
+
+                let mut enum_metas: HashMap<String, EnumMeta> = Self::into_meta(&enums);
+
+                let e_variants: HashMap<String, Vec<EVariantMeta>> = variants
+                    .into_values()
+                    .into_group_map_by(|v| v.container_name.clone().unwrap())
+                    .into_iter()
+                    .map(|(k, v)| (k, v.into_iter().map(|i| i.into()).collect()))
+                    .collect::<HashMap<String, Vec<EVariantMeta>>>();
+
+                e_variants.into_iter().for_each(|(k, v)| {
+                    if let Some(e_meta) = enum_metas.get_mut(&k) {
+                        e_meta.variants = v
+                    }
+                });
 
                 let total = v
                     .iter()
@@ -166,6 +238,34 @@ impl CurContext {
             })
             .collect();
         Ok(res_vec.join(""))
+    }
+
+    fn get_symbol_map(
+        symbols: &HashMap<SymbolKind, Vec<&SymbolInfo>>,
+        kind: &SymbolKind,
+    ) -> HashMap<String, SymbolInfo> {
+        symbols
+            .get(kind)
+            .map(|t| {
+                let res: HashMap<_, _> = t
+                    .into_iter()
+                    .cloned()
+                    .map(|info| (info.name.clone(), info.clone()))
+                    .collect();
+                res
+            })
+            .unwrap_or_default()
+    }
+
+    fn into_meta<T: From<SymbolInfo>>(map: &HashMap<String, SymbolInfo>) -> HashMap<String, T> {
+        map.iter()
+            .map(|(k, info)| {
+                let info = info.clone();
+                let k = k.clone();
+                let v: T = info.into();
+                (k, v)
+            })
+            .collect()
     }
 }
 
