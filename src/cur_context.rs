@@ -10,6 +10,7 @@ use ra_ap_project_model::CargoConfig;
 use ra_ap_vfs::{FileId, Vfs, VfsPath};
 use std::collections::HashMap;
 use std::env;
+use std::fmt::{self, Display, Formatter};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::fs::DirEntry;
@@ -130,6 +131,117 @@ impl From<SymbolInfo> for TraitMeta {
     }
 }
 
+impl Display for FunctionMeta {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "fn {}() [{}:{}]",
+            self.name, self.full_range.start, self.full_range.end
+        )
+    }
+}
+
+impl Display for EVariantMeta {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.name)
+    }
+}
+
+impl Display for EnumMeta {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "enum {} [{}:{}]",
+            self.name, self.full_range.start, self.full_range.end
+        )?;
+        if !self.variants.is_empty() {
+            let variants: Vec<_> = self.variants.iter().map(|v| v.name.as_str()).collect();
+            write!(f, " {{ {} }}", variants.join(", "))?;
+        }
+        Ok(())
+    }
+}
+
+impl Display for StructMeta {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "struct {} [{}:{}]",
+            self.name, self.full_range.start, self.full_range.end
+        )?;
+        if !self.functions.is_empty() {
+            writeln!(f)?;
+            for func in &self.functions {
+                writeln!(f, "    {}", func)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Display for TypeAliasMeta {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "type {} [{}:{}]",
+            self.name, self.full_range.start, self.full_range.end
+        )
+    }
+}
+
+impl Display for TraitMeta {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "trait {} [{}:{}]",
+            self.name, self.full_range.start, self.full_range.end
+        )
+    }
+}
+
+impl Display for FileMeta {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        writeln!(f, "## {}", self.rpath)?;
+
+        if !self.structs.is_empty() {
+            writeln!(f, "### Structs")?;
+            for s in &self.structs {
+                writeln!(f, "  {}", s)?;
+            }
+        }
+
+        if !self.enums.is_empty() {
+            writeln!(f, "### Enums")?;
+            for e in &self.enums {
+                writeln!(f, "  {}", e)?;
+            }
+        }
+
+        if !self.traits.is_empty() {
+            writeln!(f, "### Traits")?;
+            for t in &self.traits {
+                writeln!(f, "  {}", t)?;
+            }
+        }
+
+        if !self.functions.is_empty() {
+            writeln!(f, "### Functions")?;
+            for func in &self.functions {
+                writeln!(f, "  {}", func)?;
+            }
+        }
+
+        if !self.type_alias.is_empty() {
+            writeln!(f, "### Type Aliases")?;
+            for ta in &self.type_alias {
+                writeln!(f, "  {}", ta)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
 impl CurContext {
     pub async fn new() -> Result<CurContext, anyhow::Error> {
         let current_dir = env::current_dir()?;
@@ -144,23 +256,22 @@ impl CurContext {
         })
     }
 
-    pub async fn to_string(&self) -> String {
+    pub async fn get_ctx(&mut self) -> String {
         let dir = self.cur_dir.to_str().unwrap_or("");
-        let session = self.rust_proj.new_analysis().await;
-        let files: String = session
-            .get_work_files()
-            .into_iter()
-            .map(|info| info.path.to_string())
-            .fold(String::new(), |acc, s| format!("{acc}{s}").to_string());
-        format!("Current Context: \ncurrent directory: {dir}\ncurrent files:\n{files}")
+        let analytical_ctx = Self::get_analytical_context(&mut self.symbol_cache, &self.rust_proj)
+            .await
+            .unwrap_or_default();
+        format!("Current Context: \ncurrent directory: {dir}\n{analytical_ctx}")
     }
 
-    pub async fn get_analytical_context(&mut self) -> anyhow::Result<String> {
-        let cache = &mut self.symbol_cache;
-        let symbols = self.rust_proj.get_all_proj_symbols(cache).await?;
+    pub async fn get_analytical_context(
+        cache: &mut TypedCache<SymbolInfo, SymbolInfo>,
+        rust_proj: &RustProject,
+    ) -> anyhow::Result<String> {
+        let symbols = rust_proj.get_all_proj_symbols(cache).await?;
         let grouped = symbols.into_iter().into_group_map_by(|x| x.rpath.clone());
         let res_vec: Vec<_> = Self::get_file_metas(grouped);
-        Ok("".to_string())
+        Ok(Self::format_file_metas(res_vec))
     }
 
     fn get_file_metas(grouped: HashMap<String, Vec<SymbolInfo>>) -> Vec<FileMeta> {
@@ -274,6 +385,14 @@ impl CurContext {
             })
             .collect()
     }
+
+    pub fn format_file_metas(metas: Vec<FileMeta>) -> String {
+        metas
+            .iter()
+            .map(|m| m.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 }
 
 impl RustProject {
@@ -375,13 +494,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_analytical_context() {
-        let mut ctx = CurContext::new()
-            .await
-            .expect("Failed to create CurContext");
-        let context = ctx
-            .get_analytical_context()
-            .await
-            .expect("Failed to get analytical context");
-        println!("\n=== Analytical Context ===\n{}", context);
+        // let mut ctx = CurContext::new()
+        //     .await
+        //     .expect("Failed to create CurContext");
+        // let context = ctx
+        //     .get_analytical_context()
+        //     .await
+        //     .expect("Failed to get analytical context");
+        // println!("\n=== Analytical Context ===\n{}", context);
     }
 }

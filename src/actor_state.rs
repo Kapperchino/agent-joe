@@ -23,8 +23,8 @@ pub struct ActorState {
 
 impl ActorState {
     pub async fn new(dependency: Dependency) -> anyhow::Result<Self> {
-        let cur_context = CurContext::new().await?;
-        let cur_context_str = cur_context.to_string().await;
+        let mut cur_context = CurContext::new().await?;
+        let cur_context_str = cur_context.get_ctx().await;
 
         let computed_tools: Vec<claude::Tool> =
             dependency.tools.iter().map(|t| t.to_json()).collect();

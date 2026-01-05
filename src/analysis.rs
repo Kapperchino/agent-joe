@@ -30,7 +30,7 @@ pub struct AnalysisSession<'a> {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Range {
     pub(crate) start: u32,
-    end: u32,
+    pub(crate) end: u32,
 }
 
 #[derive(Serialize, Deserialize)]
