@@ -1,7 +1,7 @@
 use crate::actor_state::ActorState;
 use crate::claude::{ClaudeClient, ClaudeError, ClientRequest, ContentBlock, StreamEvent};
 use crate::worker::Worker;
-use crate::{claude, tools};
+use crate::{claude, tool_impls};
 use ractor::Actor;
 use ractor::ActorProcessingErr;
 use ractor::ActorRef;
@@ -62,7 +62,7 @@ pub enum Message {
 
 pub struct Dependency {
     pub claude: ClaudeClient,
-    pub tools: Vec<tools::Tool>,
+    pub tools: Vec<tool_impls::Tool>,
     pub tui_tx: mpsc::UnboundedSender<ActorToTui>,
 }
 
@@ -93,7 +93,7 @@ pub enum StreamAccu {
 pub(crate) enum StreamRes {
     String(String),
     Thinking { thinking: String, signature: String },
-    Tool(tools::ToolResult),
+    Tool(tool_impls::ToolResult),
 }
 
 #[cfg_attr(feature = "async-trait", ractor::async_trait)]

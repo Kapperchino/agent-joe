@@ -64,25 +64,6 @@ impl<K: CacheKey, V: CacheVal + 'static> TypedCache<K, V> {
         wtxn.commit()?;
         Ok(res)
     }
-
-    pub async fn async_transaction<F, Fut, R>(&mut self, f: F) -> anyhow::Result<R>
-    where
-        F: FnOnce(&mut TypedCacheDb<'_, '_, K, V>) -> Fut,
-        Fut: std::future::Future<Output = anyhow::Result<R>>,
-    {
-        let mut wtxn = self.env.write_txn()?;
-        let res = {
-            let db: Database<Str, SerdeJson<V>> = self.env.create_database(&mut wtxn, None)?;
-            let mut cache_db = TypedCacheDb {
-                db,
-                txn: &mut wtxn,
-                _marker: std::marker::PhantomData,
-            };
-            f(&mut cache_db).await?
-        };
-        wtxn.commit()?;
-        Ok(res)
-    }
 }
 
 pub struct TypedCacheDb<'txn, 'env, K: CacheKey, V: CacheVal> {
@@ -101,7 +82,7 @@ impl<K: CacheKey, V: CacheVal> TypedCacheDb<'_, '_, K, V> {
         Ok(self.db.is_empty(self.txn)?)
     }
 
-    pub fn iter(&self) -> anyhow::Result<impl Iterator<Item = V> > {
+    pub fn iter(&self) -> anyhow::Result<impl Iterator<Item = V>> {
         Ok(self
             .db
             .iter(self.txn)?

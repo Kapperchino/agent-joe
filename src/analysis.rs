@@ -1,12 +1,10 @@
-use crate::cache::TypedCache;
 use crate::cur_context::RustProject;
-use anyhow::anyhow;
 use ra_ap_ide::{
-    Analysis, FilePosition, FileStructureConfig, GotoDefinitionConfig, GotoImplementationConfig,
-    NavigationTarget, RangeInfo, StructureNode, TextSize,
+    Analysis, FilePosition, FileStructureConfig, GotoImplementationConfig,
+    NavigationTarget, StructureNode, TextSize,
 };
-use ra_ap_ide_db::SymbolKind;
 use ra_ap_ide_db::symbol_index::Query;
+use ra_ap_ide_db::SymbolKind;
 use ra_ap_vfs::{FileId, Vfs, VfsPath};
 use serde::{Deserialize, Serialize};
 
@@ -190,13 +188,7 @@ impl<'a> AnalysisSession<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use itertools::Itertools;
-    use ra_ap_ide_db::SymbolKind::Function;
-    use std::collections::HashMap;
     use std::env;
-    use std::io::SeekFrom;
-    use tokio::fs::File;
-    use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
     #[tokio::test]
     async fn test_get_dependencies() {

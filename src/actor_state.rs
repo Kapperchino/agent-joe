@@ -1,8 +1,8 @@
 use crate::actor::{ActorToTui, Dependency, State, StreamAccu, StreamRes};
 use crate::claude::{ClaudeClient, ContentBlock, ContentBlockInfo, Delta, Role, StreamEvent};
 use crate::cur_context::CurContext;
-use crate::tools::{ListFilesInput, ReadFileInput, Tool, ToolResult, ToolTrait};
-use crate::{claude, tools};
+use crate::tool_defs::{ReadFileInput, Tool, ToolResult, ToolTrait};
+use crate::{claude, tool_impls};
 use futures::future;
 use ractor::ActorCell;
 use std::collections::HashMap;
@@ -14,7 +14,7 @@ pub struct ActorState {
     pub cur_state: State,
     pub history: Vec<claude::Message>,
     pub claude: ClaudeClient,
-    pub tools: Vec<tools::Tool>,
+    pub tools: Vec<tool_impls::Tool>,
     pub tools_json: Vec<claude::Tool>,
     pub acc_map: HashMap<usize, Vec<StreamAccu>>,
     pub delta_buf: HashMap<usize, Vec<Delta>>,
@@ -225,8 +225,8 @@ impl ActorState {
         match Tool::from_str(name.as_str())? {
             Tool::ReadFile(_) => match a_vec.get(1).ok_or(anyhow::Error::msg("doesn't work"))? {
                 StreamAccu::Json(json) => {
-                    let input: ReadFileInput = serde_json::from_str::<_>(json)?;
-                    let rf = tools::ReadFile {
+                    let input: ReadFileInput = serde_json::from_str(json)?;
+                    let rf = tool_impls::ReadFile {
                         id: id.clone(),
                         input,
                     };
