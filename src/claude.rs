@@ -1,6 +1,6 @@
 use anyhow::anyhow;
 use async_stream::try_stream;
-use reqwest::{header, Client};
+use reqwest::{Client, header};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -254,12 +254,22 @@ pub struct ToolSchema {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct ToolProperty {
-    #[serde(skip)]
-    pub name: String,
-    #[serde(rename = "type")]
-    pub prop_type: String,
-    pub description: String,
+pub enum ToolProperty {
+    Value {
+        #[serde(skip)]
+        name: String,
+        #[serde(rename = "type")]
+        prop_type: String,
+        description: String,
+    },
+    Object {
+        #[serde(skip)]
+        name: String,
+        #[serde(rename = "type")]
+        prop_type: String,
+        description: String,
+        properties: HashMap<String, ToolProperty>,
+    },
 }
 
 #[derive(Debug, Clone)]

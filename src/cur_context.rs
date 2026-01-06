@@ -3,9 +3,9 @@ use crate::cache::{TypedCache, TypedCacheDb};
 use crate::utils::Utils;
 use anyhow::anyhow;
 use itertools::Itertools;
-use ra_ap_ide::{AnalysisHost, TextSize};
+use ra_ap_ide::{AnalysisHost, LineIndex, TextSize};
 use ra_ap_ide_db::SymbolKind;
-use ra_ap_load_cargo::{load_workspace_at, LoadCargoConfig, ProcMacroServerChoice};
+use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
 use ra_ap_project_model::CargoConfig;
 use ra_ap_vfs::{Vfs, VfsPath};
 use std::collections::HashMap;
@@ -20,6 +20,7 @@ pub struct CurContext {
     cur_files: Vec<DirEntry>,
     rust_proj: RustProject,
     symbol_cache: TypedCache<SymbolInfo, SymbolInfo>,
+    pub file_metas: HashMap<String, FileMeta>,
 }
 pub struct RustProject {
     pub analysis_host: Arc<Mutex<AnalysisHost>>,
@@ -33,6 +34,7 @@ pub struct FileMeta {
     pub functions: Vec<FunctionMeta>,
     pub type_alias: Vec<TypeAliasMeta>,
     pub traits: Vec<TraitMeta>,
+    pub line_index: triomphe::Arc<LineIndex>,
 }
 
 pub struct EnumMeta {
@@ -246,34 +248,36 @@ impl CurContext {
         let current_dir = env::current_dir()?;
         let files = Utils::get_dir_files(&current_dir).await?;
         let proj = RustProject::new(&current_dir)?;
-        let symbol_cache = TypedCache::new(None).await;
+        let mut symbol_cache = TypedCache::new(None).await;
+        let file_metas = Self::get_file_metas(&mut symbol_cache, &proj).await?;
         Ok(CurContext {
             cur_dir: current_dir,
             cur_files: files,
             rust_proj: proj,
             symbol_cache,
+            file_metas,
         })
     }
 
     pub async fn get_ctx(&mut self) -> String {
         let dir = self.cur_dir.to_str().unwrap_or("");
-        let analytical_ctx = Self::get_analytical_context(&mut self.symbol_cache, &self.rust_proj)
-            .await
-            .unwrap_or_default();
-        format!("Current Context: \ncurrent directory: {dir}\n{analytical_ctx}")
+        let analytical_ctx = self.get_analytical_context().await.unwrap_or_default();
+        format!(
+            "# Current Context: \ncurrent directory: {dir}\n## Analytical Context: \nThe offset range are given along with the symbol information\n{analytical_ctx}"
+        )
     }
 
-    pub async fn get_analytical_context(
+    pub async fn get_analytical_context(&self) -> anyhow::Result<String> {
+        Ok(Self::format_file_metas(&self.file_metas))
+    }
+
+    async fn get_file_metas(
         cache: &mut TypedCache<SymbolInfo, SymbolInfo>,
         rust_proj: &RustProject,
-    ) -> anyhow::Result<String> {
+    ) -> anyhow::Result<HashMap<String, FileMeta>> {
         let symbols = rust_proj.get_all_proj_symbols(cache).await?;
+        let session = rust_proj.new_analysis().await;
         let grouped = symbols.into_iter().into_group_map_by(|x| x.rpath.clone());
-        let res_vec: Vec<_> = Self::get_file_metas(grouped);
-        Ok(Self::format_file_metas(res_vec))
-    }
-
-    fn get_file_metas(grouped: HashMap<String, Vec<SymbolInfo>>) -> Vec<FileMeta> {
         grouped
             .into_iter()
             .map(|(k, v)| {
@@ -324,35 +328,26 @@ impl CurContext {
                     }
                 });
 
-                let total = v
-                    .iter()
-                    .map(|s| {
-                        let SymbolInfo {
-                            rpath,
-                            full_range,
-                            name,
-                            kind,
-                            container_name,
-                            docs,
-                            focus_range,
-                        } = s;
-                        format!(
-                            "     {name}  {:?}  {:?}  {:?}",
-                            kind, container_name, focus_range
-                        )
-                    })
-                    .reduce(|acc, x1| format!("{acc}\n{x1}"))
-                    .unwrap();
-                format!("path:{k}\n{total}\n");
+                let line_index = session.get_line_indecies(
+                    rust_proj
+                        .vfs
+                        .file_id(&VfsPath::new_real_path(k.clone()))
+                        .unwrap()
+                        .0,
+                )?;
 
-                FileMeta {
-                    rpath: k.clone(),
-                    enums: enum_metas.into_values().collect(),
-                    structs: struct_metas.into_values().collect(),
-                    functions: stand_alone_func,
-                    type_alias: type_alias_metas.into_values().collect(),
-                    traits: traits_metas.into_values().collect(),
-                }
+                Ok((
+                    k.clone(),
+                    FileMeta {
+                        rpath: k.clone(),
+                        enums: enum_metas.into_values().collect(),
+                        structs: struct_metas.into_values().collect(),
+                        functions: stand_alone_func,
+                        type_alias: type_alias_metas.into_values().collect(),
+                        traits: traits_metas.into_values().collect(),
+                        line_index,
+                    },
+                ))
             })
             .collect()
     }
@@ -385,9 +380,9 @@ impl CurContext {
             .collect()
     }
 
-    pub fn format_file_metas(metas: Vec<FileMeta>) -> String {
+    pub fn format_file_metas(metas: &HashMap<String, FileMeta>) -> String {
         metas
-            .iter()
+            .values()
             .map(|m| m.to_string())
             .collect::<Vec<_>>()
             .join("\n")
@@ -421,10 +416,6 @@ impl RustProject {
     pub(crate) async fn new_analysis(&'_ self) -> AnalysisSession<'_> {
         let analysis = self.analysis_host.lock().unwrap().analysis();
         AnalysisSession::new(analysis, self).await
-    }
-
-    fn modify_file(&self) {
-        let joe = self.analysis_host.lock().unwrap();
     }
 
     pub async fn get_all_proj_symbols(
@@ -479,8 +470,7 @@ impl RustProject {
                 })
             })
             .flatten()
-            .flatten()
-            .map(|info| info)
+            .flat_map(|info| info)
             .flatten()
             .collect()
     }
@@ -495,9 +485,7 @@ mod tests {
         let mut ctx = CurContext::new()
             .await
             .expect("Failed to create CurContext");
-        let context = ctx
-            .get_ctx()
-            .await;
+        let context = ctx.get_ctx().await;
         println!("\n=== Analytical Context ===\n{}", context);
     }
 }

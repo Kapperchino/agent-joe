@@ -1,7 +1,9 @@
+use crate::analysis::Range;
 use crate::claude;
 use crate::claude::ToolProperty;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
 pub trait ToolTrait {
     fn name(&self) -> String;
     fn description(&self) -> String;
@@ -30,6 +32,7 @@ pub struct ReadFile {
 #[derive(Default, Serialize, Deserialize, Debug, Clone)]
 pub struct ReadFileInput {
     pub(crate) file_path: String,
+    pub range: Option<Range>,
 }
 
 #[derive(Debug)]

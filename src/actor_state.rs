@@ -1,7 +1,7 @@
 use crate::actor::{ActorToTui, Dependency, State, StreamAccu, StreamRes};
 use crate::claude::{ClaudeClient, ContentBlock, ContentBlockInfo, Delta, Role, StreamEvent};
 use crate::cur_context::CurContext;
-use crate::tool_defs::{ReadFileInput, Tool, ToolResult, ToolTrait};
+use crate::tool_defs::{ReadFileInput, Tool, ToolResult, ToolResultTrait, ToolTrait};
 use crate::{claude, tool_impls};
 use futures::future;
 use ractor::ActorCell;
@@ -14,7 +14,7 @@ pub struct ActorState {
     pub cur_state: State,
     pub history: Vec<claude::Message>,
     pub claude: ClaudeClient,
-    pub tools: Vec<tool_impls::Tool>,
+    pub tools: Vec<Tool>,
     pub tools_json: Vec<claude::Tool>,
     pub acc_map: HashMap<usize, Vec<StreamAccu>>,
     pub delta_buf: HashMap<usize, Vec<Delta>>,
@@ -230,7 +230,7 @@ impl ActorState {
                         id: id.clone(),
                         input,
                     };
-                    Ok(Tool::ReadFile(rf).use_tool(id).await?)
+                    Ok(Tool::ReadFile(rf).use_tool(id, &self.cur_context).await?)
                 }
                 _ => Err(anyhow::Error::msg("doesn't work")),
             },

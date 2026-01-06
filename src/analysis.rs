@@ -1,12 +1,13 @@
 use crate::cur_context::RustProject;
 use ra_ap_ide::{
-    Analysis, FilePosition, FileStructureConfig, GotoImplementationConfig,
+    Analysis, FilePosition, FileStructureConfig, GotoImplementationConfig, LineIndex,
     NavigationTarget, StructureNode, TextSize,
 };
-use ra_ap_ide_db::symbol_index::Query;
 use ra_ap_ide_db::SymbolKind;
+use ra_ap_ide_db::symbol_index::Query;
 use ra_ap_vfs::{FileId, Vfs, VfsPath};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 pub struct FileInfo {
     pub id: FileId,
@@ -25,7 +26,7 @@ pub struct AnalysisSession<'a> {
     proj: &'a RustProject,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Range {
     pub(crate) start: u32,
     pub(crate) end: u32,
@@ -177,11 +178,12 @@ impl<'a> AnalysisSession<'a> {
         Ok(res)
     }
 
+    pub fn get_line_indecies(&self, file: FileId) -> anyhow::Result<triomphe::Arc<LineIndex>> {
+        Ok(self.analysis.file_line_index(file)?)
+    }
+
     pub async fn new(analysis: Analysis, proj: &'a RustProject) -> Self {
-        Self {
-            analysis,
-            proj,
-        }
+        Self { analysis, proj }
     }
 }
 
