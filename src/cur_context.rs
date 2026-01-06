@@ -24,7 +24,6 @@ pub struct CurContext {
 pub struct RustProject {
     pub analysis_host: Arc<Mutex<AnalysisHost>>,
     pub vfs: Vfs,
-    pub files: HashMap<FileId, VfsPath>,
 }
 
 pub struct FileMeta {
@@ -414,7 +413,6 @@ impl RustProject {
         let proj = RustProject {
             analysis_host: anal_host,
             vfs,
-            files: HashMap::new(),
         };
 
         Ok(proj)
@@ -494,13 +492,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_analytical_context() {
-        // let mut ctx = CurContext::new()
-        //     .await
-        //     .expect("Failed to create CurContext");
-        // let context = ctx
-        //     .get_analytical_context()
-        //     .await
-        //     .expect("Failed to get analytical context");
-        // println!("\n=== Analytical Context ===\n{}", context);
+        let mut ctx = CurContext::new()
+            .await
+            .expect("Failed to create CurContext");
+        let context = ctx
+            .get_ctx()
+            .await;
+        println!("\n=== Analytical Context ===\n{}", context);
     }
 }

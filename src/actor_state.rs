@@ -234,17 +234,6 @@ impl ActorState {
                 }
                 _ => Err(anyhow::Error::msg("doesn't work")),
             },
-            Tool::ListFiles(_) => match a_vec.get(1).ok_or(anyhow::Error::msg("doesn't work"))? {
-                StreamAccu::Json(json) => {
-                    let input: ListFilesInput = serde_json::from_str::<_>(json)?;
-                    let rf = tools::ListFiles {
-                        id: id.clone(),
-                        input,
-                    };
-                    Ok(Tool::ListFiles(rf).use_tool(id).await?)
-                }
-                _ => Err(anyhow::Error::msg("doesn't work")),
-            },
         }
     }
 

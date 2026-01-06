@@ -1,13 +1,13 @@
 mod actor;
 mod actor_state;
+mod analysis;
 mod app;
+mod cache;
 mod claude;
 mod cur_context;
 mod tools;
 mod utils;
 mod worker;
-mod analysis;
-mod cache;
 
 use crate::actor::Dependency;
 use crate::claude::{ClaudeClient, ClaudeConfig};
@@ -20,7 +20,7 @@ use log::LevelFilter;
 use ractor::Actor;
 use simplelog::{ColorChoice, CombinedLogger, Config, TermLogger, TerminalMode};
 use std::env;
-use std::io::{stdout, ErrorKind, Write};
+use std::io::{ErrorKind, Write, stdout};
 use tokio::sync::mpsc;
 use tokio::{fs, main};
 use tokio_stream::StreamExt;
@@ -48,10 +48,7 @@ async fn main() {
         Worker {},
         Dependency {
             claude: client,
-            tools: vec![
-                tools::Tool::ReadFile(ReadFile::default()),
-                tools::Tool::ListFiles(ListFiles::default()),
-            ],
+            tools: vec![tools::Tool::ReadFile(ReadFile::default())],
             tui_tx: tx,
         },
     )
