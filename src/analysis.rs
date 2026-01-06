@@ -3,8 +3,8 @@ use ra_ap_ide::{
     Analysis, FilePosition, FileStructureConfig, GotoImplementationConfig, LineIndex,
     NavigationTarget, StructureNode, TextSize,
 };
-use ra_ap_ide_db::symbol_index::Query;
 use ra_ap_ide_db::SymbolKind;
+use ra_ap_ide_db::symbol_index::Query;
 use ra_ap_vfs::{FileId, Vfs, VfsPath};
 use serde::{Deserialize, Serialize};
 
@@ -115,7 +115,7 @@ impl<'a> AnalysisSession<'a> {
             .collect()
     }
 
-    fn get_dependenceis(&self) -> Vec<CrateInfo> {
+    pub fn get_dependenceis(&self) -> Vec<CrateInfo> {
         self.analysis
             .fetch_crates()
             .unwrap()
@@ -128,13 +128,13 @@ impl<'a> AnalysisSession<'a> {
             .collect()
     }
 
-    fn get_syntax_tree(&self, file_id: FileId) -> String {
+    pub fn get_syntax_tree(&self, file_id: FileId) -> String {
         self.analysis
             .view_syntax_tree(file_id)
             .unwrap_or("".to_string())
     }
 
-    fn get_file_structure(&self, file_id: FileId) -> Vec<StructureNode> {
+    pub fn get_file_structure(&self, file_id: FileId) -> Vec<StructureNode> {
         self.analysis
             .file_structure(
                 &FileStructureConfig {

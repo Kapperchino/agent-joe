@@ -5,9 +5,9 @@ use anyhow::anyhow;
 use itertools::Itertools;
 use ra_ap_ide::{AnalysisHost, LineIndex, TextSize};
 use ra_ap_ide_db::SymbolKind;
-use ra_ap_load_cargo::{load_workspace_at, LoadCargoConfig, ProcMacroServerChoice};
+use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
 use ra_ap_project_model::CargoConfig;
-use ra_ap_vfs::{Vfs, VfsPath};
+use ra_ap_vfs::{FileId, Vfs, VfsPath};
 use std::collections::HashMap;
 use std::env;
 use std::fmt::{self, Display, Formatter};
@@ -23,12 +23,13 @@ pub struct CurContext {
     pub file_metas: HashMap<String, FileMeta>,
 }
 pub struct RustProject {
-    pub analysis_host: Arc<Mutex<AnalysisHost>>,
+    analysis_host: Arc<Mutex<AnalysisHost>>,
     pub vfs: Vfs,
 }
 
 pub struct FileMeta {
     pub rpath: String,
+    pub file_id: FileId,
     pub enums: Vec<EnumMeta>,
     pub structs: Vec<StructMeta>,
     pub functions: Vec<FunctionMeta>,
@@ -328,13 +329,13 @@ impl CurContext {
                     }
                 });
 
-                let line_index = session.get_line_indecies(
-                    rust_proj
-                        .vfs
-                        .file_id(&VfsPath::new_real_path(k.clone()))
-                        .unwrap()
-                        .0,
-                )?;
+                let file_id = rust_proj
+                    .vfs
+                    .file_id(&VfsPath::new_real_path(k.clone()))
+                    .unwrap()
+                    .0;
+
+                let line_index = session.get_line_indecies(file_id)?;
 
                 Ok((
                     k.clone(),
@@ -346,6 +347,7 @@ impl CurContext {
                         type_alias: type_alias_metas.into_values().collect(),
                         traits: traits_metas.into_values().collect(),
                         line_index,
+                        file_id,
                     },
                 ))
             })
