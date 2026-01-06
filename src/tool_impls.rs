@@ -1,15 +1,14 @@
 use crate::analysis::Range;
 use crate::claude;
 use crate::claude::{ToolProperty, ToolSchemaDTO};
-use crate::cur_context::{CurContext, FileMeta};
+use crate::cur_context::CurContext;
 pub(crate) use crate::tool_defs::{ReadFile, Tool, ToolResult, ToolTrait};
-use crate::tool_defs::{ReadFileInput, ToolResultTrait};
-use anyhow::{Error, anyhow};
+use crate::tool_defs::ToolResultTrait;
+use anyhow::{anyhow, Error};
 use futures::{StreamExt, TryStreamExt};
-use ra_ap_ide::{LineIndex, TextSize};
+use ra_ap_ide::TextSize;
 use std::collections::HashMap;
 use std::io::SeekFrom;
-use tokio::fs;
 use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, BufReader};
 use tokio_stream::wrappers::LinesStream;
@@ -23,7 +22,7 @@ impl ToolTrait for Tool {
 
     fn description(&self) -> String {
         match self {
-            Tool::ReadFile(_) => "Reads a file at file_path".to_string(),
+            Tool::ReadFile(_) => "Reads a file at file_path or a section of it defined by range, do not read the entire file unless you need to".to_string(),
         }
     }
 
@@ -43,7 +42,7 @@ impl ToolTrait for Tool {
                     ToolProperty::Object {
                         name: "range".to_string(),
                         prop_type: "string".to_string(),
-                        description: "file path of the file you want to read".to_string(),
+                        description: "range of the offsets you want to read".to_string(),
                         properties: HashMap::from([
                             (
                                 "start".to_string(),

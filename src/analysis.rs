@@ -3,11 +3,10 @@ use ra_ap_ide::{
     Analysis, FilePosition, FileStructureConfig, GotoImplementationConfig, LineIndex,
     NavigationTarget, StructureNode, TextSize,
 };
-use ra_ap_ide_db::SymbolKind;
 use ra_ap_ide_db::symbol_index::Query;
+use ra_ap_ide_db::SymbolKind;
 use ra_ap_vfs::{FileId, Vfs, VfsPath};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 pub struct FileInfo {
     pub id: FileId,

@@ -21,8 +21,8 @@ use ractor::Actor;
 use simplelog::{ColorChoice, CombinedLogger, Config, TermLogger, TerminalMode};
 use std::env;
 use std::io::{stdout, Write};
-use tokio::sync::mpsc;
 use tokio::main;
+use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 
 #[main]

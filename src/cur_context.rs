@@ -5,7 +5,7 @@ use anyhow::anyhow;
 use itertools::Itertools;
 use ra_ap_ide::{AnalysisHost, LineIndex, TextSize};
 use ra_ap_ide_db::SymbolKind;
-use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
+use ra_ap_load_cargo::{load_workspace_at, LoadCargoConfig, ProcMacroServerChoice};
 use ra_ap_project_model::CargoConfig;
 use ra_ap_vfs::{Vfs, VfsPath};
 use std::collections::HashMap;
