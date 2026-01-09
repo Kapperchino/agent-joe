@@ -99,9 +99,8 @@ impl SymbolInfo {
 
 impl<'a> AnalysisSession<'a> {
     pub(crate) fn get_work_files(&self) -> Vec<FileInfo> {
-        self.proj
-            .vfs
-            .iter()
+        let vfs = self.proj.vfs.lock().unwrap();
+        vfs.iter()
             .filter(|(id, _path)| {
                 self.analysis
                     .source_root_id(id.clone())
@@ -156,11 +155,12 @@ impl<'a> AnalysisSession<'a> {
             },
             FilePosition { file_id, offset },
         )?;
+        let vfs = self.proj.vfs.lock().unwrap();
         let res = res.map(|rinfo| {
             rinfo
                 .info
                 .into_iter()
-                .map(|n| SymbolInfo::from_nav(n, &self.proj.vfs))
+                .map(|n| SymbolInfo::from_nav(n, &vfs))
                 .collect()
         });
         Ok(res)
@@ -170,9 +170,10 @@ impl<'a> AnalysisSession<'a> {
         let mut q = Query::new("".to_string());
         q.exclude_imports();
         let search_res = self.analysis.symbol_search(q, usize::MAX)?;
+        let vfs = self.proj.vfs.lock().unwrap();
         let res: Vec<_> = search_res
             .into_iter()
-            .map(|n| SymbolInfo::from_nav(n, &self.proj.vfs))
+            .map(|n| SymbolInfo::from_nav(n, &vfs))
             .collect();
         Ok(res)
     }

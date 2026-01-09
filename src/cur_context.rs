@@ -24,7 +24,7 @@ pub struct CurContext {
 }
 pub struct RustProject {
     analysis_host: Arc<Mutex<AnalysisHost>>,
-    pub vfs: Vfs,
+    pub vfs: Arc<Mutex<Vfs>>,
 }
 
 pub struct FileMeta {
@@ -331,6 +331,8 @@ impl CurContext {
 
                 let file_id = rust_proj
                     .vfs
+                    .lock()
+                    .unwrap()
                     .file_id(&VfsPath::new_real_path(k.clone()))
                     .unwrap()
                     .0;
@@ -409,7 +411,7 @@ impl RustProject {
 
         let proj = RustProject {
             analysis_host: anal_host,
-            vfs,
+            vfs: Arc::new(Mutex::new(vfs)),
         };
 
         Ok(proj)
@@ -428,7 +430,10 @@ impl RustProject {
         symbol_cache.transaction(|db: &mut TypedCacheDb<_, _>| {
             if db.is_empty()? {
                 let symboles = session.get_symboles()?;
-                let impls = Self::get_all_trait_impls(&self.vfs, &symboles, &session);
+                let impls = {
+                    let vfs = self.vfs.lock().unwrap();
+                    Self::get_all_trait_impls(&vfs, &symboles, &session)
+                };
                 let combined = vec![symboles, impls].concat();
                 let (_, errs): (Vec<_>, Vec<_>) = combined
                     .iter()

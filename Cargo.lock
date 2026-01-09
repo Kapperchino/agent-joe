@@ -4375,6 +4375,7 @@ dependencies = [
  "heed",
  "itertools 0.14.0",
  "log",
+ "notify-types",
  "ra_ap_hir",
  "ra_ap_ide",
  "ra_ap_ide_db",
