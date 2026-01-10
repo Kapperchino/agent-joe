@@ -1,9 +1,11 @@
-use crate::file_actor::Message::{FileCreated, FileModified, FileRemoved};
+use crate::file_actor::Message::{ApplyVFS, FileCreated, FileModified, FileRemoved};
 use anyhow::anyhow;
 use futures::future::OptionFuture;
 use notify_types::event::{CreateKind, Event, EventKind, ModifyKind, RemoveKind, RenameMode};
 use ra_ap_ide::AnalysisHost;
-use ra_ap_vfs::{Vfs, VfsPath};
+use ra_ap_ide_db::ChangeWithProcMacros;
+use ra_ap_vfs::{Change, ChangeKind, Vfs, VfsPath};
+use ractor::concurrency::Duration;
 use ractor::{Actor, ActorProcessingErr, ActorRef, MessagingErr, SupervisionEvent, call};
 use ractor_actors::filewatcher::{
     FileWatcher, FileWatcherConfig, FileWatcherMessage, FileWatcherSubscriber, SubscriptionResult,
@@ -29,6 +31,7 @@ pub enum Message {
     FileCreated(CreateKind, Vec<PathBuf>),
     FileModified(ModifyKind, Vec<PathBuf>),
     FileRemoved(RemoveKind, Vec<PathBuf>),
+    ApplyVFS,
 }
 #[cfg_attr(feature = "async-trait", ractor::async_trait)]
 impl Actor for FileActor {
@@ -62,6 +65,9 @@ impl Actor for FileActor {
             SubscriptionResult::Duplicate => Err(anyhow!("duplicate subscriptions")),
             SubscriptionResult::NotFound => Err(anyhow!("subscriptions not found")),
         }?;
+
+        myself.send_interval(Duration::from_secs(1), || ApplyVFS);
+
         Ok(FileActorState {
             inner_file_actor: fwactor,
             vfs: dependency.vfs,
@@ -88,6 +94,23 @@ impl Actor for FileActor {
                     let vfs_path = VfsPath::new_real_path(path.to_string_lossy().to_string());
                     vfs.set_file_contents(vfs_path, None);
                 });
+            }
+            ApplyVFS => {
+                let changes = { state.vfs.lock().unwrap().take_changes() };
+                let mut proj_change = ChangeWithProcMacros::default();
+
+                changes
+                    .into_iter()
+                    .for_each(|(id, change)| match change.change {
+                        Change::Create(contents, _hash) | Change::Modify(contents, _hash) => {
+                            let text = String::from_utf8(contents).ok();
+                            proj_change.change_file(id, text.map(Into::into));
+                        }
+                        Change::Delete => {
+                            proj_change.change_file(id, None);
+                        }
+                    });
+                state.a_host.lock().unwrap().apply_change(proj_change);
             }
         }
         Ok(())
