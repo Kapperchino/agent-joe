@@ -108,48 +108,25 @@ impl Actor for FileActor {
     ) -> Result<(), ActorProcessingErr> {
         match message {
             FileCreated(created, paths) => {
-                if !paths.iter().any(|x| {
-                    if let Some(p) = x.to_str()
-                        && !p.ends_with("~")
-                    {
-                        true
-                    } else {
-                        false
-                    }
-                }) {
-                    Self::handle_file_created(
-                        state.vfs.clone(),
-                        created,
-                        paths.first().cloned().and_then(|t| ValidPath::new(t)),
-                    )
-                    .await?;
+                let path = paths.first().cloned().and_then(|p| ValidPath::new(p));
+                if let Some(_) = path {
+                    Self::handle_file_created(state.vfs.clone(), created, path).await?;
                 }
             }
             FileModified(modified, paths) => {
-                let paths = if !paths.iter().any(|p| p.ends_with("~")) {
-                    Some(
-                        paths
-                            .into_iter()
-                            .flat_map(|x1| ValidPath::new(x1))
-                            .collect(),
+                let v_paths: Vec<_> = paths
+                    .iter()
+                    .flat_map(|x| ValidPath::new(x.clone()))
+                    .collect();
+                if v_paths.len() == paths.len() {
+                    Self::handle_file_modified(
+                        state.vfs.clone(),
+                        modified,
+                        v_paths,
+                        state.cache_actor.clone(),
                     )
-                } else {
-                    None
-                };
-                match Self::handle_file_modified(
-                    state.vfs.clone(),
-                    modified,
-                    paths,
-                    state.cache_actor.clone(),
-                )
-                .await
-                {
-                    Ok(_) => Ok(()),
-                    Err(err) => {
-                        log::error!("{err}");
-                        Err(err)
-                    }
-                }?
+                    .await?
+                }
             }
             FileRemoved(_, paths) => {
                 let mut vfs = state.vfs.lock().unwrap();
@@ -214,30 +191,25 @@ impl FileActor {
     async fn handle_file_modified(
         vfs: Arc<Mutex<Vfs>>,
         modify_kind: ModifyKind,
-        paths: Option<Vec<ValidPath>>,
+        paths: Vec<ValidPath>,
         cache_actor: ActorRef<cache_actor::Message>,
     ) -> Result<(), ActorProcessingErr> {
-        match paths {
-            Some(paths) => match modify_kind {
-                ModifyKind::Data(_) => {
-                    Self::read_and_apply_vfs(paths.first().cloned(), vfs).await?;
-                    if let Some(path) = paths.first().cloned() {
-                        cache_actor
-                            .send_message(cache_actor::Message::InvalidateFile(path.path))?;
-                    }
+        match modify_kind {
+            ModifyKind::Data(_) => {
+                Self::read_and_apply_vfs(paths.first().cloned(), vfs).await?;
+                if let Some(path) = paths.first().cloned() {
+                    cache_actor.send_message(cache_actor::Message::InvalidateFile(path.path))?;
                 }
-                ModifyKind::Name(rename_mode) => {
-                    Self::handle_file_rename(vfs, rename_mode, &paths).await?;
-                    if let Some(path) = paths.first().cloned() {
-                        cache_actor
-                            .send_message(cache_actor::Message::InvalidateFile(path.path))?;
-                    }
+            }
+            ModifyKind::Name(rename_mode) => {
+                Self::handle_file_rename(vfs, rename_mode, &paths).await?;
+                if let Some(path) = paths.first().cloned() {
+                    cache_actor.send_message(cache_actor::Message::InvalidateFile(path.path))?;
                 }
-                ModifyKind::Metadata(_) => {}
-                ModifyKind::Any => {}
-                ModifyKind::Other => {}
-            },
-            None => {}
+            }
+            ModifyKind::Metadata(_) => {}
+            ModifyKind::Any => {}
+            ModifyKind::Other => {}
         }
         Ok(())
     }

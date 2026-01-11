@@ -1,19 +1,9 @@
 use crate::analysis::SymbolInfo;
 use crate::cache::TypedCache;
-use crate::file_actor::Message::{ApplyVFS, FileCreated, FileModified, FileRemoved};
-use anyhow::anyhow;
-use futures::future::OptionFuture;
-use itertools::cloned;
-use notify_types::event::{CreateKind, Event, EventKind, ModifyKind, RemoveKind, RenameMode};
 use ra_ap_ide::AnalysisHost;
-use ra_ap_ide_db::ChangeWithProcMacros;
-use ra_ap_vfs::{Change, ChangeKind, Vfs, VfsPath};
-use ractor::concurrency::Duration;
+use ra_ap_vfs::Vfs;
 use ractor::{
-    Actor, ActorCell, ActorProcessingErr, ActorRef, MessagingErr, SupervisionEvent, call,
-};
-use ractor_actors::filewatcher::{
-    FileWatcher, FileWatcherConfig, FileWatcherMessage, FileWatcherSubscriber, SubscriptionResult,
+    Actor, ActorProcessingErr, ActorRef,
 };
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
