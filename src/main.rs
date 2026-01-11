@@ -10,6 +10,7 @@ mod tool_defs;
 mod tool_impls;
 mod utils;
 mod worker;
+mod cache_actor;
 
 use crate::actor::Dependency;
 use crate::claude::{ClaudeClient, ClaudeConfig};

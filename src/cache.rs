@@ -19,6 +19,7 @@ pub trait CacheVal: serde::Serialize + for<'de> serde::Deserialize<'de> {}
 
 impl CacheVal for SymbolInfo {}
 
+#[derive(Clone)]
 pub struct TypedCache<K: CacheKey, V: CacheVal> {
     env: Env,
     _p_key: std::marker::PhantomData<K>,
@@ -75,6 +76,11 @@ pub struct TypedCacheDb<'txn, 'env, K: CacheKey, V: CacheVal> {
 impl<K: CacheKey, V: CacheVal> TypedCacheDb<'_, '_, K, V> {
     pub fn put(&mut self, key: &K, val: &V) -> anyhow::Result<()> {
         self.db.put(self.txn, &key.get_key(), val)?;
+        Ok(())
+    }
+
+    pub fn delete(&mut self, key: &K) -> anyhow::Result<()> {
+        self.db.delete(self.txn, &key.get_key())?;
         Ok(())
     }
 

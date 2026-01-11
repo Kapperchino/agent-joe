@@ -2,9 +2,9 @@ use crate::actor::{ActorToTui, Dependency, State, StreamAccu, StreamRes};
 use crate::claude::{ClaudeClient, ContentBlock, ContentBlockInfo, Delta, Role, StreamEvent};
 use crate::cur_context::CurContext;
 use crate::tool_defs::{ReadFileInput, Tool, ToolResult, ToolResultTrait, ToolTrait};
-use crate::{claude, tool_impls};
+use crate::{claude, file_actor, tool_impls};
 use futures::future;
-use ractor::ActorCell;
+use ractor::{ActorCell, ActorRef};
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
@@ -19,14 +19,14 @@ pub struct ActorState {
     pub acc_map: HashMap<usize, Vec<StreamAccu>>,
     pub delta_buf: HashMap<usize, Vec<Delta>>,
     pub tui_tx: mpsc::UnboundedSender<ActorToTui>,
-    pub file_actor: ActorCell,
+    pub file_actor: ActorRef<file_actor::Message>,
 }
 
 impl ActorState {
     pub async fn new(
         dependency: Dependency,
         cur_context: CurContext,
-        file_actor: ActorCell,
+        file_actor: ActorRef<file_actor::Message>,
     ) -> anyhow::Result<Self> {
         let cur_context_str = cur_context.get_ctx().await;
 

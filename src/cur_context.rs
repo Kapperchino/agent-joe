@@ -19,7 +19,7 @@ pub struct CurContext {
     pub cur_dir: PathBuf,
     cur_files: Vec<DirEntry>,
     pub rust_proj: RustProject,
-    symbol_cache: TypedCache<SymbolInfo, SymbolInfo>,
+    pub symbol_cache: TypedCache<SymbolInfo, SymbolInfo>,
     pub file_metas: HashMap<String, FileMeta>,
 }
 pub struct RustProject {

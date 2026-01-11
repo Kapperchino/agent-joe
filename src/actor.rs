@@ -1,10 +1,11 @@
 use crate::actor_state::ActorState;
+use crate::cache_actor::CacheActor;
 use crate::claude::{ClaudeClient, ClaudeError, ClientRequest, ContentBlock, StreamEvent};
 use crate::cur_context::CurContext;
 use crate::file_actor::FileActor;
 use crate::tool_defs::ReadFile;
 use crate::worker::Worker;
-use crate::{claude, file_actor, tool_impls};
+use crate::{cache_actor, claude, file_actor, tool_impls};
 use ractor::Actor;
 use ractor::ActorProcessingErr;
 use ractor::ActorRef;
@@ -111,19 +112,33 @@ impl Actor for Worker {
         dependency: Dependency,
     ) -> Result<Self::State, ActorProcessingErr> {
         let cur_context = CurContext::new().await?;
-        let (file_actor_ref, actor_handle) = Actor::spawn_linked(
+
+        let (cache_actor_ref, _) = Actor::spawn_linked(
+            None,
+            CacheActor {},
+            cache_actor::Dependency {
+                symbol_cache: cur_context.symbol_cache.clone(),
+                vfs: cur_context.rust_proj.vfs.clone(),
+                analysis_host: cur_context.rust_proj.analysis_host.clone(),
+            },
+            myself.get_cell(),
+        )
+        .await?;
+
+        let (file_actor_ref, _) = Actor::spawn_linked(
             None,
             FileActor {},
             file_actor::Dependency {
                 main_dir: cur_context.cur_dir.clone(),
                 vfs: cur_context.rust_proj.vfs.clone(),
                 a_host: cur_context.rust_proj.analysis_host.clone(),
+                cache_actor: cache_actor_ref,
             },
             myself.get_cell(),
         )
         .await?;
 
-        let state = ActorState::new(dependency, cur_context, file_actor_ref.get_cell())
+        let state = ActorState::new(dependency, cur_context, file_actor_ref)
             .await
             .actor_err()?;
 

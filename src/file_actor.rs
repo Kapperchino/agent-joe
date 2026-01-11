@@ -1,3 +1,4 @@
+use crate::cache_actor;
 use crate::file_actor::Message::{ApplyVFS, FileCreated, FileModified, FileRemoved};
 use anyhow::anyhow;
 use futures::future::OptionFuture;
@@ -8,7 +9,7 @@ use ra_ap_ide_db::ChangeWithProcMacros;
 use ra_ap_vfs::{Change, ChangeKind, Vfs, VfsPath};
 use ractor::concurrency::Duration;
 use ractor::{
-    call, Actor, ActorCell, ActorProcessingErr, ActorRef, MessagingErr, SupervisionEvent,
+    Actor, ActorCell, ActorProcessingErr, ActorRef, MessagingErr, SupervisionEvent, call,
 };
 use ractor_actors::filewatcher::{
     FileWatcher, FileWatcherConfig, FileWatcherMessage, FileWatcherSubscriber, SubscriptionResult,
@@ -22,12 +23,14 @@ pub struct Dependency {
     pub(crate) vfs: Arc<Mutex<Vfs>>,
     pub(crate) a_host: Arc<Mutex<AnalysisHost>>,
     pub main_dir: PathBuf,
+    pub cache_actor: ActorRef<cache_actor::Message>,
 }
 
 pub struct FileActorState {
     vfs: Arc<Mutex<Vfs>>,
     a_host: Arc<Mutex<AnalysisHost>>,
     inner_file_actor: ActorCell,
+    cache_actor: ActorRef<cache_actor::Message>,
 }
 
 #[derive(Clone)]
@@ -93,6 +96,7 @@ impl Actor for FileActor {
             inner_file_actor: fwactor.get_cell(),
             vfs: dependency.vfs,
             a_host: dependency.a_host,
+            cache_actor: dependency.cache_actor,
         })
     }
 
@@ -132,7 +136,14 @@ impl Actor for FileActor {
                 } else {
                     None
                 };
-                match Self::handle_file_modified(state.vfs.clone(), modified, paths).await {
+                match Self::handle_file_modified(
+                    state.vfs.clone(),
+                    modified,
+                    paths,
+                    state.cache_actor.clone(),
+                )
+                .await
+                {
                     Ok(_) => Ok(()),
                     Err(err) => {
                         log::error!("{err}");
@@ -142,10 +153,19 @@ impl Actor for FileActor {
             }
             FileRemoved(_, paths) => {
                 let mut vfs = state.vfs.lock().unwrap();
-                paths.into_iter().for_each(|path| {
+                paths.iter().for_each(|path| {
                     let vfs_path = VfsPath::new_real_path(path.to_string_lossy().to_string());
                     vfs.set_file_contents(vfs_path, None);
                 });
+
+                let _: Vec<_> = paths
+                    .into_iter()
+                    .map(|path| {
+                        state
+                            .cache_actor
+                            .send_message(cache_actor::Message::InvalidateFile(path))
+                    })
+                    .collect::<Result<_, _>>()?;
             }
             ApplyVFS => {
                 let changes = { state.vfs.lock().unwrap().take_changes() };
@@ -195,14 +215,23 @@ impl FileActor {
         vfs: Arc<Mutex<Vfs>>,
         modify_kind: ModifyKind,
         paths: Option<Vec<ValidPath>>,
+        cache_actor: ActorRef<cache_actor::Message>,
     ) -> Result<(), ActorProcessingErr> {
         match paths {
             Some(paths) => match modify_kind {
                 ModifyKind::Data(_) => {
                     Self::read_and_apply_vfs(paths.first().cloned(), vfs).await?;
+                    if let Some(path) = paths.first().cloned() {
+                        cache_actor
+                            .send_message(cache_actor::Message::InvalidateFile(path.path))?;
+                    }
                 }
                 ModifyKind::Name(rename_mode) => {
-                    Self::handle_file_rename(vfs, rename_mode, paths).await?;
+                    Self::handle_file_rename(vfs, rename_mode, &paths).await?;
+                    if let Some(path) = paths.first().cloned() {
+                        cache_actor
+                            .send_message(cache_actor::Message::InvalidateFile(path.path))?;
+                    }
                 }
                 ModifyKind::Metadata(_) => {}
                 ModifyKind::Any => {}
@@ -216,7 +245,7 @@ impl FileActor {
     async fn handle_file_rename(
         vfs: Arc<Mutex<Vfs>>,
         rename_mode: RenameMode,
-        paths: Vec<ValidPath>,
+        paths: &Vec<ValidPath>,
     ) -> Result<(), ActorProcessingErr> {
         match rename_mode {
             RenameMode::From => {
