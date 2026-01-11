@@ -11,6 +11,7 @@ mod tool_defs;
 mod tool_impls;
 mod utils;
 mod worker;
+mod rust_proj;
 
 use crate::actor::Dependency;
 use crate::claude::{ClaudeClient, ClaudeConfig};

@@ -1,23 +1,22 @@
 use crate::analysis::SymbolInfo;
 use crate::cache::{CacheKey, TypedCache};
 use crate::file_actor::ValidPath;
+use crate::rust_proj::RustProject;
 use itertools::Itertools;
 use ra_ap_ide::AnalysisHost;
-use ra_ap_vfs::Vfs;
+use ra_ap_vfs::{Vfs, VfsPath};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use std::sync::{Arc, Mutex};
 
 pub struct CacheActor {}
 
 pub struct Dependency {
-    pub analysis_host: Arc<Mutex<AnalysisHost>>,
-    pub vfs: Arc<Mutex<Vfs>>,
+    pub proj: RustProject,
     pub symbol_cache: TypedCache<SymbolInfo, SymbolInfo>,
 }
 
 pub struct CacheActorState {
-    analysis_host: Arc<Mutex<AnalysisHost>>,
-    vfs: Arc<Mutex<Vfs>>,
+    proj: RustProject,
     symbol_cache: TypedCache<SymbolInfo, SymbolInfo>,
     buffer: Vec<ValidPath>,
 }
@@ -39,8 +38,7 @@ impl Actor for CacheActor {
         dependency: Dependency,
     ) -> Result<Self::State, ActorProcessingErr> {
         Ok(CacheActorState {
-            analysis_host: dependency.analysis_host,
-            vfs: dependency.vfs,
+            proj: dependency.proj,
             symbol_cache: dependency.symbol_cache,
             buffer: Vec::new(),
         })
@@ -58,15 +56,19 @@ impl Actor for CacheActor {
             }
             Message::ApplyChanges => {
                 let buffer: Vec<_> = state.buffer.drain(..).collect();
+                let session = state.proj.new_analysis().await;
                 buffer.iter().try_for_each(|x| {
                     state.symbol_cache.transaction(|db| {
                         let remove_keys: Vec<_> = db
                             .prefix_iter(x.path.to_string_lossy().to_string())?
                             .collect();
-
                         remove_keys.iter().try_for_each(|(_, v)| db.delete(v))?;
+                        let nodes = if let Some(f_id) = state.proj.get_file_id(x.path.clone()) {
+                            session.get_file_structure(f_id)
+                        } else {
+                            Vec::new()
+                        };
 
-                        let analysis = state.analysis_host.lock().unwrap().analysis();
 
 
                         Ok(())

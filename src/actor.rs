@@ -118,8 +118,7 @@ impl Actor for Worker {
             CacheActor {},
             cache_actor::Dependency {
                 symbol_cache: cur_context.symbol_cache.clone(),
-                vfs: cur_context.rust_proj.vfs.clone(),
-                analysis_host: cur_context.rust_proj.analysis_host.clone(),
+                proj: cur_context.rust_proj.clone(),
             },
             myself.get_cell(),
         )
