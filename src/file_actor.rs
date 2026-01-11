@@ -272,11 +272,16 @@ impl FileActor {
         path: ValidPath,
         vfs: Arc<Mutex<Vfs>>,
     ) -> Result<(), ActorProcessingErr> {
-        let content = tokio::fs::read(path.path.clone()).await?;
-        let path = VfsPath::new_real_path(path.path.to_string_lossy().to_string());
-        let mut vfs = vfs.lock().unwrap();
-        vfs.set_file_contents(path, Some(content));
-        Ok(())
+        match path.path.exists() {
+            true => {
+                let content = tokio::fs::read(path.path.clone()).await?;
+                let path = VfsPath::new_real_path(path.path.to_string_lossy().to_string());
+                let mut vfs = vfs.lock().unwrap();
+                vfs.set_file_contents(path, Some(content));
+                Ok(())
+            }
+            false => Ok(()),
+        }
     }
 }
 
