@@ -10,13 +10,14 @@ use ra_ap_vfs::file_set::FileSet;
 use ra_ap_vfs::{Change, ChangeKind, FileId, Vfs, VfsPath};
 use ractor::concurrency::Duration;
 use ractor::{
-    Actor, ActorCell, ActorProcessingErr, ActorRef, MessagingErr, SupervisionEvent, call,
+    call, Actor, ActorCell, ActorProcessingErr, ActorRef, MessagingErr, SupervisionEvent,
 };
 use ractor_actors::filewatcher::{
     FileWatcher, FileWatcherConfig, FileWatcherMessage, FileWatcherSubscriber, SubscriptionResult,
 };
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use crate::cache_actor::Message::ApplyChanges;
 
 pub struct FileActor {}
 
@@ -36,7 +37,7 @@ pub struct FileActorState {
 
 #[derive(Clone, Debug)]
 pub struct ValidPath {
-    path: PathBuf,
+    pub(crate) path: PathBuf,
 }
 
 impl ValidPath {
@@ -164,6 +165,7 @@ impl Actor for FileActor {
                     });
                 proj_change.set_roots(roots);
                 state.a_host.lock().unwrap().apply_change(proj_change);
+                state.cache_actor.send_message(ApplyChanges)?;
             }
         }
         Ok(())

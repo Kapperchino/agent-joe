@@ -95,6 +95,13 @@ impl<K: CacheKey, V: CacheVal> TypedCacheDb<'_, '_, K, V> {
             .filter_map(|r| r.ok().map(|(_, v)| v)))
     }
 
+    pub fn prefix_iter(&self, key: String) -> anyhow::Result<impl Iterator<Item = (String, V)>> {
+        Ok(self
+            .db
+            .prefix_iter(self.txn, &key)?
+            .filter_map(|r| r.ok().map(|(k, v)| (k.to_string(), v))))
+    }
+
     pub fn get(&self, key: &str) -> anyhow::Result<Option<V>> {
         Ok(self.db.get(self.txn, key)?)
     }

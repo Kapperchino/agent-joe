@@ -1,13 +1,11 @@
 use crate::analysis::SymbolInfo;
-use crate::cache::TypedCache;
+use crate::cache::{CacheKey, TypedCache};
+use crate::file_actor::ValidPath;
+use itertools::Itertools;
 use ra_ap_ide::AnalysisHost;
 use ra_ap_vfs::Vfs;
-use ractor::{
-    Actor, ActorProcessingErr, ActorRef,
-};
-use std::path::PathBuf;
+use ractor::{Actor, ActorProcessingErr, ActorRef};
 use std::sync::{Arc, Mutex};
-use crate::file_actor::ValidPath;
 
 pub struct CacheActor {}
 
@@ -21,11 +19,13 @@ pub struct CacheActorState {
     analysis_host: Arc<Mutex<AnalysisHost>>,
     vfs: Arc<Mutex<Vfs>>,
     symbol_cache: TypedCache<SymbolInfo, SymbolInfo>,
+    buffer: Vec<ValidPath>,
 }
 
 #[derive(Debug)]
 pub enum Message {
     InvalidateFile(ValidPath),
+    ApplyChanges,
 }
 #[cfg_attr(feature = "async-trait", ractor::async_trait)]
 impl Actor for CacheActor {
@@ -42,6 +42,7 @@ impl Actor for CacheActor {
             analysis_host: dependency.analysis_host,
             vfs: dependency.vfs,
             symbol_cache: dependency.symbol_cache,
+            buffer: Vec::new(),
         })
     }
 
@@ -53,7 +54,25 @@ impl Actor for CacheActor {
     ) -> Result<(), ActorProcessingErr> {
         match message {
             Message::InvalidateFile(file) => {
-                println!("{:?}", file)
+                state.buffer.push(file);
+            }
+            Message::ApplyChanges => {
+                let buffer: Vec<_> = state.buffer.drain(..).collect();
+                buffer.iter().try_for_each(|x| {
+                    state.symbol_cache.transaction(|db| {
+                        let remove_keys: Vec<_> = db
+                            .prefix_iter(x.path.to_string_lossy().to_string())?
+                            .collect();
+
+                        remove_keys.iter().try_for_each(|(_, v)| db.delete(v))?;
+
+                        let analysis = state.analysis_host.lock().unwrap().analysis();
+
+
+                        Ok(())
+                    })?;
+                    Ok::<(), anyhow::Error>(())
+                })?;
             }
         }
         Ok(())
