@@ -5,7 +5,7 @@ use anyhow::anyhow;
 use itertools::Itertools;
 use ra_ap_ide::{AnalysisHost, LineIndex, TextSize};
 use ra_ap_ide_db::SymbolKind;
-use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
+use ra_ap_load_cargo::{load_workspace_at, LoadCargoConfig, ProcMacroServerChoice};
 use ra_ap_project_model::CargoConfig;
 use ra_ap_vfs::{FileId, Vfs, VfsPath};
 use std::collections::HashMap;
@@ -16,14 +16,14 @@ use std::sync::{Arc, Mutex};
 use tokio::fs::DirEntry;
 
 pub struct CurContext {
-    cur_dir: PathBuf,
+    pub cur_dir: PathBuf,
     cur_files: Vec<DirEntry>,
-    rust_proj: RustProject,
+    pub rust_proj: RustProject,
     symbol_cache: TypedCache<SymbolInfo, SymbolInfo>,
     pub file_metas: HashMap<String, FileMeta>,
 }
 pub struct RustProject {
-    analysis_host: Arc<Mutex<AnalysisHost>>,
+    pub analysis_host: Arc<Mutex<AnalysisHost>>,
     pub vfs: Arc<Mutex<Vfs>>,
 }
 
@@ -260,7 +260,7 @@ impl CurContext {
         })
     }
 
-    pub async fn get_ctx(&mut self) -> String {
+    pub async fn get_ctx(&self) -> String {
         let dir = self.cur_dir.to_str().unwrap_or("");
         let analytical_ctx = self.get_analytical_context().await.unwrap_or_default();
         format!(

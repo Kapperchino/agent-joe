@@ -1,7 +1,10 @@
 use crate::actor_state::ActorState;
 use crate::claude::{ClaudeClient, ClaudeError, ClientRequest, ContentBlock, StreamEvent};
+use crate::cur_context::CurContext;
+use crate::file_actor::FileActor;
+use crate::tool_defs::ReadFile;
 use crate::worker::Worker;
-use crate::{claude, tool_impls};
+use crate::{claude, file_actor, tool_impls};
 use ractor::Actor;
 use ractor::ActorProcessingErr;
 use ractor::ActorRef;
@@ -104,10 +107,27 @@ impl Actor for Worker {
 
     async fn pre_start(
         &self,
-        _: ActorRef<Self::Msg>,
+        myself: ActorRef<Self::Msg>,
         dependency: Dependency,
     ) -> Result<Self::State, ActorProcessingErr> {
-        ActorState::new(dependency).await.actor_err()
+        let cur_context = CurContext::new().await?;
+        let (file_actor_ref, actor_handle) = Actor::spawn_linked(
+            None,
+            FileActor {},
+            file_actor::Dependency {
+                main_dir: cur_context.cur_dir.clone(),
+                vfs: cur_context.rust_proj.vfs.clone(),
+                a_host: cur_context.rust_proj.analysis_host.clone(),
+            },
+            myself.get_cell(),
+        )
+        .await?;
+
+        let state = ActorState::new(dependency, cur_context, file_actor_ref.get_cell())
+            .await
+            .actor_err()?;
+
+        Ok(state)
     }
 
     async fn handle(
@@ -191,7 +211,7 @@ impl Actor for Worker {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
-            SupervisionEvent::ActorTerminated(who, _, _) => {
+            SupervisionEvent::ActorTerminated(who, boxed_state, reason) => {
                 if state
                     .stream_actor
                     .as_ref()
@@ -199,6 +219,8 @@ impl Actor for Worker {
                     .unwrap_or(false)
                 {
                     state.stream_actor = None;
+                } else {
+                    log::error!("{:?}", reason);
                 }
             }
             SupervisionEvent::ActorFailed(who, reason) => {

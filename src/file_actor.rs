@@ -1,29 +1,50 @@
 use crate::file_actor::Message::{ApplyVFS, FileCreated, FileModified, FileRemoved};
 use anyhow::anyhow;
 use futures::future::OptionFuture;
+use itertools::cloned;
 use notify_types::event::{CreateKind, Event, EventKind, ModifyKind, RemoveKind, RenameMode};
 use ra_ap_ide::AnalysisHost;
 use ra_ap_ide_db::ChangeWithProcMacros;
 use ra_ap_vfs::{Change, ChangeKind, Vfs, VfsPath};
 use ractor::concurrency::Duration;
-use ractor::{Actor, ActorProcessingErr, ActorRef, MessagingErr, SupervisionEvent, call};
+use ractor::{
+    call, Actor, ActorCell, ActorProcessingErr, ActorRef, MessagingErr, SupervisionEvent,
+};
 use ractor_actors::filewatcher::{
     FileWatcher, FileWatcherConfig, FileWatcherMessage, FileWatcherSubscriber, SubscriptionResult,
 };
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-struct FileActor {}
+pub struct FileActor {}
 
 pub struct Dependency {
-    vfs: Arc<Mutex<Vfs>>,
-    a_host: Arc<Mutex<AnalysisHost>>,
+    pub(crate) vfs: Arc<Mutex<Vfs>>,
+    pub(crate) a_host: Arc<Mutex<AnalysisHost>>,
+    pub main_dir: PathBuf,
 }
 
 pub struct FileActorState {
     vfs: Arc<Mutex<Vfs>>,
     a_host: Arc<Mutex<AnalysisHost>>,
-    inner_file_actor: ActorRef<FileWatcherMessage>,
+    inner_file_actor: ActorCell,
+}
+
+#[derive(Clone)]
+pub struct ValidPath {
+    path: PathBuf,
+}
+
+impl ValidPath {
+    pub fn new(path: PathBuf) -> Option<Self> {
+        if let Some(joe) = path.to_str()
+            && !joe.ends_with("~")
+        {
+            Some(ValidPath { path })
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -46,14 +67,14 @@ impl Actor for FileActor {
     ) -> Result<Self::State, ActorProcessingErr> {
         let fw = FileWatcher;
         let config = FileWatcherConfig {
-            ..Default::default()
+            directories: vec![dependency.main_dir.join("src")],
+            files: vec![dependency.main_dir.join("Cargo.toml")],
         };
-        let (fwactor, fwhandle) = Actor::spawn(None, fw, config)
-            .await
-            .expect("Filewatcher failed to spawn");
+
+        let (fwactor, fwhandle) = Actor::spawn(None, fw, config).await?;
 
         let fwrder = Forwarder {
-            actor: myself.clone(),
+            actor: myself.get_cell(),
         };
 
         match call!(fwactor, |reply| FileWatcherMessage::Subscribe(
@@ -69,7 +90,7 @@ impl Actor for FileActor {
         myself.send_interval(Duration::from_secs(1), || ApplyVFS);
 
         Ok(FileActorState {
-            inner_file_actor: fwactor,
+            inner_file_actor: fwactor.get_cell(),
             vfs: dependency.vfs,
             a_host: dependency.a_host,
         })
@@ -83,10 +104,41 @@ impl Actor for FileActor {
     ) -> Result<(), ActorProcessingErr> {
         match message {
             FileCreated(created, paths) => {
-                Self::handle_file_created(state.vfs.clone(), created, paths).await?;
+                if !paths.iter().any(|x| {
+                    if let Some(p) = x.to_str()
+                        && !p.ends_with("~")
+                    {
+                        true
+                    } else {
+                        false
+                    }
+                }) {
+                    Self::handle_file_created(
+                        state.vfs.clone(),
+                        created,
+                        paths.first().cloned().and_then(|t| ValidPath::new(t)),
+                    )
+                    .await?;
+                }
             }
             FileModified(modified, paths) => {
-                Self::handle_file_modified(state.vfs.clone(), modified, paths).await?;
+                let paths = if !paths.iter().any(|p| p.ends_with("~")) {
+                    Some(
+                        paths
+                            .into_iter()
+                            .flat_map(|x1| ValidPath::new(x1))
+                            .collect(),
+                    )
+                } else {
+                    None
+                };
+                match Self::handle_file_modified(state.vfs.clone(), modified, paths).await {
+                    Ok(_) => Ok(()),
+                    Err(err) => {
+                        log::error!("{err}");
+                        Err(err)
+                    }
+                }?
             }
             FileRemoved(_, paths) => {
                 let mut vfs = state.vfs.lock().unwrap();
@@ -121,16 +173,16 @@ impl FileActor {
     async fn handle_file_created(
         vfs: Arc<Mutex<Vfs>>,
         create_kind: CreateKind,
-        paths: Vec<PathBuf>,
+        path: Option<ValidPath>,
     ) -> Result<(), ActorProcessingErr> {
         match create_kind {
             CreateKind::File => {
-                Self::read_and_apply_vfs(paths, vfs.clone()).await?;
+                Self::read_and_apply_vfs(path, vfs.clone()).await?;
             }
             CreateKind::Folder => {
-                paths.first().map(|path_buf| {
+                path.map(|path_buf| {
                     let mut vfs = vfs.lock().unwrap();
-                    let path = VfsPath::new_real_path(path_buf.to_string_lossy().to_string());
+                    let path = VfsPath::new_real_path(path_buf.path.to_string_lossy().to_string());
                     vfs.set_file_contents(path, None);
                 });
             }
@@ -142,18 +194,21 @@ impl FileActor {
     async fn handle_file_modified(
         vfs: Arc<Mutex<Vfs>>,
         modify_kind: ModifyKind,
-        paths: Vec<PathBuf>,
+        paths: Option<Vec<ValidPath>>,
     ) -> Result<(), ActorProcessingErr> {
-        match modify_kind {
-            ModifyKind::Data(_) => {
-                Self::read_and_apply_vfs(paths, vfs).await?;
-            }
-            ModifyKind::Name(rename_mode) => {
-                Self::handle_file_rename(vfs, rename_mode, paths).await?;
-            }
-            ModifyKind::Metadata(_) => {}
-            ModifyKind::Any => {}
-            ModifyKind::Other => {}
+        match paths {
+            Some(paths) => match modify_kind {
+                ModifyKind::Data(_) => {
+                    Self::read_and_apply_vfs(paths.first().cloned(), vfs).await?;
+                }
+                ModifyKind::Name(rename_mode) => {
+                    Self::handle_file_rename(vfs, rename_mode, paths).await?;
+                }
+                ModifyKind::Metadata(_) => {}
+                ModifyKind::Any => {}
+                ModifyKind::Other => {}
+            },
+            None => {}
         }
         Ok(())
     }
@@ -161,28 +216,28 @@ impl FileActor {
     async fn handle_file_rename(
         vfs: Arc<Mutex<Vfs>>,
         rename_mode: RenameMode,
-        paths: Vec<PathBuf>,
+        paths: Vec<ValidPath>,
     ) -> Result<(), ActorProcessingErr> {
         match rename_mode {
             RenameMode::From => {
                 paths.into_iter().for_each(|path| {
                     let mut vfs = vfs.lock().unwrap();
-                    let vfs_path = VfsPath::new_real_path(path.to_string_lossy().to_string());
+                    let vfs_path = VfsPath::new_real_path(path.path.to_string_lossy().to_string());
                     vfs.set_file_contents(vfs_path, None);
                 });
             }
             RenameMode::To => {
-                Self::read_and_apply_vfs(paths, vfs.clone()).await?;
+                Self::read_and_apply_vfs(paths.first().cloned(), vfs.clone()).await?;
             }
             RenameMode::Both => {
                 let mut iter = paths.iter().take(2);
                 if let Some(first) = iter.next()
                     && let Some(second) = iter.next()
                 {
-                    let old_vfs = VfsPath::new_real_path(first.to_string_lossy().to_string());
-                    let new_vfs = VfsPath::new_real_path(second.to_string_lossy().to_string());
+                    let old_vfs = VfsPath::new_real_path(first.path.to_string_lossy().to_string());
+                    let new_vfs = VfsPath::new_real_path(second.path.to_string_lossy().to_string());
 
-                    let content = tokio::fs::read(&second).await?;
+                    let content = tokio::fs::read(&second.path).await?;
 
                     let mut vfs = vfs.lock().unwrap();
 
@@ -196,20 +251,15 @@ impl FileActor {
     }
 
     async fn read_and_apply_vfs(
-        paths: Vec<PathBuf>,
+        path: Option<ValidPath>,
         vfs: Arc<Mutex<Vfs>>,
     ) -> Result<(), ActorProcessingErr> {
-        let content = OptionFuture::from(
-            paths
-                .first()
-                .cloned()
-                .map(|path_buf: PathBuf| tokio::fs::read(path_buf)),
-        )
-        .await
-        .transpose()?;
+        let content = OptionFuture::from(path.clone().map(|path| tokio::fs::read(path.path)))
+            .await
+            .transpose()?;
 
-        paths.first().map(|path_buf| {
-            let path = VfsPath::new_real_path(path_buf.to_string_lossy().to_string());
+        path.map(|path| {
+            let path = VfsPath::new_real_path(path.path.to_string_lossy().to_string());
             let mut vfs = vfs.lock().unwrap();
             vfs.set_file_contents(path, content)
         });
@@ -218,7 +268,7 @@ impl FileActor {
 }
 
 struct Forwarder {
-    actor: ActorRef<Message>,
+    actor: ActorCell,
 }
 impl FileWatcherSubscriber for Forwarder {
     fn event_received(&self, ev: notify_types::event::Event) {
@@ -231,7 +281,9 @@ impl FileWatcherSubscriber for Forwarder {
         };
         match res {
             Ok(_) => (),
-            Err(_) => {}
+            Err(err) => {
+                log::error!("{err}")
+            }
         }
     }
 }

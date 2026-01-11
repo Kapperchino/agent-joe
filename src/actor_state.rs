@@ -19,11 +19,15 @@ pub struct ActorState {
     pub acc_map: HashMap<usize, Vec<StreamAccu>>,
     pub delta_buf: HashMap<usize, Vec<Delta>>,
     pub tui_tx: mpsc::UnboundedSender<ActorToTui>,
+    pub file_actor: ActorCell,
 }
 
 impl ActorState {
-    pub async fn new(dependency: Dependency) -> anyhow::Result<Self> {
-        let mut cur_context = CurContext::new().await?;
+    pub async fn new(
+        dependency: Dependency,
+        cur_context: CurContext,
+        file_actor: ActorCell,
+    ) -> anyhow::Result<Self> {
         let cur_context_str = cur_context.get_ctx().await;
 
         let computed_tools: Vec<claude::Tool> =
@@ -43,6 +47,7 @@ impl ActorState {
             delta_buf: Default::default(),
             stream_actor: None,
             tui_tx: dependency.tui_tx,
+            file_actor,
         })
     }
 

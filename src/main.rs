@@ -5,11 +5,11 @@ mod app;
 mod cache;
 mod claude;
 mod cur_context;
+mod file_actor;
 mod tool_defs;
 mod tool_impls;
 mod utils;
 mod worker;
-mod file_actor;
 
 use crate::actor::Dependency;
 use crate::claude::{ClaudeClient, ClaudeConfig};
