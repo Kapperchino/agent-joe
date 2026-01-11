@@ -7,6 +7,7 @@ use ractor::{
 };
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use crate::file_actor::ValidPath;
 
 pub struct CacheActor {}
 
@@ -24,7 +25,7 @@ pub struct CacheActorState {
 
 #[derive(Debug)]
 pub enum Message {
-    InvalidateFile(PathBuf),
+    InvalidateFile(ValidPath),
 }
 #[cfg_attr(feature = "async-trait", ractor::async_trait)]
 impl Actor for CacheActor {
