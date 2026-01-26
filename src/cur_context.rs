@@ -247,7 +247,7 @@ impl CurContext {
         let files = Utils::get_dir_files(&current_dir).await?;
         let proj = RustProject::new(&current_dir)?;
         let mut symbol_cache = TypedCache::new(None).await;
-        let file_metas = Self::get_file_metas(&mut symbol_cache, &proj).await?;
+        let file_metas = Self::get_file_metas(&mut symbol_cache, proj.clone()).await?;
         Ok(CurContext {
             cur_dir: current_dir,
             cur_files: files,
@@ -269,13 +269,12 @@ impl CurContext {
         Ok(Self::format_file_metas(&self.file_metas))
     }
 
-    async fn get_file_metas(
-        cache: &mut TypedCache<SymbolInfo, SymbolInfo>,
-        rust_proj: &RustProject,
+    pub async fn get_file_metas_from_symbols(
+        vec: Vec<SymbolInfo>,
+        rust_proj: RustProject,
     ) -> anyhow::Result<HashMap<String, FileMeta>> {
-        let symbols = rust_proj.get_all_proj_symbols(cache).await?;
         let session = rust_proj.new_analysis().await;
-        let grouped = symbols.into_iter().into_group_map_by(|x| x.rpath.clone());
+        let grouped = vec.into_iter().into_group_map_by(|x| x.rpath.clone());
         grouped
             .into_iter()
             .map(|(k, v)| {
@@ -351,6 +350,14 @@ impl CurContext {
                 ))
             })
             .collect()
+    }
+
+    async fn get_file_metas(
+        cache: &mut TypedCache<SymbolInfo, SymbolInfo>,
+        rust_proj: RustProject,
+    ) -> anyhow::Result<HashMap<String, FileMeta>> {
+        let symbols = rust_proj.get_all_proj_symbols(cache).await?;
+        Self::get_file_metas_from_symbols(symbols, rust_proj).await
     }
 
     fn get_symbol_map(

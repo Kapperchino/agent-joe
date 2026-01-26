@@ -59,10 +59,7 @@ impl RustProject {
         symbol_cache.transaction(|db: &mut TypedCacheDb<_, _>| {
             if db.is_empty()? {
                 let symboles = session.get_symboles()?;
-                let impls = {
-                    let vfs = self.vfs.lock().unwrap();
-                    Self::get_all_trait_impls(&vfs, &symboles, &session)
-                };
+                let impls = Self::get_all_trait_impls(self.vfs.clone(), &symboles, &session);
                 let combined = vec![symboles, impls].concat();
                 let (_, errs): (Vec<_>, Vec<_>) = combined
                     .iter()
@@ -83,7 +80,7 @@ impl RustProject {
     }
 
     fn get_all_trait_impls(
-        vfs: &Vfs,
+        vfs: Arc<Mutex<Vfs>>,
         symboles: &Vec<SymbolInfo>,
         session: &AnalysisSession<'_>,
     ) -> Vec<SymbolInfo> {
@@ -97,12 +94,13 @@ impl RustProject {
             .into_iter()
             .flat_map(|info| {
                 info.focus_range.clone().map(|t| {
-                    session
-                        .go_to_impl(
-                            vfs.file_id(&VfsPath::new_real_path(info.rpath)).unwrap().0,
-                            TextSize::new(t.start),
-                        )
-                        .ok()
+                    let id = vfs
+                        .lock()
+                        .unwrap()
+                        .file_id(&VfsPath::new_real_path(info.rpath))
+                        .unwrap()
+                        .0;
+                    session.go_to_impl(id, TextSize::new(t.start)).ok()
                 })
             })
             .flatten()

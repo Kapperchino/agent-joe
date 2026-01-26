@@ -6,6 +6,7 @@ use itertools::Itertools;
 use ra_ap_ide::AnalysisHost;
 use ra_ap_vfs::{Vfs, VfsPath};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 pub struct CacheActor {}
@@ -64,13 +65,26 @@ impl Actor for CacheActor {
                             .collect();
                         remove_keys.iter().try_for_each(|(_, v)| db.delete(v))?;
                         let nodes = if let Some(f_id) = state.proj.get_file_id(x.path.clone()) {
-                            session.get_file_structure(f_id)
+                            let file_structs = session.get_file_structure(f_id);
+                            SymbolInfo::from_file_structs(f_id, file_structs, x.path.clone())
                         } else {
                             Vec::new()
                         };
-
-
-
+                        nodes.iter().try_for_each(|s| db.put(s, s))?;
+                        let (_, infos): (Vec<_>, Vec<_>) = remove_keys.into_iter().unzip();
+                        let infos: HashMap<String, SymbolInfo> =
+                            infos.into_iter().map(|x1| (x1.get_key(), x1)).collect();
+                        let nodes: HashMap<String, SymbolInfo> =
+                            nodes.into_iter().map(|x1| (x1.get_key(), x1)).collect();
+                        infos.iter().for_each(|(info, node)| {
+                            match nodes.get(info) {
+                                None => {}
+                                Some(other) => {
+                                    println!("{:?}", other);
+                                    println!("{:?}", info);
+                                }
+                            };
+                        });
                         Ok(())
                     })?;
                     Ok::<(), anyhow::Error>(())

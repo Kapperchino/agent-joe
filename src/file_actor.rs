@@ -1,4 +1,5 @@
 use crate::cache_actor;
+use crate::cache_actor::Message::ApplyChanges;
 use crate::file_actor::Message::{ApplyVFS, FileCreated, FileModified, FileRemoved};
 use anyhow::anyhow;
 use futures::future::OptionFuture;
@@ -10,14 +11,13 @@ use ra_ap_vfs::file_set::FileSet;
 use ra_ap_vfs::{Change, ChangeKind, FileId, Vfs, VfsPath};
 use ractor::concurrency::Duration;
 use ractor::{
-    call, Actor, ActorCell, ActorProcessingErr, ActorRef, MessagingErr, SupervisionEvent,
+    Actor, ActorCell, ActorProcessingErr, ActorRef, MessagingErr, SupervisionEvent, call,
 };
 use ractor_actors::filewatcher::{
     FileWatcher, FileWatcherConfig, FileWatcherMessage, FileWatcherSubscriber, SubscriptionResult,
 };
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use crate::cache_actor::Message::ApplyChanges;
 
 pub struct FileActor {}
 

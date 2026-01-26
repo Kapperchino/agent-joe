@@ -1,12 +1,13 @@
+use crate::rust_proj::RustProject;
 use ra_ap_ide::{
     Analysis, FilePosition, FileStructureConfig, GotoImplementationConfig, LineIndex,
-    NavigationTarget, StructureNode, TextSize,
+    NavigationTarget, StructureNode, StructureNodeKind, TextSize,
 };
-use ra_ap_ide_db::symbol_index::Query;
 use ra_ap_ide_db::SymbolKind;
+use ra_ap_ide_db::symbol_index::Query;
 use ra_ap_vfs::{FileId, Vfs, VfsPath};
 use serde::{Deserialize, Serialize};
-use crate::rust_proj::RustProject;
+use std::path::PathBuf;
 
 pub struct FileInfo {
     pub id: FileId,
@@ -25,7 +26,7 @@ pub struct AnalysisSession<'a> {
     proj: &'a RustProject,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, Eq, PartialEq, Hash)]
 pub struct Range {
     pub(crate) start: u32,
     pub(crate) end: u32,
@@ -65,7 +66,7 @@ enum SymbolKindDef {
     Variant,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq, Hash)]
 pub struct SymbolInfo {
     pub rpath: String,
     pub full_range: Range,
@@ -94,6 +95,40 @@ impl SymbolInfo {
             container_name: n.container_name.map(|s| s.to_string()),
             docs: n.docs.map(|d| d.as_str().to_string()),
         }
+    }
+
+    pub fn from_file_structs(
+        file_id: FileId,
+        file_structs: Vec<StructureNode>,
+        path_buf: PathBuf,
+    ) -> Vec<Self> {
+        file_structs
+            .iter()
+            .filter(|fs| match fs.kind {
+                StructureNodeKind::SymbolKind(_) => true,
+                _ => false,
+            })
+            .map(|fs| SymbolInfo {
+                rpath: path_buf.to_string_lossy().to_string(),
+                full_range: Range {
+                    start: fs.node_range.start().into(),
+                    end: fs.node_range.end().into(),
+                },
+                focus_range: Some(Range {
+                    start: fs.navigation_range.start().into(),
+                    end: fs.navigation_range.end().into(),
+                }),
+                name: fs.label.clone(),
+                kind: match fs.kind {
+                    StructureNodeKind::SymbolKind(kind) => kind,
+                    _ => unreachable!(),
+                },
+                container_name: fs
+                    .parent
+                    .and_then(|t| file_structs.get(t).map(|node| node.label.clone())),
+                docs: None,
+            })
+            .collect()
     }
 }
 
