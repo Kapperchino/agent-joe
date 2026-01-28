@@ -4,7 +4,7 @@ use crate::claude::{ToolProperty, ToolSchemaDTO};
 use crate::cur_context::CurContext;
 use crate::tool_defs::ToolResultTrait;
 pub(crate) use crate::tool_defs::{ReadFile, Tool, ToolResult, ToolTrait};
-use anyhow::{anyhow, Error};
+use anyhow::{Error, anyhow};
 use futures::{StreamExt, TryStreamExt};
 use ra_ap_ide::TextSize;
 use std::collections::HashMap;

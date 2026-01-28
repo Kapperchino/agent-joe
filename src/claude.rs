@@ -1,10 +1,10 @@
 use anyhow::anyhow;
 use async_stream::try_stream;
-use reqwest::{header, Client};
+use futures::{Stream, StreamExt};
+use reqwest::{Client, header};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
-use futures::{Stream, StreamExt};
 use thiserror::Error;
 
 #[derive(Error, Debug)]

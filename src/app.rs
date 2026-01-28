@@ -10,12 +10,12 @@ use ratatui::layout::Position;
 use ratatui::text::Span;
 use ratatui::widgets::{List, ListItem, ListState};
 use ratatui::{
-    crossterm::event::{Event, KeyCode}, layout::{Alignment, Constraint, Layout},
+    DefaultTerminal, Frame,
+    crossterm::event::{Event, KeyCode},
+    layout::{Alignment, Constraint, Layout},
     style::{Color, Style, Stylize},
     text::Line,
     widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
-    DefaultTerminal,
-    Frame,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 

@@ -1,21 +1,18 @@
-use crate::analysis::{AnalysisSession, Range, SymbolInfo};
+use crate::analysis::{Range, SymbolInfo};
 use crate::cache::{TypedCache, TypedCacheDb};
 use crate::rust_proj::RustProject;
 use crate::utils::Utils;
 use anyhow::anyhow;
 use futures::{StreamExt, future};
 use itertools::Itertools;
-use ra_ap_ide::{AnalysisHost, LineIndex, TextSize};
+use ra_ap_ide::LineIndex;
 use ra_ap_ide_db::SymbolKind;
-use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
-use ra_ap_project_model::CargoConfig;
-use ra_ap_vfs::{FileId, Vfs, VfsPath};
+use ra_ap_vfs::{FileId, VfsPath};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
 use std::fmt::{self, Display, Formatter};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 use tokio::fs::DirEntry;
 
 pub struct CurContext {

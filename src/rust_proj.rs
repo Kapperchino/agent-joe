@@ -1,6 +1,4 @@
 use crate::analysis::{AnalysisSession, SymbolInfo};
-use crate::cache::{TypedCache, TypedCacheDb};
-use anyhow::anyhow;
 use ra_ap_ide::{AnalysisHost, TextSize};
 use ra_ap_ide_db::SymbolKind;
 use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
