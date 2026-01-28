@@ -1,24 +1,21 @@
 use crate::analysis::SymbolInfo;
-use crate::cache::{CacheKey, TypedCache};
+use crate::cache::TypedCache;
+use crate::cur_context::{CurContext, FileMeta, FileMetaData};
 use crate::file_actor::ValidPath;
 use crate::rust_proj::RustProject;
-use itertools::Itertools;
-use ra_ap_ide::AnalysisHost;
-use ra_ap_vfs::{Vfs, VfsPath};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::path::PathBuf;
 
 pub struct CacheActor {}
 
 pub struct Dependency {
     pub proj: RustProject,
-    pub symbol_cache: TypedCache<SymbolInfo, SymbolInfo>,
+    pub file_cache: TypedCache<FileMetaData, FileMetaData>,
 }
 
 pub struct CacheActorState {
     proj: RustProject,
-    symbol_cache: TypedCache<SymbolInfo, SymbolInfo>,
+    file_cache: TypedCache<FileMetaData, FileMetaData>,
     buffer: Vec<ValidPath>,
 }
 
@@ -40,7 +37,7 @@ impl Actor for CacheActor {
     ) -> Result<Self::State, ActorProcessingErr> {
         Ok(CacheActorState {
             proj: dependency.proj,
-            symbol_cache: dependency.symbol_cache,
+            file_cache: dependency.file_cache,
             buffer: Vec::new(),
         })
     }
@@ -58,37 +55,39 @@ impl Actor for CacheActor {
             Message::ApplyChanges => {
                 let buffer: Vec<_> = state.buffer.drain(..).collect();
                 let session = state.proj.new_analysis().await;
-                buffer.iter().try_for_each(|x| {
-                    state.symbol_cache.transaction(|db| {
+                for x in buffer {
+                    let deleted_paths = state.file_cache.transaction(|db| {
                         let remove_keys: Vec<_> = db
                             .prefix_iter(x.path.to_string_lossy().to_string())?
                             .collect();
                         remove_keys.iter().try_for_each(|(_, v)| db.delete(v))?;
-                        let nodes = if let Some(f_id) = state.proj.get_file_id(x.path.clone()) {
-                            let file_structs = session.get_file_structure(f_id);
-                            SymbolInfo::from_file_structs(f_id, file_structs, x.path.clone())
-                        } else {
-                            Vec::new()
-                        };
-                        nodes.iter().try_for_each(|s| db.put(s, s))?;
-                        let (_, infos): (Vec<_>, Vec<_>) = remove_keys.into_iter().unzip();
-                        let infos: HashMap<String, SymbolInfo> =
-                            infos.into_iter().map(|x1| (x1.get_key(), x1)).collect();
-                        let nodes: HashMap<String, SymbolInfo> =
-                            nodes.into_iter().map(|x1| (x1.get_key(), x1)).collect();
-                        infos.iter().for_each(|(info, node)| {
-                            match nodes.get(info) {
-                                None => {}
-                                Some(other) => {
-                                    println!("{:?}", other);
-                                    println!("{:?}", info);
-                                }
-                            };
-                        });
+                        let deleted_paths: Vec<PathBuf> = remove_keys
+                            .into_iter()
+                            .map(|(_, meta)| meta.rpath.into())
+                            .collect();
+
+                        Ok(deleted_paths)
+                    })?;
+
+                    let nodes = if let Some(f_id) = state.proj.get_file_id(x.path.clone()) {
+                        let file_structs = session.get_file_structure(f_id);
+                        SymbolInfo::from_file_structs(f_id, file_structs, x.path.clone())
+                    } else {
+                        Vec::new()
+                    };
+
+                    let hashes = CurContext::get_file_hashes_for_paths(deleted_paths)
+                        .await?
+                        .into_iter()
+                        .collect();
+                    let meta_data =
+                        CurContext::get_file_meta_datas_cache_miss(nodes, &state.proj, hashes)?;
+
+                    state.file_cache.transaction(|db| {
+                        meta_data.iter().try_for_each(|(_, s)| db.put(s, s))?;
                         Ok(())
                     })?;
-                    Ok::<(), anyhow::Error>(())
-                })?;
+                }
             }
         }
         Ok(())

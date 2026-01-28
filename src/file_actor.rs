@@ -74,6 +74,7 @@ impl Actor for FileActor {
         myself: ActorRef<Self::Msg>,
         dependency: Dependency,
     ) -> Result<Self::State, ActorProcessingErr> {
+        // spawning file watcher actor, forwarding messages to our own actor
         let fw = FileWatcher;
         let config = FileWatcherConfig {
             directories: vec![dependency.main_dir.join("src")],

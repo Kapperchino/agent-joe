@@ -2,11 +2,15 @@ use crate::actor::{ActorToTui, Dependency, State, StreamAccu, StreamRes};
 use crate::claude::{ClaudeClient, ContentBlock, ContentBlockInfo, Delta, Role, StreamEvent};
 use crate::cur_context::CurContext;
 use crate::tool_defs::{ReadFileInput, Tool, ToolResult, ToolResultTrait, ToolTrait};
+use crate::utils::Utils;
 use crate::{claude, file_actor, tool_impls};
-use futures::future;
+use futures::{StreamExt, future};
+use ra_ap_vfs::AbsPathBuf;
 use ractor::{ActorCell, ActorRef};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use tokio::sync::mpsc;
+use uuid::Variant::Future;
 
 pub struct ActorState {
     pub cur_context: CurContext,

@@ -51,32 +51,12 @@ impl RustProject {
         AnalysisSession::new(analysis, self).await
     }
 
-    pub async fn get_all_proj_symbols(
-        &self,
-        symbol_cache: &mut TypedCache<SymbolInfo, SymbolInfo>,
-    ) -> anyhow::Result<Vec<SymbolInfo>> {
+    pub async fn get_all_proj_symbols(&self) -> anyhow::Result<Vec<SymbolInfo>> {
         let session = self.new_analysis().await;
-        symbol_cache.transaction(|db: &mut TypedCacheDb<_, _>| {
-            if db.is_empty()? {
-                let symboles = session.get_symboles()?;
-                let impls = Self::get_all_trait_impls(self.vfs.clone(), &symboles, &session);
-                let combined = vec![symboles, impls].concat();
-                let (_, errs): (Vec<_>, Vec<_>) = combined
-                    .iter()
-                    .map(|i| db.put(i, i))
-                    .partition(|r| r.is_ok());
-                // report on this
-                let errs: Vec<_> = errs.into_iter().flat_map(|x1| x1.err()).collect();
-                println!("{:?}", errs);
-                if !errs.is_empty() {
-                    return Err(anyhow!("Error while wrriting to DB! {:?}", errs));
-                }
-                Ok(combined)
-            } else {
-                let res: Vec<_> = db.iter()?.collect();
-                Ok(res)
-            }
-        })
+        let symboles = session.get_symboles()?;
+        let impls = Self::get_all_trait_impls(self.vfs.clone(), &symboles, &session);
+        let combined = vec![symboles, impls].concat();
+        Ok(combined)
     }
 
     fn get_all_trait_impls(

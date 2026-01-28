@@ -3,12 +3,14 @@ use crate::cache::{TypedCache, TypedCacheDb};
 use crate::rust_proj::RustProject;
 use crate::utils::Utils;
 use anyhow::anyhow;
+use futures::{StreamExt, future};
 use itertools::Itertools;
 use ra_ap_ide::{AnalysisHost, LineIndex, TextSize};
 use ra_ap_ide_db::SymbolKind;
 use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
 use ra_ap_project_model::CargoConfig;
 use ra_ap_vfs::{FileId, Vfs, VfsPath};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
 use std::fmt::{self, Display, Formatter};
@@ -20,48 +22,58 @@ pub struct CurContext {
     pub cur_dir: PathBuf,
     cur_files: Vec<DirEntry>,
     pub rust_proj: RustProject,
-    pub symbol_cache: TypedCache<SymbolInfo, SymbolInfo>,
+    pub file_cache: TypedCache<FileMetaData, FileMetaData>,
     pub file_metas: HashMap<String, FileMeta>,
 }
 
 pub struct FileMeta {
+    pub line_index: triomphe::Arc<LineIndex>,
+    pub data: FileMetaData,
+}
+#[derive(Serialize, Deserialize, Clone)]
+pub struct FileMetaData {
     pub rpath: String,
-    pub file_id: FileId,
+    pub file_id: u32,
     pub enums: Vec<EnumMeta>,
     pub structs: Vec<StructMeta>,
     pub functions: Vec<FunctionMeta>,
     pub type_alias: Vec<TypeAliasMeta>,
     pub traits: Vec<TraitMeta>,
-    pub line_index: triomphe::Arc<LineIndex>,
+    pub hash: Vec<u8>,
 }
-
+#[derive(Serialize, Deserialize, Clone)]
 pub struct EnumMeta {
     pub rpath: String,
     pub full_range: Range,
     pub name: String,
     pub variants: Vec<EVariantMeta>,
 }
+#[derive(Serialize, Deserialize, Clone)]
 pub struct EVariantMeta {
     pub rpath: String,
     pub full_range: Range,
     pub name: String,
 }
+#[derive(Serialize, Deserialize, Clone)]
 pub struct StructMeta {
     pub rpath: String,
     pub full_range: Range,
     pub name: String,
     pub functions: Vec<FunctionMeta>,
 }
+#[derive(Serialize, Deserialize, Clone)]
 pub struct FunctionMeta {
     pub rpath: String,
     pub full_range: Range,
     pub name: String,
 }
+#[derive(Serialize, Deserialize, Clone)]
 pub struct TypeAliasMeta {
     pub rpath: String,
     pub full_range: Range,
     pub name: String,
 }
+#[derive(Serialize, Deserialize, Clone)]
 pub struct TraitMeta {
     pub rpath: String,
     pub full_range: Range,
@@ -200,39 +212,39 @@ impl Display for TraitMeta {
 
 impl Display for FileMeta {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        writeln!(f, "## {}", self.rpath)?;
+        writeln!(f, "## {}", self.data.rpath)?;
 
-        if !self.structs.is_empty() {
+        if !self.data.structs.is_empty() {
             writeln!(f, "### Structs")?;
-            for s in &self.structs {
+            for s in &self.data.structs {
                 writeln!(f, "  {}", s)?;
             }
         }
 
-        if !self.enums.is_empty() {
+        if !self.data.enums.is_empty() {
             writeln!(f, "### Enums")?;
-            for e in &self.enums {
+            for e in &self.data.enums {
                 writeln!(f, "  {}", e)?;
             }
         }
 
-        if !self.traits.is_empty() {
+        if !self.data.traits.is_empty() {
             writeln!(f, "### Traits")?;
-            for t in &self.traits {
+            for t in &self.data.traits {
                 writeln!(f, "  {}", t)?;
             }
         }
 
-        if !self.functions.is_empty() {
+        if !self.data.functions.is_empty() {
             writeln!(f, "### Functions")?;
-            for func in &self.functions {
+            for func in &self.data.functions {
                 writeln!(f, "  {}", func)?;
             }
         }
 
-        if !self.type_alias.is_empty() {
+        if !self.data.type_alias.is_empty() {
             writeln!(f, "### Type Aliases")?;
-            for ta in &self.type_alias {
+            for ta in &self.data.type_alias {
                 writeln!(f, "  {}", ta)?;
             }
         }
@@ -246,13 +258,15 @@ impl CurContext {
         let current_dir = env::current_dir()?;
         let files = Utils::get_dir_files(&current_dir).await?;
         let proj = RustProject::new(&current_dir)?;
-        let mut symbol_cache = TypedCache::new(None).await;
-        let file_metas = Self::get_file_metas(&mut symbol_cache, proj.clone()).await?;
+        let mut file_cache = TypedCache::new(None).await;
+        let hashes = Self::get_file_hashes(&proj).await?.into_iter().collect();
+        let file_metas = Self::get_file_metas(&mut file_cache, &proj, hashes).await?;
+        // get files that doesn't have the same file hashes, then evict and recompute the file metas for them
         Ok(CurContext {
             cur_dir: current_dir,
             cur_files: files,
             rust_proj: proj,
-            symbol_cache,
+            file_cache,
             file_metas,
         })
     }
@@ -269,11 +283,41 @@ impl CurContext {
         Ok(Self::format_file_metas(&self.file_metas))
     }
 
-    pub async fn get_file_metas_from_symbols(
+    pub async fn get_file_meta_datas(
         vec: Vec<SymbolInfo>,
-        rust_proj: RustProject,
-    ) -> anyhow::Result<HashMap<String, FileMeta>> {
-        let session = rust_proj.new_analysis().await;
+        rust_proj: &RustProject,
+        hashes: HashMap<PathBuf, Vec<u8>>,
+        cache: &mut TypedCache<FileMetaData, FileMetaData>,
+    ) -> anyhow::Result<HashMap<String, FileMetaData>> {
+        cache.transaction(|db: &mut TypedCacheDb<_, _>| {
+            if db.is_empty()? {
+                let metas = Self::get_file_meta_datas_cache_miss(vec, rust_proj, hashes)?;
+                let (_, errs): (Vec<_>, Vec<_>) = metas
+                    .iter()
+                    .map(|(_, v)| db.put(v, v))
+                    .partition(|r| r.is_ok());
+                // report on this
+                let errs: Vec<_> = errs.into_iter().flat_map(|x1| x1.err()).collect();
+                println!("{:?}", errs);
+                if !errs.is_empty() {
+                    return Err(anyhow!("Error while wrriting to DB! {:?}", errs));
+                }
+                Ok(metas)
+            } else {
+                let res: Vec<_> = db.iter()?.collect();
+                Ok(res
+                    .into_iter()
+                    .map(|data| (data.rpath.clone(), data))
+                    .collect())
+            }
+        })
+    }
+
+    pub fn get_file_meta_datas_cache_miss(
+        vec: Vec<SymbolInfo>,
+        rust_proj: &RustProject,
+        mut hashes: HashMap<PathBuf, Vec<u8>>,
+    ) -> anyhow::Result<HashMap<String, FileMetaData>> {
         let grouped = vec.into_iter().into_group_map_by(|x| x.rpath.clone());
         grouped
             .into_iter()
@@ -333,31 +377,60 @@ impl CurContext {
                     .unwrap()
                     .0;
 
-                let line_index = session.get_line_indecies(file_id)?;
+                let hash = hashes
+                    .remove(&PathBuf::from(k.clone()))
+                    .unwrap_or(Vec::new());
 
                 Ok((
                     k.clone(),
-                    FileMeta {
+                    FileMetaData {
                         rpath: k.clone(),
                         enums: enum_metas.into_values().collect(),
                         structs: struct_metas.into_values().collect(),
                         functions: stand_alone_func,
                         type_alias: type_alias_metas.into_values().collect(),
                         traits: traits_metas.into_values().collect(),
-                        line_index,
-                        file_id,
+                        file_id: file_id.index(),
+                        hash: hash,
                     },
                 ))
             })
             .collect()
     }
 
-    async fn get_file_metas(
-        cache: &mut TypedCache<SymbolInfo, SymbolInfo>,
-        rust_proj: RustProject,
+    pub async fn get_file_metas_inner(
+        vec: Vec<SymbolInfo>,
+        rust_proj: &RustProject,
+        hashes: HashMap<PathBuf, Vec<u8>>,
+        cache: &mut TypedCache<FileMetaData, FileMetaData>,
     ) -> anyhow::Result<HashMap<String, FileMeta>> {
-        let symbols = rust_proj.get_all_proj_symbols(cache).await?;
-        Self::get_file_metas_from_symbols(symbols, rust_proj).await
+        let session = rust_proj.new_analysis().await;
+        let datas = Self::get_file_meta_datas(vec, rust_proj, hashes, cache).await?;
+        let res: Result<HashMap<_, _>, _> = datas
+            .into_iter()
+            .map(|(k, v)| {
+                session
+                    .get_line_indecies(FileId::from_raw(v.file_id))
+                    .map(|line_index| {
+                        let meta = FileMeta {
+                            line_index,
+                            data: v,
+                        };
+                        (k, meta)
+                    })
+            })
+            .collect();
+        let res = res?;
+        Ok(res)
+    }
+
+    async fn get_file_metas(
+        cache: &mut TypedCache<FileMetaData, FileMetaData>,
+        rust_proj: &RustProject,
+        hashes: HashMap<PathBuf, Vec<u8>>,
+    ) -> anyhow::Result<HashMap<String, FileMeta>> {
+        let symbols = rust_proj.get_all_proj_symbols().await?;
+        Self::get_file_metas_inner(symbols, rust_proj, hashes, cache).await
     }
 
     fn get_symbol_map(
@@ -394,6 +467,65 @@ impl CurContext {
             .map(|m| m.to_string())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    pub async fn get_file_hashes(proj: &RustProject) -> anyhow::Result<Vec<(PathBuf, Vec<u8>)>> {
+        let contents = Self::get_files(proj).await?;
+        let results: Vec<_> = futures::stream::iter(contents)
+            .map(|(path, content)| {
+                tokio::spawn(
+                    async move { (path, blake3::hash(content.as_bytes()).as_bytes().to_vec()) },
+                )
+            })
+            .buffer_unordered(100)
+            .collect::<Vec<_>>()
+            .await;
+
+        let res = results.into_iter().collect::<Result<Vec<_>, _>>()?;
+        Ok(res)
+    }
+
+    pub async fn get_file_hashes_for_paths(
+        paths: Vec<PathBuf>,
+    ) -> anyhow::Result<Vec<(PathBuf, Vec<u8>)>> {
+        let contents = Self::get_files_for_paths(paths).await?;
+        let results: Vec<_> = futures::stream::iter(contents)
+            .map(|(path, content)| {
+                tokio::spawn(
+                    async move { (path, blake3::hash(content.as_bytes()).as_bytes().to_vec()) },
+                )
+            })
+            .buffer_unordered(100)
+            .collect::<Vec<_>>()
+            .await;
+
+        let res = results.into_iter().collect::<Result<Vec<_>, _>>()?;
+        Ok(res)
+    }
+
+    async fn get_files(proj: &RustProject) -> anyhow::Result<Vec<(PathBuf, String)>> {
+        let anal = proj.new_analysis().await;
+        future::join_all(anal.get_work_files().into_iter().flat_map(|file| {
+            file.path.into_abs_path().map(async |path| {
+                Utils::get_file_content(&path.clone().into())
+                    .await
+                    .map(|content| (path.into(), content))
+            })
+        }))
+        .await
+        .into_iter()
+        .collect()
+    }
+
+    async fn get_files_for_paths(paths: Vec<PathBuf>) -> anyhow::Result<Vec<(PathBuf, String)>> {
+        future::join_all(paths.into_iter().map(async |file| {
+            Utils::get_file_content(&file)
+                .await
+                .map(|content| (file, content))
+        }))
+        .await
+        .into_iter()
+        .collect()
     }
 }
 

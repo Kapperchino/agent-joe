@@ -4,8 +4,8 @@ use reqwest::{header, Client};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
+use futures::{Stream, StreamExt};
 use thiserror::Error;
-use tokio_stream::{Stream, StreamExt};
 
 #[derive(Error, Debug)]
 pub enum ClaudeError {

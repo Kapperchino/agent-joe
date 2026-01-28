@@ -16,7 +16,6 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use thiserror::Error;
 use tokio::sync::mpsc;
-use tokio_stream::{Stream, StreamExt};
 
 #[derive(Debug, Clone)]
 pub enum ActorToTui {
@@ -117,7 +116,7 @@ impl Actor for Worker {
             None,
             CacheActor {},
             cache_actor::Dependency {
-                symbol_cache: cur_context.symbol_cache.clone(),
+                file_cache: cur_context.file_cache.clone(),
                 proj: cur_context.rust_proj.clone(),
             },
             myself.get_cell(),

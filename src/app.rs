@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use color_eyre::Result;
 use crossterm::event::{EventStream, KeyEvent};
+use futures::StreamExt;
 use ractor::ActorRef;
 use ratatui::layout::Position;
 use ratatui::text::Span;
@@ -17,7 +18,6 @@ use ratatui::{
     Frame,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
-use tokio_stream::StreamExt;
 
 use crate::actor::{ActorToTui, Message, State};
 

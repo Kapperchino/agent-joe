@@ -24,4 +24,9 @@ impl Utils {
             .await;
         Ok(res)
     }
+
+    pub async fn get_file_content(dir: &PathBuf) -> anyhow::Result<String> {
+        let str = fs::read_to_string(dir).await?;
+        Ok(str)
+    }
 }
