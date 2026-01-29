@@ -1,11 +1,12 @@
 use crate::actor_state::ActorState;
+use crate::app::Command;
 use crate::cache_actor::CacheActor;
 use crate::claude::{ClaudeClient, ClaudeError, ClientRequest, ContentBlock, StreamEvent};
 use crate::cur_context::CurContext;
 use crate::file_actor::FileActor;
 use crate::tool_defs::ReadFile;
 use crate::worker::Worker;
-use crate::{cache_actor, claude, file_actor, tool_impls};
+use crate::{app, cache_actor, claude, file_actor, tool_impls};
 use ractor::Actor;
 use ractor::ActorProcessingErr;
 use ractor::ActorRef;
@@ -21,6 +22,7 @@ use tokio::sync::mpsc;
 pub enum ActorToTui {
     StateChanged(State),
     Data(String),
+    CommandResult(Command, String),
 }
 #[derive(Error, Debug)]
 pub enum WorkerError {
@@ -58,6 +60,7 @@ pub enum StreamItem {
 #[derive(Debug)]
 pub enum Message {
     StartWork(Option<String>),
+    Command(app::Command),
     UseTool(Vec<(usize, Vec<StreamAccu>)>),
     ProcessStreamItem(StreamItem),
     KYS,
@@ -213,6 +216,12 @@ impl Actor for Worker {
                 }
             },
             Message::KYS => myself.kill(),
+            Message::Command(command) => match command {
+                Command::PrintContext => {
+                    let ctx = state.cur_context.get_ctx().await;
+                    let _ = state.tui_tx.send(ActorToTui::CommandResult(command, ctx));
+                }
+            },
         }
         Ok(())
     }

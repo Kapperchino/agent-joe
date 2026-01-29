@@ -29,6 +29,7 @@ pub(crate) struct App {
     pub list_state: ListState,
     character_index: usize,
     input: String,
+    command: String,
     messages: Vec<String>,
     input_mode: InputMode,
     do_quit: bool,
@@ -42,7 +43,22 @@ pub(crate) struct App {
 enum InputMode {
     #[default]
     Normal,
+    InputCommand,
     Editing,
+}
+
+#[derive(Debug, Clone)]
+pub enum Command {
+    PrintContext,
+}
+
+impl Command {
+    pub fn parse(string: &str) -> anyhow::Result<Command> {
+        match string {
+            "context" => Ok(Command::PrintContext),
+            _ => Err(anyhow::anyhow!("Invalid command")),
+        }
+    }
 }
 
 impl App {
@@ -55,6 +71,7 @@ impl App {
             list_state: Default::default(),
             character_index: 0,
             input: String::new(),
+            command: String::new(),
             messages: vec![],
             input_mode: Default::default(),
             do_quit: false,
@@ -90,6 +107,12 @@ impl App {
     fn enter_char(&mut self, new_char: char) {
         let index = self.byte_index();
         self.input.insert(index, new_char);
+        self.move_cursor_right();
+    }
+
+    fn enter_char_command(&mut self, new_char: char) {
+        let index = self.byte_index();
+        self.command.insert(index, new_char);
         self.move_cursor_right();
     }
 
@@ -129,6 +152,28 @@ impl App {
         }
     }
 
+    fn delete_char_command(&mut self) {
+        let is_not_cursor_leftmost = self.character_index != 0;
+        if is_not_cursor_leftmost {
+            // Method "remove" is not used on the saved text for deleting the selected char.
+            // Reason: Using remove on String works on bytes instead of the chars.
+            // Using remove would require special care because of char boundaries.
+
+            let current_index = self.character_index;
+            let from_left_to_current_index = current_index - 1;
+
+            // Getting all characters before the selected character.
+            let before_char_to_delete = self.command.chars().take(from_left_to_current_index);
+            // Getting all characters after selected character.
+            let after_char_to_delete = self.command.chars().skip(current_index);
+
+            // Put all characters together except the selected one.
+            // By leaving the selected one out, it is forgotten and therefore deleted.
+            self.input = before_char_to_delete.chain(after_char_to_delete).collect();
+            self.move_cursor_left();
+        }
+    }
+
     fn clamp_cursor(&self, new_cursor_pos: usize) -> usize {
         new_cursor_pos.clamp(0, self.input.chars().count())
     }
@@ -154,6 +199,32 @@ impl App {
             self.reset_cursor();
             if self.auto_scroll {
                 self.scroll_to_bottom();
+            }
+        }
+    }
+
+    fn submit_command(&mut self) {
+        if !self.command.is_empty() {
+            let command = Command::parse(self.command.as_str());
+            match command {
+                Ok(command) => {
+                    match self.actor_ref.send_message(Message::Command(command)) {
+                        Ok(_) => {}
+                        Err(_) => {
+                            eprintln!("it's joever")
+                        }
+                    };
+
+                    self.messages.append(&mut self.wrap_str(&self.input));
+                    self.command.clear();
+                    self.reset_cursor();
+                    if self.auto_scroll {
+                        self.scroll_to_bottom();
+                    }
+                }
+                Err(err) => {
+                    self.messages.append(&mut self.wrap_str(&err.to_string()));
+                }
             }
         }
     }
@@ -269,6 +340,9 @@ impl App {
                 State::ToolStop => {}
                 State::Stopped => {}
             },
+            ActorToTui::CommandResult(_, command_res) => {
+                self.messages.push(command_res);
+            }
         }
     }
 
@@ -293,6 +367,7 @@ impl App {
                 KeyCode::Char('i') => {
                     self.input_mode = InputMode::Editing;
                 }
+                KeyCode::Char('/') => self.input_mode = InputMode::InputCommand,
                 KeyCode::Char('q') => {
                     self.do_quit = true;
                     match self.actor_ref.send_message(Message::KYS) {
@@ -322,6 +397,18 @@ impl App {
                 KeyCode::Esc => self.input_mode = InputMode::Normal,
                 _ => {}
             },
+            InputMode::InputCommand => match key.code {
+                KeyCode::Enter => {
+                    self.submit_command();
+                    self.input_mode = InputMode::Normal;
+                }
+                KeyCode::Char(to_insert) => self.enter_char_command(to_insert),
+                KeyCode::Backspace => self.delete_char_command(),
+                KeyCode::Left => self.move_cursor_left(),
+                KeyCode::Right => self.move_cursor_right(),
+                KeyCode::Esc => self.input_mode = InputMode::Normal,
+                _ => {}
+            },
         }
     }
 
@@ -346,16 +433,33 @@ impl App {
             self.scroll_to_bottom();
         }
 
-        let input = Paragraph::new(self.input.as_str())
+        let text = match self.input_mode {
+            InputMode::Normal => Paragraph::new(self.input.as_str()),
+            InputMode::InputCommand => Paragraph::new(self.command.as_str()),
+            InputMode::Editing => Paragraph::new(self.input.as_str()),
+        };
+
+        let input = text
             .style(match self.input_mode {
                 InputMode::Normal => Style::default(),
                 InputMode::Editing => Style::default().fg(Color::Yellow),
+                InputMode::InputCommand => Style::default().fg(Color::Green),
             })
             .block(Block::bordered().title("Input"));
         frame.render_widget(input, input_area);
         match self.input_mode {
             // Hide the cursor. `Frame` does this by default, so we don't need to do anything here
             InputMode::Normal => {}
+
+            InputMode::InputCommand => {
+                frame.set_cursor_position(Position::new(
+                    // Draw the cursor at the current position in the input field.
+                    // This position is can be controlled via the left and right arrow key
+                    input_area.x + self.character_index as u16 + 1,
+                    // Move one line down, from the border to the input line
+                    input_area.y + 1,
+                ))
+            }
 
             // Make the cursor visible and ask ratatui to put it at the specified coordinates after
             // rendering
