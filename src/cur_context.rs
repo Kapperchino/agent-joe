@@ -3,7 +3,7 @@ use crate::cache::{TypedCache, TypedCacheDb};
 use crate::rust_proj::RustProject;
 use crate::utils::Utils;
 use anyhow::anyhow;
-use futures::{StreamExt, future};
+use futures::{future, StreamExt};
 use itertools::Itertools;
 use ra_ap_ide::LineIndex;
 use ra_ap_ide_db::SymbolKind;
@@ -255,7 +255,7 @@ impl CurContext {
         let current_dir = env::current_dir()?;
         let files = Utils::get_dir_files(&current_dir).await?;
         let proj = RustProject::new(&current_dir)?;
-        let mut file_cache = TypedCache::new(None).await;
+        let mut file_cache = TypedCache::new(None).await?;
         let hashes: HashMap<_, _> = Self::get_file_hashes(&proj).await?.into_iter().collect();
         let mut file_metas = Self::get_file_metas(&mut file_cache, &proj, &hashes).await?;
         let _ = Self::validate_and_update_cache(hashes, &mut file_metas, &mut file_cache, &proj)
@@ -351,14 +351,15 @@ impl CurContext {
     }
 
     pub async fn get_file_meta_datas(
-        vec: Vec<SymbolInfo>,
         rust_proj: &RustProject,
         hashes: &HashMap<PathBuf, Vec<u8>>,
         cache: &mut TypedCache<FileMetaData, FileMetaData>,
     ) -> anyhow::Result<HashMap<String, FileMetaData>> {
-        cache.transaction(|db: &mut TypedCacheDb<_, _>| {
-            if db.is_empty()? {
-                let metas = Self::get_file_meta_datas_cache_miss(vec, rust_proj, hashes)?;
+        let is_empty = cache.read_transaction(|db| db.is_empty())?;
+        if is_empty {
+            let symbols = rust_proj.get_all_proj_symbols().await?;
+            cache.transaction(|db: &mut TypedCacheDb<_, _>| {
+                let metas = Self::get_file_meta_datas_cache_miss(symbols, rust_proj, hashes)?;
                 let (_, errs): (Vec<_>, Vec<_>) = metas
                     .iter()
                     .map(|(_, v)| db.put(v, v))
@@ -370,14 +371,16 @@ impl CurContext {
                     return Err(anyhow!("Error while wrriting to DB! {:?}", errs));
                 }
                 Ok(metas)
-            } else {
+            })
+        } else {
+            cache.read_transaction(|db| {
                 let res: Vec<_> = db.iter()?.collect();
                 Ok(res
                     .into_iter()
                     .map(|data| (data.rpath.clone(), data))
                     .collect())
-            }
-        })
+            })
+        }
     }
 
     pub fn get_file_meta_datas_cache_miss(
@@ -494,8 +497,7 @@ impl CurContext {
         rust_proj: &RustProject,
         hashes: &HashMap<PathBuf, Vec<u8>>,
     ) -> anyhow::Result<HashMap<String, FileMeta>> {
-        let symbols = rust_proj.get_all_proj_symbols().await?;
-        let datas = Self::get_file_meta_datas(symbols, rust_proj, hashes, cache).await?;
+        let datas = Self::get_file_meta_datas(rust_proj, hashes, cache).await?;
         Self::get_file_metas_inner(rust_proj, datas).await
     }
 

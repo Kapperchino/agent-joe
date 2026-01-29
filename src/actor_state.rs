@@ -3,7 +3,7 @@ use crate::claude::{ClaudeClient, ContentBlock, ContentBlockInfo, Delta, Role, S
 use crate::cur_context::CurContext;
 use crate::tool_defs::{ReadFileInput, Tool, ToolResult, ToolResultTrait, ToolTrait};
 use crate::{claude, file_actor, tool_impls};
-use futures::{StreamExt, future};
+use futures::{future, StreamExt};
 use ractor::{ActorCell, ActorRef};
 use std::collections::HashMap;
 use tokio::sync::mpsc;

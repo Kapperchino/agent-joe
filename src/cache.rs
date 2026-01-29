@@ -1,7 +1,7 @@
 use crate::analysis::SymbolInfo;
 use crate::cur_context::FileMetaData;
 use heed::types::{SerdeJson, Str};
-use heed::{Database, Env, EnvOpenOptions, RwTxn};
+use heed::{Database, Env, EnvOpenOptions, RoTxn, RwTxn};
 use std::io::ErrorKind;
 use std::path::PathBuf;
 use tokio::fs;
@@ -34,8 +34,8 @@ pub struct TypedCache<K: CacheKey, V: CacheVal> {
     _p_val: std::marker::PhantomData<V>,
 }
 
-impl<K: CacheKey, V: CacheVal + 'static> TypedCache<K, V> {
-    pub async fn new(path: Option<PathBuf>) -> Self {
+impl<K: CacheKey + 'static, V: CacheVal + 'static> TypedCache<K, V> {
+    pub async fn new(path: Option<PathBuf>) -> anyhow::Result<Self> {
         let path = path.unwrap_or("/Users/kamranorhun/.turbo-code/".into());
         match fs::create_dir(path.clone()).await {
             Ok(_) => Ok(()),
@@ -48,12 +48,16 @@ impl<K: CacheKey, V: CacheVal + 'static> TypedCache<K, V> {
             }
         }
         .unwrap();
-        let env = unsafe { EnvOpenOptions::new().open(&path) }.unwrap();
-        Self {
+        let env = unsafe { EnvOpenOptions::new().open(&path) }?;
+        let db_env = env.clone();
+        let mut wtxn = db_env.write_txn()?;
+        db_env.create_database::<Str, SerdeJson<V>>(&mut wtxn, None)?;
+
+        Ok(Self {
             env,
             _p_key: std::marker::PhantomData,
             _p_val: std::marker::PhantomData,
-        }
+        })
     }
 
     pub fn transaction<F, R>(&mut self, f: F) -> anyhow::Result<R>
@@ -73,11 +77,34 @@ impl<K: CacheKey, V: CacheVal + 'static> TypedCache<K, V> {
         wtxn.commit()?;
         Ok(res)
     }
+
+    pub fn read_transaction<F, R>(&self, f: F) -> anyhow::Result<R>
+    where
+        F: for<'txn, 'env> FnOnce(&TypedCacheDbRo<'txn, 'env, K, V>) -> anyhow::Result<R>,
+    {
+        let rtxn = self.env.read_txn()?;
+        let db: Database<Str, SerdeJson<V>> = self
+            .env
+            .open_database(&rtxn, None)?
+            .ok_or_else(|| anyhow::anyhow!("Database not found"))?;
+        let cache_db = TypedCacheDbRo {
+            db,
+            txn: &rtxn,
+            _marker: std::marker::PhantomData,
+        };
+        f(&cache_db)
+    }
 }
 
 pub struct TypedCacheDb<'txn, 'env, K: CacheKey, V: CacheVal> {
     db: Database<Str, SerdeJson<V>>,
     txn: &'txn mut RwTxn<'env>,
+    _marker: std::marker::PhantomData<K>,
+}
+
+pub struct TypedCacheDbRo<'txn, 'env, K: CacheKey, V: CacheVal> {
+    db: Database<Str, SerdeJson<V>>,
+    txn: &'txn RoTxn<'env>,
     _marker: std::marker::PhantomData<K>,
 }
 
@@ -92,6 +119,30 @@ impl<K: CacheKey, V: CacheVal> TypedCacheDb<'_, '_, K, V> {
         Ok(())
     }
 
+    pub fn is_empty(&self) -> anyhow::Result<bool> {
+        Ok(self.db.is_empty(self.txn)?)
+    }
+
+    pub fn iter(&self) -> anyhow::Result<impl Iterator<Item = V>> {
+        Ok(self
+            .db
+            .iter(self.txn)?
+            .filter_map(|r| r.ok().map(|(_, v)| v)))
+    }
+
+    pub fn prefix_iter(&self, key: String) -> anyhow::Result<impl Iterator<Item = (String, V)>> {
+        Ok(self
+            .db
+            .prefix_iter(self.txn, &key)?
+            .filter_map(|r| r.ok().map(|(k, v)| (k.to_string(), v))))
+    }
+
+    pub fn get(&self, key: &str) -> anyhow::Result<Option<V>> {
+        Ok(self.db.get(self.txn, key)?)
+    }
+}
+
+impl<K: CacheKey, V: CacheVal> TypedCacheDbRo<'_, '_, K, V> {
     pub fn is_empty(&self) -> anyhow::Result<bool> {
         Ok(self.db.is_empty(self.txn)?)
     }
