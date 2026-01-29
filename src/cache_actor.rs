@@ -4,6 +4,7 @@ use crate::cur_context::{CurContext, FileMetaData};
 use crate::file_actor::ValidPath;
 use crate::rust_proj::RustProject;
 use ractor::{Actor, ActorProcessingErr, ActorRef};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 pub struct CacheActor {}
@@ -76,12 +77,13 @@ impl Actor for CacheActor {
                         Vec::new()
                     };
 
-                    let hashes = CurContext::get_file_hashes_for_paths(deleted_paths)
-                        .await?
-                        .into_iter()
-                        .collect();
+                    let hashes: HashMap<_, _> =
+                        CurContext::get_file_hashes_for_paths(deleted_paths)
+                            .await?
+                            .into_iter()
+                            .collect();
                     let meta_data =
-                        CurContext::get_file_meta_datas_cache_miss(nodes, &state.proj, hashes)?;
+                        CurContext::get_file_meta_datas_cache_miss(nodes, &state.proj, &hashes)?;
 
                     state.file_cache.transaction(|db| {
                         meta_data.iter().try_for_each(|(_, s)| db.put(s, s))?;

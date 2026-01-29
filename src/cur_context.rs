@@ -9,7 +9,7 @@ use ra_ap_ide::LineIndex;
 use ra_ap_ide_db::SymbolKind;
 use ra_ap_vfs::{FileId, VfsPath};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fmt::{self, Display, Formatter};
 use std::path::PathBuf;
@@ -256,9 +256,11 @@ impl CurContext {
         let files = Utils::get_dir_files(&current_dir).await?;
         let proj = RustProject::new(&current_dir)?;
         let mut file_cache = TypedCache::new(None).await;
-        let hashes = Self::get_file_hashes(&proj).await?.into_iter().collect();
-        let file_metas = Self::get_file_metas(&mut file_cache, &proj, hashes).await?;
-        // get files that doesn't have the same file hashes, then evict and recompute the file metas for them
+        let hashes: HashMap<_, _> = Self::get_file_hashes(&proj).await?.into_iter().collect();
+        let mut file_metas = Self::get_file_metas(&mut file_cache, &proj, &hashes).await?;
+        let _ = Self::validate_and_update_cache(hashes, &mut file_metas, &mut file_cache, &proj)
+            .await?;
+
         Ok(CurContext {
             cur_dir: current_dir,
             cur_files: files,
@@ -280,10 +282,78 @@ impl CurContext {
         Ok(Self::format_file_metas(&self.file_metas))
     }
 
+    pub async fn validate_and_update_cache(
+        hashes: HashMap<PathBuf, Vec<u8>>,
+        file_metas: &mut HashMap<String, FileMeta>,
+        cache: &mut TypedCache<FileMetaData, FileMetaData>,
+        proj: &RustProject,
+    ) -> anyhow::Result<()> {
+        let files_to_redo: HashSet<_> = hashes
+            .iter()
+            .flat_map(|(k, v)| {
+                let p = k.to_string_lossy();
+                match file_metas.get(&p.to_string()) {
+                    Some(file) => {
+                        if &file.data.hash != v {
+                            Some(k.clone())
+                        } else {
+                            None
+                        }
+                    }
+                    None => Some(k.clone()),
+                }
+            })
+            .collect();
+
+        let hashes: HashMap<_, _> = hashes
+            .into_iter()
+            .filter(|(k, _)| files_to_redo.contains(k))
+            .collect();
+
+        let file_meta_datas = Self::invalidate_and_redo_cache(
+            files_to_redo.into_iter().collect_vec(),
+            &proj,
+            hashes,
+            cache,
+        )
+        .await?;
+
+        file_metas.extend(Self::get_file_metas_inner(&proj, file_meta_datas).await?);
+        Ok(())
+    }
+
+    pub async fn invalidate_and_redo_cache(
+        paths: Vec<PathBuf>,
+        proj: &RustProject,
+        hashes: HashMap<PathBuf, Vec<u8>>,
+        cache: &mut TypedCache<FileMetaData, FileMetaData>,
+    ) -> anyhow::Result<HashMap<String, FileMetaData>> {
+        let session = proj.new_analysis().await;
+
+        let meta = paths.into_iter().try_fold(HashMap::new(), |mut acc, p| {
+            let nodes = if let Some(f_id) = proj.get_file_id(p.clone()) {
+                let file_structs = session.get_file_structure(f_id);
+                SymbolInfo::from_file_structs(f_id, file_structs, p.clone())
+            } else {
+                Vec::new()
+            };
+            let meta_data = CurContext::get_file_meta_datas_cache_miss(nodes, proj, &hashes)?;
+            acc.extend(meta_data);
+            Ok::<HashMap<String, FileMetaData>, anyhow::Error>(acc)
+        })?;
+
+        cache.transaction(|db| {
+            meta.iter().try_for_each(|(_, s)| db.put(s, s))?;
+            Ok(())
+        })?;
+
+        Ok(meta)
+    }
+
     pub async fn get_file_meta_datas(
         vec: Vec<SymbolInfo>,
         rust_proj: &RustProject,
-        hashes: HashMap<PathBuf, Vec<u8>>,
+        hashes: &HashMap<PathBuf, Vec<u8>>,
         cache: &mut TypedCache<FileMetaData, FileMetaData>,
     ) -> anyhow::Result<HashMap<String, FileMetaData>> {
         cache.transaction(|db: &mut TypedCacheDb<_, _>| {
@@ -313,7 +383,7 @@ impl CurContext {
     pub fn get_file_meta_datas_cache_miss(
         vec: Vec<SymbolInfo>,
         rust_proj: &RustProject,
-        mut hashes: HashMap<PathBuf, Vec<u8>>,
+        hashes: &HashMap<PathBuf, Vec<u8>>,
     ) -> anyhow::Result<HashMap<String, FileMetaData>> {
         let grouped = vec.into_iter().into_group_map_by(|x| x.rpath.clone());
         grouped
@@ -375,7 +445,8 @@ impl CurContext {
                     .0;
 
                 let hash = hashes
-                    .remove(&PathBuf::from(k.clone()))
+                    .get(&PathBuf::from(k.clone()))
+                    .cloned()
                     .unwrap_or(Vec::new());
 
                 Ok((
@@ -396,14 +467,11 @@ impl CurContext {
     }
 
     pub async fn get_file_metas_inner(
-        vec: Vec<SymbolInfo>,
         rust_proj: &RustProject,
-        hashes: HashMap<PathBuf, Vec<u8>>,
-        cache: &mut TypedCache<FileMetaData, FileMetaData>,
+        file_meta_datas: HashMap<String, FileMetaData>,
     ) -> anyhow::Result<HashMap<String, FileMeta>> {
         let session = rust_proj.new_analysis().await;
-        let datas = Self::get_file_meta_datas(vec, rust_proj, hashes, cache).await?;
-        let res: Result<HashMap<_, _>, _> = datas
+        let res: Result<HashMap<_, _>, _> = file_meta_datas
             .into_iter()
             .map(|(k, v)| {
                 session
@@ -424,10 +492,11 @@ impl CurContext {
     async fn get_file_metas(
         cache: &mut TypedCache<FileMetaData, FileMetaData>,
         rust_proj: &RustProject,
-        hashes: HashMap<PathBuf, Vec<u8>>,
+        hashes: &HashMap<PathBuf, Vec<u8>>,
     ) -> anyhow::Result<HashMap<String, FileMeta>> {
         let symbols = rust_proj.get_all_proj_symbols().await?;
-        Self::get_file_metas_inner(symbols, rust_proj, hashes, cache).await
+        let datas = Self::get_file_meta_datas(symbols, rust_proj, hashes, cache).await?;
+        Self::get_file_metas_inner(rust_proj, datas).await
     }
 
     fn get_symbol_map(
