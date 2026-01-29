@@ -1,8 +1,9 @@
-use crate::analysis::SymbolInfo;
 use crate::cache::TypedCache;
-use crate::cur_context::{CurContext, FileMetaData};
+use crate::cur_context::CurContext;
 use crate::file_actor::ValidPath;
+use crate::file_meta::FileMetaData;
 use crate::rust_proj::RustProject;
+use crate::symbol_info::SymbolInfo;
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -83,7 +84,7 @@ impl Actor for CacheActor {
                             .into_iter()
                             .collect();
                     let meta_data =
-                        CurContext::get_file_meta_datas_cache_miss(nodes, &state.proj, &hashes)?;
+                        FileMetaData::get_file_meta_datas_cache_miss(nodes, &state.proj, &hashes)?;
 
                     state.file_cache.transaction(|db| {
                         meta_data.iter().try_for_each(|(_, s)| db.put(s, s))?;

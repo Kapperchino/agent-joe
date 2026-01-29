@@ -1,13 +1,12 @@
 use crate::rust_proj::RustProject;
+use crate::symbol_info::SymbolInfo;
 use ra_ap_ide::{
-    Analysis, FilePosition, FileStructureConfig, GotoImplementationConfig, LineIndex,
-    NavigationTarget, StructureNode, StructureNodeKind, TextSize,
+    Analysis, FilePosition, FileStructureConfig, GotoImplementationConfig, LineIndex
+    , StructureNode, TextSize,
 };
 use ra_ap_ide_db::symbol_index::Query;
-use ra_ap_ide_db::SymbolKind;
-use ra_ap_vfs::{FileId, Vfs, VfsPath};
+use ra_ap_vfs::{FileId, VfsPath};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 
 pub struct FileInfo {
     pub id: FileId,
@@ -30,106 +29,6 @@ pub struct AnalysisSession<'a> {
 pub struct Range {
     pub(crate) start: u32,
     pub(crate) end: u32,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(remote = "SymbolKind")]
-enum SymbolKindDef {
-    Attribute,
-    BuiltinAttr,
-    Const,
-    ConstParam,
-    Derive,
-    DeriveHelper,
-    Enum,
-    Field,
-    Function,
-    Method,
-    Impl,
-    InlineAsmRegOrRegClass,
-    Label,
-    LifetimeParam,
-    Local,
-    Macro,
-    ProcMacro,
-    Module,
-    SelfParam,
-    SelfType,
-    Static,
-    Struct,
-    ToolModule,
-    Trait,
-    TypeAlias,
-    TypeParam,
-    Union,
-    ValueParam,
-    Variant,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq, Hash)]
-pub struct SymbolInfo {
-    pub rpath: String,
-    pub full_range: Range,
-    pub focus_range: Option<Range>,
-    pub name: String,
-    #[serde(with = "SymbolKindDef")]
-    pub kind: SymbolKind,
-    pub container_name: Option<String>,
-    pub docs: Option<String>,
-}
-
-impl SymbolInfo {
-    fn from_nav(n: NavigationTarget, vfs: &Vfs) -> Self {
-        SymbolInfo {
-            rpath: vfs.file_path(n.file_id).to_string(),
-            full_range: Range {
-                start: n.full_range.start().into(),
-                end: n.full_range.end().into(),
-            },
-            focus_range: n.focus_range.map(|t| Range {
-                start: t.start().into(),
-                end: t.end().into(),
-            }),
-            name: n.name.to_string(),
-            kind: n.kind.unwrap(),
-            container_name: n.container_name.map(|s| s.to_string()),
-            docs: n.docs.map(|d| d.as_str().to_string()),
-        }
-    }
-
-    pub fn from_file_structs(
-        file_id: FileId,
-        file_structs: Vec<StructureNode>,
-        path_buf: PathBuf,
-    ) -> Vec<Self> {
-        file_structs
-            .iter()
-            .filter(|fs| match fs.kind {
-                StructureNodeKind::SymbolKind(_) => true,
-                _ => false,
-            })
-            .map(|fs| SymbolInfo {
-                rpath: path_buf.to_string_lossy().to_string(),
-                full_range: Range {
-                    start: fs.node_range.start().into(),
-                    end: fs.node_range.end().into(),
-                },
-                focus_range: Some(Range {
-                    start: fs.navigation_range.start().into(),
-                    end: fs.navigation_range.end().into(),
-                }),
-                name: fs.label.clone(),
-                kind: match fs.kind {
-                    StructureNodeKind::SymbolKind(kind) => kind,
-                    _ => unreachable!(),
-                },
-                container_name: fs
-                    .parent
-                    .and_then(|t| file_structs.get(t).map(|node| node.label.clone())),
-                docs: None,
-            })
-            .collect()
-    }
 }
 
 impl<'a> AnalysisSession<'a> {

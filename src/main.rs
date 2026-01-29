@@ -7,7 +7,9 @@ mod cache_actor;
 mod claude;
 mod cur_context;
 mod file_actor;
+mod file_meta;
 mod rust_proj;
+mod symbol_info;
 mod tool_defs;
 mod tool_impls;
 mod utils;
@@ -58,12 +60,12 @@ async fn main() {
     .await
     .expect("Failed to start actor");
 
-    color_eyre::install().unwrap();
-    let terminal = ratatui::init();
-    execute!(stdout(), EnableBracketedPaste).ok();
-    let app = crate::app::App::new(joe);
-    let app_result = app.run(terminal, rx).await.unwrap();
-    actor_handle.await.expect("Actor failed to exit cleanly");
-    execute!(stdout(), DisableBracketedPaste).ok();
-    ratatui::restore();
+    // color_eyre::install().unwrap();
+    // let terminal = ratatui::init();
+    // execute!(stdout(), EnableBracketedPaste).ok();
+    // let app = crate::app::App::new(joe);
+    // let app_result = app.run(terminal, rx).await.unwrap();
+    // actor_handle.await.expect("Actor failed to exit cleanly");
+    // execute!(stdout(), DisableBracketedPaste).ok();
+    // ratatui::restore();
 }
