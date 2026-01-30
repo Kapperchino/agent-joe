@@ -1,7 +1,7 @@
 use crate::cache::TypedCache;
 use crate::cur_context::CurContext;
 use crate::file_actor::ValidPath;
-use crate::file_meta::FileMetaData;
+use crate::proj_meta::FileMetaData;
 use crate::rust_proj::RustProject;
 use crate::symbol_info::SymbolInfo;
 use ractor::{Actor, ActorProcessingErr, ActorRef};

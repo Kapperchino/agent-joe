@@ -49,6 +49,7 @@ pub struct SymbolInfo {
     pub kind: SymbolKind,
     pub container_name: Option<String>,
     pub docs: Option<String>,
+    pub description: Option<String>
 }
 
 impl SymbolInfo {
@@ -67,6 +68,7 @@ impl SymbolInfo {
             kind: n.kind.unwrap(),
             container_name: n.container_name.map(|s| s.to_string()),
             docs: n.docs.map(|d| d.as_str().to_string()),
+            description: n.description
         }
     }
 
@@ -100,6 +102,7 @@ impl SymbolInfo {
                     .parent
                     .and_then(|t| file_structs.get(t).map(|node| node.label.clone())),
                 docs: None,
+                description: fs.detail.clone(),
             })
             .collect()
     }

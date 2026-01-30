@@ -1,4 +1,4 @@
-use crate::file_meta::FileMetaData;
+use crate::proj_meta::FileMetaData;
 use crate::symbol_info::SymbolInfo;
 use heed::types::{SerdeJson, Str};
 use heed::{Database, Env, EnvOpenOptions, RoTxn, RwTxn};

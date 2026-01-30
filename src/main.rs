@@ -7,7 +7,7 @@ mod cache_actor;
 mod claude;
 mod cur_context;
 mod file_actor;
-mod file_meta;
+mod proj_meta;
 mod rust_proj;
 mod symbol_info;
 mod tool_defs;

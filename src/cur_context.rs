@@ -1,12 +1,12 @@
 use crate::cache::{TypedCache, TypedCacheDb};
-use crate::file_meta::{FileMeta, FileMetaData};
+use crate::proj_meta::{FileMeta, FileMetaData, ProjMeta};
 use crate::rust_proj::RustProject;
 use crate::symbol_info::SymbolInfo;
 use crate::utils::Utils;
 use anyhow::anyhow;
 use futures::{future, StreamExt};
 use itertools::Itertools;
-use ra_ap_vfs::FileId;
+use ra_ap_vfs::{FileId, VfsPath};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::env;
@@ -122,7 +122,7 @@ impl CurContext {
         Ok(meta)
     }
 
-    pub async fn get_file_meta_datas(
+    pub async fn get_proj_meta_inner(
         rust_proj: &RustProject,
         hashes: &HashMap<PathBuf, Vec<u8>>,
         cache: &mut TypedCache<FileMetaData, FileMetaData>,
@@ -156,104 +156,15 @@ impl CurContext {
         }
     }
 
-    pub async fn get_file_metas_inner(
-        rust_proj: &RustProject,
-        file_meta_datas: HashMap<String, FileMetaData>,
-    ) -> anyhow::Result<HashMap<String, FileMeta>> {
-        let session = rust_proj.new_analysis().await;
-        let res: Result<HashMap<_, _>, _> = file_meta_datas
-            .into_iter()
-            .map(|(k, v)| {
-                session
-                    .get_line_indecies(FileId::from_raw(v.file_id))
-                    .map(|line_index| {
-                        let meta = FileMeta {
-                            line_index,
-                            data: v,
-                        };
-                        (k, meta)
-                    })
-            })
-            .collect();
-        let res = res?;
-        Ok(res)
-    }
-
-    async fn get_file_metas(
-        cache: &mut TypedCache<FileMetaData, FileMetaData>,
+    async fn get_proj_meta(
+        cache: &mut TypedCache<SymbolInfo, SymbolInfo>,
         rust_proj: &RustProject,
         hashes: &HashMap<PathBuf, Vec<u8>>,
-    ) -> anyhow::Result<HashMap<String, FileMeta>> {
+    ) -> anyhow::Result<ProjMeta> {
         let datas = Self::get_file_meta_datas(rust_proj, hashes, cache).await?;
         Self::get_file_metas_inner(rust_proj, datas).await
     }
-
-    pub fn format_file_metas(metas: &HashMap<String, FileMeta>) -> String {
-        metas
-            .values()
-            .map(|m| m.to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
-    pub async fn get_file_hashes(proj: &RustProject) -> anyhow::Result<Vec<(PathBuf, Vec<u8>)>> {
-        let contents = Self::get_files(proj).await?;
-        let results: Vec<_> = futures::stream::iter(contents)
-            .map(|(path, content)| {
-                tokio::spawn(
-                    async move { (path, blake3::hash(content.as_bytes()).as_bytes().to_vec()) },
-                )
-            })
-            .buffer_unordered(100)
-            .collect::<Vec<_>>()
-            .await;
-
-        let res = results.into_iter().collect::<Result<Vec<_>, _>>()?;
-        Ok(res)
-    }
-
-    pub async fn get_file_hashes_for_paths(
-        paths: Vec<PathBuf>,
-    ) -> anyhow::Result<Vec<(PathBuf, Vec<u8>)>> {
-        let contents = Self::get_files_for_paths(paths).await?;
-        let results: Vec<_> = futures::stream::iter(contents)
-            .map(|(path, content)| {
-                tokio::spawn(
-                    async move { (path, blake3::hash(content.as_bytes()).as_bytes().to_vec()) },
-                )
-            })
-            .buffer_unordered(100)
-            .collect::<Vec<_>>()
-            .await;
-
-        let res = results.into_iter().collect::<Result<Vec<_>, _>>()?;
-        Ok(res)
-    }
-
-    async fn get_files(proj: &RustProject) -> anyhow::Result<Vec<(PathBuf, String)>> {
-        let anal = proj.new_analysis().await;
-        future::join_all(anal.get_work_files().into_iter().flat_map(|file| {
-            file.path.into_abs_path().map(async |path| {
-                Utils::get_file_content(&path.clone().into())
-                    .await
-                    .map(|content| (path.into(), content))
-            })
-        }))
-        .await
-        .into_iter()
-        .collect()
-    }
-
-    async fn get_files_for_paths(paths: Vec<PathBuf>) -> anyhow::Result<Vec<(PathBuf, String)>> {
-        future::join_all(paths.into_iter().map(async |file| {
-            Utils::get_file_content(&file)
-                .await
-                .map(|content| (file, content))
-        }))
-        .await
-        .into_iter()
-        .collect()
-    }
+    
 }
 
 #[cfg(test)]
