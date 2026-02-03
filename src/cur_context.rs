@@ -10,14 +10,11 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fmt::Display;
 use std::path::PathBuf;
-use tokio::fs::DirEntry;
 
 pub struct CurContext {
     pub cur_dir: PathBuf,
-    cur_files: Vec<DirEntry>,
     pub rust_proj: RustProject,
     pub symbol_cache: TypedCache<SymbolInfo, SymbolInfo>,
-    pub proj_meta: ProjMeta,
 }
 
 impl CurContext {
@@ -31,22 +28,13 @@ impl CurContext {
             .into_iter()
             .collect();
         //validate old one
-        let proj_meta = Self::get_proj_meta(&mut cache, &proj).await?;
-        let proj_meta =
-            match Self::validate_and_update_cache(hashes, &proj_meta, &mut cache, &proj).await? {
-                true => {
-                    // updated version
-                    Self::get_proj_meta(&mut cache, &proj).await?
-                }
-                false => proj_meta,
-            };
+        let proj_meta = Self::get_proj_meta_init(&mut cache, &proj).await?;
+        let _ = Self::validate_and_update_cache(hashes, &proj_meta, &mut cache, &proj).await?;
 
         Ok(CurContext {
             cur_dir: current_dir,
-            cur_files: files,
             rust_proj: proj,
             symbol_cache: cache,
-            proj_meta,
         })
     }
 
@@ -59,7 +47,8 @@ impl CurContext {
     }
 
     pub async fn get_analytical_context(&self) -> anyhow::Result<String> {
-        Ok(self.proj_meta.to_string())
+        let meta = self.get_proj_meta().await?;
+        Ok(meta.to_string())
     }
 
     pub async fn validate_and_update_cache(
@@ -125,11 +114,18 @@ impl CurContext {
         Ok(meta)
     }
 
-    async fn get_proj_meta(
+    // cache already exists
+    pub async fn get_proj_meta(&self) -> anyhow::Result<ProjMeta> {
+        let symbols = SymbolInfo::get_symbols_from_cache(&self.symbol_cache).await?;
+        let res = ProjMeta::get_proj_meta_from_symbols(symbols, &self.rust_proj).await?;
+        Ok(res)
+    }
+
+    async fn get_proj_meta_init(
         cache: &mut TypedCache<SymbolInfo, SymbolInfo>,
         rust_proj: &RustProject,
     ) -> anyhow::Result<ProjMeta> {
-        let symbols = SymbolInfo::get_symbols_with_cache(rust_proj, cache).await?;
+        let symbols = SymbolInfo::get_symbols_with_cache_write(rust_proj, cache).await?;
         let res = ProjMeta::get_proj_meta_from_symbols(symbols, rust_proj).await?;
         Ok(res)
     }

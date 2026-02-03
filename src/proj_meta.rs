@@ -210,10 +210,10 @@ impl ProjMeta {
             } else {
                 match joe_2.get(&k) {
                     None => {
-                        println!("{:?}", v);
+                        //println!("{:?}", v);
                     }
                     Some(val) => {
-                        println!("{:?}", val);
+                        //println!("{:?}", val);
                     }
                 };
             }

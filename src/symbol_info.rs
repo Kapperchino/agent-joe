@@ -110,7 +110,16 @@ impl SymbolInfo {
             .collect()
     }
 
-    pub async fn get_symbols_with_cache(
+    pub async fn get_symbols_from_cache(
+        cache: &TypedCache<SymbolInfo, SymbolInfo>,
+    ) -> anyhow::Result<Vec<SymbolInfo>> {
+        cache.read_transaction(|db| {
+            let res: Vec<_> = db.iter()?.collect();
+            Ok(res.into_iter().collect())
+        })
+    }
+
+    pub async fn get_symbols_with_cache_write(
         rust_proj: &RustProject,
         cache: &mut TypedCache<SymbolInfo, SymbolInfo>,
     ) -> anyhow::Result<Vec<SymbolInfo>> {
