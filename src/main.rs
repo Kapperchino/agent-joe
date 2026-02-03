@@ -60,12 +60,12 @@ async fn main() {
     .await
     .expect("Failed to start actor");
 
-    // color_eyre::install().unwrap();
-    // let terminal = ratatui::init();
-    // execute!(stdout(), EnableBracketedPaste).ok();
-    // let app = crate::app::App::new(joe);
-    // let app_result = app.run(terminal, rx).await.unwrap();
-    // actor_handle.await.expect("Actor failed to exit cleanly");
-    // execute!(stdout(), DisableBracketedPaste).ok();
-    // ratatui::restore();
+    color_eyre::install().unwrap();
+    let terminal = ratatui::init();
+    execute!(stdout(), EnableBracketedPaste).ok();
+    let app = crate::app::App::new(joe);
+    let app_result = app.run(terminal, rx).await.unwrap();
+    actor_handle.await.expect("Actor failed to exit cleanly");
+    execute!(stdout(), DisableBracketedPaste).ok();
+    ratatui::restore();
 }

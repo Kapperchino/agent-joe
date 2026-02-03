@@ -271,13 +271,15 @@ impl ProjMeta {
 
     pub async fn get_file_metas(proj: &RustProject) -> anyhow::Result<Vec<FileMeta>> {
         let hashes = Self::get_file_hashes(proj).await?;
-        let vfs = proj.vfs.lock().unwrap();
         let analysis = proj.new_analysis().await;
         hashes
             .into_iter()
             .map(|(pb, hash)| {
                 let path = pb.to_string_lossy().to_string();
-                let file_id = vfs
+                let file_id = proj
+                    .vfs
+                    .lock()
+                    .unwrap()
                     .file_id(&VfsPath::new_real_path(path.clone()))
                     .unwrap()
                     .0;
@@ -327,11 +329,7 @@ impl ProjMeta {
 
 impl Display for FunctionMeta {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "fn {}() [{}:{}]",
-            self.name, self.full_range.start, self.full_range.end
-        )
+        write!(f, "fn {}() @ {}:{}-{}", self.name, self.rpath, self.full_range.start, self.full_range.end)
     }
 }
 
@@ -343,14 +341,16 @@ impl Display for EVariantMeta {
 
 impl Display for EnumMeta {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "enum {} [{}:{}]",
-            self.name, self.full_range.start, self.full_range.end
-        )?;
+        write!(f, "- enum {} @ {}:{}-{}", self.name, self.rpath, self.full_range.start, self.full_range.end)?;
         if !self.variants.is_empty() {
             let variants: Vec<_> = self.variants.iter().map(|v| v.name.as_str()).collect();
-            write!(f, " {{ {} }}", variants.join(", "))?;
+            write!(f, "\n    variants: [{}]", variants.join(", "))?;
+        }
+        if !self.functions.is_empty() {
+            write!(f, "\n    methods:")?;
+            for func in &self.functions {
+                write!(f, "\n      - {}() L{}-{}", func.name, func.full_range.start, func.full_range.end)?;
+            }
         }
         Ok(())
     }
@@ -358,15 +358,11 @@ impl Display for EnumMeta {
 
 impl Display for StructMeta {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "struct {} [{}:{}]",
-            self.name, self.full_range.start, self.full_range.end
-        )?;
+        write!(f, "- struct {} @ {}:{}-{}", self.name, self.rpath, self.full_range.start, self.full_range.end)?;
         if !self.functions.is_empty() {
-            writeln!(f)?;
+            write!(f, "\n    methods:")?;
             for func in &self.functions {
-                writeln!(f, "    {}", func)?;
+                write!(f, "\n      - {}() L{}-{}", func.name, func.full_range.start, func.full_range.end)?;
             }
         }
         Ok(())
@@ -375,60 +371,65 @@ impl Display for StructMeta {
 
 impl Display for TypeAliasMeta {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "type {} [{}:{}]",
-            self.name, self.full_range.start, self.full_range.end
-        )
+        write!(f, "- type {} @ {}:{}-{}", self.name, self.rpath, self.full_range.start, self.full_range.end)
     }
 }
 
 impl Display for TraitMeta {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "trait {} [{}:{}]",
-            self.name, self.full_range.start, self.full_range.end
-        )
+        write!(f, "- trait {} @ {}:{}-{}", self.name, self.rpath, self.full_range.start, self.full_range.end)?;
+        if !self.functions.is_empty() {
+            write!(f, "\n    methods:")?;
+            for func in &self.functions {
+                write!(f, "\n      - {}() L{}-{}", func.name, func.full_range.start, func.full_range.end)?;
+            }
+        }
+        Ok(())
     }
 }
 
 impl Display for ProjMeta {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        writeln!(f, "## {}", self.data.rpath)?;
+        writeln!(f, "# Project Symbols")?;
+        writeln!(f, "Format: <name> @ <file>:<start_line>-<end_line>")?;
+        writeln!(f)?;
 
-        if !self.data.structs.is_empty() {
-            writeln!(f, "### Structs")?;
-            for s in &self.data.structs {
-                writeln!(f, "  {}", s)?;
+        if !self.structs.is_empty() {
+            writeln!(f, "## Structs ({})", self.structs.len())?;
+            for s in &self.structs {
+                writeln!(f, "{}", s)?;
             }
+            writeln!(f)?;
         }
 
-        if !self.data.enums.is_empty() {
-            writeln!(f, "### Enums")?;
-            for e in &self.data.enums {
-                writeln!(f, "  {}", e)?;
+        if !self.enums.is_empty() {
+            writeln!(f, "## Enums ({})", self.enums.len())?;
+            for e in &self.enums {
+                writeln!(f, "{}", e)?;
             }
+            writeln!(f)?;
         }
 
-        if !self.data.traits.is_empty() {
-            writeln!(f, "### Traits")?;
-            for t in &self.data.traits {
-                writeln!(f, "  {}", t)?;
+        if !self.traits.is_empty() {
+            writeln!(f, "## Traits ({})", self.traits.len())?;
+            for t in &self.traits {
+                writeln!(f, "{}", t)?;
             }
+            writeln!(f)?;
         }
 
-        if !self.data.functions.is_empty() {
-            writeln!(f, "### Functions")?;
-            for func in &self.data.functions {
-                writeln!(f, "  {}", func)?;
+        if !self.functions.is_empty() {
+            writeln!(f, "## Standalone Functions ({})", self.functions.len())?;
+            for func in &self.functions {
+                writeln!(f, "- {}", func)?;
             }
+            writeln!(f)?;
         }
 
-        if !self.data.type_alias.is_empty() {
-            writeln!(f, "### Type Aliases")?;
-            for ta in &self.data.type_alias {
-                writeln!(f, "  {}", ta)?;
+        if !self.type_alias.is_empty() {
+            writeln!(f, "## Type Aliases ({})", self.type_alias.len())?;
+            for ta in &self.type_alias {
+                writeln!(f, "{}", ta)?;
             }
         }
 

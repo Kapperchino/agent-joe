@@ -59,7 +59,7 @@ impl CurContext {
     }
 
     pub async fn get_analytical_context(&self) -> anyhow::Result<String> {
-        Ok(Self::format_file_metas(&self.file_metas))
+        Ok(self.proj_meta.to_string())
     }
 
     pub async fn validate_and_update_cache(

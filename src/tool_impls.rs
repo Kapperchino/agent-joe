@@ -181,7 +181,7 @@ impl ReadFile {
         range: Range,
         cur_context: &CurContext,
     ) -> anyhow::Result<String> {
-        match cur_context.file_metas.get(file_path) {
+        match cur_context.proj_meta.files.get(file_path) {
             Some(meta) => {
                 let start_line = meta.line_index.line_col(TextSize::new(range.start)).line;
                 let Range { start, end } = range;
