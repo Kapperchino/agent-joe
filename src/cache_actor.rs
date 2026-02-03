@@ -1,23 +1,20 @@
 use crate::cache::TypedCache;
-use crate::cur_context::CurContext;
 use crate::file_actor::ValidPath;
-use crate::proj_meta::FileMetaData;
 use crate::rust_proj::RustProject;
 use crate::symbol_info::SymbolInfo;
 use ractor::{Actor, ActorProcessingErr, ActorRef};
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 pub struct CacheActor {}
 
 pub struct Dependency {
     pub proj: RustProject,
-    pub file_cache: TypedCache<FileMetaData, FileMetaData>,
+    pub symbol_cache: TypedCache<SymbolInfo, SymbolInfo>,
 }
 
 pub struct CacheActorState {
     proj: RustProject,
-    file_cache: TypedCache<FileMetaData, FileMetaData>,
+    symbol_cache: TypedCache<SymbolInfo, SymbolInfo>,
     buffer: Vec<ValidPath>,
 }
 
@@ -39,7 +36,7 @@ impl Actor for CacheActor {
     ) -> Result<Self::State, ActorProcessingErr> {
         Ok(CacheActorState {
             proj: dependency.proj,
-            file_cache: dependency.file_cache,
+            symbol_cache: dependency.symbol_cache,
             buffer: Vec::new(),
         })
     }
@@ -58,7 +55,7 @@ impl Actor for CacheActor {
                 let buffer: Vec<_> = state.buffer.drain(..).collect();
                 let session = state.proj.new_analysis().await;
                 for x in buffer {
-                    let deleted_paths = state.file_cache.transaction(|db| {
+                    let _ = state.symbol_cache.transaction(|db| {
                         let remove_keys: Vec<_> = db
                             .prefix_iter(x.path.to_string_lossy().to_string())?
                             .collect();
@@ -78,16 +75,8 @@ impl Actor for CacheActor {
                         Vec::new()
                     };
 
-                    let hashes: HashMap<_, _> =
-                        CurContext::get_file_hashes_for_paths(deleted_paths)
-                            .await?
-                            .into_iter()
-                            .collect();
-                    let meta_data =
-                        FileMetaData::get_file_meta_datas_cache_miss(nodes, &state.proj, &hashes)?;
-
-                    state.file_cache.transaction(|db| {
-                        meta_data.iter().try_for_each(|(_, s)| db.put(s, s))?;
+                    state.symbol_cache.transaction(|db| {
+                        nodes.iter().try_for_each(|s| db.put(s, s))?;
                         Ok(())
                     })?;
                 }

@@ -119,7 +119,7 @@ impl Actor for Worker {
             None,
             CacheActor {},
             cache_actor::Dependency {
-                file_cache: cur_context.file_cache.clone(),
+                symbol_cache: cur_context.symbol_cache.clone(),
                 proj: cur_context.rust_proj.clone(),
             },
             myself.get_cell(),

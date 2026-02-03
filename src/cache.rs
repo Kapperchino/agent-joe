@@ -1,4 +1,3 @@
-use crate::proj_meta::FileMetaData;
 use crate::symbol_info::SymbolInfo;
 use heed::types::{SerdeJson, Str};
 use heed::{Database, Env, EnvOpenOptions, RoTxn, RwTxn};
@@ -15,17 +14,9 @@ impl CacheKey for SymbolInfo {
         format!("{}-{}-{:?}-{}", self.rpath, container, self.kind, self.name)
     }
 }
-impl CacheKey for FileMetaData {
-    fn get_key(&self) -> String {
-        self.rpath.clone()
-    }
-}
-
 pub trait CacheVal: serde::Serialize + for<'de> serde::Deserialize<'de> {}
 
 impl CacheVal for SymbolInfo {}
-
-impl CacheVal for FileMetaData {}
 
 #[derive(Clone)]
 pub struct TypedCache<K: CacheKey, V: CacheVal> {

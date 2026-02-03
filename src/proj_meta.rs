@@ -393,7 +393,7 @@ impl Display for TraitMeta {
     }
 }
 
-impl Display for FileMeta {
+impl Display for ProjMeta {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         writeln!(f, "## {}", self.data.rpath)?;
 

@@ -1,4 +1,7 @@
 use crate::analysis::Range;
+use crate::cache::{TypedCache, TypedCacheDb};
+use crate::rust_proj::RustProject;
+use anyhow::anyhow;
 use ra_ap_ide::{NavigationTarget, StructureNode, StructureNodeKind};
 use ra_ap_ide_db::SymbolKind;
 use ra_ap_vfs::{FileId, Vfs};
@@ -49,7 +52,7 @@ pub struct SymbolInfo {
     pub kind: SymbolKind,
     pub container_name: Option<String>,
     pub docs: Option<String>,
-    pub description: Option<String>
+    pub description: Option<String>,
 }
 
 impl SymbolInfo {
@@ -68,7 +71,7 @@ impl SymbolInfo {
             kind: n.kind.unwrap(),
             container_name: n.container_name.map(|s| s.to_string()),
             docs: n.docs.map(|d| d.as_str().to_string()),
-            description: n.description
+            description: n.description,
         }
     }
 
@@ -105,5 +108,33 @@ impl SymbolInfo {
                 description: fs.detail.clone(),
             })
             .collect()
+    }
+
+    pub async fn get_symbols_with_cache(
+        rust_proj: &RustProject,
+        cache: &mut TypedCache<SymbolInfo, SymbolInfo>,
+    ) -> anyhow::Result<Vec<SymbolInfo>> {
+        let is_empty = cache.read_transaction(|db| db.is_empty())?;
+        if is_empty {
+            let symbols = rust_proj.get_all_proj_symbols().await?;
+            cache.transaction(|db: &mut TypedCacheDb<_, _>| {
+                let (_, errs): (Vec<_>, Vec<_>) = symbols
+                    .iter()
+                    .map(|v| db.put(v, v))
+                    .partition(|r| r.is_ok());
+                // report on this
+                let errs: Vec<_> = errs.into_iter().flat_map(|x1| x1.err()).collect();
+                println!("{:?}", errs);
+                if !errs.is_empty() {
+                    return Err(anyhow!("Error while wrriting to DB! {:?}", errs));
+                }
+                Ok(symbols)
+            })
+        } else {
+            cache.read_transaction(|db| {
+                let res: Vec<_> = db.iter()?.collect();
+                Ok(res.into_iter().collect())
+            })
+        }
     }
 }
