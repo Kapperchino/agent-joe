@@ -145,28 +145,33 @@ impl Actor for FileActor {
                 }
             }
             ApplyVFS => {
-                let changes = { state.vfs.lock().unwrap().take_changes() };
+                let mut vfs = state.vfs.lock().unwrap();
+                let changes = vfs.take_changes();
                 let mut proj_change = ChangeWithProcMacros::default();
-                let vfs = state.vfs.lock().unwrap();
                 let mut roots = Vec::new();
+                drop(vfs);
 
-                changes
-                    .into_iter()
-                    .for_each(|(id, change)| match change.change {
-                        Change::Create(contents, _hash) | Change::Modify(contents, _hash) => {
-                            let mut fs = FileSet::default();
-                            fs.insert(id, vfs.file_path(id).clone());
-                            roots.push(SourceRoot::new_local(fs));
-                            let text = String::from_utf8(contents).ok();
-                            proj_change.change_file(id, text.map(Into::into));
-                        }
-                        Change::Delete => {
-                            proj_change.change_file(id, None);
-                        }
-                    });
-                proj_change.set_roots(roots);
-                state.a_host.lock().unwrap().apply_change(proj_change);
-                state.cache_actor.send_message(ApplyChanges)?;
+                if !changes.is_empty() {
+                    changes
+                        .into_iter()
+                        .for_each(|(id, change)| match change.change {
+                            Change::Create(contents, _hash) | Change::Modify(contents, _hash) => {
+                                let mut fs = FileSet::default();
+                                let vfs = state.vfs.lock().unwrap();
+                                fs.insert(id, vfs.file_path(id).clone());
+                                roots.push(SourceRoot::new_local(fs));
+                                let text = String::from_utf8(contents).ok();
+                                proj_change.change_file(id, text.map(Into::into));
+                            }
+                            Change::Delete => {
+                                proj_change.change_file(id, None);
+                            }
+                        });
+
+                    proj_change.set_roots(roots);
+                    state.a_host.lock().unwrap().apply_change(proj_change);
+                    state.cache_actor.send_message(ApplyChanges)?;
+                }
             }
         }
         Ok(())

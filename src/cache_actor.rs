@@ -3,7 +3,6 @@ use crate::file_actor::ValidPath;
 use crate::rust_proj::RustProject;
 use crate::symbol_info::SymbolInfo;
 use ractor::{Actor, ActorProcessingErr, ActorRef};
-use std::path::PathBuf;
 
 pub struct CacheActor {}
 
@@ -60,22 +59,13 @@ impl Actor for CacheActor {
                             .prefix_iter(x.path.to_string_lossy().to_string())?
                             .collect();
                         remove_keys.iter().try_for_each(|(_, v)| db.delete(v))?;
-                        let deleted_paths: Vec<PathBuf> = remove_keys
-                            .into_iter()
-                            .map(|(_, meta)| meta.rpath.into())
-                            .collect();
 
-                        Ok(deleted_paths)
-                    })?;
-
-                    let nodes = if let Some(f_id) = state.proj.get_file_id(x.path.clone()) {
-                        let file_structs = session.get_file_structure(f_id);
-                        SymbolInfo::from_file_structs(f_id, file_structs, x.path.clone())
-                    } else {
-                        Vec::new()
-                    };
-
-                    state.symbol_cache.transaction(|db| {
+                        let nodes = if let Some(f_id) = state.proj.get_file_id(x.path.clone()) {
+                            let file_structs = session.get_file_structure(f_id);
+                            SymbolInfo::from_file_structs(f_id, file_structs, x.path.clone())
+                        } else {
+                            Vec::new()
+                        };
                         nodes.iter().try_for_each(|s| db.put(s, s))?;
                         Ok(())
                     })?;
