@@ -58,6 +58,7 @@ impl Actor for CacheActor {
                         let remove_keys: Vec<_> = db
                             .prefix_iter(x.path.to_string_lossy().to_string())?
                             .collect();
+
                         remove_keys.iter().try_for_each(|(_, v)| db.delete(v))?;
 
                         let nodes = if let Some(f_id) = state.proj.get_file_id(x.path.clone()) {

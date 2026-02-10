@@ -71,7 +71,7 @@ impl<'a> AnalysisSession<'a> {
         self.analysis
             .file_structure(
                 &FileStructureConfig {
-                    exclude_locals: false,
+                    exclude_locals: true,
                 },
                 file_id,
             )

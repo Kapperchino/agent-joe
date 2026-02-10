@@ -17,6 +17,7 @@ pub struct CurContext {
     pub symbol_cache: TypedCache<SymbolInfo, SymbolInfo>,
 }
 
+
 impl CurContext {
     pub async fn new() -> Result<CurContext, anyhow::Error> {
         let current_dir = env::current_dir()?;

@@ -56,6 +56,7 @@ pub struct FunctionMeta {
     pub rpath: String,
     pub full_range: Range,
     pub name: String,
+    pub discription: Option<String>,
 }
 #[derive(Serialize, Deserialize, Clone)]
 pub struct TypeAliasMeta {
@@ -129,6 +130,7 @@ impl From<SymbolInfo> for FunctionMeta {
             rpath: info.rpath,
             full_range: info.full_range,
             name: info.name,
+            discription: info.description,
         }
     }
 }
@@ -166,15 +168,24 @@ impl ProjMeta {
         let variants = Self::get_symbol_map(&joe, &SymbolKind::Variant);
         let traits = Self::get_symbol_map(&joe, &SymbolKind::Trait);
         let type_alias = Self::get_symbol_map(&joe, &SymbolKind::TypeAlias);
+        let impls = Self::get_symbol_map(&joe, &SymbolKind::Impl);
         let fields = Self::get_symbol_map(&joe, &SymbolKind::Field);
 
         let mut traits_metas: HashMap<String, TraitMeta> = Self::into_meta(&traits);
         let type_alias_metas: HashMap<String, TypeAliasMeta> = Self::into_meta(&type_alias);
 
-        let (stand_alone, functions): (Vec<_>, _) =
+        let (mut stand_alone, mut functions): (Vec<_>, _) =
             Self::get_symbol_map(&joe, &SymbolKind::Function)
                 .into_values()
                 .partition(|info| info.container_name.is_none());
+
+        let (mut m_stand_alone, mut m_functions): (Vec<_>, _) =
+            Self::get_symbol_map(&joe, &SymbolKind::Method)
+                .into_values()
+                .partition(|info| info.container_name.is_none());
+
+        stand_alone.append(&mut m_stand_alone);
+        functions.append(&mut m_functions);
 
         let stand_alone_func: Vec<_> = stand_alone.into_iter().map(|i| i.into()).collect();
 
@@ -183,6 +194,8 @@ impl ProjMeta {
         let mut enum_metas: HashMap<String, EnumMeta> = Self::into_meta(&enums);
 
         let mut evariants_metas: HashMap<String, EVariantMeta> = Self::into_meta(&variants);
+
+        let mut impls_metas: HashMap<String, ImplMeta> = Self::into_meta(&impls);
 
         let e_variants: HashMap<String, Vec<EVariantMeta>> = variants
             .into_values()
@@ -198,22 +211,40 @@ impl ProjMeta {
             .map(|(k, v)| (k, v.into_iter().map(|i| i.clone().into()).collect()))
             .collect::<HashMap<String, Vec<FunctionMeta>>>();
 
-        inner_funcs.into_iter().for_each(|(k, v)| {
+        inner_funcs.into_iter().for_each(|(k, mut v)| {
             if let Some(s_meta) = struct_metas.get_mut(&k) {
-                s_meta.functions = v
+                s_meta.functions.append(&mut v)
             } else if let Some(t_meta) = traits_metas.get_mut(&k) {
-                t_meta.functions = v
+                t_meta.functions.append(&mut v)
             } else if let Some(e_meta) = enum_metas.get_mut(&k) {
-                e_meta.functions = v;
+                e_meta.functions.append(&mut v);
             } else if let Some(ev_meta) = evariants_metas.get_mut(&k) {
-                ev_meta.functions = v
+                ev_meta.functions.append(&mut v)
+            } else if let Some(impl_meta) = impls_metas.get_mut(&k) {
+                impl_meta.functions.append(&mut v)
             } else {
                 match joe_2.get(&k) {
                     None => {
-                        println!("{:?}", v);
+                        let struct_split: Vec<_> = k.split("<").collect();
+                        struct_split.first().and_then(|t| joe_2.get(*t)).map(|t1| {
+                            let split_k = &t1.name;
+                            if let Some(s_meta) = struct_metas.get_mut(split_k) {
+                                s_meta.functions.append(&mut v)
+                            } else if let Some(t_meta) = traits_metas.get_mut(split_k) {
+                                t_meta.functions.append(&mut v)
+                            } else if let Some(e_meta) = enum_metas.get_mut(split_k) {
+                                e_meta.functions.append(&mut v)
+                            } else if let Some(ev_meta) = evariants_metas.get_mut(split_k) {
+                                ev_meta.functions.append(&mut v)
+                            } else if let Some(impl_meta) = impls_metas.get_mut(split_k) {
+                                impl_meta.functions.append(&mut v)
+                            } else {
+                                //println!("k:{:?}{:?}", k, v);
+                            }
+                        });
                     }
                     Some(val) => {
-                        println!("{:?}", val);
+                        //println!("k:{:?}{:?}", k, val);
                     }
                 };
             }
@@ -329,7 +360,22 @@ impl ProjMeta {
 
 impl Display for FunctionMeta {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "fn {}() @ {}:{}-{}", self.name, self.rpath, self.full_range.start, self.full_range.end)
+        match &self.discription {
+            None => {
+                write!(
+                    f,
+                    "fn {}() @ {}:{}-{}",
+                    self.name, self.rpath, self.full_range.start, self.full_range.end
+                )
+            }
+            Some(func) => {
+                write!(
+                    f,
+                    "{} @ {}:{}-{}",
+                    func, self.rpath, self.full_range.start, self.full_range.end
+                )
+            }
+        }
     }
 }
 
@@ -341,7 +387,11 @@ impl Display for EVariantMeta {
 
 impl Display for EnumMeta {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "- enum {} @ {}:{}-{}", self.name, self.rpath, self.full_range.start, self.full_range.end)?;
+        write!(
+            f,
+            "- enum {} @ {}:{}-{}",
+            self.name, self.rpath, self.full_range.start, self.full_range.end
+        )?;
         if !self.variants.is_empty() {
             let variants: Vec<_> = self.variants.iter().map(|v| v.name.as_str()).collect();
             write!(f, "\n    variants: [{}]", variants.join(", "))?;
@@ -349,7 +399,7 @@ impl Display for EnumMeta {
         if !self.functions.is_empty() {
             write!(f, "\n    methods:")?;
             for func in &self.functions {
-                write!(f, "\n      - {}() L{}-{}", func.name, func.full_range.start, func.full_range.end)?;
+                write!(f, "\n      - {func}",)?;
             }
         }
         Ok(())
@@ -358,11 +408,15 @@ impl Display for EnumMeta {
 
 impl Display for StructMeta {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "- struct {} @ {}:{}-{}", self.name, self.rpath, self.full_range.start, self.full_range.end)?;
+        write!(
+            f,
+            "- struct {} @ {}:{}-{}",
+            self.name, self.rpath, self.full_range.start, self.full_range.end
+        )?;
         if !self.functions.is_empty() {
             write!(f, "\n    methods:")?;
             for func in &self.functions {
-                write!(f, "\n      - {}() L{}-{}", func.name, func.full_range.start, func.full_range.end)?;
+                write!(f, "\n      - {func}",)?;
             }
         }
         Ok(())
@@ -371,17 +425,25 @@ impl Display for StructMeta {
 
 impl Display for TypeAliasMeta {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "- type {} @ {}:{}-{}", self.name, self.rpath, self.full_range.start, self.full_range.end)
+        write!(
+            f,
+            "- type {} @ {}:{}-{}",
+            self.name, self.rpath, self.full_range.start, self.full_range.end
+        )
     }
 }
 
 impl Display for TraitMeta {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "- trait {} @ {}:{}-{}", self.name, self.rpath, self.full_range.start, self.full_range.end)?;
+        write!(
+            f,
+            "- trait {} @ {}:{}-{}",
+            self.name, self.rpath, self.full_range.start, self.full_range.end
+        )?;
         if !self.functions.is_empty() {
             write!(f, "\n    methods:")?;
             for func in &self.functions {
-                write!(f, "\n      - {}() L{}-{}", func.name, func.full_range.start, func.full_range.end)?;
+                write!(f, "\n      - {func}",)?;
             }
         }
         Ok(())

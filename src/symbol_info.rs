@@ -2,12 +2,12 @@ use crate::analysis::Range;
 use crate::cache::{TypedCache, TypedCacheDb};
 use crate::rust_proj::RustProject;
 use anyhow::anyhow;
+use itertools::Itertools;
 use ra_ap_ide::{NavigationTarget, StructureNode, StructureNodeKind};
 use ra_ap_ide_db::SymbolKind;
 use ra_ap_vfs::{FileId, Vfs};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-
 #[derive(Serialize, Deserialize)]
 #[serde(remote = "SymbolKind")]
 enum SymbolKindDef {
@@ -103,7 +103,16 @@ impl SymbolInfo {
                 },
                 container_name: fs
                     .parent
-                    .and_then(|t| file_structs.get(t).map(|node| node.label.clone())),
+                    .and_then(|t| file_structs.get(t).map(|node| node.label.clone()))
+                    .and_then(|name| match fs.kind {
+                        StructureNodeKind::SymbolKind(kind) => match kind {
+                            SymbolKind::Function | SymbolKind::Method => {
+                                Some(Self::container_name_from_impl(&name))
+                            }
+                            _ => Some(name),
+                        },
+                        _ => unreachable!(),
+                    }),
                 docs: None,
                 description: fs.detail.clone(),
             })
@@ -117,6 +126,17 @@ impl SymbolInfo {
             let res: Vec<_> = db.iter()?.collect();
             Ok(res.into_iter().collect())
         })
+    }
+
+    fn container_name_from_impl(label: &str) -> String {
+        let tokens: Vec<_> = label.split(" ").skip(1).collect();
+        if tokens.len() > 1
+            && let Some(last) = tokens.last()
+        {
+            last.to_string()
+        } else {
+            tokens.iter().join("")
+        }
     }
 
     pub async fn get_symbols_with_cache_write(

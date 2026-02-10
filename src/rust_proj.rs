@@ -53,8 +53,7 @@ impl RustProject {
     pub async fn get_all_proj_symbols(&self) -> anyhow::Result<Vec<SymbolInfo>> {
         let session = self.new_analysis().await;
         let symboles = session.get_symboles()?;
-        let impls = Self::get_all_trait_impls(self.vfs.clone(), &symboles, &session);
-        let combined = vec![symboles, impls].concat();
+        let combined = vec![symboles].concat();
         Ok(combined)
     }
 
