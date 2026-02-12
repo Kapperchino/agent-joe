@@ -22,6 +22,7 @@ pub trait ToolResultTrait {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Tool {
     ReadFile(ReadFile),
+    InsertAfterLine(InsertAfterLine),
 }
 
 #[derive(Default, Serialize, Deserialize, Debug, Clone)]
@@ -35,7 +36,28 @@ pub struct ReadFileInput {
     pub range: Option<Range>,
 }
 
+#[derive(Default, Serialize, Deserialize, Debug, Clone)]
+pub struct InsertAfterLine {
+    pub input: InsertAfterLineInput,
+    pub id: String,
+}
+#[derive(Default, Serialize, Deserialize, Debug, Clone)]
+pub struct InsertAfterLineInput {
+    pub content: String,
+    pub(crate) file_path: String,
+    pub line_num: usize,
+}
+
 #[derive(Debug)]
 pub enum ToolResult {
-    ReadFileResult { res: String, tool: Tool, id: String },
+    ReadFileResult {
+        res: String,
+        tool: Tool,
+        id: String,
+    },
+    InsertAfterLineResult {
+        status: String,
+        tool: Tool,
+        id: String,
+    },
 }
