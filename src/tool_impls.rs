@@ -269,39 +269,95 @@ impl ReadFile {
 
 impl InsertAfterLine {
     async fn insert_after_line(&self) -> anyhow::Result<()> {
-        let line_num = self.input.line_num.clone();
+        // line number starts at 1 for the agent
+        let line_num = self.input.line_num.clone() - 1;
         let path = self.input.file_path.clone();
         let insert_lines: Vec<_> = self.input.content.lines().collect();
         let file_content = fs::read_to_string(&path).await?;
         let mut lines: Vec<_> = file_content.lines().collect();
-        let res = lines.splice(line_num..line_num, insert_lines).join("\n");
+        lines.splice(line_num..line_num, insert_lines);
+        let mut res = lines.join("\n");
+        res.push_str("\n");
         fs::write(&path, res).await?;
         Ok(())
     }
 }
 
-// #[tokio::test]
-// async fn test_read_file() {
-//     let path = ReadFile {
-//         input: ReadFileInput {
-//             file_path: "/Users/kamranorhun/Dev/turbo-code/src/cur_context.rs".to_string(),
-//             range: Default::default(),
-//         },
-//         id: "".to_string(),
-//     };
-//     let res = path.read_file().await.unwrap();
-//     println!("{}", res)
-// }
-//
-// #[tokio::test]
-// async fn test_read_file_range() {
-//     let path = ReadFile {
-//         input: ReadFileInput {
-//             file_path: "/Users/kamranorhun/Dev/turbo-code/src/cur_context.rs".to_string(),
-//             range: Some(Range { start: 0, end: 80 }),
-//         },
-//         id: "".to_string(),
-//     };
-//     let res = path.read_file().await.unwrap();
-//     println!("{}", res)
-// }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tool_defs::{InsertAfterLine, InsertAfterLineInput};
+    use std::env;
+
+    fn temp_path(name: &str) -> String {
+        env::temp_dir()
+            .join(format!("turbo_code_test_{name}"))
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn make_insert(file_path: String, line_num: usize, content: &str) -> InsertAfterLine {
+        InsertAfterLine {
+            input: InsertAfterLineInput {
+                content: content.to_string(),
+                file_path,
+                line_num,
+            },
+            id: String::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_insert_after_line_middle() {
+        let path = temp_path("middle");
+        fs::write(&path, "aaa\nbbb\nccc\n").await.unwrap();
+        let tmp = fs::read_to_string(&path).await.unwrap();
+        println!("{tmp}");
+
+        let tool = make_insert(path.clone(), 2, "xxx");
+        tool.insert_after_line().await.unwrap();
+
+        let result = fs::read_to_string(&path).await.unwrap();
+        assert_eq!(result, "aaa\nxxx\nbbb\nccc\n");
+        fs::remove_file(&path).await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_insert_after_line_beginning() {
+        let path = temp_path("beginning");
+        fs::write(&path, "aaa\nbbb\nccc\n").await.unwrap();
+
+        let tool = make_insert(path.clone(), 1, "xxx");
+        tool.insert_after_line().await.unwrap();
+
+        let result = fs::read_to_string(&path).await.unwrap();
+        assert_eq!(result, "xxx\naaa\nbbb\nccc\n");
+        fs::remove_file(&path).await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_insert_after_line_end() {
+        let path = temp_path("end");
+        fs::write(&path, "aaa\nbbb\nccc\n").await.unwrap();
+
+        let tool = make_insert(path.clone(), 4, "xxx");
+        tool.insert_after_line().await.unwrap();
+
+        let result = fs::read_to_string(&path).await.unwrap();
+        assert_eq!(result, "aaa\nbbb\nccc\nxxx\n");
+        fs::remove_file(&path).await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_insert_after_line_multiline_content() {
+        let path = temp_path("multiline");
+        fs::write(&path, "aaa\nbbb\nccc\n").await.unwrap();
+
+        let tool = make_insert(path.clone(), 2, "xxx\nyyy\n");
+        tool.insert_after_line().await.unwrap();
+
+        let result = fs::read_to_string(&path).await.unwrap();
+        assert_eq!(result, "aaa\nxxx\nyyy\nbbb\nccc\n");
+        fs::remove_file(&path).await.ok();
+    }
+}
