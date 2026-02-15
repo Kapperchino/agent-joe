@@ -200,6 +200,7 @@ impl Tool {
     pub fn from_str(name: &str) -> anyhow::Result<Self> {
         match name {
             "read_file" => Ok(Tool::ReadFile(ReadFile::default())),
+            "insert_after_line" => Ok(Tool::InsertAfterLine(InsertAfterLine::default())),
             _ => Err(Error::msg("Is not a tool")),
         }
     }

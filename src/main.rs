@@ -17,6 +17,7 @@ mod worker;
 
 use crate::actor::Dependency;
 use crate::claude::{ClaudeClient, ClaudeConfig};
+use crate::tool_defs::InsertAfterLine;
 use crate::tool_impls::ReadFile;
 use crate::worker::Worker;
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
@@ -42,6 +43,7 @@ async fn main() {
 
     let client = ClaudeClient::new(ClaudeConfig {
         api_key: env::var("CLAUDE_API").unwrap(),
+        model: "claude-haiku-4-5-20251001".to_string(),
         ..Default::default()
     })
     .unwrap();
@@ -53,7 +55,10 @@ async fn main() {
         Worker {},
         Dependency {
             claude: client,
-            tools: vec![tool_impls::Tool::ReadFile(ReadFile::default())],
+            tools: vec![
+                tool_impls::Tool::ReadFile(ReadFile::default()),
+                tool_impls::Tool::InsertAfterLine(InsertAfterLine::default()),
+            ],
             tui_tx: tx,
         },
     )
