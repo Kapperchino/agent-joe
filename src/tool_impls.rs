@@ -88,8 +88,8 @@ impl ToolTrait for Tool {
                 (
                     "line_num".to_string(),
                     ToolProperty::Value {
-                        name: "file_path".to_string(),
-                        prop_type: "number".to_string(),
+                        name: "line_num".to_string(),
+                        prop_type: "integer".to_string(),
                         description: "Line number of the file to insert to".to_string(),
                     },
                 ),
