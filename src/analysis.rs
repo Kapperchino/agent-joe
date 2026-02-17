@@ -7,6 +7,7 @@ use ra_ap_ide::{
 use ra_ap_ide_db::symbol_index::Query;
 use ra_ap_vfs::{FileId, VfsPath};
 use serde::{Deserialize, Serialize};
+use turbo_code_macros::ToolInput;
 
 pub struct FileInfo {
     pub id: FileId,
@@ -25,9 +26,11 @@ pub struct AnalysisSession<'a> {
     proj: &'a RustProject,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, Eq, PartialEq, Hash)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, Eq, PartialEq, Hash, ToolInput)]
 pub struct Range {
+    #[tool(description = "Start line (inclusive)", required)]
     pub(crate) start: u32,
+    #[tool(description = "End line (exclusive)", required)]
     pub(crate) end: u32,
 }
 

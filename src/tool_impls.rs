@@ -2,8 +2,8 @@ use crate::analysis::Range;
 use crate::claude;
 use crate::claude::{ToolProperty, ToolSchemaDTO};
 use crate::cur_context::CurContext;
-pub(crate) use crate::tool_defs::{InsertAfterLine, ToolResultTrait};
-pub(crate) use crate::tool_defs::{ReadFile, Tool, ToolResult, ToolTrait};
+pub(crate) use crate::tool_defs::{InsertAfterLine, ReadFile, Tool, ToolResult};
+use crate::tool_defs::ToolDefTrait;
 use anyhow::{anyhow, Error};
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
@@ -15,124 +15,44 @@ use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, BufReader};
 use tokio_stream::wrappers::LinesStream;
 
-impl ToolTrait for Tool {
-    fn name(&self) -> String {
+impl Tool {
+    pub fn name(&self) -> String {
         match self {
-            Tool::ReadFile(_) => "read_file".to_string(),
-            Tool::InsertAfterLine(_) => "insert_after_line".to_string(),
+            Tool::ReadFile(_) => ReadFile::tool_name().to_string(),
+            Tool::InsertAfterLine(_) => InsertAfterLine::tool_name().to_string(),
         }
     }
 
-    fn description(&self) -> String {
-        match self {
-            Tool::ReadFile(_) => "Reads a file at file_path or a section of it defined by range, do not read the entire file unless you need to".to_string(),
-            Tool::InsertAfterLine(_) => "Insert content at line_num".to_string(),
-        }
-    }
-
-    fn field_properties(&self) -> HashMap<String, ToolProperty> {
-        match self {
-            Tool::ReadFile(_) => HashMap::from([
-                (
-                    "file_path".to_string(),
-                    ToolProperty::Value {
-                        name: "file_path".to_string(),
-                        prop_type: "string".to_string(),
-                        description: "file path of the file you want to read".to_string(),
-                    },
-                ),
-                (
-                    "range".to_string(),
-                    ToolProperty::Object {
-                        name: "range".to_string(),
-                        prop_type: "string".to_string(),
-                        description: "range of the offsets you want to read".to_string(),
-                        properties: HashMap::from([
-                            (
-                                "start".to_string(),
-                                ToolProperty::Value {
-                                    name: "start".to_string(),
-                                    prop_type: "integer".to_string(),
-                                    description: "Start line (inclusive)".to_string(),
-                                },
-                            ),
-                            (
-                                "end".to_string(),
-                                ToolProperty::Value {
-                                    name: "end".to_string(),
-                                    prop_type: "integer".to_string(),
-                                    description: "End line (exclusive)".to_string(),
-                                },
-                            ),
-                        ]),
-                    },
-                ),
-            ]),
-            Tool::InsertAfterLine(_) => HashMap::from([
-                (
-                    "content".to_string(),
-                    ToolProperty::Value {
-                        name: "content".to_string(),
-                        prop_type: "string".to_string(),
-                        description: "Content to insert after line line_num".to_string(),
-                    },
-                ),
-                (
-                    "file_path".to_string(),
-                    ToolProperty::Value {
-                        name: "file_path".to_string(),
-                        prop_type: "string".to_string(),
-                        description: "Path of the file to insert".to_string(),
-                    },
-                ),
-                (
-                    "line_num".to_string(),
-                    ToolProperty::Value {
-                        name: "line_num".to_string(),
-                        prop_type: "integer".to_string(),
-                        description: "Line number of the file to insert to".to_string(),
-                    },
-                ),
-            ]),
-        }
-    }
-
-    fn required_fields(&self) -> Vec<String> {
-        match self {
-            Tool::ReadFile(_) => {
-                vec!["file_path".to_string()]
-            }
-            Tool::InsertAfterLine(_) => {
-                vec![
-                    "content".to_string(),
-                    "file_path".to_string(),
-                    "line_num".to_string(),
-                ]
-            }
-        }
-    }
-
-    fn id(&self) -> String {
+    pub fn id(&self) -> String {
         match self {
             Tool::ReadFile(file) => file.id.clone(),
             Tool::InsertAfterLine(insert) => insert.id.clone(),
         }
     }
 
-    fn to_json(&self) -> claude::Tool {
+    pub fn to_json(&self) -> claude::Tool {
         claude::Tool {
             name: self.name(),
-            description: self.description(),
+            description: match self {
+                Tool::ReadFile(_) => ReadFile::tool_description().to_string(),
+                Tool::InsertAfterLine(_) => InsertAfterLine::tool_description().to_string(),
+            },
             input_schema: ToolSchemaDTO {
                 name: self.name(),
                 tool_type: "object".to_string(),
-                properties: self.field_properties(),
-                required: self.required_fields(),
+                properties: match self {
+                    Tool::ReadFile(_) => ReadFile::field_properties(),
+                    Tool::InsertAfterLine(_) => InsertAfterLine::field_properties(),
+                },
+                required: match self {
+                    Tool::ReadFile(_) => ReadFile::required_fields(),
+                    Tool::InsertAfterLine(_) => InsertAfterLine::required_fields(),
+                },
             },
         }
     }
 
-    fn to_req(&self) -> HashMap<String, String> {
+    pub fn to_req(&self) -> HashMap<String, String> {
         match self {
             Tool::ReadFile(path) => {
                 HashMap::from([("file_path".to_string(), path.input.file_path.to_string())])
@@ -144,38 +64,7 @@ impl ToolTrait for Tool {
             ]),
         }
     }
-}
 
-impl ToolResultTrait for ToolResult {
-    fn tool(&self) -> Tool {
-        match self {
-            ToolResult::ReadFileResult {
-                res: _res,
-                tool,
-                id: _id,
-            } => tool.clone(),
-            ToolResult::InsertAfterLineResult { status, tool, id } => tool.clone(),
-        }
-    }
-
-    fn to_res_json(&self) -> claude::ContentBlock {
-        match self {
-            ToolResult::ReadFileResult { res, tool: _, id } => claude::ContentBlock::ToolResult {
-                tool_use_id: id.to_string(),
-                content: res.to_string(),
-            },
-            ToolResult::InsertAfterLineResult { status, tool, id } => {
-                claude::ContentBlock::ToolResult {
-                    tool_use_id: id.to_string(),
-                    content: status.to_string(),
-                }
-            }
-        }
-    }
-}
-
-// these can't be traits
-impl Tool {
     pub async fn use_tool(&self, id: String, ctx: &CurContext) -> anyhow::Result<ToolResult> {
         match self {
             Tool::ReadFile(read_file) => {
@@ -202,6 +91,30 @@ impl Tool {
             "read_file" => Ok(Tool::ReadFile(ReadFile::default())),
             "insert_after_line" => Ok(Tool::InsertAfterLine(InsertAfterLine::default())),
             _ => Err(Error::msg("Is not a tool")),
+        }
+    }
+}
+
+impl ToolResult {
+    pub fn tool(&self) -> Tool {
+        match self {
+            ToolResult::ReadFileResult { tool, .. } => tool.clone(),
+            ToolResult::InsertAfterLineResult { tool, .. } => tool.clone(),
+        }
+    }
+
+    pub fn to_res_json(&self) -> claude::ContentBlock {
+        match self {
+            ToolResult::ReadFileResult { res, id, .. } => claude::ContentBlock::ToolResult {
+                tool_use_id: id.to_string(),
+                content: res.to_string(),
+            },
+            ToolResult::InsertAfterLineResult { status, id, .. } => {
+                claude::ContentBlock::ToolResult {
+                    tool_use_id: id.to_string(),
+                    content: status.to_string(),
+                }
+            }
         }
     }
 }

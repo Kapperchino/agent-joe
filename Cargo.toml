@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "turbo-code-macros"]
+
 [package]
 name = "turbo-code"
 version = "0.1.0"
@@ -7,6 +10,7 @@ edition = "2024"
 opt-level = 3
 
 [dependencies]
+turbo-code-macros = { path = "turbo-code-macros" }
 reqwest = { version = "0.12.25", features = ["json", "stream"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

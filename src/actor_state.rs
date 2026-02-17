@@ -1,9 +1,7 @@
 use crate::actor::{ActorToTui, Dependency, State, StreamAccu, StreamRes};
 use crate::claude::{ClaudeClient, ContentBlock, ContentBlockInfo, Delta, Role, StreamEvent};
 use crate::cur_context::CurContext;
-use crate::tool_defs::{
-    InsertAfterLineInput, ReadFileInput, Tool, ToolResult, ToolResultTrait, ToolTrait,
-};
+use crate::tool_defs::{InsertAfterLineInput, ReadFileInput, Tool, ToolResult};
 use crate::{claude, file_actor, tool_impls};
 use futures::{future, StreamExt};
 use ractor::{ActorCell, ActorRef};

@@ -4423,8 +4423,18 @@ dependencies = [
  "tokio-stream",
  "triomphe",
  "tui",
+ "turbo-code-macros",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "turbo-code-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.106",
 ]
 
 [[package]]
