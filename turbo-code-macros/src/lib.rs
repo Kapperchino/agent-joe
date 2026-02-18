@@ -2,7 +2,8 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::spanned::Spanned;
 use syn::{
-    parse_macro_input, Data, DeriveInput, Fields, GenericArgument, LitStr, PathArguments, Type,
+    parse_macro_input, Attribute, Data, DeriveInput, Fields, GenericArgument, LitBool, LitStr, PathArguments,
+    Type,
 };
 
 #[proc_macro_derive(ToolDef, attributes(tool))]
@@ -73,35 +74,23 @@ fn impl_tool_input(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
     for field in fields {
         let field_name = field.ident.as_ref().unwrap().to_string();
 
-        let mut description: Option<String> = None;
-        let mut is_required = false;
+        let description =
+            extract_field_value_from_attrs_option::<LitStr>(&field.attrs, &field_name)?;
+        let is_required =
+            extract_field_value_from_attrs_option::<LitBool>(&field.attrs, &field_name)?
+                .map(|l| l.value)
+                .unwrap_or(false);
 
-        for attr in &field.attrs {
-            if !attr.path().is_ident("tool") {
-                continue;
+        if let Some(desc) = description {
+            if is_required {
+                required_names.push(field_name.clone());
             }
-            attr.parse_nested_meta(|meta| {
-                if meta.path.is_ident("description") {
-                    let value: LitStr = meta.value()?.parse()?;
-                    description = Some(value.value());
-                } else if meta.path.is_ident("required") {
-                    is_required = true;
-                }
-                Ok(())
-            })?;
-        }
 
-        let Some(desc) = description else { continue };
+            let kind = infer_schema_kind(&field.ty);
 
-        if is_required {
-            required_names.push(field_name.clone());
-        }
-
-        let kind = infer_schema_kind(&field.ty);
-
-        if kind == "object" {
-            let inner_type = extract_inner_type(&field.ty);
-            property_insertions.push(quote! {
+            if kind == "object" {
+                let inner_type = extract_inner_type(&field.ty);
+                property_insertions.push(quote! {
                 map.insert(#field_name.to_string(), crate::claude::ToolProperty::Object {
                     name: #field_name.to_string(),
                     prop_type: "object".to_string(),
@@ -109,14 +98,15 @@ fn impl_tool_input(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
                     properties: <#inner_type as crate::tool_defs::ToolInputSchema>::properties(),
                 });
             });
-        } else {
-            property_insertions.push(quote! {
-                map.insert(#field_name.to_string(), crate::claude::ToolProperty::Value {
-                    name: #field_name.to_string(),
-                    prop_type: #kind.to_string(),
-                    description: #desc.to_string(),
+            } else {
+                property_insertions.push(quote! {
+                    map.insert(#field_name.to_string(), crate::claude::ToolProperty::Value {
+                        name: #field_name.to_string(),
+                        prop_type: #kind.to_string(),
+                        description: #desc.to_string(),
+                    });
                 });
-            });
+            }
         }
     }
 
@@ -167,12 +157,11 @@ fn infer_schema_kind(ty: &Type) -> &'static str {
     "object"
 }
 
-fn extract_field_value<T: syn::parse::Parse>(
-    input: &DeriveInput,
+fn extract_field_value_from_attrs_option<T: syn::parse::Parse>(
+    attrs: &Vec<Attribute>,
     field_name: &str,
-) -> Result<T, syn::Error> {
-    let res: Vec<T> = input
-        .attrs
+) -> Result<Option<T>, syn::Error> {
+    let res: Vec<T> = attrs
         .iter()
         .filter(|attr| attr.path().is_ident("tool"))
         .flat_map(|attr| {
@@ -189,9 +178,22 @@ fn extract_field_value<T: syn::parse::Parse>(
         })
         .flatten()
         .collect::<Vec<_>>();
-    res.into_iter()
-        .next()
-        .ok_or_else(|| syn::Error::new(input.span(), format!("missing {field_name}")))
+    Ok(res.into_iter().next())
+}
+fn extract_field_value_from_attrs<T: syn::parse::Parse>(
+    attrs: &Vec<Attribute>,
+    field_name: &str,
+    input: &DeriveInput,
+) -> Result<T, syn::Error> {
+    let opts = extract_field_value_from_attrs_option::<T>(attrs, field_name)?;
+    opts.ok_or_else(|| syn::Error::new(input.span(), format!("missing {field_name}")))
+}
+
+fn extract_field_value<T: syn::parse::Parse>(
+    input: &DeriveInput,
+    field_name: &str,
+) -> Result<T, syn::Error> {
+    extract_field_value_from_attrs(&input.attrs, field_name, input)
 }
 
 fn extract_field_type(input: &DeriveInput, field_name: &str) -> Result<Type, syn::Error> {
