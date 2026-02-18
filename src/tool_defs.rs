@@ -9,13 +9,13 @@ pub trait ToolDefTrait {
     fn tool_description() -> &'static str;
     fn field_properties() -> HashMap<String, ToolProperty>;
     fn required_fields() -> Vec<String>;
-    fn req(&self) -> anyhow::Result<HashMap<String,String>>;
+    fn req(&self) -> anyhow::Result<HashMap<String, String>>;
 }
 
 pub trait ToolInputSchema {
     fn properties() -> HashMap<String, ToolProperty>;
     fn required() -> Vec<String>;
-    fn req(&self) -> anyhow::Result<HashMap<String,String>>;
+    fn req(&self) -> anyhow::Result<HashMap<String, String>>;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,6 +59,23 @@ pub struct InsertAfterLineInput {
     pub(crate) file_path: String,
     #[tool(description = "Line number of the file to insert to", required)]
     pub line_num: usize,
+}
+
+#[derive(Default, Serialize, Deserialize, Debug, Clone, ToolDef)]
+#[tool(name = "str_replace", description = "Replace a string with another")]
+pub struct StringReplace {
+    #[tool(input)]
+    pub input: StringReplaceInput,
+    pub id: String,
+}
+#[derive(Default, Serialize, Deserialize, Debug, Clone, ToolInput)]
+pub struct StringReplaceInput {
+    #[tool(description = "The exact text to find", required)]
+    pub old_str: String,
+    #[tool(description = "The text to replace it with", required)]
+    pub new_str: String,
+    #[tool(description = "Path of the file", required)]
+    pub path: String,
 }
 
 #[derive(Debug)]
