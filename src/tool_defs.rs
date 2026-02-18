@@ -9,11 +9,13 @@ pub trait ToolDefTrait {
     fn tool_description() -> &'static str;
     fn field_properties() -> HashMap<String, ToolProperty>;
     fn required_fields() -> Vec<String>;
+    fn req(&self) -> anyhow::Result<HashMap<String,String>>;
 }
 
 pub trait ToolInputSchema {
     fn properties() -> HashMap<String, ToolProperty>;
     fn required() -> Vec<String>;
+    fn req(&self) -> anyhow::Result<HashMap<String,String>>;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -183,7 +183,7 @@ impl Actor for Worker {
             Message::UseTool(vec) => {
                 let res = state.process_tools(vec).await;
                 state.change_state(State::ToolStart);
-                state.save_history(res);
+                state.save_history(res)?;
                 state.change_state(State::ToolStop);
                 // if tool result was the last value, then we can loop
                 if let Some(ContentBlock::ToolResult { .. }) =
@@ -211,7 +211,7 @@ impl Actor for Worker {
                         myself.send_message(Message::UseTool(vec))?;
                     } else {
                         let res = state.process_tools(vec).await;
-                        state.save_history(res);
+                        state.save_history(res)?;
                     }
                 }
             },

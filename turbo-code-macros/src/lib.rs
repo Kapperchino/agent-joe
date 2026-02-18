@@ -29,7 +29,7 @@ fn impl_tool_def(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
 
     let tool_name = extract_field_value::<LitStr>(input, "name")?;
     let tool_description = extract_field_value::<LitStr>(input, "description")?;
-    let input_type = extract_field_type(input, "input")?;
+    let (input_field, input_type) = extract_field_type(input, "input")?;
 
     Ok(quote! {
         impl crate::tool_defs::ToolDefTrait for #struct_name {
@@ -42,6 +42,10 @@ fn impl_tool_def(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
 
             fn required_fields() -> Vec<String> {
                 <#input_type as crate::tool_defs::ToolInputSchema>::required()
+            }
+
+            fn req(&self) -> anyhow::Result<std::collections::HashMap<String,String>> {
+                self.#input_field.req()
             }
         }
     })
@@ -70,9 +74,11 @@ fn impl_tool_input(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
 
     let mut property_insertions = Vec::new();
     let mut required_names = Vec::new();
+    let mut req_insertions = Vec::new();
 
     fields.iter().try_for_each(|field| {
-        let field_name = field.ident.as_ref().unwrap().to_string();
+        let field_name_str = field.ident.as_ref().unwrap().to_string();
+        let field_name = &field.ident;
 
         let description =
             extract_field_value_from_attrs_option::<LitStr>(&field.attrs, "description")?;
@@ -83,7 +89,7 @@ fn impl_tool_input(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
 
         if let Some(desc) = description {
             if is_required {
-                required_names.push(field_name.clone());
+                required_names.push(field_name_str.clone());
             }
 
             let kind = infer_schema_kind(&field.ty);
@@ -91,21 +97,27 @@ fn impl_tool_input(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
             if kind == "object" {
                 let inner_type = extract_inner_type(&field.ty);
                 property_insertions.push(quote! {
-                map.insert(#field_name.to_string(), crate::claude::ToolProperty::Object {
-                    name: #field_name.to_string(),
+                map.insert(#field_name_str.to_string(), crate::claude::ToolProperty::Object {
+                    name: #field_name_str.to_string(),
                     prop_type: "object".to_string(),
                     description: #desc.to_string(),
                     properties: <#inner_type as crate::tool_defs::ToolInputSchema>::properties(),
                 });
             });
+                req_insertions.push(quote! {
+                map.insert(#field_name_str.to_string(), serde_json::to_string(&#field_name_str)?);
+            });
             } else {
                 property_insertions.push(quote! {
-                    map.insert(#field_name.to_string(), crate::claude::ToolProperty::Value {
-                        name: #field_name.to_string(),
+                    map.insert(#field_name_str.to_string(), crate::claude::ToolProperty::Value {
+                        name: #field_name_str.to_string(),
                         prop_type: #kind.to_string(),
                         description: #desc.to_string(),
                     });
                 });
+                req_insertions.push(quote! {
+                map.insert(#field_name_str.to_string(), self.#field_name.to_string());
+            });
             }
         }
         Ok::<(), syn::Error>(())
@@ -121,6 +133,12 @@ fn impl_tool_input(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
 
             fn required() -> Vec<String> {
                 vec![#(#required_names.to_string()),*]
+            }
+
+            fn req(&self) -> anyhow::Result<std::collections::HashMap<String,String>> {
+                let mut map = ::std::collections::HashMap::new();
+                #(#req_insertions)*
+                Ok(map)
             }
         }
     })
@@ -197,7 +215,7 @@ fn extract_field_value<T: syn::parse::Parse>(
     extract_field_value_from_attrs(&input.attrs, field_name, input)
 }
 
-fn extract_field_type(input: &DeriveInput, field_name: &str) -> Result<Type, syn::Error> {
+fn extract_field_type(input: &DeriveInput, field_name: &str) -> Result<(syn::Ident, Type), syn::Error> {
     let fields = match &input.data {
         Data::Struct(data) => match &data.fields {
             Fields::Named(fields) => Ok(&fields.named),
@@ -219,16 +237,16 @@ fn extract_field_type(input: &DeriveInput, field_name: &str) -> Result<Type, syn
             x.iter()
                 .filter(|attr| attr.path().is_ident("tool"))
                 .flat_map(|attr| {
-                    let mut parsed: Option<Type> = None;
+                    let mut parsed: Option<(syn::Ident, Type)> = None;
                     attr.parse_nested_meta(|meta| {
                         if meta.path.is_ident(field_name) {
-                            parsed = Some(field.ty.clone());
+                            parsed = Some((field.ident.clone().unwrap(), field.ty.clone()));
                         } else if meta.input.peek(syn::Token![=]) {
                             meta.value()?.parse::<LitStr>()?;
                         }
                         Ok(())
                     })?;
-                    Ok::<Option<Type>, syn::Error>(parsed)
+                    Ok::<Option<(syn::Ident, Type)>, syn::Error>(parsed)
                 })
                 .flatten()
                 .collect::<Vec<_>>()

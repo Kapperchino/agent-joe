@@ -1,9 +1,9 @@
 use crate::analysis::Range;
 use crate::claude;
-use crate::claude::{ToolProperty, ToolSchemaDTO};
+use crate::claude::ToolSchemaDTO;
 use crate::cur_context::CurContext;
-pub(crate) use crate::tool_defs::{InsertAfterLine, ReadFile, Tool, ToolResult};
 use crate::tool_defs::ToolDefTrait;
+pub(crate) use crate::tool_defs::{InsertAfterLine, ReadFile, Tool, ToolResult};
 use anyhow::{anyhow, Error};
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
@@ -52,16 +52,10 @@ impl Tool {
         }
     }
 
-    pub fn to_req(&self) -> HashMap<String, String> {
+    pub fn to_req(&self) -> anyhow::Result<HashMap<String, String>> {
         match self {
-            Tool::ReadFile(path) => {
-                HashMap::from([("file_path".to_string(), path.input.file_path.to_string())])
-            }
-            Tool::InsertAfterLine(insert) => HashMap::from([
-                ("content".to_string(), insert.input.content.to_string()),
-                ("file_path".to_string(), insert.input.file_path.to_string()),
-                ("line_num".to_string(), insert.input.line_num.to_string()),
-            ]),
+            Tool::ReadFile(path) => path.req(),
+            Tool::InsertAfterLine(insert) => insert.req(),
         }
     }
 

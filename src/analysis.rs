@@ -29,9 +29,9 @@ pub struct AnalysisSession<'a> {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, Eq, PartialEq, Hash, ToolInput)]
 pub struct Range {
     #[tool(description = "Start line (inclusive)", required)]
-    pub(crate) start: u32,
+    pub start: u32,
     #[tool(description = "End line (exclusive)", required)]
-    pub(crate) end: u32,
+    pub end: u32,
 }
 
 impl<'a> AnalysisSession<'a> {

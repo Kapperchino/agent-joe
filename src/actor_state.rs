@@ -51,10 +51,13 @@ impl ActorState {
         })
     }
 
-    pub fn save_history(&mut self, vec: Vec<anyhow::Result<StreamRes>>) {
-        vec.into_iter().for_each(|res| match res {
+    pub fn save_history(&mut self, vec: Vec<anyhow::Result<StreamRes>>) -> anyhow::Result<()> {
+        vec.into_iter().try_for_each(|res| match res {
             Ok(stream_res) => match stream_res {
-                StreamRes::String(str) => self.history.push(claude::Message::new_assistant(str)),
+                StreamRes::String(str) => {
+                    self.history.push(claude::Message::new_assistant(str));
+                    Ok(())
+                }
                 StreamRes::Thinking {
                     thinking,
                     signature,
@@ -66,26 +69,31 @@ impl ActorState {
                             signature,
                         }],
                     });
+                    Ok(())
                 }
                 StreamRes::Tool(tool_res) => {
+                    let input = tool_res.tool().to_req()?;
                     self.history.push(claude::Message {
                         role: Role::Assistant,
                         content: vec![ContentBlock::ToolBlock {
                             id: tool_res.tool().id(),
                             name: tool_res.tool().name(),
-                            input: tool_res.tool().to_req(),
+                            input,
                         }],
                     });
                     self.history.push(claude::Message {
                         role: Role::User,
                         content: vec![tool_res.to_res_json()],
                     });
+                    Ok(())
                 }
             },
             Err(err) => {
-                println!("{:?}", err)
+                println!("{:?}", err);
+                Err(err)
             }
-        });
+        })?;
+        Ok(())
     }
     pub fn change_state(&mut self, new_state: State) {
         self.cur_state = new_state.clone();
