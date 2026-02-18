@@ -71,13 +71,13 @@ fn impl_tool_input(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
     let mut property_insertions = Vec::new();
     let mut required_names = Vec::new();
 
-    for field in fields {
+    fields.iter().try_for_each(|field| {
         let field_name = field.ident.as_ref().unwrap().to_string();
 
         let description =
-            extract_field_value_from_attrs_option::<LitStr>(&field.attrs, &field_name)?;
+            extract_field_value_from_attrs_option::<LitStr>(&field.attrs, "description")?;
         let is_required =
-            extract_field_value_from_attrs_option::<LitBool>(&field.attrs, &field_name)?
+            extract_field_value_from_attrs_option::<LitBool>(&field.attrs, "required")?
                 .map(|l| l.value)
                 .unwrap_or(false);
 
@@ -108,7 +108,8 @@ fn impl_tool_input(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
                 });
             }
         }
-    }
+        Ok::<(), syn::Error>(())
+    })?;
 
     Ok(quote! {
         impl crate::tool_defs::ToolInputSchema for #struct_name {
