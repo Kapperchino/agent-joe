@@ -99,6 +99,7 @@ impl Tool {
         match name {
             "read_file" => Ok(Tool::ReadFile(ReadFile::default())),
             "insert_after_line" => Ok(Tool::InsertAfterLine(InsertAfterLine::default())),
+            "str_replace" => Ok(Tool::StringReplace(StringReplace::default())),
             _ => Err(Error::msg("Is not a tool")),
         }
     }
