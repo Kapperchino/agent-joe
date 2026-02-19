@@ -10,15 +10,15 @@ mod file_actor;
 mod proj_meta;
 mod rust_proj;
 mod symbol_info;
+mod text_search;
 mod tool_defs;
 mod tool_impls;
 mod utils;
 mod worker;
-mod text_search;
 
 use crate::actor::Dependency;
 use crate::claude::{ClaudeClient, ClaudeConfig};
-use crate::tool_defs::InsertAfterLine;
+use crate::tool_defs::{InsertAfterLine, StringReplace};
 use crate::tool_impls::ReadFile;
 use crate::worker::Worker;
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
@@ -59,6 +59,7 @@ async fn main() {
             tools: vec![
                 tool_impls::Tool::ReadFile(ReadFile::default()),
                 tool_impls::Tool::InsertAfterLine(InsertAfterLine::default()),
+                tool_impls::Tool::StringReplace(StringReplace::default()),
             ],
             tui_tx: tx,
         },

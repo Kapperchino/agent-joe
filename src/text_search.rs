@@ -6,7 +6,8 @@ use grep::searcher::Searcher;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-struct TextSearch {}
+pub struct TextSearch {}
+
 impl TextSearch {
     pub fn search(text: &str, file_path: &PathBuf) -> anyhow::Result<Vec<(u64, String)>> {
         let matcher = RegexMatcher::new(text)?;

@@ -1,7 +1,7 @@
 use crate::actor::{ActorToTui, Dependency, State, StreamAccu, StreamRes};
 use crate::claude::{ClaudeClient, ContentBlock, ContentBlockInfo, Delta, Role, StreamEvent};
 use crate::cur_context::CurContext;
-use crate::tool_defs::{InsertAfterLineInput, ReadFileInput, Tool, ToolResult};
+use crate::tool_defs::{InsertAfterLineInput, ReadFileInput, StringReplaceInput, Tool, ToolResult};
 use crate::{claude, file_actor, tool_impls};
 use futures::{future, StreamExt};
 use ractor::{ActorCell, ActorRef};
@@ -256,6 +256,21 @@ impl ActorState {
                             input,
                         };
                         Ok(Tool::InsertAfterLine(rf)
+                            .use_tool(id, &self.cur_context)
+                            .await?)
+                    }
+                    _ => Err(anyhow::Error::msg("doesn't work")),
+                }
+            },
+            Tool::StringReplace(_) => {
+                match a_vec.get(1).ok_or(anyhow::Error::msg("doesn't work"))? {
+                    StreamAccu::Json(json) => {
+                        let input: StringReplaceInput = serde_json::from_str(json)?;
+                        let rf = tool_impls::StringReplace {
+                            id: id.clone(),
+                            input,
+                        };
+                        Ok(Tool::StringReplace(rf)
                             .use_tool(id, &self.cur_context)
                             .await?)
                     }

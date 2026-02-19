@@ -2,8 +2,9 @@ use crate::analysis::Range;
 use crate::claude;
 use crate::claude::ToolSchemaDTO;
 use crate::cur_context::CurContext;
-use crate::tool_defs::ToolDefTrait;
+use crate::text_search::TextSearch;
 pub(crate) use crate::tool_defs::{InsertAfterLine, ReadFile, Tool, ToolResult};
+pub(crate) use crate::tool_defs::{StringReplace, StringReplaceInput, ToolDefTrait};
 use anyhow::{anyhow, Error};
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
@@ -20,6 +21,7 @@ impl Tool {
         match self {
             Tool::ReadFile(_) => ReadFile::tool_name().to_string(),
             Tool::InsertAfterLine(_) => InsertAfterLine::tool_name().to_string(),
+            Tool::StringReplace(_) => StringReplace::tool_name().to_string(),
         }
     }
 
@@ -27,6 +29,7 @@ impl Tool {
         match self {
             Tool::ReadFile(file) => file.id.clone(),
             Tool::InsertAfterLine(insert) => insert.id.clone(),
+            Tool::StringReplace(replace) => replace.id.clone(),
         }
     }
 
@@ -36,6 +39,7 @@ impl Tool {
             description: match self {
                 Tool::ReadFile(_) => ReadFile::tool_description().to_string(),
                 Tool::InsertAfterLine(_) => InsertAfterLine::tool_description().to_string(),
+                Tool::StringReplace(_) => StringReplace::tool_description().to_string(),
             },
             input_schema: ToolSchemaDTO {
                 name: self.name(),
@@ -43,10 +47,12 @@ impl Tool {
                 properties: match self {
                     Tool::ReadFile(_) => ReadFile::field_properties(),
                     Tool::InsertAfterLine(_) => InsertAfterLine::field_properties(),
+                    Tool::StringReplace(_) => StringReplace::field_properties(),
                 },
                 required: match self {
                     Tool::ReadFile(_) => ReadFile::required_fields(),
                     Tool::InsertAfterLine(_) => InsertAfterLine::required_fields(),
+                    Tool::StringReplace(_) => StringReplace::required_fields(),
                 },
             },
         }
@@ -56,6 +62,7 @@ impl Tool {
         match self {
             Tool::ReadFile(path) => path.req(),
             Tool::InsertAfterLine(insert) => insert.req(),
+            Tool::StringReplace(replace) => replace.req(),
         }
     }
 
@@ -71,6 +78,14 @@ impl Tool {
             }
             Tool::InsertAfterLine(insert) => {
                 insert.insert_after_line().await?;
+                Ok(ToolResult::InsertAfterLineResult {
+                    status: "ok".to_string(),
+                    tool: self.clone(),
+                    id,
+                })
+            }
+            Tool::StringReplace(replace) => {
+                replace.str_replace().await?;
                 Ok(ToolResult::InsertAfterLineResult {
                     status: "ok".to_string(),
                     tool: self.clone(),
@@ -94,6 +109,7 @@ impl ToolResult {
         match self {
             ToolResult::ReadFileResult { tool, .. } => tool.clone(),
             ToolResult::InsertAfterLineResult { tool, .. } => tool.clone(),
+            ToolResult::StringReplaceResult { tool, .. } => tool.clone(),
         }
     }
 
@@ -104,6 +120,12 @@ impl ToolResult {
                 content: res.to_string(),
             },
             ToolResult::InsertAfterLineResult { status, id, .. } => {
+                claude::ContentBlock::ToolResult {
+                    tool_use_id: id.to_string(),
+                    content: status.to_string(),
+                }
+            }
+            ToolResult::StringReplaceResult { status, id, .. } => {
                 claude::ContentBlock::ToolResult {
                     tool_use_id: id.to_string(),
                     content: status.to_string(),
@@ -187,6 +209,18 @@ impl InsertAfterLine {
         let mut res = lines.join("\n");
         res.push_str("\n");
         fs::write(&path, res).await?;
+        Ok(())
+    }
+}
+
+impl StringReplace {
+    async fn str_replace(&self) -> anyhow::Result<()> {
+        let StringReplaceInput {
+            old_str,
+            new_str,
+            path,
+        } = &self.input;
+        TextSearch::search_and_replace(&old_str, &new_str, &(path.into())).await?;
         Ok(())
     }
 }

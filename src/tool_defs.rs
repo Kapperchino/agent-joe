@@ -22,6 +22,7 @@ pub trait ToolInputSchema {
 pub enum Tool {
     ReadFile(ReadFile),
     InsertAfterLine(InsertAfterLine),
+    StringReplace(StringReplace),
 }
 
 #[derive(Default, Serialize, Deserialize, Debug, Clone, ToolDef)]
@@ -86,6 +87,11 @@ pub enum ToolResult {
         id: String,
     },
     InsertAfterLineResult {
+        status: String,
+        tool: Tool,
+        id: String,
+    },
+    StringReplaceResult {
         status: String,
         tool: Tool,
         id: String,
