@@ -31,6 +31,12 @@ impl Utils {
         let str = fs::read_to_string(dir).await?;
         Ok(str)
     }
+
+    pub async fn write_to_file(dir: &PathBuf, content: &str) -> anyhow::Result<()> {
+        fs::write(dir, content).await?;
+        Ok(())
+    }
+
     pub async fn get_files_for_paths(
         paths: Vec<PathBuf>,
     ) -> anyhow::Result<Vec<(PathBuf, String)>> {

@@ -14,6 +14,7 @@ mod tool_defs;
 mod tool_impls;
 mod utils;
 mod worker;
+mod text_search;
 
 use crate::actor::Dependency;
 use crate::claude::{ClaudeClient, ClaudeConfig};
