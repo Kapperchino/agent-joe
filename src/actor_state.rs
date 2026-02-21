@@ -1,7 +1,7 @@
 use crate::actor::{ActorToTui, Dependency, State, StreamAccu, StreamRes};
 use crate::claude::{ClaudeClient, ContentBlock, ContentBlockInfo, Delta, Role, StreamEvent};
 use crate::cur_context::CurContext;
-use crate::tool_defs::{InsertAfterLineInput, ReadFileInput, StringReplaceInput, Tool, ToolResult};
+use crate::tool_defs::{CargoCheckInput, InsertAfterLineInput, ReadFileInput, StringReplaceInput, Tool, ToolResult};
 use crate::{claude, file_actor, tool_impls};
 use futures::{future, StreamExt};
 use ractor::{ActorCell, ActorRef};
@@ -271,6 +271,21 @@ impl ActorState {
                             input,
                         };
                         Ok(Tool::StringReplace(rf)
+                            .use_tool(id, &self.cur_context)
+                            .await?)
+                    }
+                    _ => Err(anyhow::Error::msg("doesn't work")),
+                }
+            },
+            Tool::CargoCheck(_) => {
+                match a_vec.get(1).ok_or(anyhow::Error::msg("doesn't work"))? {
+                    StreamAccu::Json(json) => {
+                        let input: CargoCheckInput = serde_json::from_str(json)?;
+                        let rf = tool_impls::CargoCheck {
+                            id: id.clone(),
+                            input,
+                        };
+                        Ok(Tool::CargoCheck(rf)
                             .use_tool(id, &self.cur_context)
                             .await?)
                     }

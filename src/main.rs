@@ -19,7 +19,7 @@ mod cargo;
 
 use crate::actor::Dependency;
 use crate::claude::{ClaudeClient, ClaudeConfig};
-use crate::tool_defs::{InsertAfterLine, StringReplace};
+use crate::tool_defs::{CargoCheck, InsertAfterLine, StringReplace};
 use crate::tool_impls::ReadFile;
 use crate::worker::Worker;
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
@@ -61,6 +61,7 @@ async fn main() {
                 tool_impls::Tool::ReadFile(ReadFile::default()),
                 tool_impls::Tool::InsertAfterLine(InsertAfterLine::default()),
                 tool_impls::Tool::StringReplace(StringReplace::default()),
+                tool_impls::Tool::CargoCheck(CargoCheck::default())
             ],
             tui_tx: tx,
         },

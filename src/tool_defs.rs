@@ -23,6 +23,7 @@ pub enum Tool {
     ReadFile(ReadFile),
     InsertAfterLine(InsertAfterLine),
     StringReplace(StringReplace),
+    CargoCheck(CargoCheck),
 }
 
 #[derive(Default, Serialize, Deserialize, Debug, Clone, ToolDef)]
@@ -79,6 +80,32 @@ pub struct StringReplaceInput {
     pub path: String,
 }
 
+#[derive(Default, Serialize, Deserialize, Debug, Clone, ToolDef)]
+#[tool(
+    name = "cargo_check",
+    description = "Run cargo check on the project to find compilation errors and warnings"
+)]
+pub struct CargoCheck {
+    #[tool(input)]
+    pub input: CargoCheckInput,
+    pub id: String,
+}
+
+#[derive(Default, Serialize, Deserialize, Debug, Clone, ToolInput)]
+pub struct CargoCheckInput {
+    #[serde(default)]
+    #[tool(description = "Include warnings in the output, defaults to false")]
+    pub include_warnings: bool,
+}
+
+#[derive(Debug)]
+pub enum CargoCheckResult {
+    Success(Vec<String>),
+    Failed {
+        warnings: Vec<String>,
+        errors: Vec<String>,
+    },
+}
 #[derive(Debug)]
 pub enum ToolResult {
     ReadFileResult {
@@ -93,6 +120,12 @@ pub enum ToolResult {
     },
     StringReplaceResult {
         status: String,
+        tool: Tool,
+        id: String,
+    },
+    CargoCheckResult {
+        status: String,
+        result: CargoCheckResult,
         tool: Tool,
         id: String,
     },

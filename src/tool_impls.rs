@@ -1,10 +1,12 @@
 use crate::analysis::Range;
-use crate::claude;
+use crate::cargo::Cargo;
 use crate::claude::ToolSchemaDTO;
 use crate::cur_context::CurContext;
 use crate::text_search::TextSearch;
-pub(crate) use crate::tool_defs::{InsertAfterLine, ReadFile, Tool, ToolResult};
+use crate::tool_defs::CargoCheckResult;
+pub(crate) use crate::tool_defs::{CargoCheck, InsertAfterLine, ReadFile, Tool, ToolResult};
 pub(crate) use crate::tool_defs::{StringReplace, StringReplaceInput, ToolDefTrait};
+use crate::{cargo, claude};
 use anyhow::{anyhow, Error};
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
@@ -22,6 +24,7 @@ impl Tool {
             Tool::ReadFile(_) => ReadFile::tool_name().to_string(),
             Tool::InsertAfterLine(_) => InsertAfterLine::tool_name().to_string(),
             Tool::StringReplace(_) => StringReplace::tool_name().to_string(),
+            Tool::CargoCheck(_) => CargoCheck::tool_name().to_string(),
         }
     }
 
@@ -30,6 +33,7 @@ impl Tool {
             Tool::ReadFile(file) => file.id.clone(),
             Tool::InsertAfterLine(insert) => insert.id.clone(),
             Tool::StringReplace(replace) => replace.id.clone(),
+            Tool::CargoCheck(check) => check.id.clone(),
         }
     }
 
@@ -40,6 +44,7 @@ impl Tool {
                 Tool::ReadFile(_) => ReadFile::tool_description().to_string(),
                 Tool::InsertAfterLine(_) => InsertAfterLine::tool_description().to_string(),
                 Tool::StringReplace(_) => StringReplace::tool_description().to_string(),
+                Tool::CargoCheck(_) => CargoCheck::tool_description().to_string(),
             },
             input_schema: ToolSchemaDTO {
                 name: self.name(),
@@ -48,11 +53,13 @@ impl Tool {
                     Tool::ReadFile(_) => ReadFile::field_properties(),
                     Tool::InsertAfterLine(_) => InsertAfterLine::field_properties(),
                     Tool::StringReplace(_) => StringReplace::field_properties(),
+                    Tool::CargoCheck(_) => CargoCheck::field_properties(),
                 },
                 required: match self {
                     Tool::ReadFile(_) => ReadFile::required_fields(),
                     Tool::InsertAfterLine(_) => InsertAfterLine::required_fields(),
                     Tool::StringReplace(_) => StringReplace::required_fields(),
+                    Tool::CargoCheck(_) => CargoCheck::required_fields(),
                 },
             },
         }
@@ -63,6 +70,7 @@ impl Tool {
             Tool::ReadFile(path) => path.req(),
             Tool::InsertAfterLine(insert) => insert.req(),
             Tool::StringReplace(replace) => replace.req(),
+            Tool::CargoCheck(check) => check.req(),
         }
     }
 
@@ -92,6 +100,19 @@ impl Tool {
                     id,
                 })
             }
+            Tool::CargoCheck(check) => {
+                let res = check.cargo_check().await?;
+                Ok(ToolResult::CargoCheckResult {
+                    status: match res {
+                        CargoCheckResult::Success(_) => "success",
+                        CargoCheckResult::Failed { .. } => "failed",
+                    }
+                    .to_string(),
+                    result: res,
+                    tool: self.clone(),
+                    id,
+                })
+            }
         }
     }
 
@@ -100,6 +121,7 @@ impl Tool {
             "read_file" => Ok(Tool::ReadFile(ReadFile::default())),
             "insert_after_line" => Ok(Tool::InsertAfterLine(InsertAfterLine::default())),
             "str_replace" => Ok(Tool::StringReplace(StringReplace::default())),
+            "cargo_check" => Ok(Tool::CargoCheck(CargoCheck::default())),
             _ => Err(Error::msg("Is not a tool")),
         }
     }
@@ -111,6 +133,7 @@ impl ToolResult {
             ToolResult::ReadFileResult { tool, .. } => tool.clone(),
             ToolResult::InsertAfterLineResult { tool, .. } => tool.clone(),
             ToolResult::StringReplaceResult { tool, .. } => tool.clone(),
+            ToolResult::CargoCheckResult { tool, .. } => tool.clone(),
         }
     }
 
@@ -132,6 +155,10 @@ impl ToolResult {
                     content: status.to_string(),
                 }
             }
+            ToolResult::CargoCheckResult { status, id, .. } => claude::ContentBlock::ToolResult {
+                tool_use_id: id.to_string(),
+                content: status.to_string(),
+            },
         }
     }
 }
@@ -223,6 +250,43 @@ impl StringReplace {
         } = &self.input;
         TextSearch::search_and_replace(&old_str, &new_str, &(path.into())).await?;
         Ok(())
+    }
+}
+
+impl CargoCheck {
+    async fn cargo_check(&self) -> anyhow::Result<CargoCheckResult> {
+        let res = Cargo::cargo_check().await?;
+        match res {
+            cargo::CargoCheck::CheckPasses { warnings } => {
+                let vec = if self.input.include_warnings {
+                    warnings
+                        .into_iter()
+                        .map(|x| x.message.to_string())
+                        .collect()
+                } else {
+                    vec![]
+                };
+                Ok(CargoCheckResult::Success(vec))
+            }
+            cargo::CargoCheck::CheckFailed { failures, warnings } => {
+                let vec = if self.input.include_warnings {
+                    warnings
+                        .into_iter()
+                        .map(|x| x.message.to_string())
+                        .collect()
+                } else {
+                    vec![]
+                };
+                let failures = failures
+                    .into_iter()
+                    .map(|x| x.message.to_string())
+                    .collect();
+                Ok(CargoCheckResult::Failed {
+                    warnings: vec,
+                    errors: failures,
+                })
+            }
+        }
     }
 }
 
