@@ -11,6 +11,7 @@ use anyhow::{anyhow, Error};
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
 use ra_ap_ide::TextSize;
+use std::cmp::min;
 use std::collections::HashMap;
 use std::io::SeekFrom;
 use tokio::fs;
@@ -204,7 +205,10 @@ impl ReadFile {
                 let Range { start, end } = range;
                 let mut file = File::open(file_path).await?;
                 file.seek(SeekFrom::Start(start as u64)).await?;
-                let mut buf = vec![0; (end - start) as usize];
+                let file_size = file.metadata().await?.len();
+                let remaining: usize = (file_size - file.stream_position().await?) as usize;
+                let buf_size = min(remaining, (end - start) as usize);
+                let mut buf = vec![0; buf_size];
                 file.read_exact(&mut buf).await?;
                 let res = String::from_utf8(buf)?;
                 let res = res
