@@ -294,6 +294,11 @@ impl Default for ClaudeConfig {
         }
     }
 }
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct CacheControl {
+    cache_type: String,
+    ttl: String,
+}
 
 #[derive(Debug)]
 pub struct ClaudeClient {
@@ -307,6 +312,8 @@ pub struct ClientRequest {
     thinking: bool,
     system: Option<String>,
     model: Option<String>,
+    // this shit needs to be turned ON
+    cache_control: CacheControl,
     tools: Vec<Tool>,
 }
 
@@ -318,6 +325,10 @@ impl ClientRequest {
             system: None,
             model: None,
             tools: vec![],
+            cache_control: CacheControl {
+                cache_type: "ephemeral".to_string(),
+                ttl: "5m".to_string(),
+            },
         }
     }
 
@@ -328,6 +339,7 @@ impl ClientRequest {
             system: self.system,
             model: self.model,
             tools: self.tools,
+            cache_control: self.cache_control,
         }
     }
 
@@ -338,6 +350,7 @@ impl ClientRequest {
             system: self.system,
             model: Some(model),
             tools: self.tools,
+            cache_control: self.cache_control,
         }
     }
 
@@ -347,6 +360,7 @@ impl ClientRequest {
             thinking: self.thinking,
             system: self.system,
             model: self.model,
+            cache_control: self.cache_control,
             tools,
         }
     }
