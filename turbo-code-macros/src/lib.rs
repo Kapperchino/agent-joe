@@ -131,9 +131,17 @@ fn impl_tool_input(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
                         description: #desc.to_string(),
                     });
                 });
-                req_insertions.push(quote! {
-                    map.insert(#field_name_str.to_string(), self.#field_name.to_string());
-                });
+                if is_option_type(field_ty) {
+                    req_insertions.push(quote! {
+                        if let Some(ref val) = self.#field_name {
+                            map.insert(#field_name_str.to_string(), val.to_string());
+                        }
+                    });
+                } else {
+                    req_insertions.push(quote! {
+                        map.insert(#field_name_str.to_string(), self.#field_name.to_string());
+                    });
+                }
             }
         }
         Ok::<(), syn::Error>(())

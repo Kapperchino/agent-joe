@@ -262,7 +262,7 @@ impl CargoCheck {
         let res = Cargo::cargo_check().await?;
         match res {
             cargo::CargoCheck::CheckPasses { warnings } => {
-                let vec = if self.input.include_warnings {
+                let vec = if self.input.include_warnings.unwrap_or(false) {
                     warnings
                         .into_iter()
                         .map(|x| x.message.to_string())
@@ -273,7 +273,7 @@ impl CargoCheck {
                 Ok(CargoCheckResult::Success(vec))
             }
             cargo::CargoCheck::CheckFailed { failures, warnings } => {
-                let vec = if self.input.include_warnings {
+                let vec = if self.input.include_warnings.unwrap_or(false) {
                     warnings
                         .into_iter()
                         .map(|x| x.message.to_string())

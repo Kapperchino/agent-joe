@@ -23,15 +23,6 @@ pub trait LenientDeserialize: Sized {
     fn deserialize_lenient(s: &str) -> anyhow::Result<Self>;
 }
 
-fn deserialize_or_none<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: serde::Deserialize<'de>,
-{
-    let value = serde_json::Value::deserialize(deserializer)?;
-    Ok(T::deserialize(value).ok())
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Tool {
     ReadFile(ReadFile),
@@ -94,6 +85,7 @@ pub struct StringReplaceInput {
     pub path: String,
 }
 
+
 #[derive(Default, Serialize, Deserialize, Debug, Clone, ToolDef)]
 #[tool(
     name = "cargo_check",
@@ -109,7 +101,7 @@ pub struct CargoCheck {
 pub struct CargoCheckInput {
     #[serde(default)]
     #[tool(description = "Include warnings in the output, defaults to false")]
-    pub include_warnings: bool,
+    pub include_warnings: Option<bool>,
 }
 
 #[derive(Debug)]
