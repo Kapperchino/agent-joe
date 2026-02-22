@@ -157,6 +157,7 @@ impl From<SymbolInfo> for TraitMeta {
 }
 
 impl ProjMeta {
+    // not proud of this
     pub async fn get_proj_meta_from_symbols(
         vec: Vec<SymbolInfo>,
         rust_proj: &RustProject,
@@ -174,15 +175,19 @@ impl ProjMeta {
         let mut traits_metas: HashMap<String, TraitMeta> = Self::into_meta(&traits);
         let type_alias_metas: HashMap<String, TypeAliasMeta> = Self::into_meta(&type_alias);
 
-        let (mut stand_alone, mut functions): (Vec<_>, _) =
-            Self::get_symbol_map(&joe, &SymbolKind::Function)
-                .into_values()
-                .partition(|info| info.container_name.is_none());
+        let (mut stand_alone, mut functions): (Vec<_>, _) = joe
+            .get(&SymbolKind::Function)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .partition(|info| info.container_name.is_none());
 
-        let (mut m_stand_alone, mut m_functions): (Vec<_>, _) =
-            Self::get_symbol_map(&joe, &SymbolKind::Method)
-                .into_values()
-                .partition(|info| info.container_name.is_none());
+        let (mut m_stand_alone, mut m_functions): (Vec<_>, _) = joe
+            .get(&SymbolKind::Method)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .partition(|info| info.container_name.is_none());
 
         stand_alone.append(&mut m_stand_alone);
         functions.append(&mut m_functions);
@@ -244,7 +249,7 @@ impl ProjMeta {
                         });
                     }
                     Some(val) => {
-                        //println!("k:{:?}{:?}", k, val);
+                        // println!("k:{:?}{:?}", k, val);
                     }
                 };
             }
