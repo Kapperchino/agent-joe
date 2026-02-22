@@ -41,7 +41,7 @@ pub struct ReadFile {
 pub struct ReadFileInput {
     #[tool(description = "file path of the file you want to read", required)]
     pub(crate) file_path: String,
-    #[tool(description = "range of the offsets you want to read")]
+    #[tool(description = "range of the offsets you want to read, empty to read the entire file")]
     pub range: Option<Range>,
 }
 
