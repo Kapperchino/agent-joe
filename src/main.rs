@@ -31,16 +31,22 @@ use tokio::main;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tracing::Level;
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::FmtSubscriber;
 
 #[main]
 async fn main() {
-    let file = std::fs::File::create("err.log").unwrap();
+    let file_appender = RollingFileAppender::new(
+        Rotation::HOURLY,
+        "./logs",
+        "err.log"
+    );
+    let (file_appender, _guard) = tracing_appender::non_blocking(file_appender);
+
     // a builder for `FmtSubscriber`.
     let subscriber = FmtSubscriber::builder()
         .with_max_level(Level::WARN)
-        .with_writer(file)
-        // completes the builder.
+        .with_writer(file_appender)
         .finish();
 
     tracing::subscriber::set_global_default(subscriber)
