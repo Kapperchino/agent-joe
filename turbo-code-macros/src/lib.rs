@@ -75,10 +75,29 @@ fn impl_tool_input(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
     let mut property_insertions = Vec::new();
     let mut required_names = Vec::new();
     let mut req_insertions = Vec::new();
+    let mut lenient_fields = Vec::new();
 
     fields.iter().try_for_each(|field| {
         let field_name_str = field.ident.as_ref().unwrap().to_string();
         let field_name = &field.ident;
+        let field_ty = &field.ty;
+
+        // Generate lenient deserialization for every field
+        if is_option_type(field_ty) {
+            lenient_fields.push(quote! {
+                #field_name: obj.get(#field_name_str)
+                    .cloned()
+                    .and_then(|v| serde_json::from_value(v).ok())
+            });
+        } else {
+            lenient_fields.push(quote! {
+                #field_name: serde_json::from_value(
+                    obj.get(#field_name_str)
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null)
+                )?
+            });
+        }
 
         let description =
             extract_field_value_from_attrs_option::<LitStr>(&field.attrs, "description")?;
@@ -138,7 +157,27 @@ fn impl_tool_input(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
                 Ok(map)
             }
         }
+
+        impl crate::tool_defs::LenientDeserialize for #struct_name {
+            fn deserialize_lenient(s: &str) -> anyhow::Result<Self> {
+                let value: serde_json::Value = serde_json::from_str(s)?;
+                let obj = value.as_object()
+                    .ok_or_else(|| anyhow::anyhow!("expected JSON object"))?;
+                Ok(Self {
+                    #(#lenient_fields),*
+                })
+            }
+        }
     })
+}
+
+fn is_option_type(ty: &Type) -> bool {
+    if let Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            return segment.ident == "Option";
+        }
+    }
+    false
 }
 
 fn extract_inner_type(ty: &Type) -> &Type {

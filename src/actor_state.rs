@@ -1,7 +1,7 @@
 use crate::actor::{ActorToTui, Dependency, State, StreamAccu, StreamRes};
 use crate::claude::{ClaudeClient, ContentBlock, ContentBlockInfo, Delta, Role, StreamEvent};
 use crate::cur_context::CurContext;
-use crate::tool_defs::{CargoCheckInput, InsertAfterLineInput, ReadFileInput, StringReplaceInput, Tool, ToolResult};
+use crate::tool_defs::{CargoCheckInput, InsertAfterLineInput, LenientDeserialize, ReadFileInput, StringReplaceInput, Tool, ToolResult};
 use crate::{claude, file_actor, tool_impls};
 use futures::{future, StreamExt};
 use ractor::{ActorCell, ActorRef};
@@ -238,7 +238,7 @@ impl ActorState {
         match Tool::from_str(name.as_str())? {
             Tool::ReadFile(_) => match a_vec.get(1).ok_or(anyhow::Error::msg("doesn't work"))? {
                 StreamAccu::Json(json) => {
-                    let input: ReadFileInput = serde_json::from_str(json)?;
+                    let input = ReadFileInput::deserialize_lenient(json)?;
                     let rf = tool_impls::ReadFile {
                         id: id.clone(),
                         input,
@@ -250,7 +250,7 @@ impl ActorState {
             Tool::InsertAfterLine(_) => {
                 match a_vec.get(1).ok_or(anyhow::Error::msg("doesn't work"))? {
                     StreamAccu::Json(json) => {
-                        let input: InsertAfterLineInput = serde_json::from_str(json)?;
+                        let input = InsertAfterLineInput::deserialize_lenient(json)?;
                         let rf = tool_impls::InsertAfterLine {
                             id: id.clone(),
                             input,
@@ -265,7 +265,7 @@ impl ActorState {
             Tool::StringReplace(_) => {
                 match a_vec.get(1).ok_or(anyhow::Error::msg("doesn't work"))? {
                     StreamAccu::Json(json) => {
-                        let input: StringReplaceInput = serde_json::from_str(json)?;
+                        let input = StringReplaceInput::deserialize_lenient(json)?;
                         let rf = tool_impls::StringReplace {
                             id: id.clone(),
                             input,
@@ -280,7 +280,7 @@ impl ActorState {
             Tool::CargoCheck(_) => {
                 match a_vec.get(1).ok_or(anyhow::Error::msg("doesn't work"))? {
                     StreamAccu::Json(json) => {
-                        let input: CargoCheckInput = serde_json::from_str(json)?;
+                        let input = CargoCheckInput::deserialize_lenient(json)?;
                         let rf = tool_impls::CargoCheck {
                             id: id.clone(),
                             input,

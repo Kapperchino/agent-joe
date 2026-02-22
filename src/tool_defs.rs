@@ -18,6 +18,20 @@ pub trait ToolInputSchema {
     fn req(&self) -> anyhow::Result<HashMap<String, String>>;
 }
 
+pub trait LenientDeserialize: Sized {
+    /// Deserialize from a JSON string, silently converting Option field errors to None.
+    fn deserialize_lenient(s: &str) -> anyhow::Result<Self>;
+}
+
+fn deserialize_or_none<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(T::deserialize(value).ok())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Tool {
     ReadFile(ReadFile),
