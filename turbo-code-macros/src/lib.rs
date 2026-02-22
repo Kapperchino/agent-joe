@@ -2,8 +2,8 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::spanned::Spanned;
 use syn::{
-    parse_macro_input, Attribute, Data, DeriveInput, Fields, GenericArgument, LitBool, LitStr, PathArguments,
-    Type,
+    parse_macro_input, Attribute, Data, DeriveInput, Fields, GenericArgument, LitStr,
+    PathArguments, Type,
 };
 
 #[proc_macro_derive(ToolDef, attributes(tool))]
@@ -82,10 +82,7 @@ fn impl_tool_input(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
 
         let description =
             extract_field_value_from_attrs_option::<LitStr>(&field.attrs, "description")?;
-        let is_required =
-            extract_field_value_from_attrs_option::<LitBool>(&field.attrs, "required")?
-                .map(|l| l.value)
-                .unwrap_or(false);
+        let is_required = field_exist(&field.attrs, "required")?;
 
         if let Some(desc) = description {
             if is_required {
@@ -116,8 +113,8 @@ fn impl_tool_input(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
                     });
                 });
                 req_insertions.push(quote! {
-                map.insert(#field_name_str.to_string(), self.#field_name.to_string());
-            });
+                    map.insert(#field_name_str.to_string(), self.#field_name.to_string());
+                });
             }
         }
         Ok::<(), syn::Error>(())
@@ -176,6 +173,27 @@ fn infer_schema_kind(ty: &Type) -> &'static str {
     "object"
 }
 
+fn field_exist(attrs: &Vec<Attribute>, field_name: &str) -> Result<bool, syn::Error> {
+    let res = attrs
+        .iter()
+        .filter(|attr| attr.path().is_ident("tool"))
+        .flat_map(|attr| {
+            let mut exists = false;
+            attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident(field_name) {
+                    exists = true;
+                } else if meta.input.peek(syn::Token![=]) {
+                    // consume `= value` for unrelated key-value pairs
+                    meta.value()?.parse::<syn::Lit>()?;
+                }
+                Ok(())
+            })?;
+            Ok::<bool, syn::Error>(exists)
+        })
+        .collect::<Vec<_>>();
+    Ok(res.into_iter().next().unwrap_or(false))
+}
+
 fn extract_field_value_from_attrs_option<T: syn::parse::Parse>(
     attrs: &Vec<Attribute>,
     field_name: &str,
@@ -189,7 +207,7 @@ fn extract_field_value_from_attrs_option<T: syn::parse::Parse>(
                 if meta.path.is_ident(field_name) {
                     parsed = Some(meta.value()?.parse()?);
                 } else if meta.input.peek(syn::Token![=]) {
-                    meta.value()?.parse::<LitStr>()?;
+                    meta.value()?.parse::<T>()?;
                 }
                 Ok(())
             })?;
@@ -215,7 +233,10 @@ fn extract_field_value<T: syn::parse::Parse>(
     extract_field_value_from_attrs(&input.attrs, field_name, input)
 }
 
-fn extract_field_type(input: &DeriveInput, field_name: &str) -> Result<(syn::Ident, Type), syn::Error> {
+fn extract_field_type(
+    input: &DeriveInput,
+    field_name: &str,
+) -> Result<(syn::Ident, Type), syn::Error> {
     let fields = match &input.data {
         Data::Struct(data) => match &data.fields {
             Fields::Named(fields) => Ok(&fields.named),
