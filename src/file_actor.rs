@@ -18,6 +18,7 @@ use ractor_actors::filewatcher::{
 };
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use tracing::error;
 
 pub struct FileActor {}
 
@@ -308,7 +309,7 @@ impl FileWatcherSubscriber for Forwarder {
         match res {
             Ok(_) => (),
             Err(err) => {
-                log::error!("{err}")
+                error!("{err}")
             }
         }
     }

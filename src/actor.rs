@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use thiserror::Error;
 use tokio::sync::mpsc;
+use tracing::error;
 
 #[derive(Debug, Clone)]
 pub enum ActorToTui {
@@ -198,7 +199,7 @@ impl Actor for Worker {
                     state.process_stream_event(event);
                 }
                 StreamItem::Err(err) => {
-                    eprintln!("\nError: {:?}", err);
+                    error!("\nError: {:?}", err);
                 }
                 StreamItem::Finished() => {
                     let mut vec: Vec<(usize, Vec<StreamAccu>)> =
@@ -242,7 +243,7 @@ impl Actor for Worker {
                 {
                     state.stream_actor = None;
                 } else {
-                    log::error!("{:?}", reason);
+                    error!("{:?}", reason);
                 }
             }
             SupervisionEvent::ActorFailed(who, reason) => {

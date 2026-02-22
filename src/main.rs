@@ -24,24 +24,27 @@ use crate::tool_impls::ReadFile;
 use crate::worker::Worker;
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::execute;
-use log::LevelFilter;
 use ractor::Actor;
-use simplelog::{ColorChoice, CombinedLogger, Config, TermLogger, TerminalMode};
 use std::env;
 use std::io::{stdout, Write};
 use tokio::main;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
+use tracing::Level;
+use tracing_subscriber::FmtSubscriber;
 
 #[main]
 async fn main() {
-    CombinedLogger::init(vec![TermLogger::new(
-        LevelFilter::Info,
-        Config::default(),
-        TerminalMode::Mixed,
-        ColorChoice::Auto,
-    )])
-    .unwrap();
+    let file = std::fs::File::create("err.log").unwrap();
+    // a builder for `FmtSubscriber`.
+    let subscriber = FmtSubscriber::builder()
+        .with_max_level(Level::WARN)
+        .with_writer(file)
+        // completes the builder.
+        .finish();
+
+    tracing::subscriber::set_global_default(subscriber)
+        .expect("setting default subscriber failed");
 
     let client = ClaudeClient::new(ClaudeConfig {
         api_key: env::var("CLAUDE_API").unwrap(),

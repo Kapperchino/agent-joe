@@ -7,6 +7,7 @@ use futures::{future, StreamExt};
 use ractor::{ActorCell, ActorRef};
 use std::collections::HashMap;
 use tokio::sync::mpsc;
+use tracing::error;
 
 pub struct ActorState {
     pub cur_context: CurContext,
@@ -89,7 +90,8 @@ impl ActorState {
                 }
             },
             Err(err) => {
-                println!("{:?}", err);
+                let easy_read = err.to_string();
+                error!("{:?}", err);
                 Err(err)
             }
         })?;
