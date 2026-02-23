@@ -93,7 +93,6 @@ impl ActorState {
                 }
             },
             Err(err) => {
-                let easy_read = err.to_string();
                 error!("{:?}", err);
                 Err(err)
             }
