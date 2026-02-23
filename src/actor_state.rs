@@ -1,7 +1,10 @@
 use crate::actor::{ActorToTui, Dependency, State, StreamAccu, StreamRes};
 use crate::claude::{ClaudeClient, ContentBlock, ContentBlockInfo, Delta, Role, StreamEvent};
 use crate::cur_context::CurContext;
-use crate::tool_defs::{CargoCheckInput, InsertAfterLineInput, LenientDeserialize, ReadFileInput, StringReplaceInput, Tool, ToolResult};
+use crate::tool_defs::{
+    CargoCheckInput, InsertAfterLineInput, LenientDeserialize, ReadFileInput, StringReplaceInput,
+    Tool, ToolResult,
+};
 use crate::{claude, file_actor, tool_impls};
 use futures::{future, StreamExt};
 use ractor::{ActorCell, ActorRef};
@@ -263,7 +266,7 @@ impl ActorState {
                     }
                     _ => Err(anyhow::Error::msg("doesn't work")),
                 }
-            },
+            }
             Tool::StringReplace(_) => {
                 match a_vec.get(1).ok_or(anyhow::Error::msg("doesn't work"))? {
                     StreamAccu::Json(json) => {
@@ -278,22 +281,24 @@ impl ActorState {
                     }
                     _ => Err(anyhow::Error::msg("doesn't work")),
                 }
-            },
-            Tool::CargoCheck(_) => {
-                match a_vec.get(1).ok_or(anyhow::Error::msg("doesn't work"))? {
-                    StreamAccu::Json(json) => {
-                        let input = CargoCheckInput::deserialize_lenient(json)?;
-                        let rf = tool_impls::CargoCheck {
-                            id: id.clone(),
-                            input,
-                        };
-                        Ok(Tool::CargoCheck(rf)
-                            .use_tool(id, &self.cur_context)
-                            .await?)
-                    }
-                    _ => Err(anyhow::Error::msg("doesn't work")),
-                }
             }
+            Tool::CargoCheck(_) => match a_vec.get(1).ok_or(anyhow::Error::msg("doesn't work"))? {
+                StreamAccu::Json(json) => {
+                    let input = if json.is_empty() {
+                        CargoCheckInput {
+                            include_warnings: None,
+                        }
+                    } else {
+                        CargoCheckInput::deserialize_lenient(json)?
+                    };
+                    let rf = tool_impls::CargoCheck {
+                        id: id.clone(),
+                        input,
+                    };
+                    Ok(Tool::CargoCheck(rf).use_tool(id, &self.cur_context).await?)
+                }
+                _ => Err(anyhow::Error::msg("doesn't work")),
+            },
         }
     }
 
