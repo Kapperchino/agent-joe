@@ -19,7 +19,6 @@ pub trait ToolInputSchema {
 }
 
 pub trait LenientDeserialize: Sized {
-    /// Deserialize from a JSON string, silently converting Option field errors to None.
     fn deserialize_lenient(s: &str) -> anyhow::Result<Self>;
 }
 

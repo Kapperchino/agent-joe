@@ -63,6 +63,7 @@ impl Tool {
                     Tool::CargoCheck(_) => CargoCheck::required_fields(),
                 },
             },
+            strict: true
         }
     }
 

@@ -233,6 +233,7 @@ pub struct Tool {
     pub name: String,
     pub description: String,
     pub input_schema: ToolSchemaDTO,
+    pub strict: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
