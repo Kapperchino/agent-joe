@@ -156,9 +156,47 @@ impl ToolResult {
                     content: status.to_string(),
                 }
             }
-            ToolResult::CargoCheckResult { status, id, .. } => claude::ContentBlock::ToolResult {
-                tool_use_id: id.to_string(),
-                content: status.to_string(),
+            ToolResult::CargoCheckResult {
+                status,
+                result,
+                id,
+                tool,
+            } => match result {
+                CargoCheckResult::Success(warnings) => {
+                    if let Tool::CargoCheck(cargo) = tool
+                        && cargo.input.include_warnings.unwrap_or(false)
+                    {
+                        claude::ContentBlock::ToolResult {
+                            tool_use_id: id.to_string(),
+                            content: format!("{}\nWarnings:\n{}", status, warnings.join("\n")),
+                        }
+                    } else {
+                        claude::ContentBlock::ToolResult {
+                            tool_use_id: id.to_string(),
+                            content: status.clone(),
+                        }
+                    }
+                }
+                CargoCheckResult::Failed { warnings, errors } => {
+                    if let Tool::CargoCheck(cargo) = tool
+                        && cargo.input.include_warnings.unwrap_or(false)
+                    {
+                        claude::ContentBlock::ToolResult {
+                            tool_use_id: id.to_string(),
+                            content: format!(
+                                "{}\nWarnings:\n{}\n{}",
+                                status,
+                                warnings.join("\n"),
+                                errors.join("\n")
+                            ),
+                        }
+                    } else {
+                        claude::ContentBlock::ToolResult {
+                            tool_use_id: id.to_string(),
+                            content: format!("{}\nErrors:\n{}", status, warnings.join("\n")),
+                        }
+                    }
+                }
             },
         }
     }
