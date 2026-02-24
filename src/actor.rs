@@ -182,8 +182,8 @@ impl Actor for Worker {
                 state.stream_actor = Some(actor)
             }
             Message::UseTool(vec) => {
-                let res = state.process_tools(vec).await;
                 state.change_state(State::ToolStart);
+                let res = state.process_tools(vec).await;
                 state.save_history(res)?;
                 state.change_state(State::ToolStop);
                 // if tool result was the last value, then we can loop

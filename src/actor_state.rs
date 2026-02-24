@@ -239,65 +239,63 @@ impl ActorState {
         name: String,
         id: String,
     ) -> anyhow::Result<ToolResult> {
-        match Tool::from_str(name.as_str())? {
-            Tool::ReadFile(_) => match a_vec.get(1).ok_or(anyhow::Error::msg("doesn't work"))? {
-                StreamAccu::Json(json) => {
-                    let input = ReadFileInput::deserialize_lenient(json)?;
-                    let rf = tool_impls::ReadFile {
-                        id: id.clone(),
-                        input,
-                    };
-                    Ok(Tool::ReadFile(rf).use_tool(id, &self.cur_context).await?)
-                }
-                _ => Err(anyhow::Error::msg("doesn't work")),
-            },
+        let json = match a_vec.get(1).ok_or(anyhow::Error::msg("doesn't work"))? {
+            StreamAccu::Json(json) => Ok(json),
+            _ => Err(anyhow::Error::msg("doesn't work")),
+        }?;
+        let id_c = id.clone();
+        let tool = Tool::from_str(name.as_str())?;
+        let res: anyhow::Result<ToolResult> = match Tool::from_str(name.as_str())? {
+            Tool::ReadFile(_) => {
+                let input = ReadFileInput::deserialize_lenient(json)?;
+                let rf = tool_impls::ReadFile {
+                    id: id.clone(),
+                    input,
+                };
+                Ok(Tool::ReadFile(rf).use_tool(id, &self.cur_context).await?)
+            }
             Tool::InsertAfterLine(_) => {
-                match a_vec.get(1).ok_or(anyhow::Error::msg("doesn't work"))? {
-                    StreamAccu::Json(json) => {
-                        let input = InsertAfterLineInput::deserialize_lenient(json)?;
-                        let rf = tool_impls::InsertAfterLine {
-                            id: id.clone(),
-                            input,
-                        };
-                        Ok(Tool::InsertAfterLine(rf)
-                            .use_tool(id, &self.cur_context)
-                            .await?)
-                    }
-                    _ => Err(anyhow::Error::msg("doesn't work")),
-                }
+                let input = InsertAfterLineInput::deserialize_lenient(json)?;
+                let rf = tool_impls::InsertAfterLine {
+                    id: id.clone(),
+                    input,
+                };
+                Ok(Tool::InsertAfterLine(rf)
+                    .use_tool(id, &self.cur_context)
+                    .await?)
             }
             Tool::StringReplace(_) => {
-                match a_vec.get(1).ok_or(anyhow::Error::msg("doesn't work"))? {
-                    StreamAccu::Json(json) => {
-                        let input = StringReplaceInput::deserialize_lenient(json)?;
-                        let rf = tool_impls::StringReplace {
-                            id: id.clone(),
-                            input,
-                        };
-                        Ok(Tool::StringReplace(rf)
-                            .use_tool(id, &self.cur_context)
-                            .await?)
-                    }
-                    _ => Err(anyhow::Error::msg("doesn't work")),
-                }
+                let input = StringReplaceInput::deserialize_lenient(json)?;
+                let rf = tool_impls::StringReplace {
+                    id: id.clone(),
+                    input,
+                };
+                Ok(Tool::StringReplace(rf)
+                    .use_tool(id, &self.cur_context)
+                    .await?)
             }
-            Tool::CargoCheck(_) => match a_vec.get(1).ok_or(anyhow::Error::msg("doesn't work"))? {
-                StreamAccu::Json(json) => {
-                    let input = if json.is_empty() {
-                        CargoCheckInput {
-                            include_warnings: None,
-                        }
-                    } else {
-                        CargoCheckInput::deserialize_lenient(json)?
-                    };
-                    let rf = tool_impls::CargoCheck {
-                        id: id.clone(),
-                        input,
-                    };
-                    Ok(Tool::CargoCheck(rf).use_tool(id, &self.cur_context).await?)
-                }
-                _ => Err(anyhow::Error::msg("doesn't work")),
-            },
+            Tool::CargoCheck(_) => {
+                let input = if json.is_empty() {
+                    CargoCheckInput {
+                        include_warnings: None,
+                    }
+                } else {
+                    CargoCheckInput::deserialize_lenient(json)?
+                };
+                let rf = tool_impls::CargoCheck {
+                    id: id.clone(),
+                    input,
+                };
+                Ok(Tool::CargoCheck(rf).use_tool(id, &self.cur_context).await?)
+            }
+        };
+        match res {
+            Ok(res) => Ok(res),
+            Err(err) => Ok(ToolResult::Error {
+                message: err.to_string(),
+                tool,
+                id: id_c,
+            }),
         }
     }
 
