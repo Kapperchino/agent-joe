@@ -23,6 +23,7 @@ use tracing::error;
 pub enum ActorToTui {
     StateChanged(State),
     Data(String),
+    ToolUse(Vec<String>),
     CommandResult(Command, String),
 }
 #[derive(Error, Debug)]
@@ -182,6 +183,19 @@ impl Actor for Worker {
                 state.stream_actor = Some(actor)
             }
             Message::UseTool(vec) => {
+                let tool_names: Vec<String> = vec
+                    .iter()
+                    .flat_map(|(_, accus)| accus.first())
+                    .flat_map(|accu| match accu {
+                        StreamAccu::Tool { name, .. } => Some(name.clone()),
+                        _ => None,
+                    })
+                    .collect();
+
+                if !tool_names.is_empty(){
+                    state.tui_tx.send(ActorToTui::ToolUse(tool_names))?;
+                }
+
                 state.change_state(State::ToolStart);
                 let res = state.process_tools(vec).await;
                 state.save_history(res)?;

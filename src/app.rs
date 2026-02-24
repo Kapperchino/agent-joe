@@ -310,6 +310,14 @@ impl App {
                 State::ToolStop => {}
                 State::Stopped => {}
             },
+            ActorToTui::ToolUse(names) => {
+                names.into_iter().for_each(|name| {
+                    self.messages.push(format!("--- [tool: {}] ---", name));
+                });
+                if self.auto_scroll {
+                    self.scroll_to_bottom();
+                }
+            }
             ActorToTui::CommandResult(_, command_res) => {
                 let mut wrapped = self.wrap_str(&command_res);
                 self.messages.append(&mut wrapped);
@@ -444,8 +452,14 @@ impl App {
             .iter()
             .enumerate()
             .map(|(i, m)| {
-                let content = Line::from(Span::raw(m));
-                ListItem::new(content)
+                if m.starts_with("--- [tool:") && m.ends_with("] ---") {
+                    let content =
+                        Line::from(Span::styled(m.as_str(), Style::default().fg(Color::Cyan)));
+                    ListItem::new(content)
+                } else {
+                    let content = Line::from(Span::raw(m));
+                    ListItem::new(content)
+                }
             })
             .collect();
 
