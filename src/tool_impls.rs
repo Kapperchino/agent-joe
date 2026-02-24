@@ -220,11 +220,11 @@ impl ReadFile {
     pub async fn read_file(&self, cur_context: &CurContext) -> anyhow::Result<String> {
         let file_path: PathBuf = self.input.file_path.clone().into();
         match file_path.is_dir() {
-            true => match &self.input.range {
+            false => match &self.input.range {
                 None => Self::read_entire_file(&file_path).await,
                 Some(range) => Self::read_range(&file_path, range.clone(), cur_context).await,
             },
-            false => Self::read_dir(&file_path).await,
+            true => Self::read_dir(&file_path).await,
         }
     }
 
