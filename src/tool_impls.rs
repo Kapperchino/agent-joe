@@ -135,6 +135,7 @@ impl ToolResult {
             ToolResult::InsertAfterLineResult { tool, .. } => tool.clone(),
             ToolResult::StringReplaceResult { tool, .. } => tool.clone(),
             ToolResult::CargoCheckResult { tool, .. } => tool.clone(),
+            ToolResult::Error { tool, .. } => tool.clone(),
         }
     }
 
@@ -143,17 +144,20 @@ impl ToolResult {
             ToolResult::ReadFileResult { res, id, .. } => claude::ContentBlock::ToolResult {
                 tool_use_id: id.to_string(),
                 content: res.to_string(),
+                is_error: None,
             },
             ToolResult::InsertAfterLineResult { status, id, .. } => {
                 claude::ContentBlock::ToolResult {
                     tool_use_id: id.to_string(),
                     content: status.to_string(),
+                    is_error: None,
                 }
             }
             ToolResult::StringReplaceResult { status, id, .. } => {
                 claude::ContentBlock::ToolResult {
                     tool_use_id: id.to_string(),
                     content: status.to_string(),
+                    is_error: None,
                 }
             }
             ToolResult::CargoCheckResult {
@@ -169,11 +173,13 @@ impl ToolResult {
                         claude::ContentBlock::ToolResult {
                             tool_use_id: id.to_string(),
                             content: format!("{}\nWarnings:\n{}", status, warnings.join("\n")),
+                            is_error: None,
                         }
                     } else {
                         claude::ContentBlock::ToolResult {
                             tool_use_id: id.to_string(),
                             content: status.clone(),
+                            is_error: None,
                         }
                     }
                 }
@@ -189,14 +195,21 @@ impl ToolResult {
                                 warnings.join("\n"),
                                 errors.join("\n")
                             ),
+                            is_error: None,
                         }
                     } else {
                         claude::ContentBlock::ToolResult {
                             tool_use_id: id.to_string(),
                             content: format!("{}\nErrors:\n{}", status, warnings.join("\n")),
+                            is_error: None,
                         }
                     }
                 }
+            },
+            ToolResult::Error { message, id, .. } => claude::ContentBlock::ToolResult {
+                tool_use_id: id.to_string(),
+                content: message.clone(),
+                is_error: Some(true),
             },
         }
     }

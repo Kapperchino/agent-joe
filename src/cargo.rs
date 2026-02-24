@@ -24,6 +24,7 @@ impl Cargo {
         let mut child = Command::new("cargo")
             .args(["check", "--message-format=json-diagnostic-short"])
             .stdout(Stdio::piped())
+            .stderr(Stdio::null())
             .spawn()?;
         let stdout = child.stdout.take().ok_or(anyhow!("no std output"))?;
         let mut reader = BufReader::new(stdout).lines();

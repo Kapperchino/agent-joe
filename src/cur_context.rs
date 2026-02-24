@@ -122,6 +122,11 @@ impl CurContext {
         Ok(res)
     }
 
+    fn estimate_tokens(&self, text: &str) -> usize {
+        let char_count = text.chars().count();
+        (char_count + 3) / 4
+    }
+
     async fn get_proj_meta_init(
         cache: &mut TypedCache<SymbolInfo, SymbolInfo>,
         rust_proj: &RustProject,

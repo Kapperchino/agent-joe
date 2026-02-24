@@ -18,6 +18,10 @@ pub trait ToolInputSchema {
     fn req(&self) -> anyhow::Result<HashMap<String, String>>;
 }
 
+pub trait ToolUse{
+    
+}
+
 pub trait LenientDeserialize: Sized {
     fn deserialize_lenient(s: &str) -> anyhow::Result<Self>;
 }
@@ -131,6 +135,11 @@ pub enum ToolResult {
     CargoCheckResult {
         status: String,
         result: CargoCheckResult,
+        tool: Tool,
+        id: String,
+    },
+    Error {
+        message: String,
         tool: Tool,
         id: String,
     },
