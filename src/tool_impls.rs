@@ -14,6 +14,7 @@ use ra_ap_ide::TextSize;
 use std::cmp::min;
 use std::collections::HashMap;
 use std::io::SeekFrom;
+use std::path::PathBuf;
 use tokio::fs;
 use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, BufReader};
@@ -217,14 +218,28 @@ impl ToolResult {
 
 impl ReadFile {
     pub async fn read_file(&self, cur_context: &CurContext) -> anyhow::Result<String> {
-        match &self.input.range {
-            None => Self::read_entire_file(&self.input.file_path).await,
-            Some(range) => {
-                Self::read_range(&self.input.file_path, range.clone(), cur_context).await
-            }
+        let file_path: PathBuf = self.input.file_path.clone().into();
+        match file_path.is_dir() {
+            true => match &self.input.range {
+                None => Self::read_entire_file(&file_path).await,
+                Some(range) => Self::read_range(&file_path, range.clone(), cur_context).await,
+            },
+            false => Self::read_dir(&file_path).await,
         }
     }
-    async fn read_entire_file(file_path: &String) -> anyhow::Result<String> {
+
+    // one day we will have good async streams
+    async fn read_dir(file_path: &PathBuf) -> anyhow::Result<String> {
+        let mut entries = tokio::fs::read_dir(file_path).await?;
+        let mut result = String::new();
+        while let Some(entry) = entries.next_entry().await? {
+            result.push_str(&entry.file_name().to_string_lossy());
+            result.push('\n');
+        }
+        Ok(result)
+    }
+
+    async fn read_entire_file(file_path: &PathBuf) -> anyhow::Result<String> {
         let file = File::open(file_path).await?;
         let reader = BufReader::new(file);
 
@@ -245,12 +260,12 @@ impl ReadFile {
         Ok(res)
     }
     async fn read_range(
-        file_path: &String,
+        file_path: &PathBuf,
         range: Range,
         cur_context: &CurContext,
     ) -> anyhow::Result<String> {
         let meta = cur_context.get_proj_meta().await?;
-        match meta.files.get(file_path) {
+        match meta.files.get(&file_path.to_string_lossy().to_string()) {
             Some(meta) => {
                 let start_line = meta.line_index.line_col(TextSize::new(range.start)).line;
                 let Range { start, end } = range;

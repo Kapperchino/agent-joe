@@ -18,9 +18,7 @@ pub trait ToolInputSchema {
     fn req(&self) -> anyhow::Result<HashMap<String, String>>;
 }
 
-pub trait ToolUse{
-    
-}
+pub trait ToolUse {}
 
 pub trait LenientDeserialize: Sized {
     fn deserialize_lenient(s: &str) -> anyhow::Result<Self>;
@@ -37,7 +35,8 @@ pub enum Tool {
 #[derive(Default, Serialize, Deserialize, Debug, Clone, ToolDef)]
 #[tool(
     name = "read_file",
-    description = "Reads a file at file_path or a section of it defined by range, do not read the entire file unless you need to"
+    description = "Reads a file at file_path or a section of it defined by range or the files in a director if a dir path is provided,\
+     do not read the entire file unless you need to"
 )]
 pub struct ReadFile {
     #[tool(input)]
@@ -87,7 +86,6 @@ pub struct StringReplaceInput {
     #[tool(description = "Path of the file", required)]
     pub path: String,
 }
-
 
 #[derive(Default, Serialize, Deserialize, Debug, Clone, ToolDef)]
 #[tool(
