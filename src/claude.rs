@@ -290,7 +290,7 @@ impl Default for ClaudeConfig {
         Self {
             api_key: String::new(),
             model: "claude-sonnet-4-5-20250929".to_string(),
-            max_tokens: 30000,
+            max_tokens: 64000,
             temperature: Some(1.0),
             timeout: Duration::from_secs(60),
             tools: vec![],
