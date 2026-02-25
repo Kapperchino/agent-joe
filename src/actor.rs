@@ -1,4 +1,4 @@
-use crate::actor_state::ActorState;
+use crate::actor_state::{ActorState, StreamNextStep};
 use crate::app::Command;
 use crate::cache_actor::CacheActor;
 use crate::claude::{ClaudeClient, ClaudeError, ClientRequest, ContentBlock, StreamEvent};
@@ -192,7 +192,7 @@ impl Actor for Worker {
                     })
                     .collect();
 
-                if !tool_names.is_empty(){
+                if !tool_names.is_empty() {
                     state.tui_tx.send(ActorToTui::ToolUse(tool_names))?;
                 }
 
@@ -210,25 +210,34 @@ impl Actor for Worker {
             Message::ProcessStreamItem(item) => match item {
                 StreamItem::Item(event) => {
                     state.handle_stream_state(event.clone());
-                    state.process_stream_event(event);
+                    match state.process_stream_event(event) {
+                        StreamNextStep::ToolUse => {
+                            let mut vec: Vec<(usize, Vec<StreamAccu>)> =
+                                state.acc_map.drain().into_iter().collect();
+
+                            vec.sort_by(|(i1, _), (i2, _)| i1.cmp(i2));
+                            if let Some(StreamAccu::Tool { .. }) =
+                                vec.last().and_then(|(_, v)| v.first().cloned())
+                            {
+                                myself.send_message(Message::UseTool(vec))?;
+                            } else {
+                                let res = state.process_tools(vec).await;
+                                state.save_history(res)?;
+                            }
+                        }
+                        StreamNextStep::NewStream => {
+                            // clear intermediate states
+                            state.acc_map.clear();
+                            state.delta_buf.clear();
+                            myself.send_message(Message::StartWork(None))?;
+                        }
+                        StreamNextStep::Nothing => {}
+                    }
                 }
                 StreamItem::Err(err) => {
                     error!("\nError: {:?}", err);
                 }
-                StreamItem::Finished() => {
-                    let mut vec: Vec<(usize, Vec<StreamAccu>)> =
-                        state.acc_map.drain().into_iter().collect();
-
-                    vec.sort_by(|(i1, _), (i2, _)| i1.cmp(i2));
-                    if let Some(StreamAccu::Tool { .. }) =
-                        vec.last().and_then(|(_, v)| v.first().cloned())
-                    {
-                        myself.send_message(Message::UseTool(vec))?;
-                    } else {
-                        let res = state.process_tools(vec).await;
-                        state.save_history(res)?;
-                    }
-                }
+                StreamItem::Finished() => {}
             },
             Message::KYS => myself.kill(),
             Message::Command(command) => match command {

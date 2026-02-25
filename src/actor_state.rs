@@ -7,6 +7,7 @@ use crate::tool_defs::{
 };
 use crate::{claude, file_actor, tool_impls};
 use futures::{future, StreamExt};
+use ra_ap_hir::sym::false_;
 use ractor::{ActorCell, ActorRef};
 use std::collections::HashMap;
 use tokio::sync::mpsc;
@@ -24,6 +25,14 @@ pub struct ActorState {
     pub delta_buf: HashMap<usize, Vec<Delta>>,
     pub tui_tx: mpsc::UnboundedSender<ActorToTui>,
     pub file_actor: ActorRef<file_actor::Message>,
+}
+
+pub enum StreamNextStep {
+    // do nothing, normal path
+    Nothing,
+    ToolUse,
+    // token ran out, need to restart the connection
+    NewStream,
 }
 
 impl ActorState {
@@ -144,7 +153,7 @@ impl ActorState {
             StreamEvent::Error { .. } => {}
         }
     }
-    pub fn process_stream_event(&mut self, item: StreamEvent) {
+    pub fn process_stream_event(&mut self, item: StreamEvent) -> StreamNextStep {
         match item {
             StreamEvent::ContentBlockDelta { index, delta } => {
                 match self.delta_buf.get_mut(&index) {
@@ -153,6 +162,7 @@ impl ActorState {
                     }
                     Some(vec) => vec.push(delta),
                 }
+                StreamNextStep::Nothing
             }
             StreamEvent::ContentBlockStart {
                 index,
@@ -166,8 +176,9 @@ impl ActorState {
                         }
                         Some(vec) => vec.push(StreamAccu::Tool { id, name }),
                     }
+                    StreamNextStep::Nothing
                 }
-                _ => {}
+                _ => StreamNextStep::Nothing,
             },
             StreamEvent::ContentBlockStop { index } => {
                 self.delta_buf
@@ -224,12 +235,25 @@ impl ActorState {
                             self.acc_map.insert(index, vec![buf]);
                         }
                     });
+                StreamNextStep::Nothing
             }
-            StreamEvent::MessageStop {} => {}
+            StreamEvent::MessageStop {} => StreamNextStep::Nothing,
             StreamEvent::Error { error } => {
-                println!("{:?}", error)
+                error!("{:?}", error);
+                StreamNextStep::Nothing
             }
-            _ => {}
+            StreamEvent::MessageDelta { delta, usage } => match delta.stop_reason {
+                Some(reason) => match reason.as_str() {
+                    "end_turn" => StreamNextStep::Nothing,
+                    "max_tokens" => StreamNextStep::NewStream,
+                    "stop_sequence" => StreamNextStep::Nothing,
+                    "tool_use" => StreamNextStep::ToolUse,
+                    "refusal" => StreamNextStep::ToolUse,
+                    _ => StreamNextStep::Nothing,
+                },
+                None => StreamNextStep::Nothing,
+            },
+            _ => StreamNextStep::Nothing,
         }
     }
 
