@@ -26,15 +26,6 @@ pub struct ActorState {
     pub tui_tx: mpsc::UnboundedSender<ActorToTui>,
     pub file_actor: ActorRef<file_actor::Message>,
 }
-
-pub enum StreamNextStep {
-    // do nothing, normal path
-    Nothing,
-    ToolUse,
-    // token ran out, need to restart the connection
-    NewStream,
-}
-
 impl ActorState {
     pub async fn new(
         dependency: Dependency,
@@ -243,14 +234,7 @@ impl ActorState {
                 StreamNextStep::Nothing
             }
             StreamEvent::MessageDelta { delta, usage } => match delta.stop_reason {
-                Some(reason) => match reason.as_str() {
-                    "end_turn" => StreamNextStep::Nothing,
-                    "max_tokens" => StreamNextStep::NewStream,
-                    "stop_sequence" => StreamNextStep::Nothing,
-                    "tool_use" => StreamNextStep::ToolUse,
-                    "refusal" => StreamNextStep::ToolUse,
-                    _ => StreamNextStep::Nothing,
-                },
+                Some(reason) => StreamNextStep::new(&reason),
                 None => StreamNextStep::Nothing,
             },
             _ => StreamNextStep::Nothing,
@@ -354,5 +338,26 @@ impl ActorState {
             .collect();
 
         future::join_all(futures).await
+    }
+}
+
+pub enum StreamNextStep {
+    // do nothing, normal path
+    Nothing,
+    ToolUse,
+    // token ran out, need to restart the connection
+    NewStream,
+}
+
+impl StreamNextStep {
+    pub fn new(reason: &str) -> Self {
+        match reason {
+            "end_turn" => StreamNextStep::Nothing,
+            "max_tokens" => StreamNextStep::NewStream,
+            "stop_sequence" => StreamNextStep::Nothing,
+            "tool_use" => StreamNextStep::ToolUse,
+            "refusal" => StreamNextStep::ToolUse,
+            _ => StreamNextStep::Nothing,
+        }
     }
 }
