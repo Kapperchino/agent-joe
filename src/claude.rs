@@ -178,11 +178,24 @@ pub enum StreamEvent {
     Error { error: ApiErrorDetail },
 }
 
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct StreamUsage {
+    #[serde(default)]
+    pub input_tokens: u32,
+    #[serde(default)]
+    pub cache_creation_input_tokens: u32,
+    #[serde(default)]
+    pub cache_read_input_tokens: u32,
+    #[serde(default)]
+    pub output_tokens: u32,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct StreamMessage {
     pub id: String,
     pub model: String,
     pub role: Role,
+    pub usage: StreamUsage,
 }
 
 #[derive(Debug, Deserialize, Clone)]

@@ -19,7 +19,7 @@ use ratatui::{
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
-use crate::actor::{ActorToTui, Message, State};
+use crate::actor::{ActorToTui, Message, State, TokenCount};
 
 pub(crate) struct App {
     pub vertical_scroll_state: ScrollbarState,
@@ -37,6 +37,7 @@ pub(crate) struct App {
     msg_area_width: usize,
     actor_ref: ActorRef<Message>,
     actor_state: State,
+    token_count: TokenCount,
 }
 #[derive(Default)]
 enum InputMode {
@@ -78,6 +79,7 @@ impl App {
             msg_area_width: 0,
             actor_ref,
             actor_state: State::Ready,
+            token_count: TokenCount::default(),
         }
     }
 
@@ -322,6 +324,9 @@ impl App {
                 let mut wrapped = self.wrap_str(&command_res);
                 self.messages.append(&mut wrapped);
             }
+            ActorToTui::TokensUpdated(token_count) => {
+                self.token_count = token_count;
+            }
         }
     }
 
@@ -470,9 +475,14 @@ impl App {
             .content_length(self.max_scroll().into());
         self.horizontal_scroll_state = self.horizontal_scroll_state.content_length(messages.len());
 
+        let token_info = format!(
+            "in:{} out:{}  │  Use h j k l or ◄ ▲ ▼ ► to scroll",
+            self.token_count.input_tokens,
+            self.token_count.output_tokens,
+        );
         let title = Block::new()
             .title_alignment(Alignment::Center)
-            .title("Use h j k l or ◄ ▲ ▼ ► to scroll ".bold());
+            .title(token_info.bold());
         frame.render_widget(title, top_bar_area);
 
         frame.render_stateful_widget(messages, msg_area, &mut self.list_state);

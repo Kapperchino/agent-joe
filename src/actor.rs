@@ -25,6 +25,13 @@ pub enum ActorToTui {
     Data(String),
     ToolUse(Vec<String>),
     CommandResult(Command, String),
+    TokensUpdated(TokenCount),
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TokenCount {
+    pub input_tokens: u32,
+    pub output_tokens: u32,
 }
 #[derive(Error, Debug)]
 pub enum WorkerError {

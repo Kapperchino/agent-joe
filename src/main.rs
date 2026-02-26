@@ -54,7 +54,7 @@ async fn main() {
 
     let client = ClaudeClient::new(ClaudeConfig {
         api_key: env::var("CLAUDE_API").unwrap(),
-        model: "claude-haiku-4-5-20251001".to_string(),
+        model: "claude-sonnet-4-6".to_string(),
         ..Default::default()
     })
     .unwrap();

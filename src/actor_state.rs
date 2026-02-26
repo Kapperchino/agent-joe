@@ -1,4 +1,4 @@
-use crate::actor::{ActorToTui, Dependency, State, StreamAccu, StreamRes};
+use crate::actor::{ActorToTui, Dependency, State, StreamAccu, StreamRes, TokenCount};
 use crate::claude::{ClaudeClient, ContentBlock, ContentBlockInfo, Delta, Role, StreamEvent};
 use crate::cur_context::CurContext;
 use crate::tool_defs::{
@@ -25,6 +25,7 @@ pub struct ActorState {
     pub delta_buf: HashMap<usize, Vec<Delta>>,
     pub tui_tx: mpsc::UnboundedSender<ActorToTui>,
     pub file_actor: ActorRef<file_actor::Message>,
+    pub token_count: TokenCount,
 }
 impl ActorState {
     pub async fn new(
@@ -52,6 +53,7 @@ impl ActorState {
             stream_actor: None,
             tui_tx: dependency.tui_tx,
             file_actor,
+            token_count: TokenCount::default(),
         })
     }
 
@@ -111,7 +113,13 @@ impl ActorState {
 
     pub fn handle_stream_state(&mut self, item: StreamEvent) {
         match item {
-            StreamEvent::MessageStart { .. } => self.change_state(State::StreamStart),
+            StreamEvent::MessageStart { message } => {
+                self.change_state(State::StreamStart);
+                self.token_count.input_tokens += message.usage.input_tokens;
+                let _ = self
+                    .tui_tx
+                    .send(ActorToTui::TokensUpdated(self.token_count.clone()));
+            }
             StreamEvent::ContentBlockStart {
                 index: _,
                 content_block,
@@ -138,7 +146,12 @@ impl ActorState {
                         Delta::SignatureDelta { .. } => {}
                     });
             }
-            StreamEvent::MessageDelta { .. } => {}
+            StreamEvent::MessageDelta { usage, .. } => {
+                self.token_count.output_tokens += usage.output_tokens;
+                let _ = self
+                    .tui_tx
+                    .send(ActorToTui::TokensUpdated(self.token_count.clone()));
+            }
             StreamEvent::MessageStop => self.change_state(State::StreamStop),
             StreamEvent::Ping => {}
             StreamEvent::Error { .. } => {}
