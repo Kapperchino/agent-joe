@@ -7,12 +7,11 @@ use crossterm::event::{EventStream, KeyEvent};
 use futures::StreamExt;
 use ractor::ActorRef;
 use ratatui::layout::Position;
-use ratatui::text::Span;
 use ratatui::widgets::{List, ListItem, ListState};
 use ratatui::{
     crossterm::event::{Event, KeyCode}, layout::{Alignment, Constraint, Layout},
-    style::{Color, Style, Stylize},
-    text::Line,
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
     widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
     DefaultTerminal,
     Frame,
@@ -402,9 +401,10 @@ impl App {
             Constraint::Min(1),
             Constraint::Percentage(100),
             Constraint::Min(3),
+            Constraint::Min(1),
         ]);
 
-        let [top_bar_area, msg_area, input_area] = chunks.areas(frame.area());
+        let [top_bar_area, msg_area, input_area, token_area] = chunks.areas(frame.area());
 
         self.msg_area_height = msg_area.height as usize;
         self.msg_area_width = msg_area.width as usize;
@@ -417,24 +417,64 @@ impl App {
             self.scroll_to_bottom();
         }
 
+        // ── top bar: keybind hint only ─────────────────────────────────────
+        let hint = Line::from(vec![
+            Span::styled("h j k l", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(" / "),
+            Span::styled("◄ ▲ ▼ ►", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw("  scroll   "),
+            Span::styled("i", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw("  insert   "),
+            Span::styled("/", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw("  command   "),
+            Span::styled("G", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw("  bottom   "),
+            Span::styled("q", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw("  quit"),
+        ]);
+        let top_bar = Block::new()
+            .title(hint)
+            .title_alignment(Alignment::Center);
+        frame.render_widget(top_bar, top_bar_area);
+
+        // ── token counter: pretty spans, bottom-right of input box ─────────
+        let token_line = Line::from(vec![
+            Span::styled(" ↑ ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                self.token_count.input_tokens.to_string(),
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  ↓ ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                self.token_count.output_tokens.to_string(),
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+        ]);
+
+        // ── input box ─────────────────────────────────────────────────────
+        let input_block = Block::bordered()
+            .title("Input")
+            .title_alignment(Alignment::Left);
+
+        let token_block = Block::new().title_bottom(token_line).title_alignment(Alignment::Right);
         let input = Paragraph::new(self.input.as_str())
             .style(match self.input_mode {
                 InputMode::Normal => Style::default(),
                 InputMode::Editing => Style::default().fg(Color::Yellow),
                 InputMode::InputCommand => Style::default().fg(Color::Green),
             })
-            .block(Block::bordered().title("Input"));
+            .block(input_block);
         frame.render_widget(input, input_area);
+        frame.render_widget(token_block, token_area);
+
         match self.input_mode {
             // Hide the cursor. `Frame` does this by default, so we don't need to do anything here
             InputMode::Normal => {}
 
             InputMode::InputCommand => {
                 frame.set_cursor_position(Position::new(
-                    // Draw the cursor at the current position in the input field.
-                    // This position is can be controlled via the left and right arrow key
                     input_area.x + self.character_index as u16 + 1,
-                    // Move one line down, from the border to the input line
                     input_area.y + 1,
                 ))
             }
@@ -451,12 +491,11 @@ impl App {
             )),
         }
 
-        // Account for borders and ensure minimum width of 1 to avoid panic
+        // ── message list ──────────────────────────────────────────────────
         let messages: Vec<ListItem> = self
             .messages
             .iter()
-            .enumerate()
-            .map(|(i, m)| {
+            .map(|m| {
                 if m.starts_with("--- [tool:") && m.ends_with("] ---") {
                     let content =
                         Line::from(Span::styled(m.as_str(), Style::default().fg(Color::Cyan)));
@@ -474,16 +513,6 @@ impl App {
             .vertical_scroll_state
             .content_length(self.max_scroll().into());
         self.horizontal_scroll_state = self.horizontal_scroll_state.content_length(messages.len());
-
-        let token_info = format!(
-            "in:{} out:{}  │  Use h j k l or ◄ ▲ ▼ ► to scroll",
-            self.token_count.input_tokens,
-            self.token_count.output_tokens,
-        );
-        let title = Block::new()
-            .title_alignment(Alignment::Center)
-            .title(token_info.bold());
-        frame.render_widget(title, top_bar_area);
 
         frame.render_stateful_widget(messages, msg_area, &mut self.list_state);
         frame.render_stateful_widget(
