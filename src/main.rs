@@ -16,6 +16,7 @@ mod tool_impls;
 mod utils;
 mod worker;
 mod cargo;
+mod openai;
 
 use crate::actor::Dependency;
 use crate::claude::{ClaudeClient, ClaudeConfig};
