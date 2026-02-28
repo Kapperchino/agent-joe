@@ -24,84 +24,49 @@ pub type OpenAIResult<T> = Result<T, OpenAIError>;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
-    System,
     User,
     Assistant,
-    Tool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Message {
-    pub role: Role,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_calls: Option<Vec<ToolCall>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_call_id: Option<String>,
+#[serde(tag = "type")]
+pub enum InputItem {
+    #[serde(rename = "message")]
+    Message {
+        role: Role,
+        content: String,
+    },
+    #[serde(rename = "function_call_output")]
+    FunctionCallOutput {
+        call_id: String,
+        output: String,
+    },
 }
 
-impl Message {
+impl InputItem {
     pub fn user(content: String) -> Self {
-        Message {
+        InputItem::Message {
             role: Role::User,
-            content: Some(content),
-            tool_calls: None,
-            tool_call_id: None,
+            content,
         }
     }
 
     pub fn assistant(content: String) -> Self {
-        Message {
+        InputItem::Message {
             role: Role::Assistant,
-            content: Some(content),
-            tool_calls: None,
-            tool_call_id: None,
+            content,
         }
     }
 
-    pub fn assistant_tool_calls(tool_calls: Vec<ToolCall>) -> Self {
-        Message {
-            role: Role::Assistant,
-            content: None,
-            tool_calls: Some(tool_calls),
-            tool_call_id: None,
-        }
+    pub fn function_call_output(call_id: String, output: String) -> Self {
+        InputItem::FunctionCallOutput { call_id, output }
     }
-
-    pub fn tool_result(tool_call_id: String, content: String) -> Self {
-        Message {
-            role: Role::Tool,
-            content: Some(content),
-            tool_calls: None,
-            tool_call_id: Some(tool_call_id),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCall {
-    pub id: String,
-    #[serde(rename = "type")]
-    pub call_type: String,
-    pub function: FunctionCall,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FunctionCall {
-    pub name: String,
-    pub arguments: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tool {
     #[serde(rename = "type")]
     pub tool_type: String,
-    pub function: FunctionDef,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FunctionDef {
     pub name: String,
     pub description: String,
     pub parameters: FunctionParameters,
@@ -163,99 +128,68 @@ impl From<crate::claude::ToolProperty> for ToolProperty {
 }
 
 #[derive(Debug, Serialize)]
-struct ChatCompletionRequest {
+struct ResponseRequest {
     pub model: String,
-    pub messages: Vec<Message>,
+    pub input: Vec<InputItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_tokens: Option<u32>,
+    pub max_output_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<Tool>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub stream: bool,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct ChatCompletionResponse {
-    pub id: String,
-    pub object: String,
-    pub model: String,
-    pub choices: Vec<Choice>,
-    pub usage: Usage,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Choice {
-    pub index: usize,
-    pub message: ChoiceMessage,
-    pub finish_reason: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ChoiceMessage {
-    pub role: Role,
-    pub content: Option<String>,
-    pub tool_calls: Option<Vec<ToolCall>>,
-}
-
-#[derive(Debug, Deserialize, Clone, Default)]
-pub struct Usage {
-    #[serde(default)]
-    pub prompt_tokens: u32,
-    #[serde(default)]
-    pub completion_tokens: u32,
-    #[serde(default)]
-    pub total_tokens: u32,
-}
-
 #[derive(Debug, Deserialize, Clone)]
-pub struct StreamChunk {
+pub struct Response {
     pub id: String,
-    pub object: String,
     pub model: String,
-    pub choices: Vec<StreamChoice>,
+    pub status: String,
+    pub output: Vec<OutputItem>,
     #[serde(default)]
     pub usage: Option<Usage>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct StreamChoice {
-    pub index: usize,
-    pub delta: StreamDelta,
-    pub finish_reason: Option<String>,
+#[serde(tag = "type")]
+pub enum OutputItem {
+    #[serde(rename = "message")]
+    Message {
+        id: String,
+        content: Vec<ContentPart>,
+    },
+    #[serde(rename = "function_call")]
+    FunctionCall {
+        id: String,
+        call_id: String,
+        name: String,
+        arguments: String,
+    },
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(tag = "type")]
+pub enum ContentPart {
+    #[serde(rename = "output_text")]
+    OutputText { text: String },
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
-pub struct StreamDelta {
+pub struct Usage {
     #[serde(default)]
-    pub role: Option<Role>,
+    pub input_tokens: u32,
     #[serde(default)]
-    pub content: Option<String>,
+    pub output_tokens: u32,
     #[serde(default)]
-    pub tool_calls: Option<Vec<StreamToolCall>>,
+    pub total_tokens: u32,
 }
 
-#[derive(Debug, Deserialize, Clone)]
-pub struct StreamToolCall {
-    pub index: usize,
-    #[serde(default)]
-    pub id: Option<String>,
-    #[serde(default)]
-    pub function: Option<StreamFunctionCall>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct StreamFunctionCall {
-    #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
-    pub arguments: Option<String>,
-}
-
-/// High-level stream events, normalized for easier consumption.
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
-    /// First chunk arrived, contains model info.
+    /// First event arrived, contains model info.
     MessageStart { id: String, model: String },
     /// Text content delta.
     ContentDelta { text: String },
@@ -267,11 +201,86 @@ pub enum StreamEvent {
     },
     /// Argument fragment for a tool call being streamed.
     ToolCallDelta { index: usize, arguments: String },
-    /// Stream finished with a reason ("stop", "tool_calls", "length").
+    /// Stream finished with a reason ("completed", "incomplete", "failed").
     Done { finish_reason: String },
-    /// Usage info (sent when `stream_options.include_usage` is enabled).
+    /// Usage info from the completed response.
     Usage(Usage),
 }
+
+// --- Raw streaming event deserialization ---
+
+#[derive(Debug, Deserialize, Clone)]
+struct StreamResponseEnvelope {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    usage: Option<Usage>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(tag = "type")]
+enum StreamOutputItem {
+    #[serde(rename = "function_call")]
+    FunctionCall {
+        call_id: String,
+        name: String,
+    },
+    #[serde(rename = "message")]
+    Message {},
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(tag = "type")]
+enum RawStreamEvent {
+    #[serde(rename = "response.created")]
+    ResponseCreated {
+        response: StreamResponseEnvelope,
+    },
+    #[serde(rename = "response.in_progress")]
+    ResponseInProgress {},
+    #[serde(rename = "response.output_item.added")]
+    OutputItemAdded {
+        output_index: usize,
+        item: StreamOutputItem,
+    },
+    #[serde(rename = "response.output_text.delta")]
+    OutputTextDelta {
+        delta: String,
+    },
+    #[serde(rename = "response.function_call_arguments.delta")]
+    FunctionCallArgumentsDelta {
+        output_index: usize,
+        delta: String,
+    },
+    #[serde(rename = "response.function_call_arguments.done")]
+    FunctionCallArgumentsDone {
+        output_index: usize,
+        name: String,
+        arguments: String,
+    },
+    #[serde(rename = "response.output_item.done")]
+    OutputItemDone {},
+    #[serde(rename = "response.output_text.done")]
+    OutputTextDone {},
+    #[serde(rename = "response.content_part.added")]
+    ContentPartAdded {},
+    #[serde(rename = "response.content_part.done")]
+    ContentPartDone {},
+    #[serde(rename = "response.completed")]
+    ResponseCompleted {
+        response: StreamResponseEnvelope,
+    },
+    #[serde(other)]
+    Unknown,
+}
+
+// --- Error types ---
 
 #[derive(Debug, Deserialize)]
 struct ApiErrorResponse {
@@ -290,7 +299,7 @@ pub struct OpenAIConfig {
     pub url: String,
     pub api_key: String,
     pub model: String,
-    pub max_tokens: Option<u32>,
+    pub max_output_tokens: Option<u32>,
     pub temperature: Option<f32>,
     pub timeout: Duration,
 }
@@ -301,12 +310,14 @@ impl Default for OpenAIConfig {
             api_key: String::new(),
             url: "https://api.openai.com/v1".to_string(),
             model: "gpt-4o".to_string(),
-            max_tokens: Some(4096),
+            max_output_tokens: Some(4096),
             temperature: Some(1.0),
             timeout: Duration::from_secs(120),
         }
     }
 }
+
+// --- Client ---
 
 #[derive(Debug)]
 pub struct OpenAIClient {
@@ -315,24 +326,24 @@ pub struct OpenAIClient {
 }
 
 pub struct ClientRequest {
-    messages: Vec<Message>,
-    system: Option<String>,
+    input: Vec<InputItem>,
+    instructions: Option<String>,
     model: Option<String>,
     tools: Vec<Tool>,
 }
 
 impl ClientRequest {
-    pub fn new(messages: Vec<Message>) -> Self {
+    pub fn new(input: Vec<InputItem>) -> Self {
         ClientRequest {
-            messages,
-            system: None,
+            input,
+            instructions: None,
             model: None,
             tools: vec![],
         }
     }
 
-    pub fn with_system(mut self, system: String) -> Self {
-        self.system = Some(system);
+    pub fn with_instructions(mut self, instructions: String) -> Self {
+        self.instructions = Some(instructions);
         self
     }
 
@@ -344,20 +355,6 @@ impl ClientRequest {
     pub fn with_tools(mut self, tools: Vec<Tool>) -> Self {
         self.tools = tools;
         self
-    }
-
-    fn build_messages(&self) -> Vec<Message> {
-        let mut msgs = Vec::new();
-        if let Some(system) = &self.system {
-            msgs.push(Message {
-                role: Role::System,
-                content: Some(system.clone()),
-                tool_calls: None,
-                tool_call_id: None,
-            });
-        }
-        msgs.extend(self.messages.clone());
-        msgs
     }
 }
 
@@ -386,15 +383,15 @@ impl OpenAIClient {
         Ok(Self { client, config })
     }
 
-    pub async fn chat(&self, req: ClientRequest) -> OpenAIResult<ChatCompletionResponse> {
-        let url = format!("{}/chat/completions", self.config.url);
-        let messages = req.build_messages();
+    pub async fn chat(&self, req: ClientRequest) -> OpenAIResult<Response> {
+        let url = format!("{}/responses", self.config.url);
 
-        let inner = ChatCompletionRequest {
+        let inner = ResponseRequest {
             model: req.model.unwrap_or_else(|| self.config.model.clone()),
-            messages,
+            input: req.input,
+            instructions: req.instructions,
             temperature: self.config.temperature,
-            max_tokens: self.config.max_tokens,
+            max_output_tokens: self.config.max_output_tokens,
             tools: req.tools,
             stream: false,
         };
@@ -409,28 +406,27 @@ impl OpenAIClient {
             });
         }
 
-        let chat_response: ChatCompletionResponse = response.json().await?;
-        Ok(chat_response)
+        let resp: Response = response.json().await?;
+        Ok(resp)
     }
 
     pub async fn chat_stream(
         &self,
         req: ClientRequest,
     ) -> Result<impl Stream<Item = OpenAIResult<StreamEvent>> + Send + 'static, anyhow::Error> {
-        let url = format!("{}/chat/completions", self.config.url);
-        let client = self.client.clone();
+        let url = format!("{}/responses", self.config.url);
 
-        let messages = req.build_messages();
-        let request = ChatCompletionRequest {
+        let request = ResponseRequest {
             model: req.model.unwrap_or_else(|| self.config.model.clone()),
-            messages,
+            input: req.input,
+            instructions: req.instructions,
             temperature: self.config.temperature,
-            max_tokens: self.config.max_tokens,
+            max_output_tokens: self.config.max_output_tokens,
             tools: req.tools,
             stream: true,
         };
 
-        let initial = client.post(&url).json(&request).send().await?;
+        let initial = self.client.post(&url).json(&request).send().await?;
 
         if !initial.status().is_success() {
             let status = initial.status();
@@ -440,58 +436,53 @@ impl OpenAIClient {
 
         let mut byte_stream = initial.bytes_stream();
         let mut buffer = String::new();
-        let mut seen_first = false;
+        let mut tool_call_counter: usize = 0;
 
         let stream = try_stream! {
             while let Some(chunk) = byte_stream.next().await {
                 let chunk = chunk?;
                 buffer.push_str(&String::from_utf8_lossy(&chunk));
 
-                while let Some(chunk) = extract_sse_event(&mut buffer)? {
-                    if !seen_first {
-                        seen_first = true;
-                        yield StreamEvent::MessageStart {
-                            id: chunk.id.clone(),
-                            model: chunk.model.clone(),
-                        };
-                    }
-
-                    for choice in &chunk.choices {
-                        if let Some(ref text) = choice.delta.content {
-                            if !text.is_empty() {
-                                yield StreamEvent::ContentDelta { text: text.clone() };
+                while let Some(raw_event) = extract_sse_event(&mut buffer)? {
+                    match raw_event {
+                        RawStreamEvent::ResponseCreated { response } => {
+                            yield StreamEvent::MessageStart {
+                                id: response.id.unwrap_or_default(),
+                                model: response.model.unwrap_or_default(),
+                            };
+                        }
+                        RawStreamEvent::OutputItemAdded { item, .. } => {
+                            if let StreamOutputItem::FunctionCall { call_id, name } = item {
+                                let index = tool_call_counter;
+                                tool_call_counter += 1;
+                                yield StreamEvent::ToolCallStart {
+                                    index,
+                                    id: call_id,
+                                    name,
+                                };
                             }
                         }
-
-                        if let Some(ref tool_calls) = choice.delta.tool_calls {
-                            for tc in tool_calls {
-                                if let Some(ref func) = tc.function {
-                                    if let (Some(id), Some(name)) = (&tc.id, &func.name) {
-                                        yield StreamEvent::ToolCallStart {
-                                            index: tc.index,
-                                            id: id.clone(),
-                                            name: name.clone(),
-                                        };
-                                    }
-                                    if let Some(ref args) = func.arguments {
-                                        if !args.is_empty() {
-                                            yield StreamEvent::ToolCallDelta {
-                                                index: tc.index,
-                                                arguments: args.clone(),
-                                            };
-                                        }
-                                    }
-                                }
+                        RawStreamEvent::OutputTextDelta { delta } => {
+                            if !delta.is_empty() {
+                                yield StreamEvent::ContentDelta { text: delta };
                             }
                         }
-
-                        if let Some(ref reason) = choice.finish_reason {
-                            yield StreamEvent::Done { finish_reason: reason.clone() };
+                        RawStreamEvent::FunctionCallArgumentsDelta { output_index, delta } => {
+                            if !delta.is_empty() {
+                                yield StreamEvent::ToolCallDelta {
+                                    index: output_index,
+                                    arguments: delta,
+                                };
+                            }
                         }
-                    }
-
-                    if let Some(usage) = chunk.usage {
-                        yield StreamEvent::Usage(usage);
+                        RawStreamEvent::ResponseCompleted { response } => {
+                            let status = response.status.unwrap_or_else(|| "completed".to_string());
+                            yield StreamEvent::Done { finish_reason: status };
+                            if let Some(usage) = response.usage {
+                                yield StreamEvent::Usage(usage);
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -501,7 +492,14 @@ impl OpenAIClient {
     }
 }
 
-fn extract_sse_event(buffer: &mut String) -> OpenAIResult<Option<StreamChunk>> {
+/// Parses a single SSE event block from the buffer.
+/// The Responses API SSE format is:
+///   event: <type>\n
+///   data: <json>\n
+///   \n
+/// The `event` type is injected into the JSON data as `"type"` so serde can
+/// deserialize into the correct `RawStreamEvent` variant via its `#[serde(tag = "type")]`.
+fn extract_sse_event(buffer: &mut String) -> OpenAIResult<Option<RawStreamEvent>> {
     let delimiter_pos = match buffer.find("\n\n") {
         Some(pos) => pos,
         None => return Ok(None),
@@ -510,24 +508,29 @@ fn extract_sse_event(buffer: &mut String) -> OpenAIResult<Option<StreamChunk>> {
     let event_text = buffer[..delimiter_pos].to_string();
     buffer.drain(..=delimiter_pos + 1);
 
-    let data_line = event_text.lines().fold(String::new(), |mut acc, line| {
+    let mut event_type = String::new();
+    let mut data_line = String::new();
+
+    for line in event_text.lines() {
         let line = line.trim();
-        if let Some(data) = line.strip_prefix("data: ") {
-            acc.push_str(data);
+        if let Some(evt) = line.strip_prefix("event: ") {
+            event_type = evt.to_string();
+        } else if let Some(data) = line.strip_prefix("data: ") {
+            data_line.push_str(data);
         }
-        acc
-    });
+    }
 
-    if data_line.is_empty() {
+    if event_type.is_empty() || data_line.is_empty() {
         return Ok(None);
     }
 
-    if data_line == "[DONE]" {
-        return Ok(None);
-    }
+    // Inject the event type into the JSON object so serde can dispatch on it.
+    let mut json: serde_json::Value = serde_json::from_str(&data_line)?;
+    json.as_object_mut()
+        .map(|obj| obj.insert("type".to_string(), serde_json::Value::String(event_type)));
 
-    match serde_json::from_str::<StreamChunk>(&data_line) {
-        Ok(chunk) => Ok(Some(chunk)),
+    match serde_json::from_value::<RawStreamEvent>(json) {
+        Ok(event) => Ok(Some(event)),
         Err(e) => Err(OpenAIError::Serialization(e)),
     }
 }
