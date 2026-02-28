@@ -93,8 +93,6 @@ pub struct FunctionCall {
     pub arguments: String,
 }
 
-// --- Tool definition types ---
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tool {
     #[serde(rename = "type")]
@@ -164,31 +162,6 @@ impl From<crate::claude::ToolProperty> for ToolProperty {
     }
 }
 
-/// Convert a claude::Tool into an OpenAI Tool definition.
-impl From<crate::claude::Tool> for Tool {
-    fn from(ct: crate::claude::Tool) -> Self {
-        Tool {
-            tool_type: "function".to_string(),
-            function: FunctionDef {
-                name: ct.name,
-                description: ct.description,
-                parameters: FunctionParameters {
-                    param_type: "object".to_string(),
-                    properties: ct
-                        .input_schema
-                        .properties
-                        .into_iter()
-                        .map(|(k, v)| (k, v.into()))
-                        .collect(),
-                    required: ct.input_schema.required,
-                },
-            },
-        }
-    }
-}
-
-// --- Request types ---
-
 #[derive(Debug, Serialize)]
 struct ChatCompletionRequest {
     pub model: String,
@@ -201,8 +174,6 @@ struct ChatCompletionRequest {
     pub tools: Vec<Tool>,
     pub stream: bool,
 }
-
-// --- Response types (non-streaming) ---
 
 #[derive(Debug, Deserialize)]
 pub struct ChatCompletionResponse {
@@ -236,8 +207,6 @@ pub struct Usage {
     #[serde(default)]
     pub total_tokens: u32,
 }
-
-// --- Streaming types ---
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct StreamChunk {
@@ -316,10 +285,9 @@ pub struct ApiErrorDetail {
     pub error_type: Option<String>,
 }
 
-// --- Config ---
-
 #[derive(Debug, Clone)]
 pub struct OpenAIConfig {
+    pub url: String,
     pub api_key: String,
     pub model: String,
     pub max_tokens: Option<u32>,
@@ -331,6 +299,7 @@ impl Default for OpenAIConfig {
     fn default() -> Self {
         Self {
             api_key: String::new(),
+            url: "https://api.openai.com/v1".to_string(),
             model: "gpt-4o".to_string(),
             max_tokens: Some(4096),
             temperature: Some(1.0),
@@ -339,13 +308,10 @@ impl Default for OpenAIConfig {
     }
 }
 
-// --- Client ---
-
 #[derive(Debug)]
 pub struct OpenAIClient {
     client: Client,
     config: OpenAIConfig,
-    base_url: String,
 }
 
 pub struct ClientRequest {
@@ -380,12 +346,6 @@ impl ClientRequest {
         self
     }
 
-    /// Accept claude::Tool vec and convert automatically.
-    pub fn with_claude_tools(mut self, tools: Vec<crate::claude::Tool>) -> Self {
-        self.tools = tools.into_iter().map(Tool::from).collect();
-        self
-    }
-
     fn build_messages(&self) -> Vec<Message> {
         let mut msgs = Vec::new();
         if let Some(system) = &self.system {
@@ -402,8 +362,6 @@ impl ClientRequest {
 }
 
 impl OpenAIClient {
-    const BASE_URL: &'static str = "https://api.openai.com/v1";
-
     pub fn new(config: OpenAIConfig) -> OpenAIResult<Self> {
         if config.api_key.is_empty() {
             return Err(OpenAIError::Config("API key is required".to_string()));
@@ -425,20 +383,11 @@ impl OpenAIClient {
             .default_headers(headers)
             .build()?;
 
-        Ok(Self {
-            client,
-            config,
-            base_url: Self::BASE_URL.to_string(),
-        })
-    }
-
-    pub fn with_base_url(mut self, base_url: String) -> Self {
-        self.base_url = base_url;
-        self
+        Ok(Self { client, config })
     }
 
     pub async fn chat(&self, req: ClientRequest) -> OpenAIResult<ChatCompletionResponse> {
-        let url = format!("{}/chat/completions", self.base_url);
+        let url = format!("{}/chat/completions", self.config.url);
         let messages = req.build_messages();
 
         let inner = ChatCompletionRequest {
@@ -468,7 +417,7 @@ impl OpenAIClient {
         &self,
         req: ClientRequest,
     ) -> Result<impl Stream<Item = OpenAIResult<StreamEvent>> + Send + 'static, anyhow::Error> {
-        let url = format!("{}/chat/completions", self.base_url);
+        let url = format!("{}/chat/completions", self.config.url);
         let client = self.client.clone();
 
         let messages = req.build_messages();
