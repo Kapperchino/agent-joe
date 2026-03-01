@@ -94,33 +94,6 @@ pub enum ToolProperty {
     },
 }
 
-impl From<crate::claude::ToolProperty> for ToolProperty {
-    fn from(cp: crate::claude::ToolProperty) -> Self {
-        match cp {
-            crate::claude::ToolProperty::Value {
-                name,
-                prop_type,
-                description,
-            } => ToolProperty::Value {
-                name,
-                prop_type,
-                description,
-            },
-            crate::claude::ToolProperty::Object {
-                name,
-                prop_type,
-                description,
-                properties,
-            } => ToolProperty::Object {
-                name,
-                prop_type,
-                description,
-                properties: properties.into_iter().map(|(k, v)| (k, v.into())).collect(),
-            },
-        }
-    }
-}
-
 #[derive(Debug, Serialize)]
 struct ResponseRequest {
     pub model: String,
@@ -256,7 +229,6 @@ pub enum StreamEvent {
         #[serde(default)]
         sequence_number: u64,
     },
-
     #[serde(rename = "response.output_item.added")]
     OutputItemAdded {
         output_index: usize,
