@@ -32,15 +32,9 @@ pub enum Role {
 #[serde(tag = "type")]
 pub enum InputItem {
     #[serde(rename = "message")]
-    Message {
-        role: Role,
-        content: String,
-    },
+    Message { role: Role, content: String },
     #[serde(rename = "function_call_output")]
-    FunctionCallOutput {
-        call_id: String,
-        output: String,
-    },
+    FunctionCallOutput { call_id: String, output: String },
 }
 
 impl InputItem {
@@ -225,10 +219,7 @@ struct StreamResponseEnvelope {
 #[serde(tag = "type")]
 enum StreamOutputItem {
     #[serde(rename = "function_call")]
-    FunctionCall {
-        call_id: String,
-        name: String,
-    },
+    FunctionCall { call_id: String, name: String },
     #[serde(rename = "message")]
     Message {},
     #[serde(other)]
@@ -239,9 +230,7 @@ enum StreamOutputItem {
 #[serde(tag = "type")]
 enum RawStreamEvent {
     #[serde(rename = "response.created")]
-    ResponseCreated {
-        response: StreamResponseEnvelope,
-    },
+    ResponseCreated { response: StreamResponseEnvelope },
     #[serde(rename = "response.in_progress")]
     ResponseInProgress {},
     #[serde(rename = "response.output_item.added")]
@@ -251,13 +240,12 @@ enum RawStreamEvent {
     },
     #[serde(rename = "response.output_text.delta")]
     OutputTextDelta {
+        output_index: usize,
+        content_index: usize,
         delta: String,
     },
     #[serde(rename = "response.function_call_arguments.delta")]
-    FunctionCallArgumentsDelta {
-        output_index: usize,
-        delta: String,
-    },
+    FunctionCallArgumentsDelta { output_index: usize, delta: String },
     #[serde(rename = "response.function_call_arguments.done")]
     FunctionCallArgumentsDone {
         output_index: usize,
@@ -273,14 +261,10 @@ enum RawStreamEvent {
     #[serde(rename = "response.content_part.done")]
     ContentPartDone {},
     #[serde(rename = "response.completed")]
-    ResponseCompleted {
-        response: StreamResponseEnvelope,
-    },
+    ResponseCompleted { response: StreamResponseEnvelope },
     #[serde(other)]
     Unknown,
 }
-
-// --- Error types ---
 
 #[derive(Debug, Deserialize)]
 struct ApiErrorResponse {
@@ -316,8 +300,6 @@ impl Default for OpenAIConfig {
         }
     }
 }
-
-// --- Client ---
 
 #[derive(Debug)]
 pub struct OpenAIClient {
@@ -443,7 +425,7 @@ impl OpenAIClient {
                 let chunk = chunk?;
                 buffer.push_str(&String::from_utf8_lossy(&chunk));
 
-                while let Some(raw_event) = extract_sse_event(&mut buffer)? {
+                while let Some(raw_event) = Self::extract_sse_event(&mut buffer)? {
                     match raw_event {
                         RawStreamEvent::ResponseCreated { response } => {
                             yield StreamEvent::MessageStart {
@@ -462,7 +444,7 @@ impl OpenAIClient {
                                 };
                             }
                         }
-                        RawStreamEvent::OutputTextDelta { delta } => {
+                        RawStreamEvent::OutputTextDelta { delta, .. } => {
                             if !delta.is_empty() {
                                 yield StreamEvent::ContentDelta { text: delta };
                             }
@@ -490,47 +472,95 @@ impl OpenAIClient {
 
         Ok(stream)
     }
-}
 
-/// Parses a single SSE event block from the buffer.
-/// The Responses API SSE format is:
-///   event: <type>\n
-///   data: <json>\n
-///   \n
-/// The `event` type is injected into the JSON data as `"type"` so serde can
-/// deserialize into the correct `RawStreamEvent` variant via its `#[serde(tag = "type")]`.
-fn extract_sse_event(buffer: &mut String) -> OpenAIResult<Option<RawStreamEvent>> {
-    let delimiter_pos = match buffer.find("\n\n") {
-        Some(pos) => pos,
-        None => return Ok(None),
-    };
+    fn extract_sse_event(buffer: &mut String) -> OpenAIResult<Option<RawStreamEvent>> {
+        let delimiter_pos = match buffer.find("\n\n") {
+            Some(pos) => pos,
+            None => return Ok(None),
+        };
 
-    let event_text = buffer[..delimiter_pos].to_string();
-    buffer.drain(..=delimiter_pos + 1);
+        let event_text = buffer[..delimiter_pos].to_string();
+        buffer.drain(..=delimiter_pos + 1);
 
-    let mut event_type = String::new();
-    let mut data_line = String::new();
+        let mut event_type = String::new();
+        let mut data_line = String::new();
 
-    for line in event_text.lines() {
-        let line = line.trim();
-        if let Some(evt) = line.strip_prefix("event: ") {
-            event_type = evt.to_string();
-        } else if let Some(data) = line.strip_prefix("data: ") {
-            data_line.push_str(data);
+        for line in event_text.lines() {
+            let line = line.trim();
+            if let Some(evt) = line.strip_prefix("event: ") {
+                event_type = evt.to_string();
+            } else if let Some(data) = line.strip_prefix("data: ") {
+                data_line.push_str(data);
+            }
+        }
+
+        if event_type.is_empty() || data_line.is_empty() {
+            return Ok(None);
+        }
+
+        let mut json: serde_json::Value = serde_json::from_str(&data_line)?;
+        json.as_object_mut()
+            .map(|obj| obj.insert("type".to_string(), serde_json::Value::String(event_type)));
+
+        match serde_json::from_value::<RawStreamEvent>(json) {
+            Ok(event) => Ok(Some(event)),
+            Err(e) => Err(OpenAIError::Serialization(e)),
         }
     }
+}
 
-    if event_type.is_empty() || data_line.is_empty() {
-        return Ok(None);
+#[cfg(test)]
+mod tests {
+    use std::pin::pin;
+    use super::*;
+
+    #[tokio::test]
+    async fn test_chat_api_call() {
+        let api_key = std::env::var("OPENAI_KEY").expect("OPENAI_KEY must be set");
+        let config = OpenAIConfig {
+            api_key,
+            ..Default::default()
+        };
+        let client = OpenAIClient::new(config).unwrap();
+        let req = ClientRequest::new(vec![InputItem::user("Say hello".to_string())]);
+        let response = client.chat(req).await.unwrap();
+
+        println!("{:?}",response);
+
+        assert_eq!(response.status, "completed");
+        assert!(!response.output.is_empty());
     }
 
-    // Inject the event type into the JSON object so serde can dispatch on it.
-    let mut json: serde_json::Value = serde_json::from_str(&data_line)?;
-    json.as_object_mut()
-        .map(|obj| obj.insert("type".to_string(), serde_json::Value::String(event_type)));
+    #[tokio::test]
+    async fn test_chat_stream_api_call() {
+        let api_key = std::env::var("OPENAI_KEY").expect("OPENAI_KEY must be set");
+        let config = OpenAIConfig {
+            api_key,
+            ..Default::default()
+        };
+        let client = OpenAIClient::new(config).unwrap();
+        let req = ClientRequest::new(vec![InputItem::user("Say hello".to_string())]);
+        let mut stream = client.chat_stream(req).await.unwrap();
 
-    match serde_json::from_value::<RawStreamEvent>(json) {
-        Ok(event) => Ok(Some(event)),
-        Err(e) => Err(OpenAIError::Serialization(e)),
+        let mut got_start = false;
+        let mut got_content = false;
+        let mut got_done = false;
+
+        let mut stream = pin!(stream);
+
+        while let Some(event) = stream.next().await {
+            let event = event.unwrap();
+            println!("{:?}", event);
+            match event {
+                StreamEvent::MessageStart { .. } => got_start = true,
+                StreamEvent::ContentDelta { .. } => got_content = true,
+                StreamEvent::Done { .. } => got_done = true,
+                _ => {}
+            }
+        }
+
+        assert!(got_start, "should receive MessageStart");
+        assert!(got_content, "should receive ContentDelta");
+        assert!(got_done, "should receive Done");
     }
 }
