@@ -181,101 +181,254 @@ pub struct Usage {
     pub total_tokens: u32,
 }
 
-#[derive(Debug, Clone)]
-pub enum StreamEvent {
-    /// First event arrived, contains model info.
-    MessageStart { id: String, model: String },
-    /// Text content delta.
-    ContentDelta { text: String },
-    /// A new tool call started (index, id, function name).
-    ToolCallStart {
-        index: usize,
-        id: String,
-        name: String,
-    },
-    /// Argument fragment for a tool call being streamed.
-    ToolCallDelta { index: usize, arguments: String },
-    /// Stream finished with a reason ("completed", "incomplete", "failed").
-    Done { finish_reason: String },
-    /// Usage info from the completed response.
-    Usage(Usage),
-}
-
-// --- Raw streaming event deserialization ---
-
 #[derive(Debug, Deserialize, Clone)]
-struct StreamResponseEnvelope {
+pub struct ResponseEnvelope {
     #[serde(default)]
-    id: Option<String>,
+    pub id: Option<String>,
     #[serde(default)]
-    model: Option<String>,
+    pub model: Option<String>,
     #[serde(default)]
-    status: Option<String>,
+    pub status: Option<String>,
     #[serde(default)]
-    usage: Option<Usage>,
+    pub usage: Option<Usage>,
+    #[serde(default)]
+    pub output: Vec<OutputItem>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 #[serde(tag = "type")]
-enum StreamOutputItem {
+pub enum StreamOutputItem {
     #[serde(rename = "function_call")]
-    FunctionCall { call_id: String, name: String },
+    FunctionCall {
+        #[serde(default)]
+        id: Option<String>,
+        call_id: String,
+        name: String,
+    },
     #[serde(rename = "message")]
-    Message {},
+    Message {
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        role: Option<String>,
+    },
     #[serde(other)]
     Unknown,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 #[serde(tag = "type")]
-enum RawStreamEvent {
+pub enum StreamEvent {
+    #[serde(rename = "response.queued")]
+    ResponseQueued {
+        response: ResponseEnvelope,
+        #[serde(default)]
+        sequence_number: u64,
+    },
     #[serde(rename = "response.created")]
-    ResponseCreated { response: StreamResponseEnvelope },
+    ResponseCreated {
+        response: ResponseEnvelope,
+        #[serde(default)]
+        sequence_number: u64,
+    },
     #[serde(rename = "response.in_progress")]
-    ResponseInProgress {},
+    ResponseInProgress {
+        #[serde(default)]
+        response: Option<ResponseEnvelope>,
+        #[serde(default)]
+        sequence_number: u64,
+    },
+    #[serde(rename = "response.completed")]
+    ResponseCompleted {
+        response: ResponseEnvelope,
+        #[serde(default)]
+        sequence_number: u64,
+    },
+    #[serde(rename = "response.incomplete")]
+    ResponseIncomplete {
+        response: ResponseEnvelope,
+        #[serde(default)]
+        sequence_number: u64,
+    },
+    #[serde(rename = "response.failed")]
+    ResponseFailed {
+        response: ResponseEnvelope,
+        #[serde(default)]
+        sequence_number: u64,
+    },
+
     #[serde(rename = "response.output_item.added")]
     OutputItemAdded {
         output_index: usize,
         item: StreamOutputItem,
+        #[serde(default)]
+        sequence_number: u64,
     },
+    #[serde(rename = "response.output_item.done")]
+    OutputItemDone {
+        output_index: usize,
+        #[serde(default)]
+        item: Option<serde_json::Value>,
+        #[serde(default)]
+        sequence_number: u64,
+    },
+    #[serde(rename = "response.content_part.added")]
+    ContentPartAdded {
+        #[serde(default)]
+        item_id: String,
+        #[serde(default)]
+        output_index: usize,
+        #[serde(default)]
+        content_index: usize,
+        #[serde(default)]
+        sequence_number: u64,
+    },
+    #[serde(rename = "response.content_part.done")]
+    ContentPartDone {
+        #[serde(default)]
+        item_id: String,
+        #[serde(default)]
+        output_index: usize,
+        #[serde(default)]
+        content_index: usize,
+        #[serde(default)]
+        sequence_number: u64,
+    },
+
     #[serde(rename = "response.output_text.delta")]
     OutputTextDelta {
+        #[serde(default)]
+        item_id: String,
+        #[serde(default)]
         output_index: usize,
+        #[serde(default)]
         content_index: usize,
         delta: String,
+        #[serde(default)]
+        sequence_number: u64,
     },
+    #[serde(rename = "response.output_text.done")]
+    OutputTextDone {
+        #[serde(default)]
+        item_id: String,
+        #[serde(default)]
+        output_index: usize,
+        #[serde(default)]
+        content_index: usize,
+        text: String,
+        #[serde(default)]
+        sequence_number: u64,
+    },
+    #[serde(rename = "response.output_text.annotation.added")]
+    OutputTextAnnotationAdded {
+        #[serde(default)]
+        item_id: String,
+        #[serde(default)]
+        output_index: usize,
+        #[serde(default)]
+        content_index: usize,
+        #[serde(default)]
+        annotation_index: Option<usize>,
+        #[serde(default)]
+        annotation: Option<serde_json::Value>,
+        #[serde(default)]
+        sequence_number: u64,
+    },
+
+    #[serde(rename = "response.refusal.delta")]
+    RefusalDelta {
+        #[serde(default)]
+        item_id: String,
+        #[serde(default)]
+        output_index: usize,
+        #[serde(default)]
+        content_index: usize,
+        delta: String,
+        #[serde(default)]
+        sequence_number: u64,
+    },
+    #[serde(rename = "response.refusal.done")]
+    RefusalDone {
+        #[serde(default)]
+        item_id: String,
+        #[serde(default)]
+        output_index: usize,
+        #[serde(default)]
+        content_index: usize,
+        refusal: String,
+        #[serde(default)]
+        sequence_number: u64,
+    },
+
     #[serde(rename = "response.function_call_arguments.delta")]
-    FunctionCallArgumentsDelta { output_index: usize, delta: String },
+    FunctionCallArgumentsDelta {
+        #[serde(default)]
+        item_id: String,
+        #[serde(default)]
+        output_index: usize,
+        delta: String,
+        #[serde(default)]
+        sequence_number: u64,
+    },
     #[serde(rename = "response.function_call_arguments.done")]
     FunctionCallArgumentsDone {
+        #[serde(default)]
+        item_id: String,
+        #[serde(default)]
         output_index: usize,
         name: String,
         arguments: String,
+        #[serde(default)]
+        sequence_number: u64,
     },
-    #[serde(rename = "response.output_item.done")]
-    OutputItemDone {},
-    #[serde(rename = "response.output_text.done")]
-    OutputTextDone {},
-    #[serde(rename = "response.content_part.added")]
-    ContentPartAdded {},
-    #[serde(rename = "response.content_part.done")]
-    ContentPartDone {},
-    #[serde(rename = "response.completed")]
-    ResponseCompleted { response: StreamResponseEnvelope },
+
+    #[serde(rename = "response.reasoning_summary_part.added")]
+    ReasoningSummaryPartAdded {
+        #[serde(default)]
+        sequence_number: u64,
+    },
+    #[serde(rename = "response.reasoning_summary_text.delta")]
+    ReasoningSummaryTextDelta {
+        #[serde(default)]
+        item_id: String,
+        #[serde(default)]
+        output_index: usize,
+        #[serde(default)]
+        summary_index: Option<usize>,
+        delta: String,
+        #[serde(default)]
+        sequence_number: u64,
+    },
+    #[serde(rename = "response.reasoning_summary_text.done")]
+    ReasoningSummaryTextDone {
+        #[serde(default)]
+        item_id: String,
+        #[serde(default)]
+        output_index: usize,
+        #[serde(default)]
+        summary_index: Option<usize>,
+        text: String,
+        #[serde(default)]
+        sequence_number: u64,
+    },
+    #[serde(rename = "response.reasoning_summary_part.done")]
+    ReasoningSummaryPartDone {
+        #[serde(default)]
+        sequence_number: u64,
+    },
+
+    #[serde(rename = "error")]
+    Error {
+        #[serde(default)]
+        code: Option<String>,
+        #[serde(default)]
+        message: Option<String>,
+        #[serde(default)]
+        sequence_number: u64,
+    },
+
     #[serde(other)]
     Unknown,
-}
-
-#[derive(Debug, Deserialize)]
-struct ApiErrorResponse {
-    error: ApiErrorDetail,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct ApiErrorDetail {
-    pub message: String,
-    #[serde(rename = "type")]
-    pub error_type: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -418,54 +571,14 @@ impl OpenAIClient {
 
         let mut byte_stream = initial.bytes_stream();
         let mut buffer = String::new();
-        let mut tool_call_counter: usize = 0;
 
         let stream = try_stream! {
             while let Some(chunk) = byte_stream.next().await {
                 let chunk = chunk?;
                 buffer.push_str(&String::from_utf8_lossy(&chunk));
 
-                while let Some(raw_event) = Self::extract_sse_event(&mut buffer)? {
-                    match raw_event {
-                        RawStreamEvent::ResponseCreated { response } => {
-                            yield StreamEvent::MessageStart {
-                                id: response.id.unwrap_or_default(),
-                                model: response.model.unwrap_or_default(),
-                            };
-                        }
-                        RawStreamEvent::OutputItemAdded { item, .. } => {
-                            if let StreamOutputItem::FunctionCall { call_id, name } = item {
-                                let index = tool_call_counter;
-                                tool_call_counter += 1;
-                                yield StreamEvent::ToolCallStart {
-                                    index,
-                                    id: call_id,
-                                    name,
-                                };
-                            }
-                        }
-                        RawStreamEvent::OutputTextDelta { delta, .. } => {
-                            if !delta.is_empty() {
-                                yield StreamEvent::ContentDelta { text: delta };
-                            }
-                        }
-                        RawStreamEvent::FunctionCallArgumentsDelta { output_index, delta } => {
-                            if !delta.is_empty() {
-                                yield StreamEvent::ToolCallDelta {
-                                    index: output_index,
-                                    arguments: delta,
-                                };
-                            }
-                        }
-                        RawStreamEvent::ResponseCompleted { response } => {
-                            let status = response.status.unwrap_or_else(|| "completed".to_string());
-                            yield StreamEvent::Done { finish_reason: status };
-                            if let Some(usage) = response.usage {
-                                yield StreamEvent::Usage(usage);
-                            }
-                        }
-                        _ => {}
-                    }
+                while let Some(event) = Self::extract_sse_event(&mut buffer)? {
+                    yield event;
                 }
             }
         };
@@ -473,7 +586,7 @@ impl OpenAIClient {
         Ok(stream)
     }
 
-    fn extract_sse_event(buffer: &mut String) -> OpenAIResult<Option<RawStreamEvent>> {
+    fn extract_sse_event(buffer: &mut String) -> OpenAIResult<Option<StreamEvent>> {
         let delimiter_pos = match buffer.find("\n\n") {
             Some(pos) => pos,
             None => return Ok(None),
@@ -502,7 +615,7 @@ impl OpenAIClient {
         json.as_object_mut()
             .map(|obj| obj.insert("type".to_string(), serde_json::Value::String(event_type)));
 
-        match serde_json::from_value::<RawStreamEvent>(json) {
+        match serde_json::from_value::<StreamEvent>(json) {
             Ok(event) => Ok(Some(event)),
             Err(e) => Err(OpenAIError::Serialization(e)),
         }
@@ -511,8 +624,8 @@ impl OpenAIClient {
 
 #[cfg(test)]
 mod tests {
-    use std::pin::pin;
     use super::*;
+    use std::pin::pin;
 
     #[tokio::test]
     async fn test_chat_api_call() {
@@ -525,7 +638,7 @@ mod tests {
         let req = ClientRequest::new(vec![InputItem::user("Say hello".to_string())]);
         let response = client.chat(req).await.unwrap();
 
-        println!("{:?}",response);
+        println!("{:?}", response);
 
         assert_eq!(response.status, "completed");
         assert!(!response.output.is_empty());
@@ -552,15 +665,15 @@ mod tests {
             let event = event.unwrap();
             println!("{:?}", event);
             match event {
-                StreamEvent::MessageStart { .. } => got_start = true,
-                StreamEvent::ContentDelta { .. } => got_content = true,
-                StreamEvent::Done { .. } => got_done = true,
+                StreamEvent::ResponseCreated { .. } => got_start = true,
+                StreamEvent::OutputTextDelta { .. } => got_content = true,
+                StreamEvent::ResponseCompleted { .. } => got_done = true,
                 _ => {}
             }
         }
 
-        assert!(got_start, "should receive MessageStart");
-        assert!(got_content, "should receive ContentDelta");
-        assert!(got_done, "should receive Done");
+        assert!(got_start, "should receive ResponseCreated");
+        assert!(got_content, "should receive OutputTextDelta");
+        assert!(got_done, "should receive ResponseCompleted");
     }
 }
