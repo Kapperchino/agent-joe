@@ -4,9 +4,12 @@ mod analysis;
 mod app;
 mod cache;
 mod cache_actor;
+mod cargo;
 mod claude;
 mod cur_context;
 mod file_actor;
+mod llm;
+mod openai;
 mod proj_meta;
 mod rust_proj;
 mod symbol_info;
@@ -15,12 +18,10 @@ mod tool_defs;
 mod tool_impls;
 mod utils;
 mod worker;
-mod cargo;
-mod openai;
-mod llm;
 
 use crate::actor::Dependency;
 use crate::claude::{ClaudeClient, ClaudeConfig};
+use crate::llm::LLmClient;
 use crate::tool_defs::{CargoCheck, InsertAfterLine, StringReplace};
 use crate::tool_impls::ReadFile;
 use crate::worker::Worker;
@@ -38,11 +39,7 @@ use tracing_subscriber::FmtSubscriber;
 
 #[main]
 async fn main() {
-    let file_appender = RollingFileAppender::new(
-        Rotation::HOURLY,
-        "./logs",
-        "err.log"
-    );
+    let file_appender = RollingFileAppender::new(Rotation::HOURLY, "./logs", "err.log");
     let (file_appender, _guard) = tracing_appender::non_blocking(file_appender);
 
     // a builder for `FmtSubscriber`.
@@ -51,8 +48,7 @@ async fn main() {
         .with_writer(file_appender)
         .finish();
 
-    tracing::subscriber::set_global_default(subscriber)
-        .expect("setting default subscriber failed");
+    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
     let client = ClaudeClient::new(ClaudeConfig {
         api_key: env::var("CLAUDE_API").unwrap(),
@@ -67,12 +63,12 @@ async fn main() {
         None,
         Worker {},
         Dependency {
-            claude: client,
+            claude: LLmClient::Claude(client),
             tools: vec![
                 tool_impls::Tool::ReadFile(ReadFile::default()),
                 tool_impls::Tool::InsertAfterLine(InsertAfterLine::default()),
                 tool_impls::Tool::StringReplace(StringReplace::default()),
-                tool_impls::Tool::CargoCheck(CargoCheck::default())
+                tool_impls::Tool::CargoCheck(CargoCheck::default()),
             ],
             tui_tx: tx,
         },

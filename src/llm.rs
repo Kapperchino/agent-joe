@@ -22,7 +22,9 @@ impl LLmClient {
         req: ClientRequest,
     ) -> Result<impl Stream<Item = anyhow::Result<StreamEvent>> + Send + 'static, anyhow::Error>
     {
-        todo!()
+        todo!();
+        #[allow(unreachable_code)]
+        Ok(futures::stream::empty())
     }
 
     async fn send_request(&self, request: ClientRequest) -> anyhow::Result<ClientResponse> {
