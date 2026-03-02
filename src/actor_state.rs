@@ -1,9 +1,9 @@
 use crate::actor::{ActorToTui, Dependency, State, StreamAccu, StreamRes, TokenCount};
-use crate::claude::{ClaudeClient, ContentBlock, ContentBlockInfo, Delta, Role, StreamEvent};
 use crate::cur_context::CurContext;
+use crate::llm::{ContentBlock, LLmClient, Message, Role, StreamEvent};
 use crate::tool_defs::{
     CargoCheckInput, InsertAfterLineInput, LenientDeserialize, ReadFileInput, StringReplaceInput,
-    Tool, ToolResult,
+    Tool, ToolJson, ToolResult,
 };
 use crate::{claude, file_actor, tool_impls};
 use futures::{future, StreamExt};
@@ -17,10 +17,10 @@ pub struct ActorState {
     pub cur_context: CurContext,
     pub stream_actor: Option<ActorCell>,
     pub cur_state: State,
-    pub history: Vec<claude::Message>,
-    pub claude: ClaudeClient,
+    pub history: Vec<Message>,
+    pub claude: LLmClient,
     pub tools: Vec<Tool>,
-    pub tools_json: Vec<claude::Tool>,
+    pub tools_json: Vec<ToolJson>,
     pub acc_map: HashMap<usize, Vec<StreamAccu>>,
     pub delta_buf: HashMap<usize, Vec<Delta>>,
     pub tui_tx: mpsc::UnboundedSender<ActorToTui>,
@@ -35,13 +35,12 @@ impl ActorState {
     ) -> anyhow::Result<Self> {
         let cur_context_str = cur_context.get_ctx().await;
 
-        let computed_tools: Vec<claude::Tool> =
-            dependency.tools.iter().map(|t| t.to_json()).collect();
+        let computed_tools: Vec<ToolJson> = dependency.tools.iter().map(|t| t.to_json()).collect();
 
         Ok(Self {
             cur_context,
             cur_state: State::Ready,
-            history: vec![claude::Message::new(
+            history: vec![Message::new(
                 "This is the initial context in the environment: \n".to_owned()
                     + cur_context_str.as_str(),
             )],
@@ -61,14 +60,14 @@ impl ActorState {
         vec.into_iter().try_for_each(|res| match res {
             Ok(stream_res) => match stream_res {
                 StreamRes::String(str) => {
-                    self.history.push(claude::Message::new_assistant(str));
+                    self.history.push(Message::new_assistant(str));
                     Ok(())
                 }
                 StreamRes::Thinking {
                     thinking,
                     signature,
                 } => {
-                    self.history.push(claude::Message {
+                    self.history.push(Message {
                         role: Role::Assistant,
                         content: vec![ContentBlock::ThinkingBlock {
                             thinking,
@@ -79,7 +78,7 @@ impl ActorState {
                 }
                 StreamRes::Tool(tool_res) => {
                     let input = tool_res.tool().to_req()?;
-                    self.history.push(claude::Message {
+                    self.history.push(Message {
                         role: Role::Assistant,
                         content: vec![ContentBlock::ToolBlock {
                             id: tool_res.tool().id(),
@@ -87,7 +86,7 @@ impl ActorState {
                             input,
                         }],
                     });
-                    self.history.push(claude::Message {
+                    self.history.push(Message {
                         role: Role::User,
                         content: vec![tool_res.to_res_json()],
                     });

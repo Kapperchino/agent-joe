@@ -1,5 +1,6 @@
 use crate::analysis::Range;
 use crate::claude::ToolProperty;
+use crate::{claude, openai};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use turbo_code_macros::{ToolDef, ToolInput};
@@ -22,6 +23,12 @@ pub trait ToolUse {}
 
 pub trait LenientDeserialize: Sized {
     fn deserialize_lenient(s: &str) -> anyhow::Result<Self>;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ToolJson {
+    OpenAI(openai::Tool),
+    Claude(claude::Tool),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

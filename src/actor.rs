@@ -1,12 +1,11 @@
 use crate::actor_state::{ActorState, StreamNextStep};
 use crate::app::Command;
 use crate::cache_actor::CacheActor;
-use crate::claude::{ClaudeClient, ClaudeError, ClientRequest, ContentBlock, StreamEvent};
 use crate::cur_context::CurContext;
 use crate::file_actor::FileActor;
 use crate::tool_defs::ReadFile;
 use crate::worker::Worker;
-use crate::{app, cache_actor, claude, file_actor, tool_impls};
+use crate::{app, cache_actor, claude, file_actor, llm, tool_impls};
 use ractor::Actor;
 use ractor::ActorProcessingErr;
 use ractor::ActorRef;
@@ -18,6 +17,7 @@ use std::fmt::Display;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing::error;
+use crate::llm::{ContentBlock, LLmClient, StreamEvent};
 
 #[derive(Debug, Clone)]
 pub enum ActorToTui {
@@ -62,7 +62,7 @@ impl<T, E: std::fmt::Display> IntoActorErr<T> for Result<T, E> {
 #[derive(Debug)]
 pub enum StreamItem {
     Item(StreamEvent),
-    Err(ClaudeError),
+    Err(anyhow::Error),
     Finished(),
 }
 
@@ -76,7 +76,7 @@ pub enum Message {
 }
 
 pub struct Dependency {
-    pub claude: ClaudeClient,
+    pub claude: LLmClient,
     pub tools: Vec<tool_impls::Tool>,
     pub tui_tx: mpsc::UnboundedSender<ActorToTui>,
 }
@@ -164,7 +164,7 @@ impl Actor for Worker {
         match message {
             Message::StartWork(prompt) => {
                 prompt.map(|p| {
-                    state.history.push(claude::Message::new(p));
+                    state.history.push(llm::Message::new(p));
                 });
                 let tools = state.tools_json.clone();
                 let req = ClientRequest::new(state.history.clone())

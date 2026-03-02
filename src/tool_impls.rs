@@ -3,8 +3,8 @@ use crate::cargo::Cargo;
 use crate::claude::ToolSchemaDTO;
 use crate::cur_context::CurContext;
 use crate::text_search::TextSearch;
-use crate::tool_defs::CargoCheckResult;
 pub(crate) use crate::tool_defs::{CargoCheck, InsertAfterLine, ReadFile, Tool, ToolResult};
+use crate::tool_defs::{CargoCheckResult, ToolJson};
 pub(crate) use crate::tool_defs::{StringReplace, StringReplaceInput, ToolDefTrait};
 use crate::{cargo, claude};
 use anyhow::{anyhow, Error};
@@ -39,8 +39,8 @@ impl Tool {
         }
     }
 
-    pub fn to_json(&self) -> claude::Tool {
-        claude::Tool {
+    pub fn to_json(&self) -> ToolJson {
+        ToolJson::Claude(claude::Tool {
             name: self.name(),
             description: match self {
                 Tool::ReadFile(_) => ReadFile::tool_description().to_string(),
@@ -64,7 +64,7 @@ impl Tool {
                     Tool::CargoCheck(_) => CargoCheck::required_fields(),
                 },
             },
-        }
+        })
     }
 
     pub fn to_req(&self) -> anyhow::Result<HashMap<String, String>> {
