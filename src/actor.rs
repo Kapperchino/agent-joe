@@ -3,9 +3,10 @@ use crate::app::Command;
 use crate::cache_actor::CacheActor;
 use crate::cur_context::CurContext;
 use crate::file_actor::FileActor;
+use crate::llm::{ClientRequest, ContentBlock, LLmClient, StreamEvent};
 use crate::tool_defs::ReadFile;
 use crate::worker::Worker;
-use crate::{app, cache_actor, claude, file_actor, llm, tool_impls};
+use crate::{app, cache_actor, file_actor, llm, tool_impls};
 use ractor::Actor;
 use ractor::ActorProcessingErr;
 use ractor::ActorRef;
@@ -17,7 +18,6 @@ use std::fmt::Display;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing::error;
-use crate::llm::{ContentBlock, LLmClient, StreamEvent};
 
 #[derive(Debug, Clone)]
 pub enum ActorToTui {
@@ -166,12 +166,11 @@ impl Actor for Worker {
                 prompt.map(|p| {
                     state.history.push(llm::Message::new(p));
                 });
-                let tools = state.tools_json.clone();
                 let req = ClientRequest::new(state.history.clone())
                     .with_thinking()
-                    .with_tools(tools);
+                    .with_tools(state.tools.clone());
 
-                let stream = state.claude.chat_stream(req).await?;
+                let stream = state.llm.chat_stream(req).await?;
 
                 let actor = spawn_stream_pump(
                     stream,

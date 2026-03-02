@@ -1,11 +1,11 @@
 use crate::actor::{ActorToTui, Dependency, State, StreamAccu, StreamRes, TokenCount};
 use crate::cur_context::CurContext;
-use crate::llm::{ContentBlock, LLmClient, Message, Role, StreamEvent};
+use crate::llm::{ContentBlock, ContentBlockInfo, Delta, LLmClient, Message, Role, StreamEvent};
 use crate::tool_defs::{
     CargoCheckInput, InsertAfterLineInput, LenientDeserialize, ReadFileInput, StringReplaceInput,
-    Tool, ToolJson, ToolResult,
+    Tool, ToolResult,
 };
-use crate::{claude, file_actor, tool_impls};
+use crate::{ file_actor, tool_impls};
 use futures::{future, StreamExt};
 use ra_ap_hir::sym::false_;
 use ractor::{ActorCell, ActorRef};
@@ -18,9 +18,8 @@ pub struct ActorState {
     pub stream_actor: Option<ActorCell>,
     pub cur_state: State,
     pub history: Vec<Message>,
-    pub claude: LLmClient,
+    pub llm: LLmClient,
     pub tools: Vec<Tool>,
-    pub tools_json: Vec<ToolJson>,
     pub acc_map: HashMap<usize, Vec<StreamAccu>>,
     pub delta_buf: HashMap<usize, Vec<Delta>>,
     pub tui_tx: mpsc::UnboundedSender<ActorToTui>,
@@ -35,8 +34,6 @@ impl ActorState {
     ) -> anyhow::Result<Self> {
         let cur_context_str = cur_context.get_ctx().await;
 
-        let computed_tools: Vec<ToolJson> = dependency.tools.iter().map(|t| t.to_json()).collect();
-
         Ok(Self {
             cur_context,
             cur_state: State::Ready,
@@ -44,9 +41,8 @@ impl ActorState {
                 "This is the initial context in the environment: \n".to_owned()
                     + cur_context_str.as_str(),
             )],
-            claude: dependency.claude,
+            llm: dependency.claude,
             tools: dependency.tools,
-            tools_json: computed_tools,
             acc_map: Default::default(),
             delta_buf: Default::default(),
             stream_actor: None,
