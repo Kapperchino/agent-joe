@@ -1,0 +1,13 @@
+[package]
+name = "app"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+color-eyre = "0.6.5"
+crossterm = "0.29.0"
+futures = "0.3.32"
+ratatui = "0.30.0"
+tokio = "1.50.0"
+anyhow = "1.0.102"
+textwrap = "0.16.2"

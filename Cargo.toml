@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "src/actors", "src/analysis", "src/clients", "src/tools", "src/turbo-code-macros", "src/utils", "utils"]
+members = [".", "src/actors", "src/analysis", "src/app", "src/clients", "src/tools", "src/turbo-code-macros", "src/utils"]
 
 [package]
 name = "turbo-code"
@@ -10,6 +10,7 @@ edition = "2024"
 opt-level = 3
 
 [dependencies]
+actors = { path = "src/actors" }
 turbo-code-macros = { path = "src/turbo-code-macros" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -17,14 +18,6 @@ tokio = { version = "1.0", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["fs", "io-util"] }
 thiserror = "2.0.17"
 futures = "0.3"
-ractor_actors = "0.4.9"
-ra_ap_ide = "0.0.311"
-ra_ap_load-cargo = "0.0.311"
-ra_ap_project_model = "0.0.311"
-ra_ap_ide_db = "0.0.311"
-ra_ap_vfs = "0.0.311"
-ra_ap_hir = "0.0.311"
-ra_ap_syntax = "0.0.311"
 bytes = "1.0"
 url = "2.4"
 uuid = { version = "1.0", features = ["v4", "serde"] }

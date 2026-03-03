@@ -1,4 +1,4 @@
-use crate::symbol_info::SymbolInfo;
+use crate::analysis::SymbolInfo;
 use heed::types::{SerdeJson, Str};
 use heed::{Database, Env, EnvOpenOptions, RoTxn, RwTxn};
 use std::io::ErrorKind;

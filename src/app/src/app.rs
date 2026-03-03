@@ -18,7 +18,7 @@ use ratatui::{
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
-use crate::actor::{ActorToTui, Message, State, TokenCount};
+use crate::actors::{ActorToTui, Message, State, TokenCount};
 
 pub(crate) struct App {
     pub vertical_scroll_state: ScrollbarState,
@@ -205,9 +205,9 @@ impl App {
             string.as_str(),
             textwrap::Options::new(self.msg_area_width - 5),
         )
-        .into_iter()
-        .map(|x| x.to_string())
-        .collect()
+            .into_iter()
+            .map(|x| x.to_string())
+            .collect()
     }
 
     fn scroll_up(&mut self) {

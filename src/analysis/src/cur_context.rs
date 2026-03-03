@@ -1,7 +1,7 @@
 use crate::cache::TypedCache;
-use crate::proj_meta::ProjMeta;
-use crate::rust_proj::RustProject;
-use crate::symbol_info::SymbolInfo;
+use proj_meta::ProjMeta;
+use rust_proj::RustProject;
+use symbol_info::SymbolInfo;
 use crate::utils::Utils;
 use futures::StreamExt;
 use itertools::Itertools;

@@ -1,25 +1,7 @@
-mod actor;
-mod actor_state;
-mod analysis;
-mod app;
-mod cache;
-mod cache_actor;
-mod cargo;
-mod cur_context;
-mod file_actor;
-mod proj_meta;
-mod rust_proj;
-mod symbol_info;
-mod text_search;
-mod utils;
-mod worker;
-
-use crate::actor::Dependency;
+use crate::worker::Worker;
+use actors::Dependency;
 use clients::claude::{ClaudeClient, ClaudeConfig};
 use clients::llm::LLmClient;
-use tools::tool_defs::{CargoCheck, InsertAfterLine, StringReplace};
-use tools::tool_impls::ReadFile;
-use crate::worker::Worker;
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::execute;
 use ractor::Actor;
@@ -28,10 +10,12 @@ use std::io::{stdout, Write};
 use tokio::main;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
+use tools::tool_defs::{CargoCheck, InsertAfterLine, StringReplace};
+use tools::tool_impls;
+use tools::tool_impls::ReadFile;
 use tracing::Level;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::FmtSubscriber;
-use tools::tool_impls;
 
 #[main]
 async fn main() {
