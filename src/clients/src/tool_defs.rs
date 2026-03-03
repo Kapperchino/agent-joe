@@ -1,10 +1,8 @@
-use turbo_code::analysis::Range;
-use clients::claude::ToolProperty;
-use clients::openai;
+use turbo_code_macros::ToolInput;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use clients::claude;
-use turbo_code_macros::{ToolDef, ToolInput};
+use crate::claude::ToolProperty;
+use crate::{claude, openai};
 
 pub trait ToolDefTrait {
     fn tool_name() -> &'static str;
@@ -38,6 +36,14 @@ pub enum Tool {
     InsertAfterLine(InsertAfterLine),
     StringReplace(StringReplace),
     CargoCheck(CargoCheck),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, Eq, PartialEq, Hash, ToolInput)]
+pub struct Range {
+    #[tool(description = "Start line (inclusive)", required)]
+    pub start: u32,
+    #[tool(description = "End line (exclusive)", required)]
+    pub end: u32,
 }
 
 #[derive(Default, Serialize, Deserialize, Debug, Clone, ToolDef)]

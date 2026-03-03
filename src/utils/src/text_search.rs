@@ -1,8 +1,8 @@
-use crate::utils::Utils;
 use grep::regex::RegexMatcherBuilder;
 use grep::searcher::sinks::UTF8;
 use grep::searcher::SearcherBuilder;
 use std::path::PathBuf;
+use crate::utils::Utils;
 
 pub struct TextSearch {}
 

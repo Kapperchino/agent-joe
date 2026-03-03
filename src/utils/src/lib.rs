@@ -1,2 +1,3 @@
-mod cargo;
-mod text_search;
+pub mod cargo;
+pub mod text_search;
+pub mod utils;

@@ -4,5 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+analysis = { path = "../analysis" }
+clients = { path = "../clients" }
 ractor_actors = "0.4.9"
 ractor = "0.15"
+thiserror = "2.0.18"
+tracing = "0.1.44"

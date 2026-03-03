@@ -1,6 +1,7 @@
 mod analysis;
-mod cur_context;
-mod proj_meta;
-mod rust_proj;
-mod symbol_info;
-mod cache;
+pub mod cur_context;
+pub mod proj_meta;
+pub mod rust_proj;
+pub mod symbol_info;
+pub mod cache;
+

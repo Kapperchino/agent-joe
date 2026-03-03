@@ -1,8 +1,6 @@
+use utils::utils::Utils;
 use crate::cache::TypedCache;
-use proj_meta::ProjMeta;
-use rust_proj::RustProject;
-use symbol_info::SymbolInfo;
-use crate::utils::Utils;
+use crate::rust_proj::RustProject;
 use futures::StreamExt;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -10,6 +8,8 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fmt::Display;
 use std::path::PathBuf;
+use crate::symbol_info::SymbolInfo;
+use crate::proj_meta::ProjMeta;
 
 pub struct CurContext {
     pub cur_dir: PathBuf,

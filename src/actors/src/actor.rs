@@ -1,5 +1,5 @@
 use crate::actor_state::{ActorState, StreamNextStep};
-use crate::app::Command;
+use app::Command;
 use crate::cache_actor::CacheActor;
 use crate::cur_context::CurContext;
 use crate::file_actor::FileActor;

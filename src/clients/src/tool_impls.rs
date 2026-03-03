@@ -1,26 +1,16 @@
-use turbo_code::analysis::Range;
-use turbo_code::cargo::Cargo;
-use clients::claude::ToolSchemaDTO;
-use turbo_code::cur_context::CurContext;
-use clients::llm::ContentBlock;
-use turbo_code::text_search::TextSearch;
-pub use tools::tool_defs::{CargoCheck, InsertAfterLine, ReadFile, Tool, ToolResult};
-use tools::tool_defs::{CargoCheckResult, ToolJson};
-pub use tools::tool_defs::{StringReplace, StringReplaceInput, ToolDefTrait};
-use turbo_code::cargo;
-use anyhow::{anyhow, Error};
-use futures::{StreamExt, TryStreamExt};
-use itertools::Itertools;
-use ra_ap_ide::TextSize;
+use crate::tool_defs::ReadFile;
 use std::cmp::min;
 use std::collections::HashMap;
 use std::io::SeekFrom;
 use std::path::PathBuf;
+use anyhow::anyhow;
 use tokio::fs;
 use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, BufReader};
 use tokio_stream::wrappers::LinesStream;
-use clients::claude;
+use crate::claude;
+use crate::llm::ContentBlock;
+use crate::tool_defs::{CargoCheckResult, Tool};
 
 impl Tool {
     pub fn name(&self) -> String {

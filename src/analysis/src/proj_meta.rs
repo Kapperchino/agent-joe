@@ -1,7 +1,7 @@
+use utils::utils::Utils;
 use crate::analysis::Range;
 use crate::rust_proj::RustProject;
 use crate::symbol_info::SymbolInfo;
-use crate::utils::Utils;
 use futures::{future, StreamExt};
 use itertools::Itertools;
 use ra_ap_ide::LineIndex;

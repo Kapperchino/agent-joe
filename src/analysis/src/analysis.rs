@@ -1,5 +1,5 @@
 use crate::rust_proj::RustProject;
-use crate::symbol_info::SymbolInfo;
+pub(crate) use crate::symbol_info::SymbolInfo;
 use ra_ap_ide::{
     Analysis, FilePosition, FileStructureConfig, GotoImplementationConfig, LineIndex
     , StructureNode, TextSize,
@@ -26,11 +26,9 @@ pub struct AnalysisSession<'a> {
     proj: &'a RustProject,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, Eq, PartialEq, Hash, ToolInput)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, Eq, PartialEq, Hash)]
 pub struct Range {
-    #[tool(description = "Start line (inclusive)", required)]
     pub start: u32,
-    #[tool(description = "End line (exclusive)", required)]
     pub end: u32,
 }
 
