@@ -3,10 +3,10 @@ use crate::app::Command;
 use crate::cache_actor::CacheActor;
 use crate::cur_context::CurContext;
 use crate::file_actor::FileActor;
-use crate::llm::{ClientRequest, ContentBlock, LLmClient, StreamEvent};
-use crate::tool_defs::ReadFile;
+use clients::llm::{ClientRequest, ContentBlock, LLmClient, StreamEvent};
+use tools::tool_defs::ReadFile;
 use crate::worker::Worker;
-use crate::{app, cache_actor, file_actor, llm, tool_impls};
+use crate::{app, cache_actor, file_actor};
 use ractor::Actor;
 use ractor::ActorProcessingErr;
 use ractor::ActorRef;
@@ -18,6 +18,8 @@ use std::fmt::Display;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing::error;
+use clients::llm;
+use tools::tool_impls;
 
 #[derive(Debug, Clone)]
 pub enum ActorToTui {
@@ -36,7 +38,7 @@ pub struct TokenCount {
 #[derive(Error, Debug)]
 pub enum WorkerError {
     #[error("Claude API error: {0}")]
-    Claude(#[from] crate::claude::ClaudeError),
+    Claude(#[from] clients::claude::ClaudeError),
 
     #[error("Still working")]
     WIP,

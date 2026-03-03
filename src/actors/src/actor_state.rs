@@ -1,17 +1,18 @@
 use crate::actor::{ActorToTui, Dependency, State, StreamAccu, StreamRes, TokenCount};
 use crate::cur_context::CurContext;
-use crate::llm::{ContentBlock, ContentBlockInfo, Delta, LLmClient, Message, Role, StreamEvent};
-use crate::tool_defs::{
+use clients::llm::{ContentBlock, ContentBlockInfo, Delta, LLmClient, Message, Role, StreamEvent};
+use tools::tool_defs::{
     CargoCheckInput, InsertAfterLineInput, LenientDeserialize, ReadFileInput, StringReplaceInput,
     Tool, ToolResult,
 };
-use crate::{ file_actor, tool_impls};
+use crate::file_actor;
 use futures::{future, StreamExt};
 use ra_ap_hir::sym::false_;
 use ractor::{ActorCell, ActorRef};
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 use tracing::error;
+use tools::tool_impls;
 
 pub struct ActorState {
     pub cur_context: CurContext,

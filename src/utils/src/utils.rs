@@ -45,9 +45,9 @@ impl Utils {
                 .await
                 .map(|content| (file, content))
         }))
-        .await
-        .into_iter()
-        .collect()
+            .await
+            .into_iter()
+            .collect()
     }
 
     pub async fn get_file_hashes_for_paths(

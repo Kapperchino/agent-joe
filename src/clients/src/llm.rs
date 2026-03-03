@@ -1,8 +1,7 @@
-use crate::claude::ClaudeClient;
-use crate::openai::OpenAIClient;
-use crate::tool_defs::Tool;
 use futures::Stream;
 use std::collections::HashMap;
+use crate::claude::ClaudeClient;
+use crate::openai::OpenAIClient;
 
 trait LLmClientTrait {
     async fn chat_stream(
@@ -17,7 +16,7 @@ pub enum LLmClient {
 }
 
 impl LLmClient {
-    pub(crate) async fn chat_stream(
+    pub async fn chat_stream(
         &self,
         req: ClientRequest,
     ) -> Result<impl Stream<Item = anyhow::Result<StreamEvent>> + Send + 'static, anyhow::Error>
@@ -101,7 +100,7 @@ pub struct ClientRequest {
 }
 
 impl ClientRequest {
-    pub(crate) fn new(messages: Vec<Message>) -> ClientRequest {
+    pub fn new(messages: Vec<Message>) -> ClientRequest {
         ClientRequest {
             messages,
             thinking: false,

@@ -1,13 +1,13 @@
-use crate::analysis::Range;
-use crate::cargo::Cargo;
-use crate::claude::ToolSchemaDTO;
-use crate::cur_context::CurContext;
-use crate::llm::ContentBlock;
-use crate::text_search::TextSearch;
-pub(crate) use crate::tool_defs::{CargoCheck, InsertAfterLine, ReadFile, Tool, ToolResult};
-use crate::tool_defs::{CargoCheckResult, ToolJson};
-pub(crate) use crate::tool_defs::{StringReplace, StringReplaceInput, ToolDefTrait};
-use crate::{cargo, claude};
+use turbo_code::analysis::Range;
+use turbo_code::cargo::Cargo;
+use clients::claude::ToolSchemaDTO;
+use turbo_code::cur_context::CurContext;
+use clients::llm::ContentBlock;
+use turbo_code::text_search::TextSearch;
+pub use tools::tool_defs::{CargoCheck, InsertAfterLine, ReadFile, Tool, ToolResult};
+use tools::tool_defs::{CargoCheckResult, ToolJson};
+pub use tools::tool_defs::{StringReplace, StringReplaceInput, ToolDefTrait};
+use turbo_code::cargo;
 use anyhow::{anyhow, Error};
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
@@ -20,6 +20,7 @@ use tokio::fs;
 use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, BufReader};
 use tokio_stream::wrappers::LinesStream;
+use clients::claude;
 
 impl Tool {
     pub fn name(&self) -> String {
@@ -360,7 +361,7 @@ impl CargoCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tool_defs::{InsertAfterLine, InsertAfterLineInput};
+    use tools::tool_defs::{InsertAfterLine, InsertAfterLineInput};
     use std::env;
 
     fn temp_path(name: &str) -> String {

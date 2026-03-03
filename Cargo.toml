@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "turbo-code-macros"]
+members = [".", "src/actors", "src/analysis", "src/clients", "src/tools", "src/turbo-code-macros", "src/utils", "utils"]
 
 [package]
 name = "turbo-code"
@@ -10,14 +10,12 @@ edition = "2024"
 opt-level = 3
 
 [dependencies]
-turbo-code-macros = { path = "turbo-code-macros" }
-reqwest = { version = "0.13.2", features = ["json", "stream"] }
+turbo-code-macros = { path = "src/turbo-code-macros" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.0", features = ["full"] }
-tokio-stream = { version = "0.1", features = ["fs","io-util"] }
+tokio-stream = { version = "0.1", features = ["fs", "io-util"] }
 thiserror = "2.0.17"
-async-stream = "0.3.6"
 futures = "0.3"
 ractor_actors = "0.4.9"
 ra_ap_ide = "0.0.311"

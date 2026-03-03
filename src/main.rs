@@ -5,25 +5,20 @@ mod app;
 mod cache;
 mod cache_actor;
 mod cargo;
-mod claude;
 mod cur_context;
 mod file_actor;
-mod llm;
-mod openai;
 mod proj_meta;
 mod rust_proj;
 mod symbol_info;
 mod text_search;
-mod tool_defs;
-mod tool_impls;
 mod utils;
 mod worker;
 
 use crate::actor::Dependency;
-use crate::claude::{ClaudeClient, ClaudeConfig};
-use crate::llm::LLmClient;
-use crate::tool_defs::{CargoCheck, InsertAfterLine, StringReplace};
-use crate::tool_impls::ReadFile;
+use clients::claude::{ClaudeClient, ClaudeConfig};
+use clients::llm::LLmClient;
+use tools::tool_defs::{CargoCheck, InsertAfterLine, StringReplace};
+use tools::tool_impls::ReadFile;
 use crate::worker::Worker;
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::execute;
@@ -36,6 +31,7 @@ use tokio_stream::StreamExt;
 use tracing::Level;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::FmtSubscriber;
+use tools::tool_impls;
 
 #[main]
 async fn main() {

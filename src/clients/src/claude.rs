@@ -334,7 +334,7 @@ pub struct ClientRequest {
 }
 
 impl ClientRequest {
-    pub(crate) fn new(messages: Vec<Message>) -> ClientRequest {
+    pub fn new(messages: Vec<Message>) -> ClientRequest {
         ClientRequest {
             messages,
             thinking: false,

@@ -1,8 +1,9 @@
-use crate::analysis::Range;
-use crate::claude::ToolProperty;
-use crate::{claude, openai};
+use turbo_code::analysis::Range;
+use clients::claude::ToolProperty;
+use clients::openai;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use clients::claude;
 use turbo_code_macros::{ToolDef, ToolInput};
 
 pub trait ToolDefTrait {
@@ -54,7 +55,7 @@ pub struct ReadFile {
 #[derive(Default, Serialize, Deserialize, Debug, Clone, ToolInput)]
 pub struct ReadFileInput {
     #[tool(description = "file path of the file you want to read", required)]
-    pub(crate) file_path: String,
+    pub file_path: String,
     #[tool(description = "range of the offsets you want to read, empty to read the entire file")]
     pub range: Option<Range>,
 }
@@ -72,7 +73,7 @@ pub struct InsertAfterLineInput {
     #[tool(description = "Content to insert after line line_num", required)]
     pub content: String,
     #[tool(description = "Path of the file to insert", required)]
-    pub(crate) file_path: String,
+    pub file_path: String,
     #[tool(description = "Line number of the file to insert to", required)]
     pub line_num: usize,
 }
