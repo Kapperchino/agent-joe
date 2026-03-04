@@ -518,7 +518,7 @@ impl OpenAIClient {
         Ok(resp)
     }
 
-    pub async fn chat_stream(
+    pub async fn chat_stream_openai(
         &self,
         req: ClientRequest,
     ) -> Result<impl Stream<Item = OpenAIResult<StreamEvent>> + Send + 'static, anyhow::Error> {
@@ -646,7 +646,7 @@ mod tests {
         };
         let client = OpenAIClient::new(config).unwrap();
         let req = ClientRequest::new(vec![InputItem::user("Say hello".to_string())]);
-        let mut stream = client.chat_stream(req).await.unwrap();
+        let mut stream = client.chat_stream_openai(req).await.unwrap();
 
         let mut got_start = false;
         let mut got_content = false;

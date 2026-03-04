@@ -22,9 +22,10 @@ impl LLmClient {
         req: ClientRequest,
     ) -> Result<impl Stream<Item = anyhow::Result<StreamEvent>> + Send + 'static, anyhow::Error>
     {
-        todo!();
-        #[allow(unreachable_code)]
-        Ok(futures::stream::empty())
+        match self {
+            LLmClient::Claude(claude) => claude.chat_stream(req).await,
+            LLmClient::OpenApi(opneai) => todo!(),
+        }
     }
 
     async fn send_request(&self, request: ClientRequest) -> anyhow::Result<ClientResponse> {
