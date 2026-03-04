@@ -1,10 +1,10 @@
-use crate::claude::ClaudeClient;
+use crate::claude::{ClaudeClient, Usage};
 use crate::openai::OpenAIClient;
 use crate::tool_defs::Tool;
 use futures::Stream;
 use std::collections::HashMap;
 
-trait LLmClientTrait {
+pub trait LLmClientTrait {
     async fn chat_stream(
         &self,
         req: ClientRequest,
@@ -93,11 +93,11 @@ pub struct StreamUsage {
 }
 
 pub struct ClientRequest {
-    messages: Vec<Message>,
-    thinking: bool,
-    system: Option<String>,
-    model: Option<String>,
-    tools: Vec<Tool>,
+    pub messages: Vec<Message>,
+    pub thinking: bool,
+    pub system: Option<String>,
+    pub model: Option<String>,
+    pub tools: Vec<Tool>,
 }
 
 impl ClientRequest {
@@ -142,7 +142,17 @@ impl ClientRequest {
     }
 }
 
-pub struct ClientResponse {}
+#[derive(Debug)]
+pub struct ClientResponse {
+    pub id: String,
+    pub model: String,
+    pub res_type: String,
+    pub role: Role,
+    pub content: Vec<ContentBlock>,
+    pub stop_reason: Option<String>,
+    pub stop_sequence: Option<String>,
+    pub usage: Usage,
+}
 
 pub struct CacheControl {}
 

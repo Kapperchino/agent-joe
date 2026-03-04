@@ -1,0 +1,231 @@
+use crate::claude::{CacheControl, ChatResponse, ClientRequest, ContentBlock, ContentBlockInfo, Delta, Message, Role, StreamEvent, Tool, ToolSchemaDTO};
+use crate::llm;
+use crate::llm::ClientResponse;
+
+impl From<llm::Role> for Role {
+    fn from(value: llm::Role) -> Self {
+        match value {
+            llm::Role::User => Role::User,
+            llm::Role::Assistant => Role::Assistant,
+        }
+    }
+}
+
+impl From<llm::ContentBlock> for ContentBlock {
+    fn from(value: llm::ContentBlock) -> Self {
+        match value {
+            llm::ContentBlock::MessageBlock { text } => ContentBlock::MessageBlock { text },
+            llm::ContentBlock::ThinkingBlock {
+                thinking,
+                signature,
+            } => ContentBlock::ThinkingBlock {
+                thinking,
+                signature,
+            },
+            llm::ContentBlock::ToolBlock { id, name, input } => {
+                ContentBlock::ToolBlock { id, name, input }
+            }
+            llm::ContentBlock::ToolResult {
+                tool_use_id,
+                content,
+                is_error,
+            } => ContentBlock::ToolResult {
+                tool_use_id,
+                content,
+                is_error,
+            },
+        }
+    }
+}
+
+impl From<llm::Message> for Message {
+    fn from(value: llm::Message) -> Self {
+        Message {
+            role: value.role.into(),
+            content: value.content.into_iter().map(|c| c.into()).collect(),
+        }
+    }
+}
+
+impl From<llm::ClientRequest> for ClientRequest {
+    fn from(value: llm::ClientRequest) -> Self {
+        use crate::tool_defs::ToolDefTrait;
+
+        let tools: Vec<Tool> = value
+            .tools
+            .iter()
+            .map(|t| {
+                let (name, description, properties, required) = match t {
+                    crate::tool_defs::Tool::ReadFile(_) => (
+                        crate::tool_defs::ReadFile::tool_name(),
+                        crate::tool_defs::ReadFile::tool_description(),
+                        crate::tool_defs::ReadFile::field_properties(),
+                        crate::tool_defs::ReadFile::required_fields(),
+                    ),
+                    crate::tool_defs::Tool::InsertAfterLine(_) => (
+                        crate::tool_defs::InsertAfterLine::tool_name(),
+                        crate::tool_defs::InsertAfterLine::tool_description(),
+                        crate::tool_defs::InsertAfterLine::field_properties(),
+                        crate::tool_defs::InsertAfterLine::required_fields(),
+                    ),
+                    crate::tool_defs::Tool::StringReplace(_) => (
+                        crate::tool_defs::StringReplace::tool_name(),
+                        crate::tool_defs::StringReplace::tool_description(),
+                        crate::tool_defs::StringReplace::field_properties(),
+                        crate::tool_defs::StringReplace::required_fields(),
+                    ),
+                    crate::tool_defs::Tool::CargoCheck(_) => (
+                        crate::tool_defs::CargoCheck::tool_name(),
+                        crate::tool_defs::CargoCheck::tool_description(),
+                        crate::tool_defs::CargoCheck::field_properties(),
+                        crate::tool_defs::CargoCheck::required_fields(),
+                    ),
+                };
+                Tool {
+                    name: name.to_string(),
+                    description: description.to_string(),
+                    input_schema: ToolSchemaDTO {
+                        name: name.to_string(),
+                        tool_type: "object".to_string(),
+                        properties,
+                        required,
+                    },
+                }
+            })
+            .collect();
+
+        ClientRequest {
+            messages: value.messages.into_iter().map(|m| m.into()).collect(),
+            thinking: value.thinking,
+            system: value.system,
+            model: value.model,
+            tools,
+            cache_control: CacheControl {
+                cache_type: "ephemeral".to_string(),
+                ttl: "5m".to_string(),
+            },
+        }
+    }
+}
+
+impl Into<llm::StreamEvent> for StreamEvent {
+    fn into(self) -> llm::StreamEvent {
+        match self {
+            StreamEvent::MessageStart { message } => llm::StreamEvent::MessageStart {
+                message: llm::StreamMessage {
+                    id: message.id,
+                    model: message.model,
+                    role: match message.role {
+                        Role::User => llm::Role::User,
+                        Role::Assistant => llm::Role::Assistant,
+                    },
+                    usage: llm::StreamUsage {
+                        input_tokens: message.usage.input_tokens,
+                        cache_creation_input_tokens: message.usage.cache_creation_input_tokens,
+                        cache_read_input_tokens: message.usage.cache_read_input_tokens,
+                        output_tokens: message.usage.output_tokens,
+                    },
+                },
+            },
+            StreamEvent::ContentBlockStart {
+                index,
+                content_block,
+            } => llm::StreamEvent::ContentBlockStart {
+                index,
+                content_block: match content_block {
+                    ContentBlockInfo::ToolUse { id, name, input } => {
+                        llm::ContentBlockInfo::ToolUse { id, name, input }
+                    }
+                    ContentBlockInfo::Thinking { thinking } => {
+                        llm::ContentBlockInfo::Thinking { thinking }
+                    }
+                    ContentBlockInfo::Text { text } => llm::ContentBlockInfo::Text { text },
+                },
+            },
+            StreamEvent::ContentBlockDelta { index, delta } => {
+                llm::StreamEvent::ContentBlockDelta {
+                    index,
+                    delta: match delta {
+                        Delta::TextDelta { text } => llm::Delta::TextDelta { text },
+                        Delta::ThinkingDelta { thinking } => llm::Delta::ThinkingDelta { thinking },
+                        Delta::InputJsonDelta { partial_json } => {
+                            llm::Delta::InputJsonDelta { partial_json }
+                        }
+                        Delta::SignatureDelta { signature } => {
+                            llm::Delta::SignatureDelta { signature }
+                        }
+                    },
+                }
+            }
+            StreamEvent::ContentBlockStop { index } => llm::StreamEvent::ContentBlockStop { index },
+            StreamEvent::MessageDelta { delta, usage } => llm::StreamEvent::MessageDelta {
+                delta: llm::MessageDeltaContent {
+                    stop_reason: delta.stop_reason,
+                },
+                usage: llm::UsageDelta {
+                    output_tokens: usage.output_tokens,
+                },
+            },
+            StreamEvent::MessageStop => llm::StreamEvent::MessageStop,
+            StreamEvent::Ping => llm::StreamEvent::Ping,
+            StreamEvent::Error { error } => llm::StreamEvent::Error {
+                error: llm::ApiErrorDetail {
+                    error_type: error.error_type,
+                    message: error.message,
+                },
+            },
+        }
+    }
+}
+
+impl From<Role> for llm::Role {
+    fn from(value: Role) -> Self {
+        match value {
+            Role::User => llm::Role::User,
+            Role::Assistant => llm::Role::Assistant,
+        }
+    }
+}
+
+impl From<ContentBlock> for llm::ContentBlock {
+    fn from(value: ContentBlock) -> Self {
+        match value {
+            ContentBlock::MessageBlock { text } => llm::ContentBlock::MessageBlock { text },
+            ContentBlock::ThinkingBlock {
+                thinking,
+                signature,
+            } => llm::ContentBlock::ThinkingBlock {
+                thinking,
+                signature,
+            },
+            ContentBlock::ToolBlock { id, name, input } => {
+                llm::ContentBlock::ToolBlock { id, name, input }
+            }
+            ContentBlock::ToolResult {
+                tool_use_id,
+                content,
+                is_error,
+            } => llm::ContentBlock::ToolResult {
+                tool_use_id,
+                content,
+                is_error,
+            },
+        }
+    }
+}
+
+impl From<ChatResponse> for ClientResponse {
+    fn from(value: ChatResponse) -> Self {
+        ClientResponse {
+            id: value.id,
+            model: value.model,
+            res_type: value.res_type,
+            role: value.role.into(),
+            content: value.content.into_iter().map(|c| c.into()).collect(),
+            stop_reason: value.stop_reason,
+            stop_sequence: value.stop_sequence,
+            usage: value.usage,
+        }
+    }
+}
+

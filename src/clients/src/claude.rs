@@ -1,7 +1,9 @@
-use anyhow::anyhow;
+use crate::llm;
+use crate::llm::{ClientResponse, LLmClientTrait};
+use anyhow::{anyhow, Error};
 use async_stream::try_stream;
 use futures::{Stream, StreamExt};
-use reqwest::{Client, header};
+use reqwest::{header, Client};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -312,8 +314,8 @@ impl Default for ClaudeConfig {
 }
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct CacheControl {
-    cache_type: String,
-    ttl: String,
+    pub(crate) cache_type: String,
+    pub(crate) ttl: String,
 }
 
 #[derive(Debug)]
@@ -324,13 +326,13 @@ pub struct ClaudeClient {
 }
 
 pub struct ClientRequest {
-    messages: Vec<Message>,
-    thinking: bool,
-    system: Option<String>,
-    model: Option<String>,
+    pub messages: Vec<Message>,
+    pub thinking: bool,
+    pub system: Option<String>,
+    pub model: Option<String>,
     // this shit needs to be turned ON
-    cache_control: CacheControl,
-    tools: Vec<Tool>,
+    pub(crate) cache_control: CacheControl,
+    pub tools: Vec<Tool>,
 }
 
 impl ClientRequest {
@@ -443,10 +445,10 @@ impl ClaudeClient {
         Ok(chat_response)
     }
 
-    pub async fn chat_stream(
+    pub async fn chat_stream_claude(
         &self,
         req: ClientRequest,
-    ) -> Result<impl Stream<Item = ClaudeResult<StreamEvent>> + Send + 'static, anyhow::Error> {
+    ) -> Result<impl Stream<Item=ClaudeResult<StreamEvent>> + Send + 'static, anyhow::Error> {
         let url = format!("{}/messages", self.base_url);
         let client = self.client.clone();
 
@@ -533,5 +535,30 @@ fn extract_sse_event(buffer: &mut String) -> ClaudeResult<Option<StreamEvent>> {
     match serde_json::from_str::<StreamEvent>(data.as_str()) {
         Ok(event) => Ok(Some(event)),
         Err(e) => Err(ClaudeError::Serialization(e)),
+    }
+}
+
+impl LLmClientTrait for ClaudeClient {
+    async fn chat_stream(
+        &self,
+        req: llm::ClientRequest,
+    ) -> Result<impl Stream<Item = anyhow::Result<llm::StreamEvent>> + Send + 'static, Error> {
+        let claude_req: ClientRequest = req.into();
+        let stream = self.chat_stream_claude(claude_req).await?;
+        Ok(stream.map(|res| match res {
+            Ok(event) => Ok(event.into()),
+            Err(e) => Err(anyhow!(e)),
+        }))
+    }
+
+    async fn send_request(
+        &self,
+        request: llm::ClientRequest,
+    ) -> anyhow::Result<ClientResponse> {
+        let claude_req: ClientRequest = request.into();
+        match self.chat(claude_req).await {
+            Ok(res) => Ok(res.into()),
+            Err(e) => Err(anyhow!(e))
+        }
     }
 }
