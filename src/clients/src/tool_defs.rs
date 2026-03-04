@@ -1,4 +1,3 @@
-use crate::claude::ToolProperty;
 use crate::{claude, openai};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -37,6 +36,21 @@ pub enum Tool {
     InsertAfterLine(InsertAfterLine),
     StringReplace(StringReplace),
     CargoCheck(CargoCheck),
+}
+
+#[derive(Debug, Clone)]
+pub enum ToolProperty {
+    Value {
+        name: String,
+        prop_type: String,
+        description: String,
+    },
+    Object {
+        name: String,
+        prop_type: String,
+        description: String,
+        properties: HashMap<String, ToolProperty>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, Eq, PartialEq, Hash, ToolInput)]

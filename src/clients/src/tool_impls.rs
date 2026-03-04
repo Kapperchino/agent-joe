@@ -8,7 +8,7 @@ use crate::tool_defs::ToolDefTrait;
 use crate::tool_defs::{CargoCheckResult, Tool};
 use crate::tool_defs::{Range, ReadFile, StringReplaceInput, ToolJson, ToolResult};
 use analysis::cur_context::CurContext;
-use anyhow::{Error, anyhow};
+use anyhow::{anyhow, Error};
 use futures::{StreamExt, TryStreamExt};
 use std::cmp::min;
 use std::collections::HashMap;
@@ -55,10 +55,22 @@ impl Tool {
                 name: self.name(),
                 tool_type: "object".to_string(),
                 properties: match self {
-                    Tool::ReadFile(_) => ReadFile::field_properties(),
-                    Tool::InsertAfterLine(_) => InsertAfterLine::field_properties(),
-                    Tool::StringReplace(_) => StringReplace::field_properties(),
-                    Tool::CargoCheck(_) => CargoCheck::field_properties(),
+                    Tool::ReadFile(_) => ReadFile::field_properties()
+                        .into_iter()
+                        .map(|(k, v)| (k, v.into()))
+                        .collect(),
+                    Tool::InsertAfterLine(_) => InsertAfterLine::field_properties()
+                        .into_iter()
+                        .map(|(k, v)| (k, v.into()))
+                        .collect(),
+                    Tool::StringReplace(_) => StringReplace::field_properties()
+                        .into_iter()
+                        .map(|(k, v)| (k, v.into()))
+                        .collect(),
+                    Tool::CargoCheck(_) => CargoCheck::field_properties()
+                        .into_iter()
+                        .map(|(k, v)| (k, v.into()))
+                        .collect(),
                 },
                 required: match self {
                     Tool::ReadFile(_) => ReadFile::required_fields(),

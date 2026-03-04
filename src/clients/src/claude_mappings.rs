@@ -1,8 +1,11 @@
-use crate::claude::{CacheControl, ChatResponse, ClientRequest, ContentBlock, ContentBlockInfo, Delta, Message, Role, StreamEvent, Tool, ToolSchemaDTO};
-use crate::llm;
+use crate::claude::{
+    CacheControl, ChatResponse, ClientRequest, ContentBlock, ContentBlockInfo, Delta, Message,
+    Role, StreamEvent, Tool, ToolSchemaDTO,
+};
 use crate::llm::ClientResponse;
+use crate::{claude, llm, tool_defs};
 
-impl From<llm::Role> for Role {
+impl From<llm::Role> for claude::Role {
     fn from(value: llm::Role) -> Self {
         match value {
             llm::Role::User => Role::User,
@@ -87,7 +90,7 @@ impl From<llm::ClientRequest> for ClientRequest {
                     input_schema: ToolSchemaDTO {
                         name: name.to_string(),
                         tool_type: "object".to_string(),
-                        properties,
+                        properties: properties.into_iter().map(|(k, v)| (k, v.into())).collect(),
                         required,
                     },
                 }
@@ -214,6 +217,33 @@ impl From<ContentBlock> for llm::ContentBlock {
     }
 }
 
+impl From<tool_defs::ToolProperty> for claude::ToolProperty {
+    fn from(value: tool_defs::ToolProperty) -> Self {
+        match value {
+            tool_defs::ToolProperty::Value {
+                name,
+                prop_type,
+                description,
+            } => claude::ToolProperty::Value {
+                name,
+                prop_type,
+                description,
+            },
+            tool_defs::ToolProperty::Object {
+                name,
+                prop_type,
+                description,
+                properties,
+            } => claude::ToolProperty::Object {
+                name,
+                prop_type,
+                description,
+                properties: properties.into_iter().map(|(k, v)| (k, v.into())).collect(),
+            },
+        }
+    }
+}
+
 impl From<ChatResponse> for ClientResponse {
     fn from(value: ChatResponse) -> Self {
         ClientResponse {
@@ -228,4 +258,3 @@ impl From<ChatResponse> for ClientResponse {
         }
     }
 }
-

@@ -36,7 +36,7 @@ fn impl_tool_def(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
             fn tool_name() -> &'static str { #tool_name }
             fn tool_description() -> &'static str { #tool_description }
 
-            fn field_properties() -> ::std::collections::HashMap<String, crate::claude::ToolProperty> {
+            fn field_properties() -> ::std::collections::HashMap<String, crate::tool_defs::ToolProperty> {
                 <#input_type as crate::tool_defs::ToolInputSchema>::properties()
             }
 
@@ -113,7 +113,7 @@ fn impl_tool_input(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
             if kind == "object" {
                 let inner_type = extract_inner_type(&field.ty);
                 property_insertions.push(quote! {
-                map.insert(#field_name_str.to_string(), crate::claude::ToolProperty::Object {
+                map.insert(#field_name_str.to_string(), crate::tool_defs::ToolProperty::Object {
                     name: #field_name_str.to_string(),
                     prop_type: "object".to_string(),
                     description: #desc.to_string(),
@@ -125,7 +125,7 @@ fn impl_tool_input(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
             });
             } else {
                 property_insertions.push(quote! {
-                    map.insert(#field_name_str.to_string(), crate::claude::ToolProperty::Value {
+                    map.insert(#field_name_str.to_string(), crate::tool_defs::ToolProperty::Value {
                         name: #field_name_str.to_string(),
                         prop_type: #kind.to_string(),
                         description: #desc.to_string(),
@@ -149,7 +149,7 @@ fn impl_tool_input(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
 
     Ok(quote! {
         impl crate::tool_defs::ToolInputSchema for #struct_name {
-            fn properties() -> ::std::collections::HashMap<String, crate::claude::ToolProperty> {
+            fn properties() -> ::std::collections::HashMap<String, crate::tool_defs::ToolProperty> {
                 let mut map = ::std::collections::HashMap::new();
                 #(#property_insertions)*
                 map

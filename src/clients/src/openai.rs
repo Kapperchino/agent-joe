@@ -1,7 +1,8 @@
-use anyhow::anyhow;
+use crate::llm::{ClientResponse, LLmClientTrait};
+use anyhow::{anyhow, Error};
 use async_stream::try_stream;
 use futures::{Stream, StreamExt};
-use reqwest::{Client, header};
+use reqwest::{header, Client};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -433,10 +434,10 @@ pub struct OpenAIClient {
 }
 
 pub struct ClientRequest {
-    input: Vec<InputItem>,
-    instructions: Option<String>,
-    model: Option<String>,
-    tools: Vec<Tool>,
+    pub input: Vec<InputItem>,
+    pub instructions: Option<String>,
+    pub model: Option<String>,
+    pub tools: Vec<Tool>,
 }
 
 impl ClientRequest {
@@ -591,6 +592,26 @@ impl OpenAIClient {
             Ok(event) => Ok(Some(event)),
             Err(e) => Err(OpenAIError::Serialization(e)),
         }
+    }
+}
+
+impl LLmClientTrait for OpenAIClient {
+    async fn chat_stream(
+        &self,
+        req: crate::llm::ClientRequest,
+    ) -> Result<impl Stream<Item = anyhow::Result<crate::llm::StreamEvent>> + Send + 'static, Error>
+    {
+
+        todo!();
+        #[allow(unreachable_code)]
+        Ok(futures::stream::empty())
+    }
+
+    async fn send_request(
+        &self,
+        request: crate::llm::ClientRequest,
+    ) -> anyhow::Result<ClientResponse> {
+        todo!()
     }
 }
 
