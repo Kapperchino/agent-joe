@@ -1,16 +1,27 @@
-use crate::tool_defs::ReadFile;
+use crate::claude;
+use crate::claude::ToolSchemaDTO;
+use crate::llm::ContentBlock;
+use crate::tool_defs::CargoCheck;
+use crate::tool_defs::InsertAfterLine;
+use crate::tool_defs::StringReplace;
+use crate::tool_defs::ToolDefTrait;
+use crate::tool_defs::{CargoCheckResult, Tool};
+use crate::tool_defs::{Range, ReadFile, StringReplaceInput, ToolJson, ToolResult};
+use analysis::cur_context::CurContext;
+use anyhow::{Error, anyhow};
+use futures::{StreamExt, TryStreamExt};
 use std::cmp::min;
 use std::collections::HashMap;
 use std::io::SeekFrom;
 use std::path::PathBuf;
-use anyhow::anyhow;
+use text_size::TextSize;
 use tokio::fs;
 use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, BufReader};
 use tokio_stream::wrappers::LinesStream;
-use crate::claude;
-use crate::llm::ContentBlock;
-use crate::tool_defs::{CargoCheckResult, Tool};
+use utils::cargo;
+use utils::cargo::Cargo;
+use utils::text_search::TextSearch;
 
 impl Tool {
     pub fn name(&self) -> String {
@@ -351,7 +362,7 @@ impl CargoCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tools::tool_defs::{InsertAfterLine, InsertAfterLineInput};
+    use crate::tool_defs::{InsertAfterLine, InsertAfterLineInput};
     use std::env;
 
     fn temp_path(name: &str) -> String {

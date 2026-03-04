@@ -1,5 +1,10 @@
 #![warn(clippy::pedantic)]
 
+use actors::actor::Message;
+use common_models::tui_models::ActorToTui;
+use common_models::tui_models::Command;
+use common_models::tui_models::State;
+use common_models::tui_models::TokenCount;
 use std::time::Duration;
 
 use color_eyre::Result;
@@ -9,18 +14,16 @@ use ractor::ActorRef;
 use ratatui::layout::Position;
 use ratatui::widgets::{List, ListItem, ListState};
 use ratatui::{
-    crossterm::event::{Event, KeyCode}, layout::{Alignment, Constraint, Layout},
+    DefaultTerminal, Frame,
+    crossterm::event::{Event, KeyCode},
+    layout::{Alignment, Constraint, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
-    DefaultTerminal,
-    Frame,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
-use crate::actors::{ActorToTui, Message, State, TokenCount};
-
-pub(crate) struct App {
+pub struct App {
     pub vertical_scroll_state: ScrollbarState,
     pub horizontal_scroll_state: ScrollbarState,
     pub vertical_scroll: usize,
@@ -44,20 +47,6 @@ enum InputMode {
     Normal,
     InputCommand,
     Editing,
-}
-
-#[derive(Debug, Clone)]
-pub enum Command {
-    PrintContext,
-}
-
-impl Command {
-    pub fn parse(string: &str) -> anyhow::Result<Command> {
-        match string {
-            "context" => Ok(Command::PrintContext),
-            _ => Err(anyhow::anyhow!("Invalid command")),
-        }
-    }
 }
 
 impl App {
@@ -205,9 +194,9 @@ impl App {
             string.as_str(),
             textwrap::Options::new(self.msg_area_width - 5),
         )
-            .into_iter()
-            .map(|x| x.to_string())
-            .collect()
+        .into_iter()
+        .map(|x| x.to_string())
+        .collect()
     }
 
     fn scroll_up(&mut self) {
@@ -239,7 +228,7 @@ impl App {
             .position(self.horizontal_scroll);
     }
 
-    pub(crate) async fn run(
+    pub async fn run(
         mut self,
         mut terminal: DefaultTerminal,
         mut actor_rx: UnboundedReceiver<ActorToTui>,
@@ -432,22 +421,34 @@ impl App {
             Span::styled("q", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw("  quit"),
         ]);
-        let top_bar = Block::new()
-            .title(hint)
-            .title_alignment(Alignment::Center);
+        let top_bar = Block::new().title(hint).title_alignment(Alignment::Center);
         frame.render_widget(top_bar, top_bar_area);
 
         // ── token counter: pretty spans, bottom-right of input box ─────────
         let token_line = Line::from(vec![
-            Span::styled(" ↑ ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " ↑ ",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(
                 self.token_count.input_tokens.to_string(),
-                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
             ),
-            Span::styled("  ↓ ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "  ↓ ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(
                 self.token_count.output_tokens.to_string(),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
         ]);
@@ -457,7 +458,9 @@ impl App {
             .title("Input")
             .title_alignment(Alignment::Left);
 
-        let token_block = Block::new().title_bottom(token_line).title_alignment(Alignment::Right);
+        let token_block = Block::new()
+            .title_bottom(token_line)
+            .title_alignment(Alignment::Right);
         let input = Paragraph::new(self.input.as_str())
             .style(match self.input_mode {
                 InputMode::Normal => Style::default(),
@@ -472,12 +475,10 @@ impl App {
             // Hide the cursor. `Frame` does this by default, so we don't need to do anything here
             InputMode::Normal => {}
 
-            InputMode::InputCommand => {
-                frame.set_cursor_position(Position::new(
-                    input_area.x + self.character_index as u16 + 1,
-                    input_area.y + 1,
-                ))
-            }
+            InputMode::InputCommand => frame.set_cursor_position(Position::new(
+                input_area.x + self.character_index as u16 + 1,
+                input_area.y + 1,
+            )),
 
             // Make the cursor visible and ask ratatui to put it at the specified coordinates after
             // rendering

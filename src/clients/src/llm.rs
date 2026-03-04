@@ -1,8 +1,8 @@
-use futures::Stream;
-use std::collections::HashMap;
 use crate::claude::ClaudeClient;
 use crate::openai::OpenAIClient;
 use crate::tool_defs::Tool;
+use futures::Stream;
+use std::collections::HashMap;
 
 trait LLmClientTrait {
     async fn chat_stream(

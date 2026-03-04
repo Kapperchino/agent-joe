@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "src/actors", "src/analysis", "src/app", "src/clients",  "src/turbo-code-macros", "src/utils"]
+members = [".", "src/actors", "src/analysis", "src/app", "src/clients", "src/common-models",  "src/turbo-code-macros", "src/utils"]
 
 [package]
 name = "turbo-code"
@@ -13,27 +13,12 @@ opt-level = 3
 actors = { path = "src/actors" }
 app = {path = "src/app"}
 clients = {path = "src/clients"}
-turbo-code-macros = { path = "src/turbo-code-macros" }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
 tokio = { version = "1.0", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["fs", "io-util"] }
-thiserror = "2.0.17"
-futures = "0.3"
-bytes = "1.0"
-url = "2.4"
-uuid = { version = "1.0", features = ["v4", "serde"] }
-anyhow = "1.0.99"
 ractor = "0.15"
 color-eyre = "0.6.5"
 ratatui = "0.30.0-beta.0"
 crossterm = { version = "0.29.0", features = ["event-stream"] }
-heed = "0.22.0"
-textwrap = "0.16"
-tui = "0.19.0"
-itertools = "0.14.0"
-triomphe = "0.1.15"
-notify-types = "2.0.0"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 tracing-appender = "0.2"

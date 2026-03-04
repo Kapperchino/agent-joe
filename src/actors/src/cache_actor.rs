@@ -1,7 +1,7 @@
-use crate::cache::TypedCache;
 use crate::file_actor::ValidPath;
-use crate::rust_proj::RustProject;
-use crate::symbol_info::SymbolInfo;
+use analysis::cache::TypedCache;
+use analysis::rust_proj::RustProject;
+use analysis::symbol_info::SymbolInfo;
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 
 pub struct CacheActor {}

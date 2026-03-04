@@ -1,12 +1,17 @@
 use crate::actor_state::{ActorState, StreamNextStep};
-use app::Command;
 use crate::cache_actor::CacheActor;
-use crate::cur_context::CurContext;
 use crate::file_actor::FileActor;
-use clients::llm::{ClientRequest, ContentBlock, LLmClient, StreamEvent};
-use tools::tool_defs::ReadFile;
 use crate::worker::Worker;
-use crate::{app, cache_actor, file_actor};
+use crate::{cache_actor, file_actor};
+use analysis::cur_context::CurContext;
+use clients::llm;
+use clients::llm::{ClientRequest, ContentBlock, LLmClient, StreamEvent};
+use clients::tool_defs::Tool;
+use clients::tool_defs::ToolResult;
+use clients::tool_impls;
+use common_models::tui_models::ActorToTui;
+use common_models::tui_models::Command;
+use common_models::tui_models::State;
 use ractor::Actor;
 use ractor::ActorProcessingErr;
 use ractor::ActorRef;
@@ -18,23 +23,7 @@ use std::fmt::Display;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing::error;
-use clients::llm;
-use tools::tool_impls;
 
-#[derive(Debug, Clone)]
-pub enum ActorToTui {
-    StateChanged(State),
-    Data(String),
-    ToolUse(Vec<String>),
-    CommandResult(Command, String),
-    TokensUpdated(TokenCount),
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct TokenCount {
-    pub input_tokens: u32,
-    pub output_tokens: u32,
-}
 #[derive(Error, Debug)]
 pub enum WorkerError {
     #[error("Claude API error: {0}")]
@@ -71,7 +60,7 @@ pub enum StreamItem {
 #[derive(Debug)]
 pub enum Message {
     StartWork(Option<String>),
-    Command(app::Command),
+    Command(Command),
     UseTool(Vec<(usize, Vec<StreamAccu>)>),
     ProcessStreamItem(StreamItem),
     KYS,
@@ -79,23 +68,10 @@ pub enum Message {
 
 pub struct Dependency {
     pub claude: LLmClient,
-    pub tools: Vec<tool_impls::Tool>,
+    pub tools: Vec<Tool>,
     pub tui_tx: mpsc::UnboundedSender<ActorToTui>,
 }
 
-#[derive(Debug, Clone)]
-pub enum State {
-    Ready,
-    StreamStart,
-    StreamStop,
-    ThinkingStart,
-    ThinkingStop,
-    MessageStart,
-    MessageStop,
-    ToolStart,
-    ToolStop,
-    Stopped,
-}
 impl Message {}
 
 #[derive(Debug, Clone)]
@@ -110,7 +86,7 @@ pub enum StreamAccu {
 pub(crate) enum StreamRes {
     String(String),
     Thinking { thinking: String, signature: String },
-    Tool(tool_impls::ToolResult),
+    Tool(ToolResult),
 }
 
 #[cfg_attr(feature = "async-trait", ractor::async_trait)]

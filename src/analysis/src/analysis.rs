@@ -1,8 +1,8 @@
 use crate::rust_proj::RustProject;
 pub(crate) use crate::symbol_info::SymbolInfo;
 use ra_ap_ide::{
-    Analysis, FilePosition, FileStructureConfig, GotoImplementationConfig, LineIndex
-    , StructureNode, TextSize,
+    Analysis, FilePosition, FileStructureConfig, GotoImplementationConfig, LineIndex,
+    StructureNode, TextSize,
 };
 use ra_ap_ide_db::symbol_index::Query;
 use ra_ap_vfs::{FileId, VfsPath};

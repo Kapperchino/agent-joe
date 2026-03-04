@@ -9,6 +9,7 @@
       <sourceFolder url="file://$MODULE_DIR$/src/analysis/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/src/app/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/src/clients/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/common-models/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/src/tools/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/src/turbo-code-macros/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/src/utils/src" isTestSource="false" />

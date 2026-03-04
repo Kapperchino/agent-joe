@@ -6,7 +6,17 @@ edition = "2024"
 [dependencies]
 analysis = { path = "../analysis" }
 clients = { path = "../clients" }
+common-models = { path = "../common-models" }
 ractor_actors = "0.4.9"
 ractor = "0.15"
 thiserror = "2.0.18"
 tracing = "0.1.44"
+futures = "0.3.31"
+anyhow = "1.0.102"
+tokio = "1.47.1"
+notify-types = "2.0.0"
+itertools = "0.14.0"
+ra_ap_ide = "0.0.311"
+ra_ap_ide_db = "0.0.311"
+ra_ap_vfs = "0.0.311"
+serde = { version = "1.0.228", features = ["derive"] }

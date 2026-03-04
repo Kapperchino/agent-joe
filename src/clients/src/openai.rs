@@ -1,7 +1,7 @@
 use anyhow::anyhow;
 use async_stream::try_stream;
 use futures::{Stream, StreamExt};
-use reqwest::{header, Client};
+use reqwest::{Client, header};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;

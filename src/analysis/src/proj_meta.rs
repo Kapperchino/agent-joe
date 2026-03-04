@@ -1,8 +1,7 @@
-use utils::utils::Utils;
 use crate::analysis::Range;
 use crate::rust_proj::RustProject;
 use crate::symbol_info::SymbolInfo;
-use futures::{future, StreamExt};
+use futures::{StreamExt, future};
 use itertools::Itertools;
 use ra_ap_ide::LineIndex;
 use ra_ap_ide_db::SymbolKind;
@@ -12,6 +11,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
+use utils::utils::Utils;
 
 pub struct FileMeta {
     pub line_index: triomphe::Arc<LineIndex>,

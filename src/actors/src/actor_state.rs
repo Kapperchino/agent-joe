@@ -1,18 +1,20 @@
-use crate::actor::{ActorToTui, Dependency, State, StreamAccu, StreamRes, TokenCount};
-use crate::cur_context::CurContext;
+use crate::actor::{Dependency, StreamAccu, StreamRes};
+use crate::file_actor;
+use analysis::cur_context::CurContext;
 use clients::llm::{ContentBlock, ContentBlockInfo, Delta, LLmClient, Message, Role, StreamEvent};
-use tools::tool_defs::{
+use clients::tool_defs::{
     CargoCheckInput, InsertAfterLineInput, LenientDeserialize, ReadFileInput, StringReplaceInput,
     Tool, ToolResult,
 };
-use crate::file_actor;
-use futures::{future, StreamExt};
-use ra_ap_hir::sym::false_;
+use clients::tool_impls;
+use common_models::tui_models::ActorToTui;
+use common_models::tui_models::State;
+use common_models::tui_models::TokenCount;
+use futures::{StreamExt, future};
 use ractor::{ActorCell, ActorRef};
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 use tracing::error;
-use tools::tool_impls;
 
 pub struct ActorState {
     pub cur_context: CurContext,
@@ -265,7 +267,7 @@ impl ActorState {
         let res: anyhow::Result<ToolResult> = match Tool::from_str(name.as_str())? {
             Tool::ReadFile(_) => {
                 let input = ReadFileInput::deserialize_lenient(json)?;
-                let rf = tool_impls::ReadFile {
+                let rf = clients::tool_defs::ReadFile {
                     id: id.clone(),
                     input,
                 };
@@ -273,7 +275,7 @@ impl ActorState {
             }
             Tool::InsertAfterLine(_) => {
                 let input = InsertAfterLineInput::deserialize_lenient(json)?;
-                let rf = tool_impls::InsertAfterLine {
+                let rf = clients::tool_defs::InsertAfterLine {
                     id: id.clone(),
                     input,
                 };
@@ -283,7 +285,7 @@ impl ActorState {
             }
             Tool::StringReplace(_) => {
                 let input = StringReplaceInput::deserialize_lenient(json)?;
-                let rf = tool_impls::StringReplace {
+                let rf = clients::tool_defs::StringReplace {
                     id: id.clone(),
                     input,
                 };
@@ -299,7 +301,7 @@ impl ActorState {
                 } else {
                     CargoCheckInput::deserialize_lenient(json)?
                 };
-                let rf = tool_impls::CargoCheck {
+                let rf = clients::tool_defs::CargoCheck {
                     id: id.clone(),
                     input,
                 };

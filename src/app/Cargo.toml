@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-actors = {path = "../actors"}
+common-models = { path = "../common-models" }
+actors = { path = "../actors" }
 color-eyre = "0.6.5"
 crossterm = "0.29.0"
 futures = "0.3.32"
@@ -12,3 +13,4 @@ ratatui = "0.30.0"
 tokio = "1.50.0"
 anyhow = "1.0.102"
 textwrap = "0.16.2"
+ractor = "0.15.10"

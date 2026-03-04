@@ -1,18 +1,21 @@
-use crate::worker::Worker;
-use actors::Dependency;
+use actors::actor::Dependency;
+use actors::worker::Worker;
+use app::app::App;
 use clients::claude::{ClaudeClient, ClaudeConfig};
 use clients::llm::LLmClient;
+use clients::tool_defs::CargoCheck;
+use clients::tool_defs::InsertAfterLine;
+use clients::tool_defs::ReadFile;
+use clients::tool_defs::StringReplace;
+use clients::tool_defs::Tool;
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::execute;
 use ractor::Actor;
 use std::env;
-use std::io::{stdout, Write};
+use std::io::{Write, stdout};
 use tokio::main;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
-use tools::tool_defs::{CargoCheck, InsertAfterLine, StringReplace};
-use tools::tool_impls;
-use tools::tool_impls::ReadFile;
 use tracing::Level;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::FmtSubscriber;
@@ -45,10 +48,10 @@ async fn main() {
         Dependency {
             claude: LLmClient::Claude(client),
             tools: vec![
-                tool_impls::Tool::ReadFile(ReadFile::default()),
-                tool_impls::Tool::InsertAfterLine(InsertAfterLine::default()),
-                tool_impls::Tool::StringReplace(StringReplace::default()),
-                tool_impls::Tool::CargoCheck(CargoCheck::default()),
+                Tool::ReadFile(ReadFile::default()),
+                Tool::InsertAfterLine(InsertAfterLine::default()),
+                Tool::StringReplace(StringReplace::default()),
+                Tool::CargoCheck(CargoCheck::default()),
             ],
             tui_tx: tx,
         },
@@ -59,7 +62,7 @@ async fn main() {
     color_eyre::install().unwrap();
     let terminal = ratatui::init();
     execute!(stdout(), EnableBracketedPaste).ok();
-    let app = crate::app::App::new(joe);
+    let app = App::new(joe);
     let app_result = app.run(terminal, rx).await.unwrap();
     actor_handle.await.expect("Actor failed to exit cleanly");
     execute!(stdout(), DisableBracketedPaste).ok();

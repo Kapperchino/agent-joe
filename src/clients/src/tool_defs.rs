@@ -1,8 +1,9 @@
-use turbo_code_macros::ToolInput;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use crate::claude::ToolProperty;
 use crate::{claude, openai};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use turbo_code_macros::ToolDef;
+use turbo_code_macros::ToolInput;
 
 pub trait ToolDefTrait {
     fn tool_name() -> &'static str;
