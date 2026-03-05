@@ -1,4 +1,5 @@
-use crate::llm::{ClientResponse, LLmClientTrait};
+use crate::llm;
+use crate::llm::{ClientResponse, ContentBlockInfo, Delta, LLmClientTrait};
 use anyhow::{anyhow, Error};
 use async_stream::try_stream;
 use futures::{Stream, StreamExt};
@@ -158,9 +159,9 @@ pub struct Usage {
 #[derive(Debug, Deserialize, Clone)]
 pub struct ResponseEnvelope {
     #[serde(default)]
-    pub id: Option<String>,
+    pub id: String,
     #[serde(default)]
-    pub model: Option<String>,
+    pub model: String,
     #[serde(default)]
     pub status: Option<String>,
     #[serde(default)]
@@ -419,7 +420,7 @@ impl Default for OpenAIConfig {
         Self {
             api_key: String::new(),
             url: "https://api.openai.com/v1".to_string(),
-            model: "gpt-4o".to_string(),
+            model: "gpt-5.3-codex".to_string(),
             max_output_tokens: Some(4096),
             temperature: Some(1.0),
             timeout: Duration::from_secs(120),
@@ -601,6 +602,81 @@ impl LLmClientTrait for OpenAIClient {
         req: crate::llm::ClientRequest,
     ) -> Result<impl Stream<Item = anyhow::Result<crate::llm::StreamEvent>> + Send + 'static, Error>
     {
+        let joe = match self.chat_stream_openai(req.into()).await {
+            Ok(stream) => stream.flat_map(|x| match x {
+                Ok(event) => match event {
+                    StreamEvent::ResponseCreated {
+                        response,
+                        sequence_number,
+                    } => Some(llm::StreamEvent::MessageStart {
+                        message: llm::StreamMessage {
+                            id: response.id,
+                            model: response.model,
+                            role: llm::Role::Assistant,
+                            usage: Default::default(),
+                        },
+                    }),
+                    StreamEvent::ResponseCompleted {
+                        response,
+                        sequence_number,
+                    }
+                    | StreamEvent::ResponseIncomplete {
+                        response,
+                        sequence_number,
+                    }
+                    | StreamEvent::ResponseFailed {
+                        response,
+                        sequence_number,
+                    } => Some(llm::StreamEvent::MessageDelta {
+                        delta: llm::MessageDeltaContent {
+                            stop_reason: response.status,
+                        },
+                        usage: llm::UsageDelta {
+                            output_tokens: response.usage.map(|t| t.output_tokens).unwrap_or(0),
+                        },
+                    }),
+                    StreamEvent::ContentPartAdded {
+                        item_id,
+                        output_index,
+                        content_index,
+                        sequence_number,
+                    } => Some(llm::StreamEvent::ContentBlockStart {
+                        index: output_index,
+                        content_block: ContentBlockInfo::Text {
+                            text: "".to_string(),
+                        },
+                    }),
+                    StreamEvent::ContentPartDone {
+                        item_id,
+                        output_index,
+                        content_index,
+                        sequence_number,
+                    } => Some(llm::StreamEvent::ContentBlockStop {
+                        index: output_index,
+                    }),
+                    StreamEvent::OutputTextDelta {
+                        item_id,
+                        output_index,
+                        content_index,
+                        delta,
+                        sequence_number,
+                    } => Some(llm::StreamEvent::ContentBlockDelta {
+                        index: output_index,
+                        delta: Delta::TextDelta { text: delta },
+                    }),
+                    StreamEvent::FunctionCallArgumentsDelta { .. } => {}
+                    StreamEvent::FunctionCallArgumentsDone { .. } => {}
+                    StreamEvent::ReasoningSummaryPartAdded { .. } => {}
+                    StreamEvent::ReasoningSummaryTextDelta { .. } => {}
+                    StreamEvent::ReasoningSummaryTextDone { .. } => {}
+                    StreamEvent::ReasoningSummaryPartDone { .. } => {}
+                    StreamEvent::Error { .. } => {}
+                    _ => None,
+                },
+                Err(_) => {}
+            }),
+            Err(e) => Err(anyhow!(e)),
+        };
 
         todo!();
         #[allow(unreachable_code)]
