@@ -50,52 +50,43 @@ impl From<llm::Message> for Message {
     }
 }
 
+impl From<&tool_defs::Tool> for Tool {
+    fn from(value: &tool_defs::Tool) -> Self {
+        use tool_defs::ToolDefTrait;
+        macro_rules! extract {
+            ($variant:ident) => {{
+                (
+                    tool_defs::$variant::tool_name(),
+                    tool_defs::$variant::tool_description(),
+                    tool_defs::$variant::field_properties(),
+                    tool_defs::$variant::required_fields(),
+                )
+            }};
+        }
+
+        let (name, description, properties, required) = match value {
+            tool_defs::Tool::ReadFile(_) => extract!(ReadFile),
+            tool_defs::Tool::InsertAfterLine(_) => extract!(InsertAfterLine),
+            tool_defs::Tool::StringReplace(_) => extract!(StringReplace),
+            tool_defs::Tool::CargoCheck(_) => extract!(CargoCheck),
+        };
+
+        Tool {
+            name: name.to_string(),
+            description: description.to_string(),
+            input_schema: ToolSchemaDTO {
+                name: name.to_string(),
+                tool_type: "object".to_string(),
+                properties: properties.into_iter().map(|(k, v)| (k, v.into())).collect(),
+                required,
+            },
+        }
+    }
+}
+
 impl From<llm::ClientRequest> for ClientRequest {
     fn from(value: llm::ClientRequest) -> Self {
-        use crate::tool_defs::ToolDefTrait;
-
-        let tools: Vec<Tool> = value
-            .tools
-            .iter()
-            .map(|t| {
-                let (name, description, properties, required) = match t {
-                    crate::tool_defs::Tool::ReadFile(_) => (
-                        crate::tool_defs::ReadFile::tool_name(),
-                        crate::tool_defs::ReadFile::tool_description(),
-                        crate::tool_defs::ReadFile::field_properties(),
-                        crate::tool_defs::ReadFile::required_fields(),
-                    ),
-                    crate::tool_defs::Tool::InsertAfterLine(_) => (
-                        crate::tool_defs::InsertAfterLine::tool_name(),
-                        crate::tool_defs::InsertAfterLine::tool_description(),
-                        crate::tool_defs::InsertAfterLine::field_properties(),
-                        crate::tool_defs::InsertAfterLine::required_fields(),
-                    ),
-                    crate::tool_defs::Tool::StringReplace(_) => (
-                        crate::tool_defs::StringReplace::tool_name(),
-                        crate::tool_defs::StringReplace::tool_description(),
-                        crate::tool_defs::StringReplace::field_properties(),
-                        crate::tool_defs::StringReplace::required_fields(),
-                    ),
-                    crate::tool_defs::Tool::CargoCheck(_) => (
-                        crate::tool_defs::CargoCheck::tool_name(),
-                        crate::tool_defs::CargoCheck::tool_description(),
-                        crate::tool_defs::CargoCheck::field_properties(),
-                        crate::tool_defs::CargoCheck::required_fields(),
-                    ),
-                };
-                Tool {
-                    name: name.to_string(),
-                    description: description.to_string(),
-                    input_schema: ToolSchemaDTO {
-                        name: name.to_string(),
-                        tool_type: "object".to_string(),
-                        properties: properties.into_iter().map(|(k, v)| (k, v.into())).collect(),
-                        required,
-                    },
-                }
-            })
-            .collect();
+        let tools: Vec<Tool> = value.tools.iter().map(|t| t.into()).collect();
 
         ClientRequest {
             messages: value.messages.into_iter().map(|m| m.into()).collect(),
