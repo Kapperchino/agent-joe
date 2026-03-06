@@ -1,5 +1,5 @@
-use crate::llm::ContentBlock;
-use crate::openai::{ClientRequest, InputItem, Role};
+use crate::llm::{ContentBlock, ContentBlockInfo, Delta};
+use crate::openai::{ClientRequest, InputItem, Role, StreamEvent};
 use crate::{llm, openai, tool_defs};
 
 impl From<llm::ClientRequest> for ClientRequest {
@@ -86,6 +86,105 @@ impl From<tool_defs::Tool> for openai::Tool {
                 properties: properties.into_iter().map(|(k, v)| (k, v.into())).collect(),
                 required,
             },
+        }
+    }
+}
+
+impl From<StreamEvent> for Option<llm::StreamEvent> {
+    fn from(event: StreamEvent) -> Self {
+        match event {
+            StreamEvent::ResponseCreated {
+                response,
+                sequence_number: _,
+            } => Some(llm::StreamEvent::MessageStart {
+                message: llm::StreamMessage {
+                    id: response.id,
+                    model: response.model,
+                    role: llm::Role::Assistant,
+                    usage: Default::default(),
+                },
+            }),
+            StreamEvent::ResponseCompleted {
+                response,
+                sequence_number: _,
+            }
+            | StreamEvent::ResponseIncomplete {
+                response,
+                sequence_number: _,
+            }
+            | StreamEvent::ResponseFailed {
+                response,
+                sequence_number: _,
+            } => Some(llm::StreamEvent::MessageDelta {
+                delta: llm::MessageDeltaContent {
+                    stop_reason: response.status,
+                },
+                usage: llm::UsageDelta {
+                    output_tokens: response.usage.map(|t| t.output_tokens).unwrap_or(0),
+                },
+            }),
+            StreamEvent::ContentPartAdded {
+                output_index, ..
+            } => Some(llm::StreamEvent::ContentBlockStart {
+                index: output_index,
+                content_block: ContentBlockInfo::Text {
+                    text: "".to_string(),
+                },
+            }),
+            StreamEvent::ContentPartDone {
+                output_index, ..
+            } => Some(llm::StreamEvent::ContentBlockStop {
+                index: output_index,
+            }),
+            StreamEvent::OutputTextDelta {
+                output_index,
+                delta,
+                ..
+            } => Some(llm::StreamEvent::ContentBlockDelta {
+                index: output_index,
+                delta: Delta::TextDelta { text: delta },
+            }),
+            StreamEvent::FunctionCallArgumentsDelta {
+                output_index,
+                delta,
+                ..
+            } => Some(llm::StreamEvent::ContentBlockDelta {
+                index: output_index,
+                delta: Delta::InputJsonDelta {
+                    partial_json: delta,
+                },
+            }),
+            StreamEvent::FunctionCallArgumentsDone {
+                output_index, ..
+            } => Some(llm::StreamEvent::ContentBlockStop {
+                index: output_index,
+            }),
+            StreamEvent::ReasoningSummaryTextDelta {
+                output_index,
+                delta,
+                ..
+            } => Some(llm::StreamEvent::ContentBlockDelta {
+                index: output_index,
+                delta: Delta::ThinkingDelta {
+                    thinking: delta.to_string(),
+                },
+            }),
+            StreamEvent::ReasoningSummaryTextDone {
+                output_index, ..
+            } => Some(llm::StreamEvent::ContentBlockStop {
+                index: output_index,
+            }),
+            StreamEvent::Error {
+                code,
+                message,
+                sequence_number: _,
+            } => Some(llm::StreamEvent::Error {
+                error: llm::ApiErrorDetail {
+                    error_type: code,
+                    message,
+                },
+            }),
+            _ => None,
         }
     }
 }

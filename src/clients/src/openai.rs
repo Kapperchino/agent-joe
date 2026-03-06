@@ -1,5 +1,5 @@
 use crate::llm;
-use crate::llm::{ClientResponse, ContentBlockInfo, Delta, LLmClientTrait};
+use crate::llm::{ClientResponse, LLmClientTrait};
 use anyhow::{anyhow, Error};
 use async_stream::try_stream;
 use futures::{Stream, StreamExt};
@@ -606,119 +606,10 @@ impl LLmClientTrait for OpenAIClient {
         match self.chat_stream_openai(req.into()).await {
             Ok(stream) => Ok(stream
                 .map(|x| match x {
-                    Ok(event) => match event {
-                        StreamEvent::ResponseCreated {
-                            response,
-                            sequence_number,
-                        } => Some(Ok(llm::StreamEvent::MessageStart {
-                            message: llm::StreamMessage {
-                                id: response.id,
-                                model: response.model,
-                                role: llm::Role::Assistant,
-                                usage: Default::default(),
-                            },
-                        })),
-                        StreamEvent::ResponseCompleted {
-                            response,
-                            sequence_number,
-                        }
-                        | StreamEvent::ResponseIncomplete {
-                            response,
-                            sequence_number,
-                        }
-                        | StreamEvent::ResponseFailed {
-                            response,
-                            sequence_number,
-                        } => Some(Ok(llm::StreamEvent::MessageDelta {
-                            delta: llm::MessageDeltaContent {
-                                stop_reason: response.status,
-                            },
-                            usage: llm::UsageDelta {
-                                output_tokens: response.usage.map(|t| t.output_tokens).unwrap_or(0),
-                            },
-                        })),
-                        StreamEvent::ContentPartAdded {
-                            item_id,
-                            output_index,
-                            content_index,
-                            sequence_number,
-                        } => Some(Ok(llm::StreamEvent::ContentBlockStart {
-                            index: output_index,
-                            content_block: ContentBlockInfo::Text {
-                                text: "".to_string(),
-                            },
-                        })),
-                        StreamEvent::ContentPartDone {
-                            item_id,
-                            output_index,
-                            content_index,
-                            sequence_number,
-                        } => Some(Ok(llm::StreamEvent::ContentBlockStop {
-                            index: output_index,
-                        })),
-                        StreamEvent::OutputTextDelta {
-                            item_id,
-                            output_index,
-                            content_index,
-                            delta,
-                            sequence_number,
-                        } => Some(Ok(llm::StreamEvent::ContentBlockDelta {
-                            index: output_index,
-                            delta: Delta::TextDelta { text: delta },
-                        })),
-                        StreamEvent::FunctionCallArgumentsDelta {
-                            item_id,
-                            output_index,
-                            delta,
-                            sequence_number,
-                        } => Some(Ok(llm::StreamEvent::ContentBlockDelta {
-                            index: output_index,
-                            delta: Delta::InputJsonDelta {
-                                partial_json: delta,
-                            },
-                        })),
-                        StreamEvent::FunctionCallArgumentsDone {
-                            item_id,
-                            output_index,
-                            name,
-                            arguments,
-                            sequence_number,
-                        } => Some(Ok(llm::StreamEvent::ContentBlockStop {
-                            index: output_index,
-                        })),
-                        StreamEvent::ReasoningSummaryTextDelta {
-                            item_id,
-                            output_index,
-                            summary_index,
-                            delta,
-                            sequence_number,
-                        } => Some(Ok(llm::StreamEvent::ContentBlockDelta {
-                            index: output_index,
-                            delta: Delta::ThinkingDelta {
-                                thinking: delta.to_string(),
-                            },
-                        })),
-                        StreamEvent::ReasoningSummaryTextDone {
-                            item_id,
-                            output_index,
-                            summary_index,
-                            text,
-                            sequence_number,
-                        } => Some(Ok(llm::StreamEvent::ContentBlockStop {
-                            index: output_index,
-                        })),
-                        StreamEvent::Error {
-                            code,
-                            message,
-                            sequence_number,
-                        } => Some(Ok(llm::StreamEvent::Error {
-                            error: llm::ApiErrorDetail {
-                                error_type: code,
-                                message,
-                            },
-                        })),
-                        _ => None,
-                    },
+                    Ok(event) => {
+                        let converted: Option<llm::StreamEvent> = event.into();
+                        converted.map(Ok)
+                    }
                     Err(err) => Some(Err(anyhow!(err))),
                 })
                 .filter_map(ready)),
