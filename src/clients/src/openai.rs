@@ -600,8 +600,8 @@ impl OpenAIClient {
 impl LLmClientTrait for OpenAIClient {
     async fn chat_stream(
         &self,
-        req: crate::llm::ClientRequest,
-    ) -> Result<impl Stream<Item = anyhow::Result<crate::llm::StreamEvent>> + Send + 'static, Error>
+        req: llm::ClientRequest,
+    ) -> Result<impl Stream<Item = anyhow::Result<llm::StreamEvent>> + Send + 'static, Error>
     {
         match self.chat_stream_openai(req.into()).await {
             Ok(stream) => Ok(stream

@@ -19,6 +19,7 @@ use tokio_stream::StreamExt;
 use tracing::Level;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::FmtSubscriber;
+use clients::openai::{OpenAIClient, OpenAIConfig};
 
 #[main]
 async fn main() {
@@ -33,12 +34,12 @@ async fn main() {
 
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
-    let client = ClaudeClient::new(ClaudeConfig {
-        api_key: env::var("CLAUDE_API").unwrap(),
-        model: "claude-sonnet-4-6".to_string(),
+    let api_key = std::env::var("OPENAI_KEY").expect("OPENAI_KEY must be set");
+    let config = OpenAIConfig {
+        api_key,
         ..Default::default()
-    })
-    .unwrap();
+    };
+    let client = OpenAIClient::new(config).unwrap();
 
     let (tx, rx) = mpsc::unbounded_channel();
 
@@ -46,7 +47,7 @@ async fn main() {
         None,
         Worker {},
         Dependency {
-            claude: LLmClient::Claude(client),
+            claude: LLmClient::OpenApi(client),
             tools: vec![
                 Tool::ReadFile(ReadFile::default()),
                 Tool::InsertAfterLine(InsertAfterLine::default()),
