@@ -1,5 +1,5 @@
 use crate::llm::{ContentBlock, ContentBlockInfo, Delta};
-use crate::openai::{ClientRequest, InputItem, Role, StreamEvent};
+use crate::openai::{ClientRequest, InputItem, Role, StreamEvent, StreamOutputItem};
 use crate::{llm, openai, tool_defs};
 
 impl From<llm::ClientRequest> for ClientRequest {
@@ -123,14 +123,31 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
                     output_tokens: response.usage.map(|t| t.output_tokens).unwrap_or(0),
                 },
             }),
-            StreamEvent::ContentPartAdded { output_index, .. } => {
-                Some(llm::StreamEvent::ContentBlockStart {
-                    index: output_index,
-                    content_block: ContentBlockInfo::Text {
-                        text: "".to_string(),
-                    },
-                })
-            }
+            StreamEvent::OutputItemAdded {
+                output_index,
+                item,
+                sequence_number,
+            } => match item {
+                StreamOutputItem::FunctionCall { id, call_id, name } => {
+                    Some(llm::StreamEvent::ContentBlockStart {
+                        index: output_index,
+                        content_block: ContentBlockInfo::ToolUse {
+                            id: call_id,
+                            name,
+                            input: Default::default(),
+                        },
+                    })
+                }
+                StreamOutputItem::Message { id, role } => {
+                    Some(llm::StreamEvent::ContentBlockStart {
+                        index: output_index,
+                        content_block: ContentBlockInfo::Text {
+                            text: "".to_string(),
+                        },
+                    })
+                }
+                StreamOutputItem::Unknown => None,
+            },
             StreamEvent::ContentPartDone { output_index, .. } => {
                 Some(llm::StreamEvent::ContentBlockStop {
                     index: output_index,

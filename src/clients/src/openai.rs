@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::future::ready;
 use std::time::Duration;
 use thiserror::Error;
+use tracing::{error, warn};
 
 #[derive(Error, Debug)]
 pub enum OpenAIError {
@@ -109,6 +110,8 @@ struct ResponseRequest {
     pub max_output_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<Tool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<ReasoningConfig>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub stream: bool,
 }
@@ -121,6 +124,14 @@ pub struct Response {
     pub output: Vec<OutputItem>,
     #[serde(default)]
     pub usage: Option<Usage>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct SummaryTextContent {
+    #[serde(default)]
+    pub text: String,
+    #[serde(rename = "type")]
+    prop_type: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -137,6 +148,18 @@ pub enum OutputItem {
         call_id: String,
         name: String,
         arguments: String,
+    },
+    #[serde(rename = "reasoning")]
+    Reasoning {
+        id: String,
+        #[serde(default)]
+        summary: Vec<SummaryTextContent>,
+        #[serde(default)]
+        content: Vec<SummaryTextContent>,
+        #[serde(default)]
+        encrypted_content: String,
+        #[serde(default)]
+        status: String,
     },
 }
 
@@ -178,7 +201,9 @@ pub enum StreamOutputItem {
     FunctionCall {
         #[serde(default)]
         id: Option<String>,
+        #[serde(default)]
         call_id: String,
+        #[serde(default)]
         name: String,
     },
     #[serde(rename = "message")]
@@ -351,7 +376,9 @@ pub enum StreamEvent {
         item_id: String,
         #[serde(default)]
         output_index: usize,
+        #[serde(default)]
         name: String,
+        #[serde(default)]
         arguments: String,
         #[serde(default)]
         sequence_number: u64,
@@ -414,6 +441,29 @@ pub struct OpenAIConfig {
     pub max_output_tokens: Option<u32>,
     pub temperature: Option<f32>,
     pub timeout: Duration,
+    pub reasoning: Option<ReasoningConfig>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReasoningConfig {
+    pub effort: ReasoningEffort,
+    pub summary: ReasoningSummary,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningEffort {
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningSummary {
+    Auto,
+    Concise,
+    Detailed,
 }
 
 impl Default for OpenAIConfig {
@@ -425,6 +475,10 @@ impl Default for OpenAIConfig {
             max_output_tokens: Some(4096),
             temperature: Some(1.0),
             timeout: Duration::from_secs(120),
+            reasoning: Some(ReasoningConfig {
+                effort: ReasoningEffort::Medium,
+                summary: ReasoningSummary::Auto,
+            }),
         }
     }
 }
@@ -503,6 +557,7 @@ impl OpenAIClient {
             temperature: self.config.temperature,
             max_output_tokens: self.config.max_output_tokens,
             tools: req.tools,
+            reasoning: self.config.reasoning.clone(),
             stream: false,
         };
 
@@ -533,6 +588,7 @@ impl OpenAIClient {
             temperature: self.config.temperature,
             max_output_tokens: self.config.max_output_tokens,
             tools: req.tools,
+            reasoning: self.config.reasoning.clone(),
             stream: true,
         };
 
@@ -553,6 +609,7 @@ impl OpenAIClient {
                 buffer.push_str(&String::from_utf8_lossy(&chunk));
 
                 while let Some(event) = Self::extract_sse_event(&mut buffer)? {
+                                        warn!("{:?}", event);
                     yield event;
                 }
             }
@@ -650,6 +707,41 @@ mod tests {
     async fn test_chat_stream_api_call() {
         let api_key = std::env::var("OPENAI_KEY").expect("OPENAI_KEY must be set");
         let config = OpenAIConfig {
+            api_key,
+            ..Default::default()
+        };
+        let client = OpenAIClient::new(config).unwrap();
+        let req = ClientRequest::new(vec![InputItem::user("Say hello".to_string())]);
+        let mut stream = client.chat_stream_openai(req).await.unwrap();
+
+        let mut got_start = false;
+        let mut got_content = false;
+        let mut got_done = false;
+
+        let mut stream = pin!(stream);
+
+        while let Some(event) = stream.next().await {
+            let event = event.unwrap();
+            println!("{:?}", event);
+            match event {
+                StreamEvent::ResponseCreated { .. } => got_start = true,
+                StreamEvent::OutputTextDelta { .. } => got_content = true,
+                StreamEvent::ResponseCompleted { .. } => got_done = true,
+                _ => {}
+            }
+        }
+
+        assert!(got_start, "should receive ResponseCreated");
+        assert!(got_content, "should receive OutputTextDelta");
+        assert!(got_done, "should receive ResponseCompleted");
+    }
+
+    #[tokio::test]
+    async fn test_chat_stream_openrouter_api_call() {
+        let api_key = std::env::var("OPEN_KEY").expect("OPEN_KEY must be set");
+        let config = OpenAIConfig {
+            url: "https://openrouter.ai/api/v1".to_string(),
+            model: "openai/gpt-5.2-codex".to_string(),
             api_key,
             ..Default::default()
         };

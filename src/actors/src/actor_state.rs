@@ -183,7 +183,8 @@ impl ActorState {
                 _ => StreamNextStep::Nothing,
             },
             StreamEvent::ContentBlockStop { index } => {
-                self.delta_buf
+                let buf = self
+                    .delta_buf
                     .remove(&index)
                     .and_then(|buf| {
                         buf.into_iter()
@@ -231,13 +232,21 @@ impl ActorState {
                                 acc
                             })
                     })
-                    .map(|buf| match self.acc_map.get_mut(&index) {
-                        Some(vec) => vec.push(buf),
-                        None => {
-                            self.acc_map.insert(index, vec![buf]);
-                        }
+                    .map(|buf| {
+                        match self.acc_map.get_mut(&index) {
+                            Some(vec) => vec.push(buf.clone()),
+                            None => {
+                                self.acc_map.insert(index, vec![buf.clone()]);
+                            }
+                        };
+                        buf
                     });
-                StreamNextStep::Nothing
+
+                if let Some(StreamAccu::Json(_)) = buf {
+                    StreamNextStep::ToolUse
+                } else{
+                    StreamNextStep::Nothing
+                }
             }
             StreamEvent::MessageStop {} => StreamNextStep::Nothing,
             StreamEvent::Error { error } => {
@@ -366,7 +375,7 @@ impl StreamNextStep {
             "end_turn" => StreamNextStep::Nothing,
             "max_tokens" => StreamNextStep::NewStream,
             "stop_sequence" => StreamNextStep::Nothing,
-            "tool_use" => StreamNextStep::ToolUse,
+            // "tool_use" => StreamNextStep::ToolUse,
             "refusal" => StreamNextStep::ToolUse,
             _ => StreamNextStep::Nothing,
         }
