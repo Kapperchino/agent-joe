@@ -123,19 +123,19 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
                     output_tokens: response.usage.map(|t| t.output_tokens).unwrap_or(0),
                 },
             }),
-            StreamEvent::ContentPartAdded {
-                output_index, ..
-            } => Some(llm::StreamEvent::ContentBlockStart {
-                index: output_index,
-                content_block: ContentBlockInfo::Text {
-                    text: "".to_string(),
-                },
-            }),
-            StreamEvent::ContentPartDone {
-                output_index, ..
-            } => Some(llm::StreamEvent::ContentBlockStop {
-                index: output_index,
-            }),
+            StreamEvent::ContentPartAdded { output_index, .. } => {
+                Some(llm::StreamEvent::ContentBlockStart {
+                    index: output_index,
+                    content_block: ContentBlockInfo::Text {
+                        text: "".to_string(),
+                    },
+                })
+            }
+            StreamEvent::ContentPartDone { output_index, .. } => {
+                Some(llm::StreamEvent::ContentBlockStop {
+                    index: output_index,
+                })
+            }
             StreamEvent::OutputTextDelta {
                 output_index,
                 delta,
@@ -154,11 +154,11 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
                     partial_json: delta,
                 },
             }),
-            StreamEvent::FunctionCallArgumentsDone {
-                output_index, ..
-            } => Some(llm::StreamEvent::ContentBlockStop {
-                index: output_index,
-            }),
+            StreamEvent::FunctionCallArgumentsDone { output_index, .. } => {
+                Some(llm::StreamEvent::ContentBlockStop {
+                    index: output_index,
+                })
+            }
             StreamEvent::ReasoningSummaryTextDelta {
                 output_index,
                 delta,
@@ -169,11 +169,11 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
                     thinking: delta.to_string(),
                 },
             }),
-            StreamEvent::ReasoningSummaryTextDone {
-                output_index, ..
-            } => Some(llm::StreamEvent::ContentBlockStop {
-                index: output_index,
-            }),
+            StreamEvent::ReasoningSummaryTextDone { output_index, .. } => {
+                Some(llm::StreamEvent::ContentBlockStop {
+                    index: output_index,
+                })
+            }
             StreamEvent::Error {
                 code,
                 message,

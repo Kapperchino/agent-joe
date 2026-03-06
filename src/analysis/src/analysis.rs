@@ -7,7 +7,6 @@ use ra_ap_ide::{
 use ra_ap_ide_db::symbol_index::Query;
 use ra_ap_vfs::{FileId, VfsPath};
 use serde::{Deserialize, Serialize};
-use turbo_code_macros::ToolInput;
 
 pub struct FileInfo {
     pub id: FileId,

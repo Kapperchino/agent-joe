@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "src/actors", "src/analysis", "src/app", "src/clients", "src/common-models",  "src/turbo-code-macros", "src/utils"]
+members = [".", "src/actors", "src/analysis", "src/app", "src/clients", "src/common-models", "src/turbo-code-macros", "src/utils"]
 
 [package]
 name = "turbo-code"
@@ -11,8 +11,8 @@ opt-level = 3
 
 [dependencies]
 actors = { path = "src/actors" }
-app = {path = "src/app"}
-clients = {path = "src/clients"}
+app = { path = "src/app" }
+clients = { path = "src/clients" }
 tokio = { version = "1.0", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["fs", "io-util"] }
 ractor = "0.15"

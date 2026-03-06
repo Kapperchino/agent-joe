@@ -14,12 +14,12 @@ use ractor::ActorRef;
 use ratatui::layout::Position;
 use ratatui::widgets::{List, ListItem, ListState};
 use ratatui::{
-    DefaultTerminal, Frame,
-    crossterm::event::{Event, KeyCode},
-    layout::{Alignment, Constraint, Layout},
+    crossterm::event::{Event, KeyCode}, layout::{Alignment, Constraint, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
+    DefaultTerminal,
+    Frame,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 

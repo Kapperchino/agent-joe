@@ -1,6 +1,7 @@
 # turbo-code
 
-A TUI-based coding assistant powered by Claude. It uses rust-analyzer for project context and provides tools for reading, editing, and checking your Rust code.
+A TUI-based coding assistant powered by Claude. It uses rust-analyzer for project context and provides tools for
+reading, editing, and checking your Rust code.
 
 ## Requirements
 
@@ -21,15 +22,15 @@ cargo run
 
 ## Keybindings
 
-| Key | Mode | Action |
-|-----|------|--------|
-| `i` | Normal | Enter edit mode |
-| `/` | Normal | Enter command mode |
-| `q` | Normal | Quit |
-| `h/j/k/l` or arrow keys | Normal | Scroll |
-| `G` | Normal | Scroll to bottom (re-enable auto-scroll) |
-| `Enter` | Edit/Command | Submit |
-| `Esc` | Edit/Command | Back to normal mode |
+| Key                     | Mode         | Action                                   |
+|-------------------------|--------------|------------------------------------------|
+| `i`                     | Normal       | Enter edit mode                          |
+| `/`                     | Normal       | Enter command mode                       |
+| `q`                     | Normal       | Quit                                     |
+| `h/j/k/l` or arrow keys | Normal       | Scroll                                   |
+| `G`                     | Normal       | Scroll to bottom (re-enable auto-scroll) |
+| `Enter`                 | Edit/Command | Submit                                   |
+| `Esc`                   | Edit/Command | Back to normal mode                      |
 
 ## Tools
 

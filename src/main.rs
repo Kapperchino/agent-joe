@@ -1,8 +1,8 @@
 use actors::actor::Dependency;
 use actors::worker::Worker;
 use app::app::App;
-use clients::claude::{ClaudeClient, ClaudeConfig};
 use clients::llm::LLmClient;
+use clients::openai::{OpenAIClient, OpenAIConfig};
 use clients::tool_defs::CargoCheck;
 use clients::tool_defs::InsertAfterLine;
 use clients::tool_defs::ReadFile;
@@ -11,15 +11,13 @@ use clients::tool_defs::Tool;
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::execute;
 use ractor::Actor;
-use std::env;
-use std::io::{Write, stdout};
+use std::io::{stdout, Write};
 use tokio::main;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tracing::Level;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::FmtSubscriber;
-use clients::openai::{OpenAIClient, OpenAIConfig};
 
 #[main]
 async fn main() {

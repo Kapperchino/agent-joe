@@ -448,7 +448,7 @@ impl ClaudeClient {
     pub async fn chat_stream_claude(
         &self,
         req: ClientRequest,
-    ) -> Result<impl Stream<Item=ClaudeResult<StreamEvent>> + Send + 'static, anyhow::Error> {
+    ) -> Result<impl Stream<Item = ClaudeResult<StreamEvent>> + Send + 'static, anyhow::Error> {
         let url = format!("{}/messages", self.base_url);
         let client = self.client.clone();
 
@@ -551,14 +551,11 @@ impl LLmClientTrait for ClaudeClient {
         }))
     }
 
-    async fn send_request(
-        &self,
-        request: llm::ClientRequest,
-    ) -> anyhow::Result<ClientResponse> {
+    async fn send_request(&self, request: llm::ClientRequest) -> anyhow::Result<ClientResponse> {
         let claude_req: ClientRequest = request.into();
         match self.chat(claude_req).await {
             Ok(res) => Ok(res.into()),
-            Err(e) => Err(anyhow!(e))
+            Err(e) => Err(anyhow!(e)),
         }
     }
 }

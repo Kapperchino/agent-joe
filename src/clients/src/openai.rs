@@ -601,8 +601,7 @@ impl LLmClientTrait for OpenAIClient {
     async fn chat_stream(
         &self,
         req: llm::ClientRequest,
-    ) -> Result<impl Stream<Item = anyhow::Result<llm::StreamEvent>> + Send + 'static, Error>
-    {
+    ) -> Result<impl Stream<Item = anyhow::Result<llm::StreamEvent>> + Send + 'static, Error> {
         match self.chat_stream_openai(req.into()).await {
             Ok(stream) => Ok(stream
                 .map(|x| match x {

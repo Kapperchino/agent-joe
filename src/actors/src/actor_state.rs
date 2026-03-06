@@ -10,7 +10,7 @@ use clients::tool_impls;
 use common_models::tui_models::ActorToTui;
 use common_models::tui_models::State;
 use common_models::tui_models::TokenCount;
-use futures::{StreamExt, future};
+use futures::{future, StreamExt};
 use ractor::{ActorCell, ActorRef};
 use std::collections::HashMap;
 use tokio::sync::mpsc;

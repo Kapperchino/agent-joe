@@ -1,7 +1,7 @@
 pub mod claude;
+mod claude_mappings;
 pub mod llm;
 pub mod openai;
+mod openai_mappings;
 pub mod tool_defs;
 pub mod tool_impls;
-mod claude_mappings;
-mod openai_mappings;

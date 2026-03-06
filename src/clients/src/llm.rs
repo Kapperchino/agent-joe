@@ -1,8 +1,8 @@
 use crate::claude::{ClaudeClient, Usage};
 use crate::openai::OpenAIClient;
 use crate::tool_defs::Tool;
-use futures::Stream;
 use futures::future::Either;
+use futures::Stream;
 use std::collections::HashMap;
 
 pub trait LLmClientTrait {
