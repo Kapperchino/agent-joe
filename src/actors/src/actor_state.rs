@@ -244,7 +244,7 @@ impl ActorState {
 
                 if let Some(StreamAccu::Json(_)) = buf {
                     StreamNextStep::ToolUse
-                } else{
+                } else {
                     StreamNextStep::Nothing
                 }
             }
@@ -375,7 +375,8 @@ impl StreamNextStep {
             "end_turn" => StreamNextStep::Nothing,
             "max_tokens" => StreamNextStep::NewStream,
             "stop_sequence" => StreamNextStep::Nothing,
-            // "tool_use" => StreamNextStep::ToolUse,
+            "tool_use" => StreamNextStep::ToolUse,
+            "continue" => StreamNextStep::NewStream,
             "refusal" => StreamNextStep::ToolUse,
             _ => StreamNextStep::Nothing,
         }

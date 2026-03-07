@@ -254,7 +254,7 @@ impl Actor for Worker {
                 }
             }
             SupervisionEvent::ActorFailed(who, reason) => {
-                eprintln!("Child actor {:?} failed: {:?}", who.get_id(), reason);
+                error!("Child actor {:?} failed: {:?}", who.get_id(), reason);
             }
             _ => {}
         }

@@ -1,5 +1,5 @@
 use crate::llm::{ContentBlock, ContentBlockInfo, Delta};
-use crate::openai::{ClientRequest, InputItem, Role, StreamEvent, StreamOutputItem};
+use crate::openai::{ClientRequest, InputItem, OutputItem, Role, StreamEvent, StreamOutputItem};
 use crate::{llm, openai, tool_defs};
 
 impl From<llm::ClientRequest> for ClientRequest {
@@ -23,10 +23,11 @@ impl From<llm::ClientRequest> for ClientRequest {
                             content: thinking,
                         },
                         ContentBlock::ToolBlock { id, name, input } => {
-                            // doesn't matter here
-                            InputItem::Message {
-                                role: role.into(),
-                                content: name,
+                            InputItem::FunctionCall {
+                                id: id.clone(),
+                                call_id: id,
+                                name,
+                                arguments: serde_json::to_string(&input).unwrap_or_default(),
                             }
                         }
                         ContentBlock::ToolResult {
@@ -115,14 +116,29 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
             | StreamEvent::ResponseFailed {
                 response,
                 sequence_number: _,
-            } => Some(llm::StreamEvent::MessageDelta {
-                delta: llm::MessageDeltaContent {
-                    stop_reason: response.status,
-                },
-                usage: llm::UsageDelta {
-                    output_tokens: response.usage.map(|t| t.output_tokens).unwrap_or(0),
-                },
-            }),
+            } => response
+                .output
+                .iter()
+                .any(|x| match x {
+                    OutputItem::FunctionCall { .. } => true,
+                    _ => false,
+                })
+                .then(|| llm::StreamEvent::MessageDelta {
+                    delta: llm::MessageDeltaContent {
+                        stop_reason: Some("continue".to_string()),
+                    },
+                    usage: llm::UsageDelta {
+                        output_tokens: response.usage.clone().map(|t| t.output_tokens).unwrap_or(0),
+                    },
+                })
+                .or(Some(llm::StreamEvent::MessageDelta {
+                    delta: llm::MessageDeltaContent {
+                        stop_reason: response.status,
+                    },
+                    usage: llm::UsageDelta {
+                        output_tokens: response.usage.map(|t| t.output_tokens).unwrap_or(0),
+                    },
+                })),
             StreamEvent::OutputItemAdded {
                 output_index,
                 item,
@@ -148,7 +164,7 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
                 }
                 StreamOutputItem::Unknown => None,
             },
-            StreamEvent::ContentPartDone { output_index, .. } => {
+            StreamEvent::OutputItemDone { output_index, .. } => {
                 Some(llm::StreamEvent::ContentBlockStop {
                     index: output_index,
                 })

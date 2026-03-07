@@ -1,4 +1,5 @@
 use actors::actor::Dependency;
+use actors::supervisor::WorkerSupervisor;
 use actors::worker::Worker;
 use app::app::App;
 use clients::llm::LLmClient;
@@ -41,7 +42,11 @@ async fn main() {
 
     let (tx, rx) = mpsc::unbounded_channel();
 
-    let (joe, actor_handle) = Actor::spawn(
+    let (supervisor, _) = Actor::spawn(None, WorkerSupervisor, ())
+        .await
+        .expect("Failed to start supervisor");
+
+    let (joe, actor_handle) = Actor::spawn_linked(
         None,
         Worker {},
         Dependency {
@@ -54,6 +59,7 @@ async fn main() {
             ],
             tui_tx: tx,
         },
+        supervisor.get_cell(),
     )
     .await
     .expect("Failed to start actor");

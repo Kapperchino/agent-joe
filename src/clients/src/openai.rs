@@ -37,6 +37,13 @@ pub enum Role {
 pub enum InputItem {
     #[serde(rename = "message")]
     Message { role: Role, content: String },
+    #[serde(rename = "function_call")]
+    FunctionCall {
+        id: String,
+        call_id: String,
+        name: String,
+        arguments: String,
+    },
     #[serde(rename = "function_call_output")]
     FunctionCallOutput { call_id: String, output: String },
 }
@@ -218,7 +225,7 @@ pub enum StreamOutputItem {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-#[serde(tag = "type")]
+#[serde(tag = "e_type")]
 pub enum StreamEvent {
     #[serde(rename = "response.queued")]
     ResponseQueued {
@@ -268,7 +275,7 @@ pub enum StreamEvent {
     OutputItemDone {
         output_index: usize,
         #[serde(default)]
-        item: Option<serde_json::Value>,
+        item: Option<OutputItem>,
         #[serde(default)]
         sequence_number: u64,
     },
@@ -645,7 +652,7 @@ impl OpenAIClient {
 
         let mut json: serde_json::Value = serde_json::from_str(&data_line)?;
         json.as_object_mut()
-            .map(|obj| obj.insert("type".to_string(), serde_json::Value::String(event_type)));
+            .map(|obj| obj.insert("e_type".to_string(), serde_json::Value::String(event_type)));
 
         match serde_json::from_value::<StreamEvent>(json) {
             Ok(event) => Ok(Some(event)),
