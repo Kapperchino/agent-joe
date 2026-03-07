@@ -3,6 +3,7 @@ use crate::claude::{
     Role, StreamEvent, Tool, ToolSchemaDTO,
 };
 use crate::llm::ClientResponse;
+use crate::tool_defs::ToolId;
 use crate::{claude, llm, tool_defs};
 
 impl From<llm::Role> for claude::Role {
@@ -25,15 +26,21 @@ impl From<llm::ContentBlock> for ContentBlock {
                 thinking,
                 signature,
             },
-            llm::ContentBlock::ToolBlock { id, name, input } => {
-                ContentBlock::ToolBlock { id, name, input }
-            }
+            llm::ContentBlock::ToolBlock {
+                tool_id,
+                name,
+                input,
+            } => ContentBlock::ToolBlock {
+                id: tool_id.id,
+                name,
+                input,
+            },
             llm::ContentBlock::ToolResult {
-                tool_use_id,
+                tool_id,
                 content,
                 is_error,
             } => ContentBlock::ToolResult {
-                tool_use_id,
+                tool_use_id: tool_id.id,
                 content,
                 is_error,
             },
@@ -128,7 +135,11 @@ impl Into<llm::StreamEvent> for StreamEvent {
                 index,
                 content_block: match content_block {
                     ContentBlockInfo::ToolUse { id, name, input } => {
-                        llm::ContentBlockInfo::ToolUse { id, name, input }
+                        llm::ContentBlockInfo::ToolUse {
+                            id: ToolId { call_id: None, id },
+                            name,
+                            input,
+                        }
                     }
                     ContentBlockInfo::Thinking { thinking } => {
                         llm::ContentBlockInfo::Thinking { thinking }
@@ -192,15 +203,20 @@ impl From<ContentBlock> for llm::ContentBlock {
                 thinking,
                 signature,
             },
-            ContentBlock::ToolBlock { id, name, input } => {
-                llm::ContentBlock::ToolBlock { id, name, input }
-            }
+            ContentBlock::ToolBlock { id, name, input } => llm::ContentBlock::ToolBlock {
+                tool_id: ToolId { call_id: None, id },
+                name,
+                input,
+            },
             ContentBlock::ToolResult {
                 tool_use_id,
                 content,
                 is_error,
             } => llm::ContentBlock::ToolResult {
-                tool_use_id,
+                tool_id: ToolId {
+                    call_id: None,
+                    id: tool_use_id,
+                },
                 content,
                 is_error,
             },

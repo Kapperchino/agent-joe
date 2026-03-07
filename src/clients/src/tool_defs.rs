@@ -142,32 +142,37 @@ pub enum CargoCheckResult {
         errors: Vec<String>,
     },
 }
+#[derive(Debug, Clone)]
+pub struct ToolId {
+    pub call_id: Option<String>,
+    pub id: String,
+}
 #[derive(Debug)]
 pub enum ToolResult {
     ReadFileResult {
         res: String,
         tool: Tool,
-        id: String,
+        id: ToolId,
     },
     InsertAfterLineResult {
         status: String,
         tool: Tool,
-        id: String,
+        id: ToolId,
     },
     StringReplaceResult {
         status: String,
         tool: Tool,
-        id: String,
+        id: ToolId,
     },
     CargoCheckResult {
         status: String,
         result: CargoCheckResult,
         tool: Tool,
-        id: String,
+        id: ToolId,
     },
     Error {
         message: String,
         tool: Tool,
-        id: String,
+        id: ToolId,
     },
 }

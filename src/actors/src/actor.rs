@@ -6,7 +6,7 @@ use crate::{cache_actor, file_actor};
 use analysis::cur_context::CurContext;
 use clients::llm;
 use clients::llm::{ClientRequest, ContentBlock, LLmClient, StreamEvent};
-use clients::tool_defs::Tool;
+use clients::tool_defs::{Tool, ToolId};
 use clients::tool_defs::ToolResult;
 use clients::tool_impls;
 use common_models::tui_models::ActorToTui;
@@ -79,7 +79,7 @@ pub enum StreamAccu {
     String(String),
     Json(String),
     Thinking { thinking: String, signature: String },
-    Tool { id: String, name: String },
+    Tool { id: ToolId, name: String },
 }
 
 #[derive(Debug)]

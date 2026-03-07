@@ -4,7 +4,7 @@ use analysis::cur_context::CurContext;
 use clients::llm::{ContentBlock, ContentBlockInfo, Delta, LLmClient, Message, Role, StreamEvent};
 use clients::tool_defs::{
     CargoCheckInput, InsertAfterLineInput, LenientDeserialize, ReadFileInput, StringReplaceInput,
-    Tool, ToolResult,
+    Tool, ToolId, ToolResult,
 };
 use clients::tool_impls;
 use common_models::tui_models::ActorToTui;
@@ -80,7 +80,7 @@ impl ActorState {
                     self.history.push(Message {
                         role: Role::Assistant,
                         content: vec![ContentBlock::ToolBlock {
-                            id: tool_res.tool().id(),
+                            tool_id: tool_res.id(),
                             name: tool_res.tool().name(),
                             input,
                         }],
@@ -265,7 +265,7 @@ impl ActorState {
         &self,
         a_vec: &Vec<StreamAccu>,
         name: String,
-        id: String,
+        id: ToolId,
     ) -> anyhow::Result<ToolResult> {
         let json = match a_vec.get(1).ok_or(anyhow::Error::msg("doesn't work"))? {
             StreamAccu::Json(json) => Ok(json),
@@ -276,28 +276,19 @@ impl ActorState {
         let res: anyhow::Result<ToolResult> = match Tool::from_str(name.as_str())? {
             Tool::ReadFile(_) => {
                 let input = ReadFileInput::deserialize_lenient(json)?;
-                let rf = clients::tool_defs::ReadFile {
-                    id: id.clone(),
-                    input,
-                };
+                let rf = clients::tool_defs::ReadFile { id: id.id.clone(), input };
                 Ok(Tool::ReadFile(rf).use_tool(id, &self.cur_context).await?)
             }
             Tool::InsertAfterLine(_) => {
                 let input = InsertAfterLineInput::deserialize_lenient(json)?;
-                let rf = clients::tool_defs::InsertAfterLine {
-                    id: id.clone(),
-                    input,
-                };
+                let rf = clients::tool_defs::InsertAfterLine { id: id.id.clone(), input };
                 Ok(Tool::InsertAfterLine(rf)
                     .use_tool(id, &self.cur_context)
                     .await?)
             }
             Tool::StringReplace(_) => {
                 let input = StringReplaceInput::deserialize_lenient(json)?;
-                let rf = clients::tool_defs::StringReplace {
-                    id: id.clone(),
-                    input,
-                };
+                let rf = clients::tool_defs::StringReplace { id: id.id.clone(), input };
                 Ok(Tool::StringReplace(rf)
                     .use_tool(id, &self.cur_context)
                     .await?)
@@ -310,10 +301,7 @@ impl ActorState {
                 } else {
                     CargoCheckInput::deserialize_lenient(json)?
                 };
-                let rf = clients::tool_defs::CargoCheck {
-                    id: id.clone(),
-                    input,
-                };
+                let rf = clients::tool_defs::CargoCheck { id: id.id.clone(), input };
                 Ok(Tool::CargoCheck(rf).use_tool(id, &self.cur_context).await?)
             }
         };
@@ -339,7 +327,7 @@ impl ActorState {
                         StreamAccu::String(str) => Ok(StreamRes::String(str.clone())),
                         StreamAccu::Tool { id, name } => {
                             let tool_res = self
-                                .tool_use(&a_vec, name.to_string(), id.to_string())
+                                .tool_use(&a_vec, name.to_string(), id.clone())
                                 .await?;
                             Ok(StreamRes::Tool(tool_res))
                         }

@@ -1,5 +1,6 @@
 use crate::llm::{ContentBlock, ContentBlockInfo, Delta};
 use crate::openai::{ClientRequest, InputItem, OutputItem, Role, StreamEvent, StreamOutputItem};
+use crate::tool_defs::ToolId;
 use crate::{llm, openai, tool_defs};
 
 impl From<llm::ClientRequest> for ClientRequest {
@@ -12,33 +13,31 @@ impl From<llm::ClientRequest> for ClientRequest {
                     let role = x.role.clone();
                     x.content.into_iter().map(move |c| (c, role.clone()))
                 })
-                .map(|(content, role)| {
-                    match content {
-                        ContentBlock::MessageBlock { text } => InputItem::Message {
-                            role: role.into(),
-                            content: text,
-                        },
-                        ContentBlock::ThinkingBlock { thinking, .. } => InputItem::Message {
-                            role: role.into(),
-                            content: thinking,
-                        },
-                        ContentBlock::ToolBlock { id, name, input } => {
-                            InputItem::FunctionCall {
-                                id: id.clone(),
-                                call_id: id,
-                                name,
-                                arguments: serde_json::to_string(&input).unwrap_or_default(),
-                            }
-                        }
-                        ContentBlock::ToolResult {
-                            tool_use_id,
-                            content,
-                            ..
-                        } => InputItem::FunctionCallOutput {
-                            call_id: tool_use_id,
-                            output: content,
-                        },
-                    }
+                .map(|(content, role)| match content {
+                    ContentBlock::MessageBlock { text } => InputItem::Message {
+                        role: role.into(),
+                        content: text,
+                    },
+                    ContentBlock::ThinkingBlock { thinking, .. } => InputItem::Message {
+                        role: role.into(),
+                        content: thinking,
+                    },
+                    ContentBlock::ToolBlock {
+                        tool_id,
+                        name,
+                        input,
+                    } => InputItem::FunctionCall {
+                        id: tool_id.id,
+                        call_id: String::default(),
+                        name,
+                        arguments: serde_json::to_string(&input).unwrap_or_default(),
+                    },
+                    ContentBlock::ToolResult {
+                        tool_id, content, ..
+                    } => InputItem::FunctionCallOutput {
+                        call_id: tool_id.call_id.unwrap_or_default(),
+                        output: content,
+                    },
                 })
                 .collect(),
             instructions: llm_req.system,
@@ -148,7 +147,10 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
                     Some(llm::StreamEvent::ContentBlockStart {
                         index: output_index,
                         content_block: ContentBlockInfo::ToolUse {
-                            id: call_id,
+                            id: ToolId {
+                                call_id: Some(call_id),
+                                id: id.unwrap_or_default(),
+                            },
                             name,
                             input: Default::default(),
                         },

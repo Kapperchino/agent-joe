@@ -1,10 +1,10 @@
 use crate::claude;
 use crate::claude::ToolSchemaDTO;
 use crate::llm::ContentBlock;
-use crate::tool_defs::CargoCheck;
 use crate::tool_defs::InsertAfterLine;
 use crate::tool_defs::StringReplace;
 use crate::tool_defs::ToolDefTrait;
+use crate::tool_defs::{CargoCheck, ToolId};
 use crate::tool_defs::{CargoCheckResult, Tool};
 use crate::tool_defs::{Range, ReadFile, StringReplaceInput, ToolJson, ToolResult};
 use analysis::cur_context::CurContext;
@@ -91,7 +91,7 @@ impl Tool {
         }
     }
 
-    pub async fn use_tool(&self, id: String, ctx: &CurContext) -> anyhow::Result<ToolResult> {
+    pub async fn use_tool(&self, id: ToolId, ctx: &CurContext) -> anyhow::Result<ToolResult> {
         match self {
             Tool::ReadFile(read_file) => {
                 let result = read_file.read_file(ctx).await?;
@@ -155,20 +155,30 @@ impl ToolResult {
         }
     }
 
+    pub fn id(&self) -> ToolId {
+        match self {
+            ToolResult::ReadFileResult { id, .. } => id.clone(),
+            ToolResult::InsertAfterLineResult { id, .. } => id.clone(),
+            ToolResult::StringReplaceResult { id, .. } => id.clone(),
+            ToolResult::CargoCheckResult { id, .. } => id.clone(),
+            ToolResult::Error { id, .. } => id.clone(),
+        }
+    }
+
     pub fn to_res_json(&self) -> ContentBlock {
         match self {
             ToolResult::ReadFileResult { res, id, .. } => ContentBlock::ToolResult {
-                tool_use_id: id.to_string(),
+                tool_id: id.clone(),
                 content: res.to_string(),
                 is_error: None,
             },
             ToolResult::InsertAfterLineResult { status, id, .. } => ContentBlock::ToolResult {
-                tool_use_id: id.to_string(),
+                tool_id: id.clone(),
                 content: status.to_string(),
                 is_error: None,
             },
             ToolResult::StringReplaceResult { status, id, .. } => ContentBlock::ToolResult {
-                tool_use_id: id.to_string(),
+                tool_id: id.clone(),
                 content: status.to_string(),
                 is_error: None,
             },
@@ -183,13 +193,13 @@ impl ToolResult {
                         && cargo.input.include_warnings.unwrap_or(false)
                     {
                         ContentBlock::ToolResult {
-                            tool_use_id: id.to_string(),
+                            tool_id: id.clone(),
                             content: format!("{}\nWarnings:\n{}", status, warnings.join("\n")),
                             is_error: None,
                         }
                     } else {
                         ContentBlock::ToolResult {
-                            tool_use_id: id.to_string(),
+                            tool_id: id.clone(),
                             content: status.clone(),
                             is_error: None,
                         }
@@ -200,7 +210,7 @@ impl ToolResult {
                         && cargo.input.include_warnings.unwrap_or(false)
                     {
                         ContentBlock::ToolResult {
-                            tool_use_id: id.to_string(),
+                            tool_id: id.clone(),
                             content: format!(
                                 "{}\nWarnings:\n{}\n{}",
                                 status,
@@ -211,7 +221,7 @@ impl ToolResult {
                         }
                     } else {
                         ContentBlock::ToolResult {
-                            tool_use_id: id.to_string(),
+                            tool_id: id.clone(),
                             content: format!("{}\nErrors:\n{}", status, warnings.join("\n")),
                             is_error: None,
                         }
@@ -219,7 +229,7 @@ impl ToolResult {
                 }
             },
             ToolResult::Error { message, id, .. } => ContentBlock::ToolResult {
-                tool_use_id: id.to_string(),
+                tool_id: id.clone(),
                 content: message.clone(),
                 is_error: Some(true),
             },

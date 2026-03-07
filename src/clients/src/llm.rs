@@ -1,6 +1,6 @@
 use crate::claude::{ClaudeClient, Usage};
 use crate::openai::OpenAIClient;
-use crate::tool_defs::Tool;
+use crate::tool_defs::{Tool, ToolId};
 use futures::future::Either;
 use futures::Stream;
 use std::collections::HashMap;
@@ -169,7 +169,7 @@ pub enum Delta {
 #[derive(Debug, Clone)]
 pub enum ContentBlockInfo {
     ToolUse {
-        id: String,
+        id: ToolId,
         name: String,
         input: HashMap<String, String>,
     },
@@ -191,12 +191,12 @@ pub enum ContentBlock {
         signature: String,
     },
     ToolBlock {
-        id: String,
+        tool_id: ToolId,
         name: String,
         input: HashMap<String, String>,
     },
     ToolResult {
-        tool_use_id: String,
+        tool_id: ToolId,
         content: String,
         is_error: Option<bool>,
     },
