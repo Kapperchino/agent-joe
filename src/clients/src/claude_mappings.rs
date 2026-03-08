@@ -22,6 +22,7 @@ impl From<llm::ContentBlock> for ContentBlock {
             llm::ContentBlock::ThinkingBlock {
                 thinking,
                 signature,
+                ..
             } => ContentBlock::ThinkingBlock {
                 thinking,
                 signature,
@@ -152,7 +153,7 @@ impl Into<llm::StreamEvent> for StreamEvent {
                     index,
                     delta: match delta {
                         Delta::TextDelta { text } => llm::Delta::TextDelta { text },
-                        Delta::ThinkingDelta { thinking } => llm::Delta::ThinkingDelta { thinking },
+                        Delta::ThinkingDelta { thinking } => llm::Delta::ThinkingDelta { thinking, reasoning_id: None },
                         Delta::InputJsonDelta { partial_json } => {
                             llm::Delta::InputJsonDelta { partial_json }
                         }
@@ -202,6 +203,7 @@ impl From<ContentBlock> for llm::ContentBlock {
             } => llm::ContentBlock::ThinkingBlock {
                 thinking,
                 signature,
+                reasoning_id: None,
             },
             ContentBlock::ToolBlock { id, name, input } => llm::ContentBlock::ToolBlock {
                 tool_id: ToolId { call_id: None, id },

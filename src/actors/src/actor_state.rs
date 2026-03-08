@@ -65,12 +65,14 @@ impl ActorState {
                 StreamRes::Thinking {
                     thinking,
                     signature,
+                    reasoning_id,
                 } => {
                     self.history.push(Message {
                         role: Role::Assistant,
                         content: vec![ContentBlock::ThinkingBlock {
                             thinking,
                             signature,
+                            reasoning_id,
                         }],
                     });
                     Ok(())
@@ -128,7 +130,7 @@ impl ActorState {
             },
             StreamEvent::ContentBlockDelta { index, delta } => match delta {
                 Delta::TextDelta { text } => self.send_delta(text),
-                Delta::ThinkingDelta { thinking } => self.send_delta(thinking),
+                Delta::ThinkingDelta { thinking,.. } => self.send_delta(thinking),
                 Delta::InputJsonDelta { .. } => {}
                 Delta::SignatureDelta { .. } => {}
             },
@@ -193,13 +195,15 @@ impl ActorState {
                                 Delta::InputJsonDelta { partial_json } => {
                                     Some(StreamAccu::Json(partial_json))
                                 }
-                                Delta::ThinkingDelta { thinking } => Some(StreamAccu::Thinking {
+                                Delta::ThinkingDelta { thinking, reasoning_id } => Some(StreamAccu::Thinking {
                                     thinking,
                                     signature: "".to_string(),
+                                    reasoning_id,
                                 }),
                                 Delta::SignatureDelta { signature } => Some(StreamAccu::Thinking {
                                     thinking: "".to_string(),
                                     signature,
+                                    reasoning_id: None,
                                 }),
                             })
                             .reduce(|mut acc, delta| {
@@ -211,15 +215,20 @@ impl ActorState {
                                         StreamAccu::Thinking {
                                             thinking: think_buf,
                                             signature: sig,
+                                            reasoning_id: acc_id,
                                         },
                                         StreamAccu::Thinking {
                                             thinking,
                                             signature,
+                                            reasoning_id,
                                         },
                                     ) => {
                                         think_buf.push_str(&thinking);
                                         if !signature.is_empty() {
                                             sig.push_str(&signature)
+                                        }
+                                        if reasoning_id.is_some() {
+                                            *acc_id = reasoning_id;
                                         }
                                     }
                                     (StreamAccu::Json(buffer), StreamAccu::Json(delta)) => {
@@ -334,9 +343,11 @@ impl ActorState {
                         StreamAccu::Thinking {
                             thinking,
                             signature,
+                            reasoning_id,
                         } => Ok(StreamRes::Thinking {
                             thinking: thinking.clone(),
                             signature: signature.clone(),
+                            reasoning_id: reasoning_id.clone(),
                         }),
                         _ => Err(anyhow::Error::msg("No valid tool")),
                     },

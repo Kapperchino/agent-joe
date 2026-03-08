@@ -220,8 +220,23 @@ pub enum StreamOutputItem {
         #[serde(default)]
         role: Option<String>,
     },
+    #[serde(rename = "reasoning")]
+    Reasoning {
+        #[serde(default)]
+        summary_text_content: Vec<SummaryTextContent>,
+        #[serde(default)]
+        content: Vec<ReasoningText>,
+    },
     #[serde(other)]
     Unknown,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ReasoningText {
+    #[serde(rename = "type")]
+    prop_type: String,
+    #[serde(default)]
+    text: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]

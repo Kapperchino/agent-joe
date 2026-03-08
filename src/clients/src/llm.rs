@@ -161,7 +161,7 @@ pub struct CacheControl {}
 #[derive(Debug, Clone)]
 pub enum Delta {
     TextDelta { text: String },
-    ThinkingDelta { thinking: String },
+    ThinkingDelta { thinking: String, reasoning_id: Option<String> },
     InputJsonDelta { partial_json: String },
     SignatureDelta { signature: String },
 }
@@ -189,6 +189,7 @@ pub enum ContentBlock {
     ThinkingBlock {
         thinking: String,
         signature: String,
+        reasoning_id: Option<String>,
     },
     ToolBlock {
         tool_id: ToolId,

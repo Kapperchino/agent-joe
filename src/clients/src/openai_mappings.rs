@@ -13,31 +13,28 @@ impl From<llm::ClientRequest> for ClientRequest {
                     let role = x.role.clone();
                     x.content.into_iter().map(move |c| (c, role.clone()))
                 })
-                .map(|(content, role)| match content {
-                    ContentBlock::MessageBlock { text } => InputItem::Message {
+                .filter_map(|(content, role)| match content {
+                    ContentBlock::MessageBlock { text } => Some(InputItem::Message {
                         role: role.into(),
                         content: text,
-                    },
-                    ContentBlock::ThinkingBlock { thinking, .. } => InputItem::Message {
-                        role: role.into(),
-                        content: thinking,
-                    },
+                    }),
+                    ContentBlock::ThinkingBlock { .. } => None,
                     ContentBlock::ToolBlock {
                         tool_id,
                         name,
                         input,
-                    } => InputItem::FunctionCall {
+                    } => Some(InputItem::FunctionCall {
                         id: tool_id.id,
-                        call_id: String::default(),
+                        call_id: tool_id.call_id.unwrap_or_default(),
                         name,
                         arguments: serde_json::to_string(&input).unwrap_or_default(),
-                    },
+                    }),
                     ContentBlock::ToolResult {
                         tool_id, content, ..
-                    } => InputItem::FunctionCallOutput {
+                    } => Some(InputItem::FunctionCallOutput {
                         call_id: tool_id.call_id.unwrap_or_default(),
                         output: content,
-                    },
+                    }),
                 })
                 .collect(),
             instructions: llm_req.system,
@@ -164,6 +161,15 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
                         },
                     })
                 }
+                StreamOutputItem::Reasoning {
+                    summary_text_content,
+                    content,
+                } => Some(llm::StreamEvent::ContentBlockStart {
+                    index: output_index,
+                    content_block: ContentBlockInfo::Thinking {
+                        thinking: "".to_string(),
+                    },
+                }),
                 StreamOutputItem::Unknown => None,
             },
             StreamEvent::OutputItemDone { output_index, .. } => {
@@ -195,6 +201,7 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
                 })
             }
             StreamEvent::ReasoningSummaryTextDelta {
+                item_id,
                 output_index,
                 delta,
                 ..
@@ -202,6 +209,7 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
                 index: output_index,
                 delta: Delta::ThinkingDelta {
                     thinking: delta.to_string(),
+                    reasoning_id: Some(item_id),
                 },
             }),
             StreamEvent::ReasoningSummaryTextDone { output_index, .. } => {

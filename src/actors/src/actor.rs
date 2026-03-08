@@ -78,14 +78,14 @@ impl Message {}
 pub enum StreamAccu {
     String(String),
     Json(String),
-    Thinking { thinking: String, signature: String },
+    Thinking { thinking: String, signature: String, reasoning_id: Option<String> },
     Tool { id: ToolId, name: String },
 }
 
 #[derive(Debug)]
 pub(crate) enum StreamRes {
     String(String),
-    Thinking { thinking: String, signature: String },
+    Thinking { thinking: String, signature: String, reasoning_id: Option<String> },
     Tool(ToolResult),
 }
 
