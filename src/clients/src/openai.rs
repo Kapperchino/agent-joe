@@ -46,6 +46,12 @@ pub enum InputItem {
     },
     #[serde(rename = "function_call_output")]
     FunctionCallOutput { call_id: String, output: String },
+    #[serde(rename = "reasoning")]
+    Reasoning {
+        id: String,
+        #[serde(default)]
+        summary: Vec<SummaryTextContent>,
+    },
 }
 
 impl InputItem {
@@ -133,12 +139,12 @@ pub struct Response {
     pub usage: Option<Usage>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SummaryTextContent {
     #[serde(default)]
     pub text: String,
     #[serde(rename = "type")]
-    prop_type: String,
+    pub prop_type: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
