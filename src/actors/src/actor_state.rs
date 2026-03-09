@@ -141,8 +141,11 @@ impl ActorState {
                 .open(path)
                 .await
             {
-                let line = format!("{:?}\n", item);
-                let _ = file.write_all(line.as_bytes()).await;
+                if let Ok(json) = serde_json::to_string(item) {
+                    let mut line = json;
+                    line.push('\n');
+                    let _ = file.write_all(line.as_bytes()).await;
+                }
             }
         }
     }

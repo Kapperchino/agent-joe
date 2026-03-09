@@ -142,7 +142,7 @@ pub enum CargoCheckResult {
         errors: Vec<String>,
     },
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ToolId {
     pub call_id: Option<String>,
     pub id: String,

@@ -3,6 +3,7 @@ use crate::openai::OpenAIClient;
 use crate::tool_defs::{Tool, ToolId};
 use futures::future::Either;
 use futures::Stream;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub trait LLmClientTrait {
@@ -35,7 +36,7 @@ impl LLmClient {
 }
 
 // map from other clients to this
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum StreamEvent {
     MessageStart {
         message: StreamMessage,
@@ -62,23 +63,23 @@ pub enum StreamEvent {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageDeltaContent {
     pub stop_reason: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiErrorDetail {
     pub error_type: String,
     pub message: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsageDelta {
     pub output_tokens: u32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamMessage {
     pub id: String,
     pub model: String,
@@ -86,7 +87,7 @@ pub struct StreamMessage {
     pub usage: StreamUsage,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StreamUsage {
     pub input_tokens: u32,
     pub cache_creation_input_tokens: u32,
@@ -158,7 +159,7 @@ pub struct ClientResponse {
 
 pub struct CacheControl {}
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Delta {
     TextDelta { text: String },
     ThinkingDelta { thinking: String, reasoning_id: Option<String> },
@@ -166,7 +167,7 @@ pub enum Delta {
     SignatureDelta { signature: String },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ContentBlockInfo {
     ToolUse {
         id: ToolId,
@@ -209,7 +210,7 @@ pub struct Message {
     pub content: Vec<ContentBlock>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Role {
     User,
     Assistant,
