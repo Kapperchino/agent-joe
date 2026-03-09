@@ -7,3 +7,4 @@ pub mod worker;
 
 #[cfg(test)]
 mod stream_replay_test;
+mod stream_processor;
