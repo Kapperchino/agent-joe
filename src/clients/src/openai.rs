@@ -499,7 +499,7 @@ impl Default for OpenAIConfig {
         Self {
             api_key: String::new(),
             url: "https://api.openai.com/v1".to_string(),
-            model: "gpt-5.3-codex".to_string(),
+            model: "gpt-5.4".to_string(),
             max_output_tokens: Some(4096),
             temperature: Some(1.0),
             timeout: Duration::from_secs(120),

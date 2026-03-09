@@ -13,6 +13,9 @@ use common_models::tui_models::TokenCount;
 use futures::{future, StreamExt};
 use ractor::{ActorCell, ActorRef};
 use std::collections::HashMap;
+use std::path::PathBuf;
+use tokio::fs::OpenOptions;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 use tracing::error;
 
@@ -28,6 +31,7 @@ pub struct ActorState {
     pub tui_tx: mpsc::UnboundedSender<ActorToTui>,
     pub file_actor: ActorRef<file_actor::Message>,
     pub token_count: TokenCount,
+    pub stream_log_path: Option<PathBuf>,
 }
 impl ActorState {
     pub async fn new(
@@ -36,6 +40,23 @@ impl ActorState {
         file_actor: ActorRef<file_actor::Message>,
     ) -> anyhow::Result<Self> {
         let cur_context_str = cur_context.get_ctx().await;
+
+        let stream_log_path = if dependency.save_stream {
+            let path = PathBuf::from(format!(
+                "./logs/stream_{}.jsonl",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+            ));
+            // Ensure the log directory exists
+            if let Some(parent) = path.parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
+            Some(path)
+        } else {
+            None
+        };
 
         Ok(Self {
             cur_context,
@@ -52,6 +73,7 @@ impl ActorState {
             tui_tx: dependency.tui_tx,
             file_actor,
             token_count: TokenCount::default(),
+            stream_log_path,
         })
     }
 
@@ -109,6 +131,20 @@ impl ActorState {
     }
     pub fn send_delta(&mut self, str: String) {
         let _ = self.tui_tx.send(ActorToTui::Data(str));
+    }
+
+    pub async fn log_stream_item(&self, item: &StreamEvent) {
+        if let Some(ref path) = self.stream_log_path {
+            if let Ok(mut file) = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .await
+            {
+                let line = format!("{:?}\n", item);
+                let _ = file.write_all(line.as_bytes()).await;
+            }
+        }
     }
 
     pub fn handle_stream_state(&mut self, item: StreamEvent) {

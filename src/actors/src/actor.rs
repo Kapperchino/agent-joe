@@ -70,6 +70,7 @@ pub struct Dependency {
     pub claude: LLmClient,
     pub tools: Vec<Tool>,
     pub tui_tx: mpsc::UnboundedSender<ActorToTui>,
+    pub save_stream: bool,
 }
 
 impl Message {}
@@ -193,6 +194,9 @@ impl Actor for Worker {
             }
             Message::ProcessStreamItem(item) => match item {
                 StreamItem::Item(event) => {
+                    if state.stream_log_path.is_some() {
+                        state.log_stream_item(&event).await;
+                    }
                     state.handle_stream_state(event.clone());
                     match state.process_stream_event(event) {
                         StreamNextStep::ToolUse => {

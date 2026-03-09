@@ -58,6 +58,7 @@ async fn main() {
                 Tool::CargoCheck(CargoCheck::default()),
             ],
             tui_tx: tx,
+            save_stream: true,
         },
         supervisor.get_cell(),
     )
