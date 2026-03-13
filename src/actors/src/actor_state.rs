@@ -1,10 +1,11 @@
-use crate::actor::{Dependency, StreamAccu, StreamRes};
+use crate::actor::{Dependency, StreamRes};
 use crate::event_reporter::EventReporter;
 use crate::file_actor;
 use crate::stream_processor::{
     PreprocessedStreamItem, ProcessedItem, StreamAccu, StreamProcessor, ToolCall,
 };
 use analysis::cur_context::CurContext;
+use anyhow::anyhow;
 use clients::llm::{ContentBlock, ContentBlockInfo, Delta, LLmClient, Message, Role, StreamEvent};
 use clients::tool_defs::{
     CargoCheckInput, InsertAfterLineInput, LenientDeserialize, ReadFileInput, StringReplaceInput,
@@ -18,7 +19,6 @@ use futures::{StreamExt, future};
 use ractor::{ActorCell, ActorRef};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use anyhow::anyhow;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
@@ -72,13 +72,18 @@ impl ActorState {
             acc_map: Default::default(),
             delta_buf: Default::default(),
             stream_actor: None,
+            reporter: EventReporter {
+                tui_tx: dependency.tui_tx.clone(),
+            },
             file_actor,
             stream_processor: StreamProcessor {
                 acc_map: Default::default(),
                 delta_buf: Default::default(),
                 stream_log_path,
                 token_count: Default::default(),
-                reporter: EventReporter { tui_tx: () },
+                reporter: EventReporter {
+                    tui_tx: dependency.tui_tx,
+                },
                 cur_state: State::Ready,
             },
         })
@@ -236,7 +241,7 @@ impl ActorState {
                     signature: signature.clone(),
                     reasoning_id: reasoning_id.clone(),
                 }),
-                _ => {Err(anyhow!("Tool cannot exist for this"))}
+                _ => Err(anyhow!("Tool cannot exist for this")),
             })
             .collect();
 

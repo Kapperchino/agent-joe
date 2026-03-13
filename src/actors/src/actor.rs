@@ -1,4 +1,4 @@
-use crate::actor_state::{ActorState, StreamNextStep};
+use crate::actor_state::ActorState;
 use crate::cache_actor::CacheActor;
 use crate::file_actor::FileActor;
 use crate::stream_processor::{PreprocessedStreamItem, ProcessedItem, StreamNextStep};
