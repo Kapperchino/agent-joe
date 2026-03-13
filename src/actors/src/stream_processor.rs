@@ -1,6 +1,6 @@
 use crate::actor::{Message, StreamAccu};
 use anyhow::anyhow;
-use clients::llm::{ContentBlockInfo, Delta, StreamEvent};
+use clients::llm::{ContentBlockInfo, Delta, StopReason, StreamEvent};
 use clients::tool_defs::{ToolId, ToolUse};
 use common_models::tui_models::{ActorToTui, State, TokenCount};
 use std::collections::HashMap;
@@ -34,24 +34,24 @@ pub enum StreamNextStep {
 }
 
 impl StreamNextStep {
-    pub fn new(reason: &str, tool_call: Option<ToolCall>) -> anyhow::Result<Self> {
+    pub fn new(reason: &StopReason, tool_call: Option<ToolCall>) -> anyhow::Result<Self> {
         match reason {
-            "end_turn" => Ok(StreamNextStep::Nothing),
-            "max_tokens" => Ok(StreamNextStep::NewStream),
-            "stop_sequence" => Ok(StreamNextStep::Nothing),
-            "tool_use" => Ok(StreamNextStep::ToolUse(
+            StopReason::EndTurn => Ok(StreamNextStep::Nothing),
+            StopReason::MaxTokens => Ok(StreamNextStep::NewStream),
+            StopReason::StopSequence => Ok(StreamNextStep::Nothing),
+            StopReason::ToolUse => Ok(StreamNextStep::ToolUse(
                 tool_call.ok_or(anyhow!("Tool needs to be here"))?,
             )),
-            "continue" => Ok(StreamNextStep::NewStream),
-            "refusal" => Ok(StreamNextStep::ToolUse(
-                tool_call.ok_or(anyhow!("Tool needs to be here"))?,
-            )),
+            StopReason::Refusal => {
+                error!("Stream refusal");
+                Ok(StreamNextStep::Nothing)
+            }
             _ => Ok(StreamNextStep::Nothing),
         }
     }
 }
 impl StreamProcessor {
-    pub fn process_stream_event(&mut self, item: StreamEvent) -> StreamNextStep {
+    pub fn process_stream_event(&mut self, item: StreamEvent) -> anyhow::Result<StreamNextStep> {
         match item {
             StreamEvent::ContentBlockDelta { index, delta } => {
                 match self.delta_buf.get_mut(&index) {
@@ -60,7 +60,7 @@ impl StreamProcessor {
                     }
                     Some(vec) => vec.push(delta),
                 }
-                StreamNextStep::Nothing
+                Ok(StreamNextStep::Nothing)
             }
             StreamEvent::ContentBlockStart {
                 index,
@@ -74,9 +74,9 @@ impl StreamProcessor {
                         }
                         Some(vec) => vec.push(StreamAccu::Tool { id, name }),
                     }
-                    StreamNextStep::Nothing
+                    Ok(StreamNextStep::Nothing)
                 }
-                _ => StreamNextStep::Nothing,
+                _ => Ok(StreamNextStep::Nothing),
             },
             StreamEvent::ContentBlockStop { index } => {
                 self.accumulate(index).map(|buf| {
@@ -88,20 +88,18 @@ impl StreamProcessor {
                     };
                     buf
                 });
-                StreamNextStep::Nothing
+                Ok(StreamNextStep::Nothing)
             }
-            StreamEvent::MessageStop {} => StreamNextStep::Nothing,
+            StreamEvent::MessageStop {} => Ok(StreamNextStep::Nothing),
             StreamEvent::Error { error } => {
                 error!("{:?}", error);
-                StreamNextStep::Nothing
+                Ok(StreamNextStep::Nothing)
             }
             StreamEvent::MessageDelta { delta, usage } => match delta.stop_reason {
-                Some(reason) => {
-                    StreamNextStep::new(&reason,None)?
-                }
-                None => StreamNextStep::Nothing,
+                Some(reason) => Ok(StreamNextStep::new(&reason, None)?),
+                None => Ok(StreamNextStep::Nothing),
             },
-            _ => StreamNextStep::Nothing,
+            _ => Ok(StreamNextStep::Nothing),
         }
     }
 
