@@ -1,6 +1,7 @@
 use crate::actor_state::{ActorState, StreamNextStep};
 use crate::cache_actor::CacheActor;
 use crate::file_actor::FileActor;
+use crate::stream_processor::{PreprocessedStreamItem, ProcessedItem, StreamNextStep};
 use crate::worker::Worker;
 use crate::{cache_actor, file_actor};
 use analysis::cur_context::CurContext;
@@ -61,7 +62,8 @@ pub enum StreamItem {
 pub enum Message {
     StartWork(Option<String>),
     Command(Command),
-    UseTool(Vec<(usize, Vec<StreamAccu>)>),
+    UseTool(Vec<PreprocessedStreamItem>),
+    Noop(Vec<PreprocessedStreamItem>),
     ProcessStreamItem(StreamItem),
     KYS,
 }
@@ -74,21 +76,6 @@ pub struct Dependency {
 }
 
 impl Message {}
-
-#[derive(Debug, Clone)]
-pub enum StreamAccu {
-    String(String),
-    Json(String),
-    Thinking {
-        thinking: String,
-        signature: String,
-        reasoning_id: Option<String>,
-    },
-    Tool {
-        id: ToolId,
-        name: String,
-    },
-}
 
 #[derive(Debug)]
 pub(crate) enum StreamRes {
@@ -178,51 +165,42 @@ impl Actor for Worker {
 
                 state.stream_actor = Some(actor)
             }
+            Message::Noop(res) => {
+                let res = state.stream_items_to_res(res).await;
+                state.save_history(res)?;
+            }
             Message::UseTool(vec) => {
                 let tool_names: Vec<String> = vec
                     .iter()
-                    .flat_map(|(_, accus)| accus.first())
-                    .flat_map(|accu| match accu {
-                        StreamAccu::Tool { name, .. } => Some(name.clone()),
-                        _ => None,
+                    .filter_map(|x| {
+                        if let ProcessedItem::Tool(t) = &x.processed {
+                            Some(t.name.clone())
+                        } else {
+                            None
+                        }
                     })
                     .collect();
 
                 if !tool_names.is_empty() {
-                    state.tui_tx.send(ActorToTui::ToolUse(tool_names))?;
+                    state.reporter.send(ActorToTui::ToolUse(tool_names));
                 }
 
                 state.change_state(State::ToolStart);
                 let res = state.process_tools(vec).await;
                 state.save_history(res)?;
                 state.change_state(State::ToolStop);
-                // if tool result was the last value, then we can loop
-                if let Some(ContentBlock::ToolResult { .. }) =
-                    state.history.last().and_then(|msg| msg.content.last())
-                {
-                    myself.send_message(Message::StartWork(None))?;
-                }
+                myself.send_message(Message::StartWork(None))?;
             }
             Message::ProcessStreamItem(item) => match item {
                 StreamItem::Item(event) => {
-                    if state.stream_log_path.is_some() {
-                        state.log_stream_item(&event).await;
-                    }
-                    state.handle_stream_state(event.clone());
-                    match state.process_stream_event(event) {
+                    match state
+                        .stream_processor
+                        .process_stream_event(event.clone())
+                        .await?
+                    {
                         StreamNextStep::ToolUse => {
-                            let mut vec: Vec<(usize, Vec<StreamAccu>)> =
-                                state.acc_map.drain().into_iter().collect();
-
-                            vec.sort_by(|(i1, _), (i2, _)| i1.cmp(i2));
-                            if let Some(StreamAccu::Tool { .. }) =
-                                vec.last().and_then(|(_, v)| v.first().cloned())
-                            {
-                                myself.send_message(Message::UseTool(vec))?;
-                            } else {
-                                let res = state.process_tools(vec).await;
-                                state.save_history(res)?;
-                            }
+                            let pre_processed = state.stream_processor.extract_and_pre_process()?;
+                            myself.send_message(Message::UseTool(pre_processed))?;
                         }
                         StreamNextStep::NewStream => {
                             // clear intermediate states
@@ -230,7 +208,10 @@ impl Actor for Worker {
                             state.delta_buf.clear();
                             myself.send_message(Message::StartWork(None))?;
                         }
-                        StreamNextStep::Nothing => {}
+                        StreamNextStep::Nothing => {
+                            let pre_processed = state.stream_processor.extract_and_pre_process()?;
+                            myself.send_message(Message::Noop(pre_processed))?;
+                        }
                     }
                 }
                 StreamItem::Err(err) => {
@@ -242,7 +223,7 @@ impl Actor for Worker {
             Message::Command(command) => match command {
                 Command::PrintContext => {
                     let ctx = state.cur_context.get_ctx().await;
-                    let _ = state.tui_tx.send(ActorToTui::CommandResult(command, ctx));
+                    let _ = state.reporter.send(ActorToTui::CommandResult(command, ctx));
                 }
             },
         }

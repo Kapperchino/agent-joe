@@ -1,4 +1,5 @@
-use crate::actor::{Message, StreamAccu};
+use crate::actor::Message;
+use crate::event_reporter::EventReporter;
 use anyhow::anyhow;
 use clients::llm::{ContentBlockInfo, Delta, StopReason, StreamEvent};
 use clients::tool_defs::{ToolId, ToolUse};
@@ -7,41 +8,69 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::mpsc;
 use tracing::error;
 
-struct StreamProcessor {
+pub struct StreamProcessor {
     pub acc_map: HashMap<usize, Vec<StreamAccu>>,
     pub delta_buf: HashMap<usize, Vec<Delta>>,
     pub stream_log_path: Option<PathBuf>,
     pub token_count: TokenCount,
-    pub tui_tx: mpsc::UnboundedSender<ActorToTui>,
+    pub reporter: EventReporter,
     pub cur_state: State,
 }
-
+#[derive(Debug, Clone)]
 pub struct ToolCall {
-    id: ToolId,
-    name: String,
-    json: String,
+    pub id: ToolId,
+    pub name: String,
+    pub json: String,
 }
 
 pub enum StreamNextStep {
     // do nothing, normal path
     Nothing,
-    ToolUse(ToolCall),
+    ToolUse,
     // token ran out, need to restart the connection
     NewStream,
 }
 
+#[derive(Debug, Clone)]
+pub enum StreamAccu {
+    String(String),
+    Json(String),
+    Thinking {
+        thinking: String,
+        signature: String,
+        reasoning_id: Option<String>,
+    },
+    Tool {
+        id: ToolId,
+        name: String,
+    },
+}
+
+#[derive(Debug)]
+pub struct PreprocessedStreamItem {
+    pub index: usize,
+    pub processed: ProcessedItem,
+}
+#[derive(Debug, Clone)]
+pub enum ProcessedItem {
+    String(String),
+    Thinking {
+        thinking: String,
+        signature: String,
+        reasoning_id: Option<String>,
+    },
+    Tool(ToolCall),
+}
+
 impl StreamNextStep {
-    pub fn new(reason: &StopReason, tool_call: Option<ToolCall>) -> anyhow::Result<Self> {
+    pub fn new(reason: &StopReason) -> anyhow::Result<Self> {
         match reason {
             StopReason::EndTurn => Ok(StreamNextStep::Nothing),
             StopReason::MaxTokens => Ok(StreamNextStep::NewStream),
             StopReason::StopSequence => Ok(StreamNextStep::Nothing),
-            StopReason::ToolUse => Ok(StreamNextStep::ToolUse(
-                tool_call.ok_or(anyhow!("Tool needs to be here"))?,
-            )),
+            StopReason::ToolUse => Ok(StreamNextStep::ToolUse),
             StopReason::Refusal => {
                 error!("Stream refusal");
                 Ok(StreamNextStep::Nothing)
@@ -51,7 +80,12 @@ impl StreamNextStep {
     }
 }
 impl StreamProcessor {
-    pub fn process_stream_event(&mut self, item: StreamEvent) -> anyhow::Result<StreamNextStep> {
+    pub async fn process_stream_event(
+        &mut self,
+        item: StreamEvent,
+    ) -> anyhow::Result<StreamNextStep> {
+        self.log_stream_item(&item).await;
+        self.handle_stream_state(&item);
         match item {
             StreamEvent::ContentBlockDelta { index, delta } => {
                 match self.delta_buf.get_mut(&index) {
@@ -96,20 +130,19 @@ impl StreamProcessor {
                 Ok(StreamNextStep::Nothing)
             }
             StreamEvent::MessageDelta { delta, usage } => match delta.stop_reason {
-                Some(reason) => Ok(StreamNextStep::new(&reason, None)?),
+                Some(reason) => Ok(StreamNextStep::new(&reason)?),
                 None => Ok(StreamNextStep::Nothing),
             },
             _ => Ok(StreamNextStep::Nothing),
         }
     }
 
-    pub fn handle_stream_state(&mut self, item: StreamEvent) {
+    pub fn handle_stream_state(&mut self, item: &StreamEvent) {
         match item {
             StreamEvent::MessageStart { message } => {
                 self.change_state(State::StreamStart);
                 self.token_count.input_tokens += message.usage.input_tokens;
-                let _ = self
-                    .tui_tx
+                self.reporter
                     .send(ActorToTui::TokensUpdated(self.token_count.clone()));
             }
             StreamEvent::ContentBlockStart {
@@ -121,8 +154,8 @@ impl StreamProcessor {
                 ContentBlockInfo::Text { .. } => self.change_state(State::MessageStart),
             },
             StreamEvent::ContentBlockDelta { index, delta } => match delta {
-                Delta::TextDelta { text } => self.send_delta(text),
-                Delta::ThinkingDelta { thinking, .. } => self.send_delta(thinking),
+                Delta::TextDelta { text } => self.reporter.send_delta(text.clone()),
+                Delta::ThinkingDelta { thinking, .. } => self.reporter.send_delta(thinking.clone()),
                 Delta::InputJsonDelta { .. } => {}
                 Delta::SignatureDelta { .. } => {}
             },
@@ -141,7 +174,7 @@ impl StreamProcessor {
             StreamEvent::MessageDelta { usage, .. } => {
                 self.token_count.output_tokens += usage.output_tokens;
                 let _ = self
-                    .tui_tx
+                    .reporter
                     .send(ActorToTui::TokensUpdated(self.token_count.clone()));
             }
             StreamEvent::MessageStop => self.change_state(State::StreamStop),
@@ -152,12 +185,69 @@ impl StreamProcessor {
 
     pub fn change_state(&mut self, new_state: State) {
         self.cur_state = new_state.clone();
-        let _ = self
-            .tui_tx
-            .send(ActorToTui::StateChanged(new_state.clone()));
+        self.reporter.state_changed(new_state.clone())
     }
-    pub fn send_delta(&mut self, str: String) {
-        let _ = self.tui_tx.send(ActorToTui::Data(str));
+    pub fn extract_and_pre_process(&mut self) -> anyhow::Result<Vec<PreprocessedStreamItem>> {
+        let mut vec: Vec<(usize, Vec<StreamAccu>)> = self.acc_map.drain().into_iter().collect();
+        vec.sort_by(|(i1, _), (i2, _)| i1.cmp(i2));
+        let res: Result<_, _> = vec
+            .into_iter()
+            .map(|(i, item)| {
+                let prep = if let Some(StreamAccu::Tool { .. }) = item.first() {
+                    let toolcall = Self::extract_tool((i, item))?;
+                    Ok(ProcessedItem::Tool(toolcall))
+                } else {
+                    match item.first().cloned() {
+                        Some(accu) => Ok(match accu {
+                            StreamAccu::String(s) => ProcessedItem::String(s),
+                            StreamAccu::Thinking {
+                                thinking,
+                                signature,
+                                reasoning_id,
+                            } => ProcessedItem::Thinking {
+                                thinking,
+                                signature,
+                                reasoning_id,
+                            },
+                            _ => unreachable!("Should not be here"),
+                        }),
+                        None => Err(anyhow!("Empty stream process")),
+                    }
+                }?;
+                Ok(PreprocessedStreamItem {
+                    index: i,
+                    processed: prep,
+                })
+            })
+            .collect();
+        res
+    }
+
+    fn extract_tool((_, vec): (usize, Vec<StreamAccu>)) -> anyhow::Result<ToolCall> {
+        let tool_info = vec
+            .get(0)
+            .cloned()
+            .map(|t| match t {
+                StreamAccu::Tool { id, name } => Ok(StreamAccu::Tool { id, name }),
+                _ => Err(anyhow::Error::msg("doesn't work")),
+            })
+            .transpose()?;
+        let json = vec
+            .get(1)
+            .cloned()
+            .map(|j| match j {
+                StreamAccu::Json(json) => Ok(json),
+                _ => Err(anyhow::Error::msg("doesn't work")),
+            })
+            .transpose()?;
+
+        if let Some(StreamAccu::Tool { id, name }) = tool_info
+            && let Some(json) = json
+        {
+            Ok(ToolCall { id, name, json })
+        } else {
+            Err(anyhow::Error::msg("doesn't work"))
+        }
     }
 
     fn accumulate(&mut self, index: usize) -> Option<StreamAccu> {

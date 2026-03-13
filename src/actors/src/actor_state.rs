@@ -1,5 +1,9 @@
 use crate::actor::{Dependency, StreamAccu, StreamRes};
+use crate::event_reporter::EventReporter;
 use crate::file_actor;
+use crate::stream_processor::{
+    PreprocessedStreamItem, ProcessedItem, StreamAccu, StreamProcessor, ToolCall,
+};
 use analysis::cur_context::CurContext;
 use clients::llm::{ContentBlock, ContentBlockInfo, Delta, LLmClient, Message, Role, StreamEvent};
 use clients::tool_defs::{
@@ -14,6 +18,7 @@ use futures::{StreamExt, future};
 use ractor::{ActorCell, ActorRef};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use anyhow::anyhow;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
@@ -28,6 +33,8 @@ pub struct ActorState {
     pub acc_map: HashMap<usize, Vec<StreamAccu>>,
     pub delta_buf: HashMap<usize, Vec<Delta>>,
     pub file_actor: ActorRef<file_actor::Message>,
+    pub stream_processor: StreamProcessor,
+    pub reporter: EventReporter,
 }
 impl ActorState {
     pub async fn new(
@@ -66,6 +73,14 @@ impl ActorState {
             delta_buf: Default::default(),
             stream_actor: None,
             file_actor,
+            stream_processor: StreamProcessor {
+                acc_map: Default::default(),
+                delta_buf: Default::default(),
+                stream_log_path,
+                token_count: Default::default(),
+                reporter: EventReporter { tui_tx: () },
+                cur_state: State::Ready,
+            },
         })
     }
 
@@ -116,45 +131,38 @@ impl ActorState {
         Ok(())
     }
 
-    async fn tool_use(
-        &self,
-        a_vec: &Vec<StreamAccu>,
-        name: String,
-        id: ToolId,
-    ) -> anyhow::Result<ToolResult> {
-        let json = match a_vec.get(1).ok_or(anyhow::Error::msg("doesn't work"))? {
-            StreamAccu::Json(json) => Ok(json),
-            _ => Err(anyhow::Error::msg("doesn't work")),
-        }?;
-        let id_c = id.clone();
-        let tool = Tool::from_str(name.as_str())?;
+    async fn tool_use(&self, tool_call: ToolCall) -> anyhow::Result<ToolResult> {
+        let tool = Tool::from_str(tool_call.name.as_str())?;
+        let ToolCall { id, name, json } = tool_call;
         let res: anyhow::Result<ToolResult> = match Tool::from_str(name.as_str())? {
             Tool::ReadFile(_) => {
-                let input = ReadFileInput::deserialize_lenient(json)?;
+                let input = ReadFileInput::deserialize_lenient(&json)?;
                 let rf = clients::tool_defs::ReadFile {
                     id: id.id.clone(),
                     input,
                 };
-                Ok(Tool::ReadFile(rf).use_tool(id, &self.cur_context).await?)
+                Ok(Tool::ReadFile(rf)
+                    .use_tool(id.clone(), &self.cur_context)
+                    .await?)
             }
             Tool::InsertAfterLine(_) => {
-                let input = InsertAfterLineInput::deserialize_lenient(json)?;
+                let input = InsertAfterLineInput::deserialize_lenient(&json)?;
                 let rf = clients::tool_defs::InsertAfterLine {
                     id: id.id.clone(),
                     input,
                 };
                 Ok(Tool::InsertAfterLine(rf)
-                    .use_tool(id, &self.cur_context)
+                    .use_tool(id.clone(), &self.cur_context)
                     .await?)
             }
             Tool::StringReplace(_) => {
-                let input = StringReplaceInput::deserialize_lenient(json)?;
+                let input = StringReplaceInput::deserialize_lenient(&json)?;
                 let rf = clients::tool_defs::StringReplace {
                     id: id.id.clone(),
                     input,
                 };
                 Ok(Tool::StringReplace(rf)
-                    .use_tool(id, &self.cur_context)
+                    .use_tool(id.clone(), &self.cur_context)
                     .await?)
             }
             Tool::CargoCheck(_) => {
@@ -163,13 +171,15 @@ impl ActorState {
                         include_warnings: None,
                     }
                 } else {
-                    CargoCheckInput::deserialize_lenient(json)?
+                    CargoCheckInput::deserialize_lenient(&json)?
                 };
                 let rf = clients::tool_defs::CargoCheck {
                     id: id.id.clone(),
                     input,
                 };
-                Ok(Tool::CargoCheck(rf).use_tool(id, &self.cur_context).await?)
+                Ok(Tool::CargoCheck(rf)
+                    .use_tool(id.clone(), &self.cur_context)
+                    .await?)
             }
         };
         match res {
@@ -177,43 +187,63 @@ impl ActorState {
             Err(err) => Ok(ToolResult::Error {
                 message: err.to_string(),
                 tool,
-                id: id_c,
+                id: id.clone(),
             }),
         }
     }
 
     pub async fn process_tools(
         &self,
-        vec: Vec<(usize, Vec<StreamAccu>)>,
+        vec: Vec<PreprocessedStreamItem>,
     ) -> Vec<anyhow::Result<StreamRes>> {
         let futures: Vec<_> = vec
             .into_iter()
-            .map(
-                async |(_, a_vec): (usize, Vec<StreamAccu>)| match a_vec.first() {
-                    Some(accu) => match accu {
-                        StreamAccu::String(str) => Ok(StreamRes::String(str.clone())),
-                        StreamAccu::Tool { id, name } => {
-                            let tool_res =
-                                self.tool_use(&a_vec, name.to_string(), id.clone()).await?;
-                            Ok(StreamRes::Tool(tool_res))
-                        }
-                        StreamAccu::Thinking {
-                            thinking,
-                            signature,
-                            reasoning_id,
-                        } => Ok(StreamRes::Thinking {
-                            thinking: thinking.clone(),
-                            signature: signature.clone(),
-                            reasoning_id: reasoning_id.clone(),
-                        }),
-                        _ => Err(anyhow::Error::msg("No valid tool")),
-                    },
-                    None => Err(anyhow::Error::msg("No valid tool")),
-                },
-            )
+            .map(async |item| match item.processed {
+                ProcessedItem::String(str) => Ok(StreamRes::String(str.clone())),
+                ProcessedItem::Tool(tool) => {
+                    let tool_res = self.tool_use(tool).await?;
+                    Ok(StreamRes::Tool(tool_res))
+                }
+                ProcessedItem::Thinking {
+                    thinking,
+                    signature,
+                    reasoning_id,
+                } => Ok(StreamRes::Thinking {
+                    thinking: thinking.clone(),
+                    signature: signature.clone(),
+                    reasoning_id: reasoning_id.clone(),
+                }),
+            })
             .collect();
 
         future::join_all(futures).await
     }
-}
 
+    pub async fn stream_items_to_res(
+        &self,
+        vec: Vec<PreprocessedStreamItem>,
+    ) -> Vec<anyhow::Result<StreamRes>> {
+        let futures: Vec<_> = vec
+            .into_iter()
+            .map(async |item| match item.processed {
+                ProcessedItem::String(str) => Ok(StreamRes::String(str.clone())),
+                ProcessedItem::Thinking {
+                    thinking,
+                    signature,
+                    reasoning_id,
+                } => Ok(StreamRes::Thinking {
+                    thinking: thinking.clone(),
+                    signature: signature.clone(),
+                    reasoning_id: reasoning_id.clone(),
+                }),
+                _ => {Err(anyhow!("Tool cannot exist for this"))}
+            })
+            .collect();
+
+        future::join_all(futures).await
+    }
+
+    pub fn change_state(&mut self, new_state: State) {
+        self.stream_processor.change_state(new_state)
+    }
+}
