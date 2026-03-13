@@ -6,10 +6,9 @@ use crate::worker::Worker;
 use crate::{cache_actor, file_actor};
 use analysis::cur_context::CurContext;
 use clients::llm;
-use clients::llm::{ClientRequest, ContentBlock, LLmClient, StreamEvent};
+use clients::llm::{ClientRequest, LLmClient, StreamEvent};
+use clients::tool_defs::Tool;
 use clients::tool_defs::ToolResult;
-use clients::tool_defs::{Tool, ToolId};
-use clients::tool_impls;
 use common_models::tui_models::ActorToTui;
 use common_models::tui_models::Command;
 use common_models::tui_models::State;
@@ -20,7 +19,6 @@ use ractor::SupervisionEvent;
 use ractor_actors::streams::spawn_stream_pump;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fmt::Display;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing::error;
@@ -78,7 +76,7 @@ pub struct Dependency {
 impl Message {}
 
 #[derive(Debug)]
-pub(crate) enum StreamRes {
+pub enum StreamRes {
     String(String),
     Thinking {
         thinking: String,

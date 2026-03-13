@@ -6,22 +6,16 @@ use crate::stream_processor::{
 };
 use analysis::cur_context::CurContext;
 use anyhow::anyhow;
-use clients::llm::{ContentBlock, ContentBlockInfo, Delta, LLmClient, Message, Role, StreamEvent};
+use clients::llm::{ContentBlock, Delta, LLmClient, Message, Role};
 use clients::tool_defs::{
     CargoCheckInput, InsertAfterLineInput, LenientDeserialize, ReadFileInput, StringReplaceInput,
     Tool, ToolId, ToolResult,
 };
-use clients::tool_impls;
-use common_models::tui_models::ActorToTui;
 use common_models::tui_models::State;
-use common_models::tui_models::TokenCount;
-use futures::{StreamExt, future};
 use ractor::{ActorCell, ActorRef};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use tokio::fs::OpenOptions;
-use tokio::io::AsyncWriteExt;
-use tokio::sync::mpsc;
+use futures::future;
 use tracing::error;
 
 pub struct ActorState {

@@ -18,7 +18,11 @@ impl From<llm::ClientRequest> for ClientRequest {
                         role: role.into(),
                         content: text,
                     }),
-                    ContentBlock::ThinkingBlock { thinking, signature, reasoning_id } => Some(InputItem::Reasoning {
+                    ContentBlock::ThinkingBlock {
+                        thinking,
+                        signature,
+                        reasoning_id,
+                    } => Some(InputItem::Reasoning {
                         id: reasoning_id.unwrap_or_default(),
                         summary: vec![openai::SummaryTextContent {
                             text: thinking,
@@ -119,7 +123,10 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
                 response,
                 sequence_number: _,
             } => {
-                let has_tool_calls = response.output.iter().any(|x| matches!(x, OutputItem::FunctionCall { .. }));
+                let has_tool_calls = response
+                    .output
+                    .iter()
+                    .any(|x| matches!(x, OutputItem::FunctionCall { .. }));
                 let stop_reason = if has_tool_calls {
                     Some(llm::StopReason::ToolUse)
                 } else {

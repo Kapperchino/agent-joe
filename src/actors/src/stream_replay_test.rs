@@ -5,7 +5,9 @@ mod tests {
     use tokio::io::{AsyncBufReadExt, BufReader};
 
     async fn load_stream_log(path: &Path) -> Vec<StreamEvent> {
-        let file = tokio::fs::File::open(path).await.expect("failed to open stream log");
+        let file = tokio::fs::File::open(path)
+            .await
+            .expect("failed to open stream log");
         let reader = BufReader::new(file);
         let mut lines = reader.lines();
         let mut events = Vec::new();
@@ -57,8 +59,8 @@ mod tests {
         ];
 
         for (i, json) in samples.iter().enumerate() {
-            let event: StreamEvent =
-                serde_json::from_str(json).unwrap_or_else(|e| panic!("failed to deserialize sample {i}: {e}\njson: {json}"));
+            let event: StreamEvent = serde_json::from_str(json)
+                .unwrap_or_else(|e| panic!("failed to deserialize sample {i}: {e}\njson: {json}"));
             println!("sample {i}: {:?}", event);
         }
     }
