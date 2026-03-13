@@ -153,7 +153,10 @@ impl Into<llm::StreamEvent> for StreamEvent {
                     index,
                     delta: match delta {
                         Delta::TextDelta { text } => llm::Delta::TextDelta { text },
-                        Delta::ThinkingDelta { thinking } => llm::Delta::ThinkingDelta { thinking, reasoning_id: None },
+                        Delta::ThinkingDelta { thinking } => llm::Delta::ThinkingDelta {
+                            thinking,
+                            reasoning_id: None,
+                        },
                         Delta::InputJsonDelta { partial_json } => {
                             llm::Delta::InputJsonDelta { partial_json }
                         }
@@ -166,7 +169,15 @@ impl Into<llm::StreamEvent> for StreamEvent {
             StreamEvent::ContentBlockStop { index } => llm::StreamEvent::ContentBlockStop { index },
             StreamEvent::MessageDelta { delta, usage } => llm::StreamEvent::MessageDelta {
                 delta: llm::MessageDeltaContent {
-                    stop_reason: delta.stop_reason,
+                    stop_reason: delta.stop_reason.and_then(|s| match s.as_str() {
+                        "end_turn" => Some(llm::StopReason::EndTurn),
+                        "max_tokens" => Some(llm::StopReason::MaxTokens),
+                        "stop_sequence" => Some(llm::StopReason::StopSequence),
+                        "tool_use" => Some(llm::StopReason::ToolUse),
+                        "refusal" => Some(llm::StopReason::Refusal),
+                        "context_exceeded" => Some(llm::StopReason::ContextExceeded),
+                        _ => None,
+                    }),
                 },
                 usage: llm::UsageDelta {
                     output_tokens: usage.output_tokens,

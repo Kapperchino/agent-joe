@@ -118,29 +118,25 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
             | StreamEvent::ResponseFailed {
                 response,
                 sequence_number: _,
-            } => response
-                .output
-                .iter()
-                .any(|x| match x {
-                    OutputItem::FunctionCall { .. } => true,
-                    _ => false,
-                })
-                .then(|| llm::StreamEvent::MessageDelta {
-                    delta: llm::MessageDeltaContent {
-                        stop_reason: Some("continue".to_string()),
-                    },
-                    usage: llm::UsageDelta {
-                        output_tokens: response.usage.clone().map(|t| t.output_tokens).unwrap_or(0),
-                    },
-                })
-                .or(Some(llm::StreamEvent::MessageDelta {
-                    delta: llm::MessageDeltaContent {
-                        stop_reason: response.status,
-                    },
+            } => {
+                let has_tool_calls = response.output.iter().any(|x| matches!(x, OutputItem::FunctionCall { .. }));
+                let stop_reason = if has_tool_calls {
+                    Some(llm::StopReason::ToolUse)
+                } else {
+                    match response.status.as_deref() {
+                        Some("completed") => Some(llm::StopReason::EndTurn),
+                        Some("incomplete") => Some(llm::StopReason::MaxTokens),
+                        Some("failed") => Some(llm::StopReason::ContextExceeded),
+                        _ => None,
+                    }
+                };
+                Some(llm::StreamEvent::MessageDelta {
+                    delta: llm::MessageDeltaContent { stop_reason },
                     usage: llm::UsageDelta {
                         output_tokens: response.usage.map(|t| t.output_tokens).unwrap_or(0),
                     },
-                })),
+                })
+            }
             StreamEvent::OutputItemAdded {
                 output_index,
                 item,

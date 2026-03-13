@@ -1,8 +1,8 @@
 use crate::claude::{ClaudeClient, Usage};
 use crate::openai::OpenAIClient;
 use crate::tool_defs::{Tool, ToolId};
-use futures::future::Either;
 use futures::Stream;
+use futures::future::Either;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -65,7 +65,17 @@ pub enum StreamEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageDeltaContent {
-    pub stop_reason: Option<String>,
+    pub stop_reason: Option<StopReason>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum StopReason {
+    EndTurn,
+    MaxTokens,
+    StopSequence,
+    ToolUse,
+    Refusal,
+    ContextExceeded,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,10 +171,19 @@ pub struct CacheControl {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Delta {
-    TextDelta { text: String },
-    ThinkingDelta { thinking: String, reasoning_id: Option<String> },
-    InputJsonDelta { partial_json: String },
-    SignatureDelta { signature: String },
+    TextDelta {
+        text: String,
+    },
+    ThinkingDelta {
+        thinking: String,
+        reasoning_id: Option<String>,
+    },
+    InputJsonDelta {
+        partial_json: String,
+    },
+    SignatureDelta {
+        signature: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
