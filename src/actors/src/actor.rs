@@ -206,10 +206,12 @@ impl Actor for Worker {
                             state.delta_buf.clear();
                             myself.send_message(Message::StartWork(None))?;
                         }
-                        StreamNextStep::Nothing => {
+                        StreamNextStep::Done => {
                             let pre_processed = state.stream_processor.extract_and_pre_process()?;
                             myself.send_message(Message::Noop(pre_processed))?;
                         }
+                        StreamNextStep::Accum => {}
+                        StreamNextStep::Noop => {}
                     }
                 }
                 StreamItem::Err(err) => {

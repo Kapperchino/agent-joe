@@ -26,9 +26,10 @@ pub struct ToolCall {
 }
 
 pub enum StreamNextStep {
-    // do nothing, normal path
-    Nothing,
+    Accum,
+    Done,
     ToolUse,
+    Noop,
     // token ran out, need to restart the connection
     NewStream,
 }
@@ -67,15 +68,15 @@ pub enum ProcessedItem {
 impl StreamNextStep {
     pub fn new(reason: &StopReason) -> anyhow::Result<Self> {
         match reason {
-            StopReason::EndTurn => Ok(StreamNextStep::Nothing),
+            StopReason::EndTurn => Ok(StreamNextStep::Done),
             StopReason::MaxTokens => Ok(StreamNextStep::NewStream),
-            StopReason::StopSequence => Ok(StreamNextStep::Nothing),
+            StopReason::StopSequence => Ok(StreamNextStep::Done),
             StopReason::ToolUse => Ok(StreamNextStep::ToolUse),
             StopReason::Refusal => {
                 error!("Stream refusal");
-                Ok(StreamNextStep::Nothing)
+                Ok(StreamNextStep::Done)
             }
-            _ => Ok(StreamNextStep::Nothing),
+            _ => Ok(StreamNextStep::Done),
         }
     }
 }
@@ -94,7 +95,7 @@ impl StreamProcessor {
                     }
                     Some(vec) => vec.push(delta),
                 }
-                Ok(StreamNextStep::Nothing)
+                Ok(StreamNextStep::Accum)
             }
             StreamEvent::ContentBlockStart {
                 index,
@@ -108,9 +109,9 @@ impl StreamProcessor {
                         }
                         Some(vec) => vec.push(StreamAccu::Tool { id, name }),
                     }
-                    Ok(StreamNextStep::Nothing)
+                    Ok(StreamNextStep::Accum)
                 }
-                _ => Ok(StreamNextStep::Nothing),
+                _ => Ok(StreamNextStep::Accum),
             },
             StreamEvent::ContentBlockStop { index } => {
                 self.accumulate(index).map(|buf| {
@@ -122,18 +123,18 @@ impl StreamProcessor {
                     };
                     buf
                 });
-                Ok(StreamNextStep::Nothing)
+                Ok(StreamNextStep::Accum)
             }
-            StreamEvent::MessageStop {} => Ok(StreamNextStep::Nothing),
+            StreamEvent::MessageStop {} => Ok(StreamNextStep::Noop),
             StreamEvent::Error { error } => {
                 error!("{:?}", error);
-                Ok(StreamNextStep::Nothing)
+                Ok(StreamNextStep::Noop)
             }
             StreamEvent::MessageDelta { delta, usage } => match delta.stop_reason {
                 Some(reason) => Ok(StreamNextStep::new(&reason)?),
-                None => Ok(StreamNextStep::Nothing),
+                None => Ok(StreamNextStep::Noop),
             },
-            _ => Ok(StreamNextStep::Nothing),
+            _ => Ok(StreamNextStep::Noop),
         }
     }
 
@@ -229,7 +230,7 @@ impl StreamProcessor {
             .cloned()
             .map(|t| match t {
                 StreamAccu::Tool { id, name } => Ok(StreamAccu::Tool { id, name }),
-                _ => Err(anyhow::Error::msg("doesn't work")),
+                _ => Err(anyhow::Error::msg("Tool doesn't exist")),
             })
             .transpose()?;
         let json = vec
@@ -237,7 +238,7 @@ impl StreamProcessor {
             .cloned()
             .map(|j| match j {
                 StreamAccu::Json(json) => Ok(json),
-                _ => Err(anyhow::Error::msg("doesn't work")),
+                _ => Err(anyhow::Error::msg("Json doesn't exist")),
             })
             .transpose()?;
 
@@ -246,7 +247,7 @@ impl StreamProcessor {
         {
             Ok(ToolCall { id, name, json })
         } else {
-            Err(anyhow::Error::msg("doesn't work"))
+            Err(anyhow::Error::msg("Type shit"))
         }
     }
 
