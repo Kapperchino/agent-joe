@@ -1,4 +1,3 @@
-use crate::actor::Message;
 use crate::event_reporter::EventReporter;
 use anyhow::anyhow;
 use clients::llm::{ContentBlockInfo, Delta, StopReason, StreamEvent};
@@ -113,16 +112,28 @@ impl StreamProcessor {
                 }
                 _ => Ok(StreamNextStep::Accum),
             },
-            StreamEvent::ContentBlockStop { index } => {
-                self.accumulate(index).map(|buf| {
-                    match self.acc_map.get_mut(&index) {
+            StreamEvent::ContentBlockStop { index, id } => {
+                match self.accumulate(index) {
+                    Some(buf) => match self.acc_map.get_mut(&index) {
                         Some(vec) => vec.push(buf.clone()),
                         None => {
                             self.acc_map.insert(index, vec![buf.clone()]);
                         }
-                    };
-                    buf
-                });
+                    },
+                    // special case here for openai
+                    None => {
+                        id.map(|t| {
+                            self.acc_map.insert(
+                                index,
+                                vec![StreamAccu::Thinking {
+                                    thinking: "".to_string(),
+                                    signature: "".to_string(),
+                                    reasoning_id: Some(t),
+                                }],
+                            )
+                        });
+                    }
+                }
                 Ok(StreamNextStep::Accum)
             }
             StreamEvent::MessageStop {} => Ok(StreamNextStep::Noop),
@@ -160,7 +171,7 @@ impl StreamProcessor {
                 Delta::InputJsonDelta { .. } => {}
                 Delta::SignatureDelta { .. } => {}
             },
-            StreamEvent::ContentBlockStop { index } => {
+            StreamEvent::ContentBlockStop { index, .. } => {
                 self.delta_buf
                     .get(&index)
                     .cloned()

@@ -51,6 +51,8 @@ pub enum StreamEvent {
     },
     ContentBlockStop {
         index: usize,
+        // openai specific
+        id: Option<String>,
     },
     MessageDelta {
         delta: MessageDeltaContent,

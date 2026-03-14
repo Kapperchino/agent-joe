@@ -181,11 +181,18 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
                 }),
                 StreamOutputItem::Unknown => None,
             },
-            StreamEvent::OutputItemDone { output_index, .. } => {
-                Some(llm::StreamEvent::ContentBlockStop {
-                    index: output_index,
-                })
-            }
+            StreamEvent::OutputItemDone {
+                output_index,
+                item,
+                sequence_number,
+            } => Some(llm::StreamEvent::ContentBlockStop {
+                index: output_index,
+                id: item.map(|item| match item {
+                    OutputItem::Message { id, .. } => id,
+                    OutputItem::FunctionCall { id, .. } => id,
+                    OutputItem::Reasoning { id, .. } => id,
+                }),
+            }),
             StreamEvent::OutputTextDelta {
                 output_index,
                 delta,
@@ -204,11 +211,11 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
                     partial_json: delta,
                 },
             }),
-            StreamEvent::FunctionCallArgumentsDone { output_index, .. } => {
-                Some(llm::StreamEvent::ContentBlockStop {
-                    index: output_index,
-                })
-            }
+            // StreamEvent::FunctionCallArgumentsDone { output_index, .. } => {
+            //     Some(llm::StreamEvent::ContentBlockStop {
+            //         index: output_index,
+            //     })
+            // }
             StreamEvent::ReasoningSummaryTextDelta {
                 item_id,
                 output_index,
@@ -224,6 +231,7 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
             StreamEvent::ReasoningSummaryTextDone { output_index, .. } => {
                 Some(llm::StreamEvent::ContentBlockStop {
                     index: output_index,
+                    id: None,
                 })
             }
             StreamEvent::Error {

@@ -166,7 +166,7 @@ impl Into<llm::StreamEvent> for StreamEvent {
                     },
                 }
             }
-            StreamEvent::ContentBlockStop { index } => llm::StreamEvent::ContentBlockStop { index },
+            StreamEvent::ContentBlockStop { index } => llm::StreamEvent::ContentBlockStop { index, id: None },
             StreamEvent::MessageDelta { delta, usage } => llm::StreamEvent::MessageDelta {
                 delta: llm::MessageDeltaContent {
                     stop_reason: delta.stop_reason.and_then(|s| match s.as_str() {

@@ -12,10 +12,10 @@ use clients::tool_defs::{
     Tool, ToolId, ToolResult,
 };
 use common_models::tui_models::State;
+use futures::future;
 use ractor::{ActorCell, ActorRef};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use futures::future;
 use tracing::error;
 
 pub struct ActorState {
