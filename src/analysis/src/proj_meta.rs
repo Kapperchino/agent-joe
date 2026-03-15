@@ -363,6 +363,12 @@ impl ProjMeta {
     }
 }
 
+impl Display for FileMeta {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "- {}", self.rpath)
+    }
+}
+
 impl Display for FunctionMeta {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match &self.discription {
@@ -497,6 +503,14 @@ impl Display for ProjMeta {
             writeln!(f, "## Type Aliases ({})", self.type_alias.len())?;
             for ta in &self.type_alias {
                 writeln!(f, "{}", ta)?;
+            }
+            writeln!(f)?;
+        }
+
+        if !self.files.is_empty() {
+            writeln!(f, "## Files ({})", self.files.len())?;
+            for file in self.files.values() {
+                writeln!(f, "{}", file)?;
             }
         }
 

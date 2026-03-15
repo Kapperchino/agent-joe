@@ -3,11 +3,13 @@ use crate::cache::{TypedCache, TypedCacheDb};
 use crate::rust_proj::RustProject;
 use anyhow::anyhow;
 use itertools::Itertools;
-use ra_ap_ide::{NavigationTarget, StructureNode, StructureNodeKind};
+use ra_ap_ide::{LineIndex, NavigationTarget, StructureNode, StructureNodeKind};
 use ra_ap_ide_db::SymbolKind;
 use ra_ap_vfs::{FileId, Vfs};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use triomphe::Arc;
+
 #[derive(Serialize, Deserialize)]
 #[serde(remote = "SymbolKind")]
 enum SymbolKindDef {
@@ -56,13 +58,12 @@ pub struct SymbolInfo {
 }
 
 impl SymbolInfo {
-    pub(crate) fn from_nav(n: NavigationTarget, vfs: &Vfs) -> Self {
+    pub(crate) fn from_nav(n: NavigationTarget, vfs: &Vfs, line_ind: Arc<LineIndex>) -> Self {
+        let start = line_ind.line_col(n.full_range.start()).line;
+        let end = line_ind.line_col(n.full_range.end()).line;
         SymbolInfo {
             rpath: vfs.file_path(n.file_id).to_string(),
-            full_range: Range {
-                start: n.full_range.start().into(),
-                end: n.full_range.end().into(),
-            },
+            full_range: Range { start, end },
             focus_range: n.focus_range.map(|t| Range {
                 start: t.start().into(),
                 end: t.end().into(),
@@ -79,6 +80,7 @@ impl SymbolInfo {
         file_id: FileId,
         file_structs: Vec<StructureNode>,
         path_buf: PathBuf,
+        line_ind: Arc<LineIndex>,
     ) -> Vec<Self> {
         file_structs
             .iter()
@@ -86,35 +88,36 @@ impl SymbolInfo {
                 StructureNodeKind::SymbolKind(_) => true,
                 _ => false,
             })
-            .map(|fs| SymbolInfo {
-                rpath: path_buf.to_string_lossy().to_string(),
-                full_range: Range {
-                    start: fs.node_range.start().into(),
-                    end: fs.node_range.end().into(),
-                },
-                focus_range: Some(Range {
-                    start: fs.navigation_range.start().into(),
-                    end: fs.navigation_range.end().into(),
-                }),
-                name: fs.label.clone(),
-                kind: match fs.kind {
-                    StructureNodeKind::SymbolKind(kind) => kind,
-                    _ => unreachable!(),
-                },
-                container_name: fs
-                    .parent
-                    .and_then(|t| file_structs.get(t).map(|node| node.label.clone()))
-                    .and_then(|name| match fs.kind {
-                        StructureNodeKind::SymbolKind(kind) => match kind {
-                            SymbolKind::Function | SymbolKind::Method => {
-                                Some(Self::container_name_from_impl(&name))
-                            }
-                            _ => Some(name),
-                        },
-                        _ => unreachable!(),
+            .map(|fs| {
+                let start = line_ind.line_col(fs.node_range.start()).line;
+                let end = line_ind.line_col(fs.node_range.end()).line;
+                SymbolInfo {
+                    rpath: path_buf.to_string_lossy().to_string(),
+                    full_range: Range { start, end },
+                    focus_range: Some(Range {
+                        start: fs.navigation_range.start().into(),
+                        end: fs.navigation_range.end().into(),
                     }),
-                docs: None,
-                description: fs.detail.clone(),
+                    name: fs.label.clone(),
+                    kind: match fs.kind {
+                        StructureNodeKind::SymbolKind(kind) => kind,
+                        _ => unreachable!(),
+                    },
+                    container_name: fs
+                        .parent
+                        .and_then(|t| file_structs.get(t).map(|node| node.label.clone()))
+                        .and_then(|name| match fs.kind {
+                            StructureNodeKind::SymbolKind(kind) => match kind {
+                                SymbolKind::Function | SymbolKind::Method => {
+                                    Some(Self::container_name_from_impl(&name))
+                                }
+                                _ => Some(name),
+                            },
+                            _ => unreachable!(),
+                        }),
+                    docs: None,
+                    description: fs.detail.clone(),
+                }
             })
             .collect()
     }

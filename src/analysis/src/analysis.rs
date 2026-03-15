@@ -94,10 +94,13 @@ impl<'a> AnalysisSession<'a> {
             rinfo
                 .info
                 .into_iter()
-                .map(|n| SymbolInfo::from_nav(n, &vfs))
-                .collect()
+                .map(|n| {
+                    let line_ind = self.get_line_indecies(n.file_id)?;
+                    Ok(SymbolInfo::from_nav(n, &vfs, line_ind.clone()))
+                })
+                .collect::<Result<Vec<_>, anyhow::Error>>()
         });
-        Ok(res)
+        res.transpose()
     }
 
     pub fn get_symboles(&self) -> anyhow::Result<Vec<SymbolInfo>> {
@@ -105,11 +108,14 @@ impl<'a> AnalysisSession<'a> {
         q.exclude_imports();
         let search_res = self.analysis.symbol_search(q, usize::MAX)?;
         let vfs = self.proj.vfs.lock().unwrap();
-        let res: Vec<_> = search_res
+        let res: Result<Vec<_>, _> = search_res
             .into_iter()
-            .map(|n| SymbolInfo::from_nav(n, &vfs))
+            .map(|n| {
+                let line_ind = self.get_line_indecies(n.file_id)?;
+                Ok(SymbolInfo::from_nav(n, &vfs, line_ind.clone()))
+            })
             .collect();
-        Ok(res)
+        res
     }
 
     pub fn get_line_indecies(&self, file: FileId) -> anyhow::Result<triomphe::Arc<LineIndex>> {

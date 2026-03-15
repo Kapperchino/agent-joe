@@ -63,7 +63,13 @@ impl Actor for CacheActor {
 
                         let nodes = if let Some(f_id) = state.proj.get_file_id(x.path.clone()) {
                             let file_structs = session.get_file_structure(f_id);
-                            SymbolInfo::from_file_structs(f_id, file_structs, x.path.clone())
+                            let line_ind = session.get_line_indecies(f_id)?;
+                            SymbolInfo::from_file_structs(
+                                f_id,
+                                file_structs,
+                                x.path.clone(),
+                                line_ind,
+                            )
                         } else {
                             Vec::new()
                         };
