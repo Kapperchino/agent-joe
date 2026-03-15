@@ -14,7 +14,6 @@ use std::cmp::min;
 use std::collections::HashMap;
 use std::io::SeekFrom;
 use std::path::PathBuf;
-use text_size::TextSize;
 use tokio::fs;
 use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, BufReader};
@@ -289,8 +288,18 @@ impl ReadFile {
         let meta = cur_context.get_proj_meta().await?;
         match meta.files.get(&file_path.to_string_lossy().to_string()) {
             Some(meta) => {
-                let start_line = meta.line_index.line_col(TextSize::new(range.start)).line;
-                let Range { start, end } = range;
+                let start: u32 = meta
+                    .line_index
+                    .line(range.start - 1)
+                    .unwrap()
+                    .start()
+                    .into();
+                let end: u32 = meta
+                    .line_index
+                    .line(range.end - 1)
+                    .map(|l| l.end().into())
+                    .unwrap_or(u32::MAX);
+                let start_line = range.start - 1;
                 let mut file = File::open(file_path).await?;
                 file.seek(SeekFrom::Start(start as u64)).await?;
                 let file_size = file.metadata().await?.len();

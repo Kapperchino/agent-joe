@@ -323,7 +323,7 @@ impl ProjMeta {
                 let line_index = analysis.get_line_indecies(file_id)?;
                 let rpath = path
                     .strip_prefix(&format!("{}/", proj.root))
-                    .unwrap()
+                    .unwrap_or(&path)
                     .to_string();
 
                 Ok(FileMeta {
