@@ -96,7 +96,12 @@ impl<'a> AnalysisSession<'a> {
                 .into_iter()
                 .map(|n| {
                     let line_ind = self.get_line_indecies(n.file_id)?;
-                    Ok(SymbolInfo::from_nav(n, &vfs, line_ind.clone()))
+                    Ok(SymbolInfo::from_nav(
+                        n,
+                        &vfs,
+                        line_ind.clone(),
+                        &self.proj.root,
+                    ))
                 })
                 .collect::<Result<Vec<_>, anyhow::Error>>()
         });
@@ -112,7 +117,12 @@ impl<'a> AnalysisSession<'a> {
             .into_iter()
             .map(|n| {
                 let line_ind = self.get_line_indecies(n.file_id)?;
-                Ok(SymbolInfo::from_nav(n, &vfs, line_ind.clone()))
+                Ok(SymbolInfo::from_nav(
+                    n,
+                    &vfs,
+                    line_ind.clone(),
+                    &self.proj.root,
+                ))
             })
             .collect();
         res

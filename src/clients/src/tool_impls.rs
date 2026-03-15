@@ -240,6 +240,7 @@ impl ToolResult {
 impl ReadFile {
     pub async fn read_file(&self, cur_context: &CurContext) -> anyhow::Result<String> {
         let file_path: PathBuf = self.input.file_path.clone().into();
+
         match file_path.is_dir() {
             false => match &self.input.range {
                 None => Self::read_entire_file(&file_path).await,

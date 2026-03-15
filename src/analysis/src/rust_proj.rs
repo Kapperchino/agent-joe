@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 pub struct RustProject {
     pub analysis_host: Arc<Mutex<AnalysisHost>>,
     pub vfs: Arc<Mutex<Vfs>>,
+    pub root: String,
 }
 impl RustProject {
     pub(crate) fn new(cur_dir: &PathBuf) -> Result<RustProject, anyhow::Error> {
@@ -32,6 +33,7 @@ impl RustProject {
         let proj = RustProject {
             analysis_host: anal_host,
             vfs: Arc::new(Mutex::new(vfs)),
+            root: cur_dir.to_string_lossy().to_string(),
         };
 
         Ok(proj)

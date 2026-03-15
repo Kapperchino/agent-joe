@@ -98,7 +98,7 @@ impl CurContext {
             let nodes = if let Some(f_id) = proj.get_file_id(p.clone()) {
                 let file_structs = session.get_file_structure(f_id);
                 let line_ind = session.get_line_indecies(f_id)?;
-                SymbolInfo::from_file_structs(f_id, file_structs, p.clone(), line_ind)
+                SymbolInfo::from_file_structs(f_id, file_structs, p.clone(), line_ind, &proj.root)
             } else {
                 Vec::new()
             };

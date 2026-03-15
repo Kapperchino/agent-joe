@@ -69,6 +69,7 @@ impl Actor for CacheActor {
                                 file_structs,
                                 x.path.clone(),
                                 line_ind,
+                                &state.proj.root,
                             )
                         } else {
                             Vec::new()

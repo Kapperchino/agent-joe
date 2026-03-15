@@ -58,11 +58,21 @@ pub struct SymbolInfo {
 }
 
 impl SymbolInfo {
-    pub(crate) fn from_nav(n: NavigationTarget, vfs: &Vfs, line_ind: Arc<LineIndex>) -> Self {
-        let start = line_ind.line_col(n.full_range.start()).line;
-        let end = line_ind.line_col(n.full_range.end()).line;
+    pub(crate) fn from_nav(
+        n: NavigationTarget,
+        vfs: &Vfs,
+        line_ind: Arc<LineIndex>,
+        root: &str,
+    ) -> Self {
+        let start = line_ind.line_col(n.full_range.start()).line + 1;
+        let end = line_ind.line_col(n.full_range.end()).line + 1;
+        let path = vfs.file_path(n.file_id).as_path().unwrap().as_str();
+        let rpath = path
+            .strip_prefix(&(root.to_owned() + "/"))
+            .unwrap()
+            .to_string();
         SymbolInfo {
-            rpath: vfs.file_path(n.file_id).to_string(),
+            rpath,
             full_range: Range { start, end },
             focus_range: n.focus_range.map(|t| Range {
                 start: t.start().into(),
@@ -81,6 +91,7 @@ impl SymbolInfo {
         file_structs: Vec<StructureNode>,
         path_buf: PathBuf,
         line_ind: Arc<LineIndex>,
+        root: &str,
     ) -> Vec<Self> {
         file_structs
             .iter()
@@ -89,10 +100,15 @@ impl SymbolInfo {
                 _ => false,
             })
             .map(|fs| {
-                let start = line_ind.line_col(fs.node_range.start()).line;
-                let end = line_ind.line_col(fs.node_range.end()).line;
+                let start = line_ind.line_col(fs.node_range.start()).line + 1;
+                let end = line_ind.line_col(fs.node_range.end()).line + 1;
+                let rpath = path_buf
+                    .strip_prefix(root.to_owned() + "/")
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string();
                 SymbolInfo {
-                    rpath: path_buf.to_string_lossy().to_string(),
+                    rpath,
                     full_range: Range { start, end },
                     focus_range: Some(Range {
                         start: fs.navigation_range.start().into(),

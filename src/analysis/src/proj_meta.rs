@@ -321,10 +321,14 @@ impl ProjMeta {
                     .0;
 
                 let line_index = analysis.get_line_indecies(file_id)?;
+                let rpath = path
+                    .strip_prefix(&format!("{}/", proj.root))
+                    .unwrap()
+                    .to_string();
 
                 Ok(FileMeta {
                     line_index,
-                    rpath: path,
+                    rpath,
                     file_id: file_id.index(),
                     hash,
                 })
@@ -494,7 +498,7 @@ impl Display for ProjMeta {
         if !self.functions.is_empty() {
             writeln!(f, "## Standalone Functions ({})", self.functions.len())?;
             for func in &self.functions {
-                writeln!(f, "- {}", func)?;
+                writeln!(f, "{}", func)?;
             }
             writeln!(f)?;
         }

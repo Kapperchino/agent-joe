@@ -39,7 +39,7 @@ impl<K: CacheKey + 'static, V: CacheVal + 'static> TypedCache<K, V> {
             }
         }
         .unwrap();
-        let env = unsafe { EnvOpenOptions::new().open(&path) }?;
+        let env = unsafe { EnvOpenOptions::new().map_size(4096000).open(&path) }?;
         let db_env = env.clone();
         let mut wtxn = db_env.write_txn()?;
         db_env.create_database::<Str, SerdeJson<V>>(&mut wtxn, None)?;
