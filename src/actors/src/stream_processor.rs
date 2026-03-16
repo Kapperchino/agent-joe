@@ -123,14 +123,18 @@ impl StreamProcessor {
                     // special case here for openai
                     None => {
                         id.map(|t| {
-                            self.acc_map.insert(
-                                index,
-                                vec![StreamAccu::Thinking {
-                                    thinking: "".to_string(),
-                                    signature: "".to_string(),
-                                    reasoning_id: Some(t),
-                                }],
-                            )
+                            if t.starts_with("rs_") && !self.acc_map.contains_key(&index) {
+                                self.acc_map.insert(
+                                    index,
+                                    vec![StreamAccu::Thinking {
+                                        thinking: "".to_string(),
+                                        signature: "".to_string(),
+                                        reasoning_id: Some(t),
+                                    }],
+                                );
+                            } else{
+                                ()
+                            }
                         });
                     }
                 }

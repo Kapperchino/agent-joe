@@ -290,16 +290,16 @@ impl ReadFile {
             Some(meta) => {
                 let start: u32 = meta
                     .line_index
-                    .line(range.start - 1)
+                    .line(range.start.saturating_sub(1))
                     .unwrap()
                     .start()
                     .into();
                 let end: u32 = meta
                     .line_index
-                    .line(range.end - 1)
+                    .line(range.end.saturating_sub(1))
                     .map(|l| l.end().into())
                     .unwrap_or(u32::MAX);
-                let start_line = range.start - 1;
+                let start_line = range.start.saturating_sub(1);
                 let mut file = File::open(file_path).await?;
                 file.seek(SeekFrom::Start(start as u64)).await?;
                 let file_size = file.metadata().await?.len();
