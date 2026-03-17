@@ -18,17 +18,7 @@ impl From<llm::ClientRequest> for ClientRequest {
                         role: role.into(),
                         content: text,
                     }),
-                    ContentBlock::ThinkingBlock {
-                        thinking,
-                        signature,
-                        reasoning_id,
-                    } => Some(InputItem::Reasoning {
-                        id: reasoning_id.unwrap_or_default(),
-                        summary: vec![openai::SummaryTextContent {
-                            text: thinking,
-                            prop_type: "summary_text".to_string(),
-                        }],
-                    }),
+                    ContentBlock::ThinkingBlock { .. } => None,
                     ContentBlock::ToolBlock {
                         tool_id,
                         name,

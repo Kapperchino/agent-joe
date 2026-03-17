@@ -516,7 +516,7 @@ pub struct OpenAIClient {
     client: Client,
     config: OpenAIConfig,
 }
-
+#[derive(Serialize)]
 pub struct ClientRequest {
     pub input: Vec<InputItem>,
     pub instructions: Option<String>,
