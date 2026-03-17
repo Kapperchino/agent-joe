@@ -36,7 +36,7 @@ async fn main() {
     let api_key = std::env::var("OPENAI_KEY").expect("OPENAI_KEY must be set");
     let config = OpenAIConfig {
         api_key,
-        model: "gpt-5-mini-2025-08-07".to_string(),
+        model: "gpt-5.4-mini".to_string(),
         ..Default::default()
     };
     let client = OpenAIClient::new(config).unwrap();
