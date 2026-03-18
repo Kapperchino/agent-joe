@@ -150,6 +150,7 @@ impl App {
 
     fn submit_command(&mut self) {
         if !self.input.is_empty() {
+            let submitted_command = format!("/{}", self.input);
             let command = Command::parse(self.input.as_str());
             match command {
                 Ok(command) => {
@@ -160,14 +161,16 @@ impl App {
                         }
                     };
 
-                    self.messages.append(&mut self.wrap_str(&self.input));
-                    self.input.clear();
-                    self.reset_cursor();
+                    self.messages.append(&mut self.wrap_str(&submitted_command));
                 }
                 Err(err) => {
+                    self.messages.append(&mut self.wrap_str(&submitted_command));
                     self.messages.append(&mut self.wrap_str(&err.to_string()));
                 }
             }
+
+            self.input.clear();
+            self.reset_cursor();
         }
     }
 
@@ -231,6 +234,40 @@ impl App {
             lines.push(Self::thinking_throbber().to_line(&self.throbber_state));
         }
         lines
+    }
+
+    fn command_lines(&self) -> Vec<Line<'static>> {
+        vec![
+            Line::from(vec![
+                Span::styled(
+                    "/ ",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(self.input.clone(), Style::default().fg(Color::Green)),
+            ]),
+            Line::from(Span::styled(
+                "Enter to run, Esc to cancel",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(Span::styled(
+                "Available commands",
+                Style::default()
+                    .fg(Color::Gray)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(vec![
+                Span::styled(
+                    "context",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("  "),
+                Span::styled("Print current context", Style::default().fg(Color::Gray)),
+            ]),
+        ]
     }
 
     fn thinking_throbber() -> Throbber<'static> {
@@ -374,9 +411,14 @@ impl App {
 
     #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
     fn draw(&mut self, frame: &mut Frame) {
+        let input_height = if matches!(self.input_mode, InputMode::InputCommand) {
+            6
+        } else {
+            3
+        };
         let chunks = Layout::vertical([
             Constraint::Min(1),
-            Constraint::Length(3),
+            Constraint::Length(input_height),
             Constraint::Length(1),
         ]);
 
@@ -414,26 +456,33 @@ impl App {
             Span::raw(" "),
         ]);
 
-        // ── input box ─────────────────────────────────────────────────────
-        let input_block = Block::bordered().title("Input");
-
         let token_block = Block::new().title_bottom(token_line);
-        let input = Paragraph::new(self.input.as_str())
-            .style(match self.input_mode {
-                InputMode::Normal => Style::default(),
-                InputMode::Editing => Style::default().fg(Color::Yellow),
-                InputMode::InputCommand => Style::default().fg(Color::Green),
-            })
-            .block(input_block);
-        frame.render_widget(input, input_area);
         frame.render_widget(token_block, token_area);
+
+        match self.input_mode {
+            InputMode::InputCommand => {
+                let command_section =
+                    Paragraph::new(self.command_lines()).block(Block::bordered().title("Command"));
+                frame.render_widget(command_section, input_area);
+            }
+            _ => {
+                let input = Paragraph::new(self.input.as_str())
+                    .style(match self.input_mode {
+                        InputMode::Normal => Style::default(),
+                        InputMode::Editing => Style::default().fg(Color::Yellow),
+                        InputMode::InputCommand => Style::default().fg(Color::Green),
+                    })
+                    .block(Block::bordered().title("Input"));
+                frame.render_widget(input, input_area);
+            }
+        }
 
         match self.input_mode {
             // Hide the cursor. `Frame` does this by default, so we don't need to do anything here
             InputMode::Normal => {}
 
             InputMode::InputCommand => frame.set_cursor_position(Position::new(
-                input_area.x + self.character_index as u16 + 1,
+                input_area.x + self.character_index as u16 + 3,
                 input_area.y + 1,
             )),
 
