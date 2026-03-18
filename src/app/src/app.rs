@@ -15,11 +15,12 @@ use ratatui::layout::Position;
 use ratatui::{
     DefaultTerminal, Frame,
     crossterm::event::{Event, KeyCode},
-    layout::{Alignment, Constraint, Layout},
+    layout::{Constraint, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Paragraph, Widget},
 };
+use throbber_widgets_tui::{Throbber, ThrobberState};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 pub struct App {
@@ -32,6 +33,8 @@ pub struct App {
     msg_area_width: usize,
     actor_ref: ActorRef<Message>,
     actor_state: State,
+    throbber_state: ThrobberState,
+    throbber_tick: usize,
     token_count: TokenCount,
 }
 #[derive(Default)]
@@ -54,12 +57,17 @@ impl App {
             msg_area_width: 0,
             actor_ref,
             actor_state: State::Ready,
+            throbber_state: ThrobberState::default(),
+            throbber_tick: 0,
             token_count: TokenCount::default(),
         }
     }
 
     fn max_live_messages(&self) -> usize {
-        self.msg_area_height.max(1)
+        let throbber_reserved = usize::from(matches!(self.actor_state, State::ThinkingStart));
+        self.msg_area_height
+            .saturating_sub(throbber_reserved)
+            .max(1)
     }
 
     fn move_cursor_left(&mut self) {
@@ -204,6 +212,38 @@ impl App {
         Ok(())
     }
 
+    fn advance_throbber(&mut self) {
+        if !matches!(self.actor_state, State::ThinkingStart) {
+            self.throbber_state = ThrobberState::default();
+            self.throbber_tick = 0;
+            return;
+        }
+
+        self.throbber_tick = self.throbber_tick.wrapping_add(1);
+        if self.throbber_tick % 8 == 0 {
+            self.throbber_state.calc_next();
+        }
+    }
+
+    fn output_lines(&self) -> Vec<Line<'static>> {
+        let mut lines = Self::render_lines(&self.messages);
+        if matches!(self.actor_state, State::ThinkingStart) {
+            lines.push(Self::thinking_throbber().to_line(&self.throbber_state));
+        }
+        lines
+    }
+
+    fn thinking_throbber() -> Throbber<'static> {
+        Throbber::default()
+            .label("thinking")
+            .style(Style::default().fg(Color::Yellow))
+            .throbber_style(
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )
+    }
+
     pub async fn run(
         mut self,
         mut terminal: DefaultTerminal,
@@ -216,7 +256,7 @@ impl App {
 
         while !self.do_quit {
             tokio::select! {
-                _ = interval.tick() => {}
+                _ = interval.tick() => self.advance_throbber(),
                 Some(Ok(event)) = events.next() => self.handle_term_event(&event),
                 Some(actor_msg) = actor_rx.recv() => self.handle_actor_msg(actor_msg),
             }
@@ -232,10 +272,8 @@ impl App {
             ActorToTui::StateChanged(state) => {
                 self.actor_state = state;
                 match self.actor_state {
-                    State::ThinkingStart => self.messages.push(String::new()),
                     State::MessageStart => self.messages.push(String::new()),
                     State::MessageStop => self.messages.push(String::new()),
-                    State::ThinkingStop => self.messages.push(String::new()),
                     _ => {}
                 }
             }
@@ -243,21 +281,7 @@ impl App {
                 State::Ready => {}
                 State::StreamStart => {}
                 State::StreamStop => {}
-                State::ThinkingStart => {
-                    let last = self.messages.last_mut().cloned();
-                    match last {
-                        None => {
-                            let mut wrapped = self.wrap_str(&data);
-                            self.messages.append(&mut wrapped);
-                        }
-                        Some(mut buff) => {
-                            buff.push_str(data.as_str());
-                            let mut wrapped = self.wrap_str(&buff);
-                            self.messages.pop();
-                            self.messages.append(&mut wrapped)
-                        }
-                    }
-                }
+                State::ThinkingStart => {}
                 State::ThinkingStop => {}
                 State::MessageStart => {
                     let last = self.messages.last_mut().cloned();
@@ -300,11 +324,10 @@ impl App {
             Event::FocusLost => {}
             Event::Key(key) => self.handle_key_event(key),
             Event::Mouse(_) => {}
-            Event::Paste(text) => {
-                if let InputMode::Editing = self.input_mode {
-                    self.paste(text)
-                }
-            }
+            Event::Paste(text) => match self.input_mode {
+                InputMode::Editing | InputMode::InputCommand => self.paste(text),
+                InputMode::Normal => {}
+            },
             Event::Resize(_, _) => {}
         }
     }
@@ -318,10 +341,7 @@ impl App {
                 KeyCode::Char('/') => self.input_mode = InputMode::InputCommand,
                 KeyCode::Char('q') => {
                     self.do_quit = true;
-                    match self.actor_ref.send_message(Message::KYS) {
-                        Ok(_) => {}
-                        Err(_) => {}
-                    }
+                    self.actor_ref.kill();
                 }
                 _ => {}
             },
@@ -355,13 +375,12 @@ impl App {
     #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
     fn draw(&mut self, frame: &mut Frame) {
         let chunks = Layout::vertical([
-            Constraint::Length(1),
             Constraint::Min(1),
             Constraint::Length(3),
             Constraint::Length(1),
         ]);
 
-        let [top_bar_area, msg_area, input_area, token_area] = chunks.areas(frame.area());
+        let [msg_area, input_area, token_area] = chunks.areas(frame.area());
 
         self.msg_area_height = msg_area.height as usize;
         self.msg_area_width = msg_area.width as usize;
@@ -396,13 +415,9 @@ impl App {
         ]);
 
         // ── input box ─────────────────────────────────────────────────────
-        let input_block = Block::bordered()
-            .title("Input")
-            .title_alignment(Alignment::Left);
+        let input_block = Block::bordered().title("Input");
 
-        let token_block = Block::new()
-            .title_bottom(token_line)
-            .title_alignment(Alignment::Right);
+        let token_block = Block::new().title_bottom(token_line);
         let input = Paragraph::new(self.input.as_str())
             .style(match self.input_mode {
                 InputMode::Normal => Style::default(),
@@ -434,7 +449,7 @@ impl App {
             )),
         }
 
-        let messages = Paragraph::new(Self::render_lines(&self.messages));
+        let messages = Paragraph::new(self.output_lines());
         frame.render_widget(messages, msg_area);
     }
 }
