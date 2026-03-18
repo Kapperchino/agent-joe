@@ -133,16 +133,16 @@ impl ActorState {
     async fn tool_use(&self, tool_call: ToolCall) -> anyhow::Result<ToolResult> {
         let tool = Tool::from_str(tool_call.name.as_str())?;
         let ToolCall { id, name, json } = tool_call;
-        let res: anyhow::Result<ToolResult> = match Tool::from_str(name.as_str())? {
+        let res: anyhow::Result<ToolResult> = match tool.clone() {
             Tool::ReadFile(_) => {
                 let input = ReadFileInput::deserialize_lenient(&json)?;
                 let rf = clients::tool_defs::ReadFile {
                     id: id.id.clone(),
                     input,
                 };
-                Ok(Tool::ReadFile(rf)
+                Tool::ReadFile(rf)
                     .use_tool(id.clone(), &self.cur_context)
-                    .await?)
+                    .await
             }
             Tool::InsertAfterLine(_) => {
                 let input = InsertAfterLineInput::deserialize_lenient(&json)?;
@@ -150,9 +150,9 @@ impl ActorState {
                     id: id.id.clone(),
                     input,
                 };
-                Ok(Tool::InsertAfterLine(rf)
+                Tool::InsertAfterLine(rf)
                     .use_tool(id.clone(), &self.cur_context)
-                    .await?)
+                    .await
             }
             Tool::StringReplace(_) => {
                 let input = StringReplaceInput::deserialize_lenient(&json)?;
@@ -160,9 +160,9 @@ impl ActorState {
                     id: id.id.clone(),
                     input,
                 };
-                Ok(Tool::StringReplace(rf)
+                Tool::StringReplace(rf)
                     .use_tool(id.clone(), &self.cur_context)
-                    .await?)
+                    .await
             }
             Tool::CargoCheck(_) => {
                 let input = if json.is_empty() {
@@ -176,9 +176,9 @@ impl ActorState {
                     id: id.id.clone(),
                     input,
                 };
-                Ok(Tool::CargoCheck(rf)
+                Tool::CargoCheck(rf)
                     .use_tool(id.clone(), &self.cur_context)
-                    .await?)
+                    .await
             }
         };
         match res {
