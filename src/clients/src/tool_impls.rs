@@ -8,7 +8,7 @@ use crate::tool_defs::{CargoCheck, ToolId};
 use crate::tool_defs::{CargoCheckResult, Tool};
 use crate::tool_defs::{Range, ReadFile, StringReplaceInput, ToolJson, ToolResult};
 use analysis::cur_context::CurContext;
-use anyhow::{anyhow, Error};
+use anyhow::{Error, anyhow};
 use futures::{StreamExt, TryStreamExt};
 use std::cmp::min;
 use std::collections::HashMap;

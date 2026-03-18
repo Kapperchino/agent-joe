@@ -132,7 +132,7 @@ impl StreamProcessor {
                                         reasoning_id: Some(t),
                                     }],
                                 );
-                            } else{
+                            } else {
                                 ()
                             }
                         });

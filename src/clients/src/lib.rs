@@ -1,8 +1,8 @@
 pub mod claude;
 mod claude_mappings;
+pub mod config;
 pub mod llm;
 pub mod openai;
 mod openai_mappings;
 pub mod tool_defs;
 pub mod tool_impls;
-pub mod config;

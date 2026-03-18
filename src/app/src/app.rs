@@ -12,29 +12,22 @@ use crossterm::event::{EventStream, KeyEvent};
 use futures::StreamExt;
 use ractor::ActorRef;
 use ratatui::layout::Position;
-use ratatui::widgets::{List, ListItem, ListState};
 use ratatui::{
-    crossterm::event::{Event, KeyCode}, layout::{Alignment, Constraint, Layout},
+    DefaultTerminal, Frame,
+    crossterm::event::{Event, KeyCode},
+    layout::{Alignment, Constraint, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
-    DefaultTerminal,
-    Frame,
+    widgets::{Block, Paragraph, Widget},
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
 pub struct App {
-    pub vertical_scroll_state: ScrollbarState,
-    pub horizontal_scroll_state: ScrollbarState,
-    pub vertical_scroll: usize,
-    pub horizontal_scroll: usize,
-    pub list_state: ListState,
     character_index: usize,
     input: String,
     messages: Vec<String>,
     input_mode: InputMode,
     do_quit: bool,
-    auto_scroll: bool,
     msg_area_height: usize,
     msg_area_width: usize,
     actor_ref: ActorRef<Message>,
@@ -52,17 +45,11 @@ enum InputMode {
 impl App {
     pub fn new(actor_ref: ActorRef<Message>) -> Self {
         Self {
-            vertical_scroll_state: Default::default(),
-            horizontal_scroll_state: Default::default(),
-            vertical_scroll: 0,
-            horizontal_scroll: 0,
-            list_state: Default::default(),
             character_index: 0,
             input: String::new(),
             messages: vec![],
             input_mode: Default::default(),
             do_quit: false,
-            auto_scroll: true,
             msg_area_height: 0,
             msg_area_width: 0,
             actor_ref,
@@ -71,15 +58,8 @@ impl App {
         }
     }
 
-    fn max_scroll(&self) -> usize {
-        let visible_lines = self.msg_area_height.saturating_sub(2);
-        self.messages.len().saturating_sub(visible_lines)
-    }
-
-    fn scroll_to_bottom(&mut self) {
-        self.vertical_scroll = self.max_scroll();
-        self.vertical_scroll_state = self.vertical_scroll_state.position(self.vertical_scroll);
-        *self.list_state.offset_mut() = self.vertical_scroll;
+    fn max_live_messages(&self) -> usize {
+        self.msg_area_height.max(1)
     }
 
     fn move_cursor_left(&mut self) {
@@ -157,9 +137,6 @@ impl App {
             self.messages.append(&mut self.wrap_str(&self.input));
             self.input.clear();
             self.reset_cursor();
-            if self.auto_scroll {
-                self.scroll_to_bottom();
-            }
         }
     }
 
@@ -178,9 +155,6 @@ impl App {
                     self.messages.append(&mut self.wrap_str(&self.input));
                     self.input.clear();
                     self.reset_cursor();
-                    if self.auto_scroll {
-                        self.scroll_to_bottom();
-                    }
                 }
                 Err(err) => {
                     self.messages.append(&mut self.wrap_str(&err.to_string()));
@@ -190,42 +164,44 @@ impl App {
     }
 
     fn wrap_str(&self, string: &String) -> Vec<String> {
-        textwrap::wrap(
-            string.as_str(),
-            textwrap::Options::new(self.msg_area_width - 5),
-        )
-        .into_iter()
-        .map(|x| x.to_string())
-        .collect()
+        let wrap_width = self.msg_area_width.saturating_sub(2).max(1);
+        textwrap::wrap(string.as_str(), textwrap::Options::new(wrap_width))
+            .into_iter()
+            .map(|x| x.to_string())
+            .collect()
     }
 
-    fn scroll_up(&mut self) {
-        self.vertical_scroll = self.vertical_scroll.saturating_sub(1);
-        self.vertical_scroll_state = self.vertical_scroll_state.position(self.vertical_scroll);
-        *self.list_state.offset_mut() = self.vertical_scroll;
-        self.auto_scroll = false;
+    fn render_lines(lines: &[String]) -> Vec<Line<'static>> {
+        lines
+            .iter()
+            .map(|message| {
+                if message.starts_with("--- [tool:") && message.ends_with("] ---") {
+                    Line::from(Span::styled(
+                        message.clone(),
+                        Style::default().fg(Color::Cyan),
+                    ))
+                } else {
+                    Line::from(Span::raw(message.clone()))
+                }
+            })
+            .collect()
     }
 
-    fn scroll_down(&mut self) {
-        let max = self.max_scroll();
-        self.vertical_scroll = self.vertical_scroll.saturating_add(1).min(max);
-        self.vertical_scroll_state = self.vertical_scroll_state.position(self.vertical_scroll);
-        *self.list_state.offset_mut() = self.vertical_scroll;
-        self.auto_scroll = false;
-    }
+    fn flush_scrollback(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
+        let max_live_messages = self.max_live_messages();
+        if self.messages.len() <= max_live_messages {
+            return Ok(());
+        }
 
-    fn scroll_left(&mut self) {
-        self.horizontal_scroll = self.horizontal_scroll.saturating_sub(1);
-        self.horizontal_scroll_state = self
-            .horizontal_scroll_state
-            .position(self.horizontal_scroll);
-    }
+        let flush_count = self.messages.len().saturating_sub(max_live_messages);
+        let flushed_lines = self.messages.drain(0..flush_count).collect::<Vec<_>>();
+        let rendered_lines = Self::render_lines(&flushed_lines);
 
-    fn scroll_right(&mut self) {
-        self.horizontal_scroll = self.horizontal_scroll.saturating_add(1);
-        self.horizontal_scroll_state = self
-            .horizontal_scroll_state
-            .position(self.horizontal_scroll);
+        terminal.insert_before(flush_count as u16, |buf| {
+            Paragraph::new(rendered_lines).render(buf.area, buf);
+        })?;
+
+        Ok(())
     }
 
     pub async fn run(
@@ -240,10 +216,13 @@ impl App {
 
         while !self.do_quit {
             tokio::select! {
-                _ = interval.tick() => { terminal.draw(|frame| self.draw(frame))?; },
+                _ = interval.tick() => {}
                 Some(Ok(event)) = events.next() => self.handle_term_event(&event),
                 Some(actor_msg) = actor_rx.recv() => self.handle_actor_msg(actor_msg),
             }
+
+            self.flush_scrollback(&mut terminal)?;
+            terminal.draw(|frame| self.draw(frame))?;
         }
         Ok(())
     }
@@ -253,10 +232,10 @@ impl App {
             ActorToTui::StateChanged(state) => {
                 self.actor_state = state;
                 match self.actor_state {
-                    State::ThinkingStart => self.messages.push("\n".to_string()),
-                    State::MessageStart => self.messages.push("\n".to_string()),
-                    State::MessageStop => self.messages.push("\n".to_string()),
-                    State::ThinkingStop => self.messages.push("\n".to_string()),
+                    State::ThinkingStart => self.messages.push(String::new()),
+                    State::MessageStart => self.messages.push(String::new()),
+                    State::MessageStop => self.messages.push(String::new()),
+                    State::ThinkingStop => self.messages.push(String::new()),
                     _ => {}
                 }
             }
@@ -304,9 +283,6 @@ impl App {
                 names.into_iter().for_each(|name| {
                     self.messages.push(format!("--- [tool: {}] ---", name));
                 });
-                if self.auto_scroll {
-                    self.scroll_to_bottom();
-                }
             }
             ActorToTui::CommandResult(_, command_res) => {
                 let mut wrapped = self.wrap_str(&command_res);
@@ -347,14 +323,6 @@ impl App {
                         Err(_) => {}
                     }
                 }
-                KeyCode::Char('j') | KeyCode::Down => self.scroll_down(),
-                KeyCode::Char('k') | KeyCode::Up => self.scroll_up(),
-                KeyCode::Char('h') | KeyCode::Left => self.scroll_left(),
-                KeyCode::Char('l') | KeyCode::Right => self.scroll_right(),
-                KeyCode::Char('G') => {
-                    self.auto_scroll = true;
-                    self.scroll_to_bottom();
-                }
                 _ => {}
             },
             InputMode::Editing => match key.code {
@@ -387,42 +355,16 @@ impl App {
     #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
     fn draw(&mut self, frame: &mut Frame) {
         let chunks = Layout::vertical([
+            Constraint::Length(1),
             Constraint::Min(1),
-            Constraint::Percentage(100),
-            Constraint::Min(3),
-            Constraint::Min(1),
+            Constraint::Length(3),
+            Constraint::Length(1),
         ]);
 
         let [top_bar_area, msg_area, input_area, token_area] = chunks.areas(frame.area());
 
         self.msg_area_height = msg_area.height as usize;
         self.msg_area_width = msg_area.width as usize;
-
-        if self.vertical_scroll >= self.max_scroll() {
-            self.auto_scroll = true;
-        }
-
-        if self.auto_scroll {
-            self.scroll_to_bottom();
-        }
-
-        // ── top bar: keybind hint only ─────────────────────────────────────
-        let hint = Line::from(vec![
-            Span::styled("h j k l", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(" / "),
-            Span::styled("◄ ▲ ▼ ►", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw("  scroll   "),
-            Span::styled("i", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw("  insert   "),
-            Span::styled("/", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw("  command   "),
-            Span::styled("G", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw("  bottom   "),
-            Span::styled("q", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw("  quit"),
-        ]);
-        let top_bar = Block::new().title(hint).title_alignment(Alignment::Center);
-        frame.render_widget(top_bar, top_bar_area);
 
         // ── token counter: pretty spans, bottom-right of input box ─────────
         let token_line = Line::from(vec![
@@ -492,36 +434,7 @@ impl App {
             )),
         }
 
-        // ── message list ──────────────────────────────────────────────────
-        let messages: Vec<ListItem> = self
-            .messages
-            .iter()
-            .map(|m| {
-                if m.starts_with("--- [tool:") && m.ends_with("] ---") {
-                    let content =
-                        Line::from(Span::styled(m.as_str(), Style::default().fg(Color::Cyan)));
-                    ListItem::new(content)
-                } else {
-                    let content = Line::from(Span::raw(m));
-                    ListItem::new(content)
-                }
-            })
-            .collect();
-
-        let messages = List::new(messages).block(Block::bordered().title("Messages"));
-
-        self.vertical_scroll_state = self
-            .vertical_scroll_state
-            .content_length(self.max_scroll().into());
-        self.horizontal_scroll_state = self.horizontal_scroll_state.content_length(messages.len());
-
-        frame.render_stateful_widget(messages, msg_area, &mut self.list_state);
-        frame.render_stateful_widget(
-            Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                .begin_symbol(Some("↑"))
-                .end_symbol(Some("↓")),
-            msg_area,
-            &mut self.vertical_scroll_state,
-        );
+        let messages = Paragraph::new(Self::render_lines(&self.messages));
+        frame.render_widget(messages, msg_area);
     }
 }

@@ -12,15 +12,16 @@ use clients::tool_defs::Tool;
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::execute;
 use ractor::Actor;
-use std::io::{stdout, Write};
+use ratatui::{TerminalOptions, Viewport};
+use std::io::stdout;
 use tokio::main;
 use tokio::sync::mpsc;
-use tokio_stream::StreamExt;
 use tracing::Level;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::FmtSubscriber;
 
 const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
+const INLINE_VIEWPORT_HEIGHT: u16 = 12;
 
 struct ResolvedAuth {
     api_key: String,
@@ -130,10 +131,12 @@ async fn main() {
     .expect("Failed to start actor");
 
     color_eyre::install().unwrap();
-    let terminal = ratatui::init();
+    let terminal = ratatui::init_with_options(TerminalOptions {
+        viewport: Viewport::Inline(INLINE_VIEWPORT_HEIGHT),
+    });
     execute!(stdout(), EnableBracketedPaste).ok();
     let app = App::new(joe);
-    let app_result = app.run(terminal, rx).await.unwrap();
+    app.run(terminal, rx).await.unwrap();
     actor_handle.await.expect("Actor failed to exit cleanly");
     execute!(stdout(), DisableBracketedPaste).ok();
     ratatui::restore();

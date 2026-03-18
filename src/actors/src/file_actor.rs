@@ -11,7 +11,7 @@ use ra_ap_vfs::file_set::FileSet;
 use ra_ap_vfs::{Change, ChangeKind, FileId, Vfs, VfsPath};
 use ractor::concurrency::Duration;
 use ractor::{
-    call, Actor, ActorCell, ActorProcessingErr, ActorRef, MessagingErr, SupervisionEvent,
+    Actor, ActorCell, ActorProcessingErr, ActorRef, MessagingErr, SupervisionEvent, call,
 };
 use ractor_actors::filewatcher::{
     FileWatcher, FileWatcherConfig, FileWatcherMessage, FileWatcherSubscriber, SubscriptionResult,
