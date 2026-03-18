@@ -175,12 +175,29 @@ impl App {
         }
     }
 
-    fn wrap_str(&self, string: &String) -> Vec<String> {
+    fn wrap_str(&self, string: &str) -> Vec<String> {
         let wrap_width = self.msg_area_width.saturating_sub(2).max(1);
-        textwrap::wrap(string.as_str(), textwrap::Options::new(wrap_width))
+        textwrap::wrap(string, textwrap::Options::new(wrap_width))
             .into_iter()
             .map(|x| x.to_string())
             .collect()
+    }
+
+    fn wrap_tool_str(&self, string: &str) -> Vec<String> {
+        if let Some(content) = string.strip_prefix("- ") {
+            let wrap_width = self.msg_area_width.saturating_sub(2).max(1);
+            return textwrap::wrap(
+                content,
+                textwrap::Options::new(wrap_width)
+                    .initial_indent("- ")
+                    .subsequent_indent("  "),
+            )
+            .into_iter()
+            .map(|x| x.to_string())
+            .collect();
+        }
+
+        self.wrap_str(string)
     }
 
     fn flush_scrollback(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
@@ -325,9 +342,9 @@ impl App {
                 State::ToolStop => {}
                 State::Stopped => {}
             },
-            ActorToTui::ToolUse(names) => {
-                names.into_iter().for_each(|name| {
-                    self.messages.push(format!("--- [tool: {}] ---", name));
+            ActorToTui::ToolUse(lines) => {
+                lines.into_iter().for_each(|line| {
+                    self.messages.append(&mut self.wrap_tool_str(&line));
                 });
             }
             ActorToTui::CommandResult(_, command_res) => {
