@@ -115,8 +115,7 @@ pub enum ToolProperty {
 struct ResponseRequest {
     pub model: String,
     pub input: Vec<InputItem>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub instructions: Option<String>,
+    pub instructions: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -127,6 +126,7 @@ struct ResponseRequest {
     pub reasoning: Option<ReasoningConfig>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub stream: bool,
+    pub store: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -470,6 +470,8 @@ pub struct OpenAIConfig {
     pub temperature: Option<f32>,
     pub timeout: Duration,
     pub reasoning: Option<ReasoningConfig>,
+    /// Additional headers to include in every request (e.g. ChatGPT-Account-Id).
+    pub extra_headers: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -500,13 +502,14 @@ impl Default for OpenAIConfig {
             api_key: String::new(),
             url: "https://api.openai.com/v1".to_string(),
             model: "gpt-5.4".to_string(),
-            max_output_tokens: Some(4096),
-            temperature: Some(1.0),
+            max_output_tokens: None,
+            temperature: None,
             timeout: Duration::from_secs(120),
             reasoning: Some(ReasoningConfig {
                 effort: ReasoningEffort::Medium,
                 summary: ReasoningSummary::Auto,
             }),
+            extra_headers: vec![],
         }
     }
 }
@@ -566,6 +569,14 @@ impl OpenAIClient {
             header::CONTENT_TYPE,
             header::HeaderValue::from_static("application/json"),
         );
+        for (name, value) in &config.extra_headers {
+            headers.insert(
+                header::HeaderName::from_bytes(name.as_bytes())
+                    .map_err(|_| OpenAIError::Config(format!("Invalid header name: {name}")))?,
+                header::HeaderValue::from_str(value)
+                    .map_err(|_| OpenAIError::Config(format!("Invalid header value for {name}")))?,
+            );
+        }
 
         let client = Client::builder()
             .timeout(config.timeout)
@@ -581,12 +592,13 @@ impl OpenAIClient {
         let inner = ResponseRequest {
             model: req.model.unwrap_or_else(|| self.config.model.clone()),
             input: req.input,
-            instructions: req.instructions,
+            instructions: req.instructions.unwrap_or_default(),
             temperature: self.config.temperature,
             max_output_tokens: self.config.max_output_tokens,
             tools: req.tools,
             reasoning: self.config.reasoning.clone(),
             stream: false,
+            store: false,
         };
 
         let response = self.client.post(&url).json(&inner).send().await?;
@@ -612,12 +624,13 @@ impl OpenAIClient {
         let request = ResponseRequest {
             model: req.model.unwrap_or_else(|| self.config.model.clone()),
             input: req.input,
-            instructions: req.instructions,
+            instructions: req.instructions.unwrap_or_default(),
             temperature: self.config.temperature,
             max_output_tokens: self.config.max_output_tokens,
             tools: req.tools,
             reasoning: self.config.reasoning.clone(),
             stream: true,
+            store: false,
         };
 
         let initial = self.client.post(&url).json(&request).send().await?;
