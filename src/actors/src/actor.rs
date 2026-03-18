@@ -1,14 +1,15 @@
 use crate::actor_state::ActorState;
 use crate::cache_actor::CacheActor;
 use crate::file_actor::FileActor;
-use crate::stream_processor::{PreprocessedStreamItem, ProcessedItem, StreamNextStep};
+use crate::stream_processor::{PreprocessedStreamItem, ProcessedItem, StreamNextStep, ToolCall};
 use crate::worker::Worker;
 use crate::{cache_actor, file_actor};
 use analysis::cur_context::CurContext;
 use clients::llm;
 use clients::llm::{ClientRequest, LLmClient, StreamEvent};
-use clients::tool_defs::Tool;
-use clients::tool_defs::ToolResult;
+use clients::tool_defs::{
+    CargoCheckInput, InsertAfterLineInput, ReadFileInput, StringReplaceInput, Tool, ToolResult,
+};
 use common_models::tui_models::ActorToTui;
 use common_models::tui_models::Command;
 use common_models::tui_models::State;
@@ -168,19 +169,19 @@ impl Actor for Worker {
                 state.save_history(res)?;
             }
             Message::UseTool(vec) => {
-                let tool_names: Vec<String> = vec
+                let tool_lines: Vec<String> = vec
                     .iter()
                     .filter_map(|x| {
                         if let ProcessedItem::Tool(t) = &x.processed {
-                            Some(t.name.clone())
+                            Some(t.tool_use_line())
                         } else {
                             None
                         }
                     })
                     .collect();
 
-                if !tool_names.is_empty() {
-                    state.reporter.send(ActorToTui::ToolUse(tool_names));
+                if !tool_lines.is_empty() {
+                    state.reporter.send(ActorToTui::ToolUse(tool_lines));
                 }
 
                 state.change_state(State::ToolStart);

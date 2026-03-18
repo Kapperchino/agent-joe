@@ -131,52 +131,26 @@ impl ActorState {
     }
 
     async fn tool_use(&self, tool_call: ToolCall) -> anyhow::Result<ToolResult> {
-        let tool = Tool::from_str(tool_call.name.as_str())?;
+        let tool = tool_call.get_tool()?;
         let ToolCall { id, name, json } = tool_call;
         let res: anyhow::Result<ToolResult> = match tool.clone() {
-            Tool::ReadFile(_) => {
-                let input = ReadFileInput::deserialize_lenient(&json)?;
-                let rf = clients::tool_defs::ReadFile {
-                    id: id.id.clone(),
-                    input,
-                };
+            Tool::ReadFile(rf) => {
                 Tool::ReadFile(rf)
                     .use_tool(id.clone(), &self.cur_context)
                     .await
             }
-            Tool::InsertAfterLine(_) => {
-                let input = InsertAfterLineInput::deserialize_lenient(&json)?;
-                let rf = clients::tool_defs::InsertAfterLine {
-                    id: id.id.clone(),
-                    input,
-                };
-                Tool::InsertAfterLine(rf)
+            Tool::InsertAfterLine(insert) => {
+                Tool::InsertAfterLine(insert)
                     .use_tool(id.clone(), &self.cur_context)
                     .await
             }
-            Tool::StringReplace(_) => {
-                let input = StringReplaceInput::deserialize_lenient(&json)?;
-                let rf = clients::tool_defs::StringReplace {
-                    id: id.id.clone(),
-                    input,
-                };
-                Tool::StringReplace(rf)
+            Tool::StringReplace(replace) => {
+                Tool::StringReplace(replace)
                     .use_tool(id.clone(), &self.cur_context)
                     .await
             }
-            Tool::CargoCheck(_) => {
-                let input = if json.is_empty() {
-                    CargoCheckInput {
-                        include_warnings: None,
-                    }
-                } else {
-                    CargoCheckInput::deserialize_lenient(&json)?
-                };
-                let rf = clients::tool_defs::CargoCheck {
-                    id: id.id.clone(),
-                    input,
-                };
-                Tool::CargoCheck(rf)
+            Tool::CargoCheck(check) => {
+                Tool::CargoCheck(check)
                     .use_tool(id.clone(), &self.cur_context)
                     .await
             }

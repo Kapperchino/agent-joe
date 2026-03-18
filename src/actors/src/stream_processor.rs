@@ -1,7 +1,10 @@
 use crate::event_reporter::EventReporter;
-use anyhow::anyhow;
+use anyhow::{Error, anyhow};
 use clients::llm::{ContentBlockInfo, Delta, StopReason, StreamEvent};
-use clients::tool_defs::{ToolId, ToolUse};
+use clients::tool_defs::{
+    CargoCheckInput, InsertAfterLine, InsertAfterLineInput, LenientDeserialize, ReadFile,
+    ReadFileInput, StringReplace, StringReplaceInput, Tool, ToolId, ToolUse,
+};
 use common_models::tui_models::{ActorToTui, State, TokenCount};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -62,6 +65,84 @@ pub enum ProcessedItem {
         reasoning_id: Option<String>,
     },
     Tool(ToolCall),
+}
+
+impl ToolCall {
+    pub fn get_tool(&self) -> anyhow::Result<Tool> {
+        let tool = Tool::from_str(self.name.as_str())?;
+        match tool {
+            Tool::ReadFile(_) => {
+                let input = ReadFileInput::deserialize_lenient(&self.json)?;
+                Ok(Tool::ReadFile(ReadFile {
+                    id: self.id.id.clone(),
+                    input,
+                }))
+            }
+            Tool::InsertAfterLine(_) => {
+                let input = InsertAfterLineInput::deserialize_lenient(&self.json)?;
+                Ok(Tool::InsertAfterLine(InsertAfterLine {
+                    id: self.id.id.clone(),
+                    input,
+                }))
+            }
+            Tool::StringReplace(_) => {
+                let input = StringReplaceInput::deserialize_lenient(&self.json)?;
+                Ok(Tool::StringReplace(StringReplace {
+                    id: self.id.id.clone(),
+                    input,
+                }))
+            }
+            Tool::CargoCheck(_) => {
+                let input = if self.json.is_empty() {
+                    CargoCheckInput {
+                        include_warnings: None,
+                    }
+                } else {
+                    CargoCheckInput::deserialize_lenient(&self.json)?
+                };
+                Ok(Tool::CargoCheck(clients::tool_defs::CargoCheck {
+                    id: self.id.id.clone(),
+                    input,
+                }))
+            }
+        }
+    }
+
+    pub fn tool_use_line(&self) -> String {
+        self.get_tool()
+            .map(|t| match t {
+                Tool::ReadFile(rf) => match rf.input.range {
+                    Some(range) => format!(
+                        "- read `{}` (lines {}-{})",
+                        rf.input.file_path,
+                        range.start,
+                        range.end.saturating_sub(1)
+                    ),
+                    None => format!("- read `{}`", rf.input.file_path),
+                },
+                Tool::InsertAfterLine(insert) => {
+                    format!(
+                        "- edit `{}` after line {}",
+                        insert.input.file_path, insert.input.line_num
+                    )
+                }
+                Tool::StringReplace(replace) => {
+                    format!("- replace text in `{}`", replace.input.path)
+                }
+                Tool::CargoCheck(check) => {
+                    if check.input.include_warnings.unwrap_or(false) {
+                        "- run `cargo check` (with warnings)".to_string()
+                    } else {
+                        "- run `cargo check`".to_string()
+                    }
+                }
+            })
+            .unwrap_or_else(|_| self.fallback_tool_line())
+    }
+
+    fn fallback_tool_line(&self) -> String {
+        format!("- {}", self.name.replace('_', " "))
+    }
 }
 
 impl StreamNextStep {
