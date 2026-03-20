@@ -384,6 +384,13 @@ impl Display for FunctionMeta {
                 )
             }
             Some(func) => {
+                let func = if func.starts_with("fn") {
+                    func.replacen("fn", &format!("fn {}", self.name), 1)
+                } else if func.contains(&self.name) {
+                    func.clone()
+                } else {
+                    format!("fn {} {}", self.name, func)
+                };
                 write!(
                     f,
                     "{} @ {}:{}-{}",
