@@ -41,9 +41,7 @@ impl CurContext {
     pub async fn get_ctx(&self) -> String {
         let dir = self.cur_dir.to_str().unwrap_or("");
         let analytical_ctx = self.get_analytical_context().await.unwrap_or_default();
-        format!(
-            "# Current Context: \ncurrent directory: {dir}\n## Analytical Context: \nThe offset range are given along with the symbol information\n{analytical_ctx}"
-        )
+        format!("project_root: {dir}\n{analytical_ctx}")
     }
 
     pub async fn get_analytical_context(&self) -> anyhow::Result<String> {

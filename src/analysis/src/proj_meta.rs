@@ -277,6 +277,26 @@ impl ProjMeta {
         })
     }
 
+    fn compact_function(func: &FunctionMeta) -> String {
+        let sig = match &func.discription {
+            None => format!("fn {}()", func.name),
+            Some(desc) => {
+                if desc.starts_with("fn") {
+                    desc.replacen("fn", &format!("fn {}", func.name), 1)
+                } else if desc.contains(&func.name) {
+                    desc.clone()
+                } else {
+                    format!("fn {} {}", func.name, desc)
+                }
+            }
+        };
+
+        format!(
+            "{} @ {}:{}-{}",
+            sig, func.rpath, func.full_range.start, func.full_range.end
+        )
+    }
+
     fn into_meta<T: From<SymbolInfo>>(map: &HashMap<String, SymbolInfo>) -> HashMap<String, T> {
         map.iter()
             .map(|(k, info)| {
@@ -474,54 +494,145 @@ impl Display for TraitMeta {
 
 impl Display for ProjMeta {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        writeln!(f, "# Project Symbols")?;
-        writeln!(f, "Format: <name> @ <file>:<start_line>-<end_line>")?;
-        writeln!(f)?;
+        let mut files: Vec<_> = self.files.values().collect();
+        files.sort_by(|a, b| a.rpath.cmp(&b.rpath));
+        writeln!(
+            f,
+            "project_meta: files={}, structs={}, enums={}, traits={}, functions={}, type_aliases={}",
+            files.len(),
+            self.structs.len(),
+            self.enums.len(),
+            self.traits.len(),
+            self.functions.len(),
+            self.type_alias.len()
+        )?;
 
-        if !self.structs.is_empty() {
-            writeln!(f, "## Structs ({})", self.structs.len())?;
-            for s in &self.structs {
-                writeln!(f, "{}", s)?;
+        if !files.is_empty() {
+            writeln!(f, "files:")?;
+            for file in files.iter() {
+                writeln!(f, "- {}", file.rpath)?;
             }
-            writeln!(f)?;
         }
 
-        if !self.enums.is_empty() {
-            writeln!(f, "## Enums ({})", self.enums.len())?;
-            for e in &self.enums {
-                writeln!(f, "{}", e)?;
+        let mut structs = self.structs.clone();
+        structs.sort_by(|a, b| a.rpath.cmp(&b.rpath).then(a.name.cmp(&b.name)));
+        if !structs.is_empty() {
+            writeln!(f, "structs:")?;
+            for s in structs {
+                if s.functions.is_empty() {
+                    writeln!(
+                        f,
+                        "- {} @ {}:{}-{}",
+                        s.name, s.rpath, s.full_range.start, s.full_range.end
+                    )?;
+                } else {
+                    writeln!(
+                        f,
+                        "- {} @ {}:{}-{} | methods: [{}]",
+                        s.name,
+                        s.rpath,
+                        s.full_range.start,
+                        s.full_range.end,
+                        s.functions
+                            .iter()
+                            .map(Self::compact_function)
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    )?;
+                }
             }
-            writeln!(f)?;
         }
 
-        if !self.traits.is_empty() {
-            writeln!(f, "## Traits ({})", self.traits.len())?;
-            for t in &self.traits {
-                writeln!(f, "{}", t)?;
+        let mut enums = self.enums.clone();
+        enums.sort_by(|a, b| a.rpath.cmp(&b.rpath).then(a.name.cmp(&b.name)));
+        if !enums.is_empty() {
+            writeln!(f, "enums:")?;
+            for e in enums {
+                if e.functions.is_empty() {
+                    writeln!(
+                        f,
+                        "- {} @ {}:{}-{} | variants: [{}]",
+                        e.name,
+                        e.rpath,
+                        e.full_range.start,
+                        e.full_range.end,
+                        e.variants
+                            .iter()
+                            .map(|v| v.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    )?;
+                } else {
+                    writeln!(
+                        f,
+                        "- {} @ {}:{}-{} | variants: [{}] | methods: [{}]",
+                        e.name,
+                        e.rpath,
+                        e.full_range.start,
+                        e.full_range.end,
+                        e.variants
+                            .iter()
+                            .map(|v| v.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(","),
+                        e.functions
+                            .iter()
+                            .map(Self::compact_function)
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    )?;
+                }
             }
-            writeln!(f)?;
         }
 
-        if !self.functions.is_empty() {
-            writeln!(f, "## Standalone Functions ({})", self.functions.len())?;
-            for func in &self.functions {
-                writeln!(f, "{}", func)?;
+        let mut traits = self.traits.clone();
+        traits.sort_by(|a, b| a.rpath.cmp(&b.rpath).then(a.name.cmp(&b.name)));
+        if !traits.is_empty() {
+            writeln!(f, "traits:")?;
+            for t in traits {
+                if t.functions.is_empty() {
+                    writeln!(
+                        f,
+                        "- {} @ {}:{}-{}",
+                        t.name, t.rpath, t.full_range.start, t.full_range.end
+                    )?;
+                } else {
+                    writeln!(
+                        f,
+                        "- {} @ {}:{}-{} | methods: [{}]",
+                        t.name,
+                        t.rpath,
+                        t.full_range.start,
+                        t.full_range.end,
+                        t.functions
+                            .iter()
+                            .map(Self::compact_function)
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    )?;
+                }
             }
-            writeln!(f)?;
         }
 
-        if !self.type_alias.is_empty() {
-            writeln!(f, "## Type Aliases ({})", self.type_alias.len())?;
-            for ta in &self.type_alias {
-                writeln!(f, "{}", ta)?;
+        let mut funcs = self.functions.clone();
+        funcs.sort_by(|a, b| a.rpath.cmp(&b.rpath).then(a.name.cmp(&b.name)));
+        if !funcs.is_empty() {
+            writeln!(f, "functions:")?;
+            for func in funcs {
+                writeln!(f, "- {}", Self::compact_function(&func))?;
             }
-            writeln!(f)?;
         }
 
-        if !self.files.is_empty() {
-            writeln!(f, "## Files ({})", self.files.len())?;
-            for file in self.files.values() {
-                writeln!(f, "{}", file)?;
+        let mut type_alias = self.type_alias.clone();
+        type_alias.sort_by(|a, b| a.rpath.cmp(&b.rpath).then(a.name.cmp(&b.name)));
+        if !type_alias.is_empty() {
+            writeln!(f, "type_aliases:")?;
+            for ta in type_alias {
+                writeln!(
+                    f,
+                    "- {} @ {}:{}-{}",
+                    ta.name, ta.rpath, ta.full_range.start, ta.full_range.end
+                )?;
             }
         }
 
