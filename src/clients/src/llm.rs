@@ -89,6 +89,7 @@ pub struct ApiErrorDetail {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsageDelta {
     pub output_tokens: u32,
+    pub input_tokens: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

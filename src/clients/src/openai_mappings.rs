@@ -131,7 +131,8 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
                 Some(llm::StreamEvent::MessageDelta {
                     delta: llm::MessageDeltaContent { stop_reason },
                     usage: llm::UsageDelta {
-                        output_tokens: response.usage.map(|t| t.output_tokens).unwrap_or(0),
+                        output_tokens: response.usage.clone().map(|t| t.output_tokens).unwrap_or(0),
+                        input_tokens: response.usage.map(|t| t.input_tokens).unwrap_or(0),
                     },
                 })
             }

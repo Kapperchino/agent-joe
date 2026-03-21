@@ -184,6 +184,7 @@ impl Into<llm::StreamEvent> for StreamEvent {
                 },
                 usage: llm::UsageDelta {
                     output_tokens: usage.output_tokens,
+                    input_tokens: 0,
                 },
             },
             StreamEvent::MessageStop => llm::StreamEvent::MessageStop,

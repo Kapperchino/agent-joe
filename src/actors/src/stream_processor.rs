@@ -282,6 +282,7 @@ impl StreamProcessor {
             }
             StreamEvent::MessageDelta { usage, .. } => {
                 self.token_count.output_tokens += usage.output_tokens;
+                self.token_count.input_tokens += usage.input_tokens;
                 let _ = self
                     .reporter
                     .send(ActorToTui::TokensUpdated(self.token_count.clone()));
