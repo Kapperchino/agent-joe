@@ -1,6 +1,7 @@
 use crate::claude;
 use crate::claude::ToolSchemaDTO;
 use crate::llm::ContentBlock;
+use crate::tool_defs::GrepTool;
 use crate::tool_defs::InsertAfterLine;
 use crate::tool_defs::StringReplace;
 use crate::tool_defs::ToolDefTrait;
@@ -20,6 +21,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, BufReader};
 use tokio_stream::wrappers::LinesStream;
 use utils::cargo;
 use utils::cargo::Cargo;
+use utils::grep::Grep as ProjectGrep;
 use utils::text_search::TextSearch;
 
 impl Tool {
@@ -29,6 +31,7 @@ impl Tool {
             Tool::InsertAfterLine(_) => InsertAfterLine::tool_name().to_string(),
             Tool::StringReplace(_) => StringReplace::tool_name().to_string(),
             Tool::CargoCheck(_) => CargoCheck::tool_name().to_string(),
+            Tool::Grep(_) => GrepTool::tool_name().to_string(),
         }
     }
 
@@ -38,6 +41,7 @@ impl Tool {
             Tool::InsertAfterLine(insert) => insert.id.clone(),
             Tool::StringReplace(replace) => replace.id.clone(),
             Tool::CargoCheck(check) => check.id.clone(),
+            Tool::Grep(grep) => grep.id.clone(),
         }
     }
 
@@ -49,6 +53,7 @@ impl Tool {
                 Tool::InsertAfterLine(_) => InsertAfterLine::tool_description().to_string(),
                 Tool::StringReplace(_) => StringReplace::tool_description().to_string(),
                 Tool::CargoCheck(_) => CargoCheck::tool_description().to_string(),
+                Tool::Grep(_) => GrepTool::tool_description().to_string(),
             },
             input_schema: ToolSchemaDTO {
                 name: self.name(),
@@ -70,12 +75,17 @@ impl Tool {
                         .into_iter()
                         .map(|(k, v)| (k, v.into()))
                         .collect(),
+                    Tool::Grep(_) => GrepTool::field_properties()
+                        .into_iter()
+                        .map(|(k, v)| (k, v.into()))
+                        .collect(),
                 },
                 required: match self {
                     Tool::ReadFile(_) => ReadFile::required_fields(),
                     Tool::InsertAfterLine(_) => InsertAfterLine::required_fields(),
                     Tool::StringReplace(_) => StringReplace::required_fields(),
                     Tool::CargoCheck(_) => CargoCheck::required_fields(),
+                    Tool::Grep(_) => GrepTool::required_fields(),
                 },
             },
         })
@@ -87,6 +97,7 @@ impl Tool {
             Tool::InsertAfterLine(insert) => insert.req(),
             Tool::StringReplace(replace) => replace.req(),
             Tool::CargoCheck(check) => check.req(),
+            Tool::Grep(grep) => grep.req(),
         }
     }
 
@@ -129,6 +140,14 @@ impl Tool {
                     id,
                 })
             }
+            Tool::Grep(grep) => {
+                let result = grep.grep(ctx).await?;
+                Ok(ToolResult::GrepResult {
+                    res: result,
+                    tool: self.clone(),
+                    id,
+                })
+            }
         }
     }
 
@@ -138,6 +157,7 @@ impl Tool {
             "insert_after_line" => Ok(Tool::InsertAfterLine(InsertAfterLine::default())),
             "str_replace" => Ok(Tool::StringReplace(StringReplace::default())),
             "cargo_check" => Ok(Tool::CargoCheck(CargoCheck::default())),
+            "grep" => Ok(Tool::Grep(GrepTool::default())),
             _ => Err(Error::msg("Is not a tool")),
         }
     }
@@ -150,6 +170,7 @@ impl ToolResult {
             ToolResult::InsertAfterLineResult { tool, .. } => tool.clone(),
             ToolResult::StringReplaceResult { tool, .. } => tool.clone(),
             ToolResult::CargoCheckResult { tool, .. } => tool.clone(),
+            ToolResult::GrepResult { tool, .. } => tool.clone(),
             ToolResult::Error { tool, .. } => tool.clone(),
         }
     }
@@ -160,6 +181,7 @@ impl ToolResult {
             ToolResult::InsertAfterLineResult { id, .. } => id.clone(),
             ToolResult::StringReplaceResult { id, .. } => id.clone(),
             ToolResult::CargoCheckResult { id, .. } => id.clone(),
+            ToolResult::GrepResult { id, .. } => id.clone(),
             ToolResult::Error { id, .. } => id.clone(),
         }
     }
@@ -179,6 +201,11 @@ impl ToolResult {
             ToolResult::StringReplaceResult { status, id, .. } => ContentBlock::ToolResult {
                 tool_id: id.clone(),
                 content: status.to_string(),
+                is_error: None,
+            },
+            ToolResult::GrepResult { res, id, .. } => ContentBlock::ToolResult {
+                tool_id: id.clone(),
+                content: res.clone(),
                 is_error: None,
             },
             ToolResult::CargoCheckResult {
@@ -387,6 +414,31 @@ impl CargoCheck {
                     errors: failures,
                 })
             }
+        }
+    }
+}
+
+impl GrepTool {
+    async fn grep(&self, cur_context: &CurContext) -> anyhow::Result<String> {
+        let meta = cur_context.get_proj_meta().await?;
+        let mut file_paths: Vec<PathBuf> = meta.files.keys().map(PathBuf::from).collect();
+        file_paths.sort();
+        let matches = ProjectGrep::grep(
+            &self.input.regex,
+            file_paths,
+            self.input.add_start,
+            self.input.add_end,
+        )
+        .await?;
+
+        if matches.is_empty() {
+            Ok("No matches found".to_string())
+        } else {
+            Ok(matches
+                .into_iter()
+                .map(|grep_match| grep_match.to_string())
+                .collect::<Vec<_>>()
+                .join("\n\n"))
         }
     }
 }

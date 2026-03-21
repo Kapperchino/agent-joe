@@ -1,7 +1,8 @@
 use futures::StreamExt;
 use grep::regex::RegexMatcher;
 use grep::searcher::{Searcher, SearcherBuilder, Sink, SinkContext, SinkMatch};
-use std::path::Path;
+use std::fmt;
+use std::path::PathBuf;
 
 pub struct Grep {}
 
@@ -15,6 +16,25 @@ pub struct GrepMatch {
 pub struct GrepLine {
     pub line_number: Option<u64>,
     pub line: String,
+}
+
+impl fmt::Display for GrepLine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.line_number {
+            Some(i) => write!(f, "{i}: {}", self.line),
+            None => f.write_str(&self.line),
+        }
+    }
+}
+
+impl fmt::Display for GrepMatch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.path)?;
+        for line in &self.lines {
+            write!(f, "\n{line}")?;
+        }
+        Ok(())
+    }
 }
 
 struct LineCollector {
@@ -71,13 +91,13 @@ impl Sink for LineCollector {
 impl Grep {
     pub async fn grep(
         regex: &str,
-        files: Vec<&Path>,
+        files: Vec<PathBuf>,
         before: usize,
         after: usize,
     ) -> anyhow::Result<Vec<GrepMatch>> {
         let results: Vec<_> = futures::stream::iter(files)
             .map(|file| {
-                let file = file.to_owned().clone();
+                let file = file.clone();
                 let mut searcher = SearcherBuilder::new()
                     .line_number(true)
                     .before_context(before)
@@ -125,9 +145,7 @@ mod tests {
     async fn grep_returns_match_and_context_lines_with_numbers() {
         let path = temp_file("alpha\nbravo\nmatch here\ncharlie\ndelta\n");
 
-        let results = Grep::grep("match", vec![path.as_path()], 1, 1)
-            .await
-            .unwrap();
+        let results = Grep::grep("match", vec![path.clone()], 1, 1).await.unwrap();
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].path, path.to_string_lossy());
@@ -154,9 +172,7 @@ mod tests {
     async fn grep_splits_disjoint_match_groups_per_file() {
         let path = temp_file("alpha\nmatch\ncharlie\n\nomega\nmatch\nzulu\n");
 
-        let results = Grep::grep("match", vec![path.as_path()], 1, 1)
-            .await
-            .unwrap();
+        let results = Grep::grep("match", vec![path.clone()], 1, 1).await.unwrap();
 
         assert_eq!(results.len(), 2);
         assert_eq!(
@@ -168,7 +184,7 @@ mod tests {
                 },
                 GrepLine {
                     line_number: Some(2),
-                    line: "match one".into(),
+                    line: "match".into(),
                 },
                 GrepLine {
                     line_number: Some(3),
@@ -185,7 +201,7 @@ mod tests {
                 },
                 GrepLine {
                     line_number: Some(6),
-                    line: "match two".into(),
+                    line: "match".into(),
                 },
                 GrepLine {
                     line_number: Some(7),

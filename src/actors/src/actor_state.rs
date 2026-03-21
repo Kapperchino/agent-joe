@@ -154,6 +154,7 @@ impl ActorState {
                     .use_tool(id.clone(), &self.cur_context)
                     .await
             }
+            Tool::Grep(grep) => Tool::Grep(grep).use_tool(id.clone(), &self.cur_context).await,
         };
         match res {
             Ok(res) => Ok(res),

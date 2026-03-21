@@ -2,8 +2,9 @@ use crate::event_reporter::EventReporter;
 use anyhow::{Error, anyhow};
 use clients::llm::{ContentBlockInfo, Delta, StopReason, StreamEvent};
 use clients::tool_defs::{
-    CargoCheckInput, InsertAfterLine, InsertAfterLineInput, LenientDeserialize, ReadFile,
-    ReadFileInput, StringReplace, StringReplaceInput, Tool, ToolId, ToolUse,
+    CargoCheckInput, GrepInput, GrepTool, InsertAfterLine, InsertAfterLineInput,
+    LenientDeserialize, ReadFile, ReadFileInput, StringReplace, StringReplaceInput, Tool, ToolId,
+    ToolUse,
 };
 use common_models::tui_models::{ActorToTui, State, TokenCount};
 use std::collections::HashMap;
@@ -105,6 +106,13 @@ impl ToolCall {
                     input,
                 }))
             }
+            Tool::Grep(_) => {
+                let input = GrepInput::deserialize_lenient(&self.json)?;
+                Ok(Tool::Grep(GrepTool {
+                    id: self.id.id.clone(),
+                    input,
+                }))
+            }
         }
     }
 
@@ -136,6 +144,10 @@ impl ToolCall {
                         "- run `cargo check`".to_string()
                     }
                 }
+                Tool::Grep(grep) => format!(
+                    "- grep `{}` (before: {}, after: {})",
+                    grep.input.regex, grep.input.add_start, grep.input.add_end
+                ),
             })
             .unwrap_or_else(|_| self.fallback_tool_line())
     }

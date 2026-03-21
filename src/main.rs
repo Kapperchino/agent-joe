@@ -121,6 +121,7 @@ async fn main() {
                 Tool::InsertAfterLine(InsertAfterLine::default()),
                 Tool::StringReplace(StringReplace::default()),
                 Tool::CargoCheck(CargoCheck::default()),
+                Tool::Grep(clients::tool_defs::GrepTool::default()),
             ],
             tui_tx: tx,
             save_stream: true,

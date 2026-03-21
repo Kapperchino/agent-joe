@@ -36,6 +36,7 @@ pub enum Tool {
     InsertAfterLine(InsertAfterLine),
     StringReplace(StringReplace),
     CargoCheck(CargoCheck),
+    Grep(GrepTool),
 }
 
 #[derive(Debug, Clone)]
@@ -134,6 +135,27 @@ pub struct CargoCheckInput {
     pub include_warnings: Option<bool>,
 }
 
+#[derive(Default, Serialize, Deserialize, Debug, Clone, ToolDef)]
+#[tool(
+    name = "grep",
+    description = "Search the current project files with a regex and return matching lines with surrounding context"
+)]
+pub struct GrepTool {
+    #[tool(input)]
+    pub input: GrepInput,
+    pub id: String,
+}
+
+#[derive(Default, Serialize, Deserialize, Debug, Clone, ToolInput)]
+pub struct GrepInput {
+    #[tool(description = "The regex pattern to search for", required)]
+    pub regex: String,
+    #[tool(description = "Number of context lines to include before each match", required)]
+    pub add_start: usize,
+    #[tool(description = "Number of context lines to include after each match", required)]
+    pub add_end: usize,
+}
+
 #[derive(Debug)]
 pub enum CargoCheckResult {
     Success(Vec<String>),
@@ -167,6 +189,11 @@ pub enum ToolResult {
     CargoCheckResult {
         status: String,
         result: CargoCheckResult,
+        tool: Tool,
+        id: ToolId,
+    },
+    GrepResult {
+        res: String,
         tool: Tool,
         id: ToolId,
     },
