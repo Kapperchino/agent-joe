@@ -650,7 +650,6 @@ impl OpenAIClient {
                 buffer.push_str(&String::from_utf8_lossy(&chunk));
 
                 while let Some(event) = Self::extract_sse_event(&mut buffer)? {
-                                        warn!("{:?}", event);
                     yield event;
                 }
             }

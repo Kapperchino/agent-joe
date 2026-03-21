@@ -16,7 +16,7 @@ use futures::future;
 use ractor::{ActorCell, ActorRef};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use tracing::error;
+use tracing::{error, warn};
 
 pub struct ActorState {
     pub cur_context: CurContext,
@@ -38,7 +38,7 @@ impl ActorState {
     ) -> anyhow::Result<Self> {
         let cur_context_str = cur_context.get_ctx().await;
 
-        let stream_log_path = if dependency.save_stream {
+        let stream_log_path = if dependency.log_streams {
             let path = PathBuf::from(format!(
                 "./logs/stream_{}.jsonl",
                 std::time::SystemTime::now()
@@ -154,15 +154,22 @@ impl ActorState {
                     .use_tool(id.clone(), &self.cur_context)
                     .await
             }
-            Tool::Grep(grep) => Tool::Grep(grep).use_tool(id.clone(), &self.cur_context).await,
+            Tool::Grep(grep) => {
+                Tool::Grep(grep)
+                    .use_tool(id.clone(), &self.cur_context)
+                    .await
+            }
         };
         match res {
             Ok(res) => Ok(res),
-            Err(err) => Ok(ToolResult::Error {
-                message: err.to_string(),
-                tool,
-                id: id.clone(),
-            }),
+            Err(err) => {
+                warn!("{:?}", err.to_string());
+                Ok(ToolResult::Error {
+                    message: err.to_string(),
+                    tool,
+                    id: id.clone(),
+                })
+            }
         }
     }
 

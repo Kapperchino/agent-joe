@@ -71,7 +71,7 @@ pub struct Dependency {
     pub claude: LLmClient,
     pub tools: Vec<Tool>,
     pub tui_tx: mpsc::UnboundedSender<ActorToTui>,
-    pub save_stream: bool,
+    pub log_streams: bool,
 }
 
 impl Message {}

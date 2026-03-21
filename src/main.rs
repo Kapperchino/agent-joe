@@ -124,7 +124,7 @@ async fn main() {
                 Tool::Grep(clients::tool_defs::GrepTool::default()),
             ],
             tui_tx: tx,
-            save_stream: true,
+            log_streams: false,
         },
         supervisor.get_cell(),
     )
