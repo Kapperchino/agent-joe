@@ -266,7 +266,13 @@ impl ToolResult {
 impl ReadFile {
     pub async fn read_file(&self, cur_context: &CurContext) -> anyhow::Result<String> {
         let file_path: PathBuf = self.input.file_path.clone().into();
-
+        let file_path = if file_path.starts_with(&cur_context.rust_proj.root) {
+            file_path
+                .strip_prefix(&cur_context.rust_proj.root)
+                .map(|t| t.to_path_buf())
+        } else {
+            Ok(file_path)
+        }?;
         match file_path.is_dir() {
             false => match &self.input.range {
                 None => Self::read_entire_file(&file_path).await,
