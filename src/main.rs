@@ -100,7 +100,7 @@ async fn main() {
         api_key: auth.api_key,
         url: auth.base_url,
         extra_headers: auth.extra_headers,
-        model: "gpt-5.4-mini".to_string(),
+        model: "gpt-5.4".to_string(),
         ..Default::default()
     };
     let client = OpenAIClient::new(config).unwrap();
