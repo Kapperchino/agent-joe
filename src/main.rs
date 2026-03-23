@@ -2,6 +2,7 @@ use actors::actor::Dependency;
 use actors::supervisor::WorkerSupervisor;
 use actors::worker::Worker;
 use app::app::App;
+use app::init_app::InitApp;
 use clients::config::Config;
 use clients::llm::LLmClient;
 use clients::tool_defs::CargoCheck;
@@ -35,9 +36,25 @@ async fn main() {
 
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
-    let config = Config::new().unwrap();
-    let client = LLmClient::new(config).unwrap();
+    color_eyre::install().unwrap();
+    let mut terminal = ratatui::init_with_options(TerminalOptions {
+        viewport: Viewport::Inline(INLINE_VIEWPORT_HEIGHT),
+    });
+    execute!(stdout(), EnableBracketedPaste).ok();
 
+    let config = match Config::load_optional().unwrap() {
+        Some(config) => config,
+        None => {
+            let (returned_terminal, config) = InitApp::default().run(terminal).await.unwrap();
+            terminal = returned_terminal;
+            config
+        }
+    }
+    .prepare()
+    .await
+    .unwrap();
+
+    let client = LLmClient::new(config).unwrap();
     let (tx, rx) = mpsc::unbounded_channel();
 
     let (supervisor, _) = Actor::spawn(None, WorkerSupervisor, ())
@@ -64,11 +81,7 @@ async fn main() {
     .await
     .expect("Failed to start actor");
 
-    color_eyre::install().unwrap();
-    let terminal = ratatui::init_with_options(TerminalOptions {
-        viewport: Viewport::Inline(INLINE_VIEWPORT_HEIGHT),
-    });
-    execute!(stdout(), EnableBracketedPaste).ok();
+    terminal.clear().ok();
     let app = App::new(joe);
     app.run(terminal, rx).await.unwrap();
     actor_handle.await.expect("Actor failed to exit cleanly");

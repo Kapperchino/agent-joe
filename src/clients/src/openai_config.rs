@@ -6,7 +6,7 @@ use strum_macros::EnumMessage;
 const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 const CHATGPT_BASE_URL: &str = "https://api.openai.com/v1/responses";
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenAIConfig {
     pub auth: OpenAIAuthConfig,
     pub model: String,
@@ -36,14 +36,14 @@ pub enum OpenAIEffort {
     #[strum(message = "low")]
     Low,
     #[strum(message = "medium")]
-    Med,
+    Medium,
     #[strum(message = "high")]
     High,
     #[strum(message = "xhigh")]
     Xhigh,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum OpenAIAuthConfig {
     APIKey(OpenAIKeyConfig),
     Codex(OpenAICodexConfig),
@@ -61,4 +61,6 @@ pub struct OpenAICodexConfig {
     pub refresh_token: String,
     pub account_id: String,
     pub last_refresh: Duration,
+    #[serde(default)]
+    pub expires_at_ms: u64,
 }

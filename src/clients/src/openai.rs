@@ -543,6 +543,14 @@ impl OpenAIClient {
                     header::HeaderName::from_str("ChatGPT-Account-Id")?,
                     header::HeaderValue::from_str(codex.account_id.as_str())?,
                 );
+                headers.insert(
+                    header::HeaderName::from_static("openai-beta"),
+                    header::HeaderValue::from_static("responses=experimental"),
+                );
+                headers.insert(
+                    header::HeaderName::from_static("originator"),
+                    header::HeaderValue::from_static("codex_cli_rs"),
+                );
                 headers
             }
         };
@@ -563,7 +571,7 @@ impl OpenAIClient {
             input: req.input,
             instructions: req.instructions.unwrap_or_default(),
             temperature: None,
-            max_output_tokens: Some(64000),
+            max_output_tokens: None,
             tools: req.tools,
             reasoning: Some(self.config.get_reasoning()),
             stream: false,
@@ -595,7 +603,7 @@ impl OpenAIClient {
             input: req.input,
             instructions: req.instructions.unwrap_or_default(),
             temperature: None,
-            max_output_tokens: Some(64000),
+            max_output_tokens: None,
             tools: req.tools,
             reasoning: Some(self.config.get_reasoning()),
             stream: true,

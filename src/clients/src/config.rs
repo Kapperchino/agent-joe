@@ -1,12 +1,17 @@
 use crate::claude_config::ClaudeConfig;
+use crate::openai_codex_auth::refresh_codex_tokens;
 use crate::openai_config::OpenAIConfig;
+use anyhow::Context;
 use figment::Figment;
-use figment::providers::{Env, Format, Toml};
+use figment::providers::{Format, Toml};
 use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::PathBuf;
 
-pub const CONFIG_PATH: &str = "~/.turbo-code/config.toml";
+pub const CONFIG_DIR_NAME: &str = ".turbo-code";
+pub const CONFIG_FILE_NAME: &str = "config.toml";
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Config {
     Claude(ClaudeConfig),
     OpenAI(OpenAIConfig),
@@ -14,7 +19,48 @@ pub enum Config {
 
 impl Config {
     pub fn new() -> anyhow::Result<Config> {
-        let figment: Config = Figment::new().merge(Toml::file(CONFIG_PATH)).extract()?;
+        Self::load()
+    }
+
+    pub fn load() -> anyhow::Result<Config> {
+        let path = Self::path()?;
+        let figment: Config = Figment::new().merge(Toml::file(&path)).extract()?;
         Ok(figment)
+    }
+
+    pub fn load_optional() -> anyhow::Result<Option<Config>> {
+        let path = Self::path()?;
+        if !path.exists() {
+            return Ok(None);
+        }
+
+        Self::load().map(Some)
+    }
+
+    pub fn save(&self) -> anyhow::Result<()> {
+        let path = Self::path()?;
+        let parent = path
+            .parent()
+            .context("Config path should always have a parent directory")?;
+        fs::create_dir_all(parent)?;
+        fs::write(path, toml::to_string_pretty(self)?)?;
+        Ok(())
+    }
+
+    pub fn path() -> anyhow::Result<PathBuf> {
+        let home_dir = dirs::home_dir().context("Failed to determine the home directory")?;
+        Ok(home_dir.join(CONFIG_DIR_NAME).join(CONFIG_FILE_NAME))
+    }
+
+    pub async fn prepare(mut self) -> anyhow::Result<Config> {
+        if let Config::OpenAI(OpenAIConfig { auth, .. }) = &mut self {
+            if let crate::openai_config::OpenAIAuthConfig::Codex(codex) = auth {
+                if refresh_codex_tokens(codex).await? {
+                    self.save()?;
+                }
+            }
+        }
+
+        Ok(self)
     }
 }

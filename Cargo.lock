@@ -99,6 +99,7 @@ version = "0.1.0"
 dependencies = [
  "actors",
  "anyhow",
+ "clients",
  "color-eyre",
  "common-models",
  "crossterm",
@@ -108,6 +109,7 @@ dependencies = [
  "textwrap",
  "throbber-widgets-tui",
  "tokio",
+ "url",
 ]
 
 [[package]]
@@ -455,17 +457,23 @@ dependencies = [
  "analysis",
  "anyhow",
  "async-stream",
+ "base64",
+ "dirs",
  "figment",
  "futures",
+ "getrandom 0.3.3",
  "reqwest",
  "serde",
  "serde_json",
+ "serde_urlencoded",
+ "sha2",
  "strum 0.28.0",
  "strum_macros 0.28.0",
  "text-size",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
+ "toml 0.8.23",
  "tracing",
  "turbo-code-macros",
  "utils",
@@ -3983,6 +3991,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8bbf91e5a4d6315eee45e704372590b30e260ee83af6639d64557f51b067776"
 dependencies = [
  "serde_core",
+]
+
+[[package]]
+name = "serde_urlencoded"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3491c14715ca2294c4d6a88f15e84739788c1d030eed8c110436aafdaa2f3fd"
+dependencies = [
+ "form_urlencoded",
+ "itoa",
+ "ryu",
+ "serde",
 ]
 
 [[package]]
