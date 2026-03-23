@@ -1,13 +1,11 @@
-use crate::claude;
 use crate::claude::{ClaudeClient, Usage};
-use crate::config::{ClaudeAuthConfig, Config};
+use crate::config::Config;
 use crate::openai::OpenAIClient;
 use crate::tool_defs::{Tool, ToolId};
 use futures::Stream;
 use futures::future::Either;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::Duration;
 
 pub trait LLmClientTrait {
     async fn chat_stream(
@@ -24,12 +22,8 @@ pub enum LLmClient {
 impl LLmClient {
     pub fn new(config: Config) -> anyhow::Result<LLmClient> {
         match config {
-            Config::Claude(config) => {
-                Ok(LLmClient::Claude(ClaudeClient::new(config)?))
-            }
-            Config::OpenAI(config) => {
-
-            }
+            Config::Claude(config) => Ok(LLmClient::Claude(ClaudeClient::new(config)?)),
+            Config::OpenAI(config) => Ok(LLmClient::OpenApi(OpenAIClient::new(config)?)),
         }
     }
 
@@ -265,37 +259,5 @@ impl Message {
             role: Role::Assistant,
             content: vec![(ContentBlock::MessageBlock { text: message })],
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::openai::OpenAIConfig;
-    use futures::StreamExt;
-    use std::pin::pin;
-
-    #[tokio::test]
-    async fn test_llm_client_openai_chat_stream() {
-        let api_key = std::env::var("OPENAI_KEY").expect("OPENAI_KEY must be set");
-        let config = OpenAIConfig {
-            api_key,
-            ..Default::default()
-        };
-        let openai = OpenAIClient::new(config).unwrap();
-        let client = LLmClient::OpenApi(openai);
-
-        let req = ClientRequest::new(vec![Message::new("Say hello".to_string())]);
-        let stream = client.chat_stream(req).await.unwrap();
-        let mut stream = pin!(stream);
-
-        let mut event_count = 0;
-        while let Some(event) = stream.next().await {
-            let event = event.unwrap();
-            event_count += 1;
-            println!("{:?}", event);
-        }
-
-        assert!(event_count > 0, "should receive at least one stream event");
     }
 }

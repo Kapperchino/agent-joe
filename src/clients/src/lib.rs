@@ -6,3 +6,5 @@ pub mod openai;
 mod openai_mappings;
 pub mod tool_defs;
 pub mod tool_impls;
+mod openai_config;
+mod claude_config;

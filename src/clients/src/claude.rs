@@ -1,4 +1,3 @@
-use crate::config::{ClaudeAuthConfig, ClaudeConfig, ClaudeEffort};
 use crate::llm;
 use crate::llm::{ClientResponse, LLmClientTrait};
 use anyhow::{Error, anyhow};
@@ -10,6 +9,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::TryAcquireError::NoPermits;
+use crate::claude_config::{ClaudeAuthConfig, ClaudeConfig, ClaudeEffort};
 
 pub const MAX_TOKENS: u32 = 64000;
 #[derive(Error, Debug)]

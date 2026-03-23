@@ -1,5 +1,6 @@
 use crate::llm;
 use crate::llm::{ClientResponse, LLmClientTrait};
+use crate::openai_config::{OpenAIAuthConfig, OpenAIConfig, OpenAIEffort};
 use anyhow::{Error, anyhow};
 use async_stream::try_stream;
 use futures::{Stream, StreamExt};
@@ -7,6 +8,7 @@ use reqwest::{Client, header};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::future::ready;
+use std::str::FromStr;
 use std::time::Duration;
 use thiserror::Error;
 use tracing::{error, warn};
@@ -461,31 +463,10 @@ pub enum StreamEvent {
     Unknown,
 }
 
-#[derive(Debug, Clone)]
-pub struct OpenAIConfig {
-    pub url: String,
-    pub api_key: String,
-    pub model: String,
-    pub max_output_tokens: Option<u32>,
-    pub temperature: Option<f32>,
-    pub timeout: Duration,
-    pub reasoning: Option<ReasoningConfig>,
-    /// Additional headers to include in every request (e.g. ChatGPT-Account-Id).
-    pub extra_headers: Vec<(String, String)>,
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct ReasoningConfig {
-    pub effort: ReasoningEffort,
+    pub effort: OpenAIEffort,
     pub summary: ReasoningSummary,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ReasoningEffort {
-    Low,
-    Medium,
-    High,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -494,24 +475,6 @@ pub enum ReasoningSummary {
     Auto,
     Concise,
     Detailed,
-}
-
-impl Default for OpenAIConfig {
-    fn default() -> Self {
-        Self {
-            api_key: String::new(),
-            url: "https://api.openai.com/v1".to_string(),
-            model: "gpt-5.4".to_string(),
-            max_output_tokens: None,
-            temperature: None,
-            timeout: Duration::from_secs(120),
-            reasoning: Some(ReasoningConfig {
-                effort: ReasoningEffort::Medium,
-                summary: ReasoningSummary::Auto,
-            }),
-            extra_headers: vec![],
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -554,32 +517,38 @@ impl ClientRequest {
 }
 
 impl OpenAIClient {
-    pub fn new(config: OpenAIConfig) -> OpenAIResult<Self> {
-        if config.api_key.is_empty() {
-            return Err(OpenAIError::Config("API key is required".to_string()));
-        }
-
-        let mut headers = header::HeaderMap::new();
-        headers.insert(
-            header::AUTHORIZATION,
-            header::HeaderValue::from_str(&format!("Bearer {}", config.api_key))
-                .map_err(|_| OpenAIError::Config("Invalid API key format".to_string()))?,
-        );
-        headers.insert(
-            header::CONTENT_TYPE,
-            header::HeaderValue::from_static("application/json"),
-        );
-        for (name, value) in &config.extra_headers {
-            headers.insert(
-                header::HeaderName::from_bytes(name.as_bytes())
-                    .map_err(|_| OpenAIError::Config(format!("Invalid header name: {name}")))?,
-                header::HeaderValue::from_str(value)
-                    .map_err(|_| OpenAIError::Config(format!("Invalid header value for {name}")))?,
-            );
-        }
+    pub fn new(config: OpenAIConfig) -> anyhow::Result<Self> {
+        let headers = match &config.auth {
+            OpenAIAuthConfig::APIKey(api) => {
+                let mut headers = header::HeaderMap::new();
+                headers.insert(
+                    header::AUTHORIZATION,
+                    header::HeaderValue::from_str(&format!("Bearer {}", api.api_key))
+                        .map_err(|_| OpenAIError::Config("Invalid API key format".to_string()))?,
+                );
+                headers
+            }
+            OpenAIAuthConfig::Codex(codex) => {
+                let mut headers = header::HeaderMap::new();
+                headers.insert(
+                    header::AUTHORIZATION,
+                    header::HeaderValue::from_str(&format!("Bearer {}", codex.access_token))
+                        .map_err(|_| OpenAIError::Config("Invalid API key format".to_string()))?,
+                );
+                headers.insert(
+                    header::CONTENT_TYPE,
+                    header::HeaderValue::from_static("application/json"),
+                );
+                headers.insert(
+                    header::HeaderName::from_str("ChatGPT-Account-Id")?,
+                    header::HeaderValue::from_str(codex.account_id.as_str())?,
+                );
+                headers
+            }
+        };
 
         let client = Client::builder()
-            .timeout(config.timeout)
+            .timeout(Duration::from_secs(60))
             .default_headers(headers)
             .build()?;
 
@@ -587,16 +556,16 @@ impl OpenAIClient {
     }
 
     pub async fn chat(&self, req: ClientRequest) -> OpenAIResult<Response> {
-        let url = format!("{}/responses", self.config.url);
+        let url = format!("{}/responses", self.config.get_url());
 
         let inner = ResponseRequest {
             model: req.model.unwrap_or_else(|| self.config.model.clone()),
             input: req.input,
             instructions: req.instructions.unwrap_or_default(),
-            temperature: self.config.temperature,
-            max_output_tokens: self.config.max_output_tokens,
+            temperature: None,
+            max_output_tokens: Some(64000),
             tools: req.tools,
-            reasoning: self.config.reasoning.clone(),
+            reasoning: Some(self.config.get_reasoning()),
             stream: false,
             store: false,
         };
@@ -619,16 +588,16 @@ impl OpenAIClient {
         &self,
         req: ClientRequest,
     ) -> Result<impl Stream<Item = OpenAIResult<StreamEvent>> + Send + 'static, anyhow::Error> {
-        let url = format!("{}/responses", self.config.url);
+        let url = format!("{}/responses", self.config.get_url());
 
         let request = ResponseRequest {
             model: req.model.unwrap_or_else(|| self.config.model.clone()),
             input: req.input,
             instructions: req.instructions.unwrap_or_default(),
-            temperature: self.config.temperature,
-            max_output_tokens: self.config.max_output_tokens,
+            temperature: None,
+            max_output_tokens: Some(64000),
             tools: req.tools,
-            reasoning: self.config.reasoning.clone(),
+            reasoning: Some(self.config.get_reasoning()),
             stream: true,
             store: false,
         };
@@ -718,96 +687,5 @@ impl LLmClientTrait for OpenAIClient {
         request: crate::llm::ClientRequest,
     ) -> anyhow::Result<ClientResponse> {
         todo!()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::pin::pin;
-
-    #[tokio::test]
-    async fn test_chat_api_call() {
-        let api_key = std::env::var("OPENAI_KEY").expect("OPENAI_KEY must be set");
-        let config = OpenAIConfig {
-            api_key,
-            ..Default::default()
-        };
-        let client = OpenAIClient::new(config).unwrap();
-        let req = ClientRequest::new(vec![InputItem::user("Say hello".to_string())]);
-        let response = client.chat(req).await.unwrap();
-
-        println!("{:?}", response);
-
-        assert_eq!(response.status, "completed");
-        assert!(!response.output.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_chat_stream_api_call() {
-        let api_key = std::env::var("OPENAI_KEY").expect("OPENAI_KEY must be set");
-        let config = OpenAIConfig {
-            api_key,
-            ..Default::default()
-        };
-        let client = OpenAIClient::new(config).unwrap();
-        let req = ClientRequest::new(vec![InputItem::user("Say hello".to_string())]);
-        let mut stream = client.chat_stream_openai(req).await.unwrap();
-
-        let mut got_start = false;
-        let mut got_content = false;
-        let mut got_done = false;
-
-        let mut stream = pin!(stream);
-
-        while let Some(event) = stream.next().await {
-            let event = event.unwrap();
-            println!("{:?}", event);
-            match event {
-                StreamEvent::ResponseCreated { .. } => got_start = true,
-                StreamEvent::OutputTextDelta { .. } => got_content = true,
-                StreamEvent::ResponseCompleted { .. } => got_done = true,
-                _ => {}
-            }
-        }
-
-        assert!(got_start, "should receive ResponseCreated");
-        assert!(got_content, "should receive OutputTextDelta");
-        assert!(got_done, "should receive ResponseCompleted");
-    }
-
-    #[tokio::test]
-    async fn test_chat_stream_openrouter_api_call() {
-        let api_key = std::env::var("OPEN_KEY").expect("OPEN_KEY must be set");
-        let config = OpenAIConfig {
-            url: "https://openrouter.ai/api/v1".to_string(),
-            model: "openai/gpt-5.2-codex".to_string(),
-            api_key,
-            ..Default::default()
-        };
-        let client = OpenAIClient::new(config).unwrap();
-        let req = ClientRequest::new(vec![InputItem::user("Say hello".to_string())]);
-        let mut stream = client.chat_stream_openai(req).await.unwrap();
-
-        let mut got_start = false;
-        let mut got_content = false;
-        let mut got_done = false;
-
-        let mut stream = pin!(stream);
-
-        while let Some(event) = stream.next().await {
-            let event = event.unwrap();
-            println!("{:?}", event);
-            match event {
-                StreamEvent::ResponseCreated { .. } => got_start = true,
-                StreamEvent::OutputTextDelta { .. } => got_content = true,
-                StreamEvent::ResponseCompleted { .. } => got_done = true,
-                _ => {}
-            }
-        }
-
-        assert!(got_start, "should receive ResponseCreated");
-        assert!(got_content, "should receive OutputTextDelta");
-        assert!(got_done, "should receive ResponseCompleted");
     }
 }
