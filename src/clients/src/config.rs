@@ -5,8 +5,8 @@ use anyhow::Context;
 use figment::Figment;
 use figment::providers::{Format, Toml};
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::path::PathBuf;
+use tokio::fs;
 
 pub const CONFIG_DIR_NAME: &str = ".turbo-code";
 pub const CONFIG_FILE_NAME: &str = "config.toml";
@@ -19,13 +19,15 @@ pub enum Config {
 
 impl Config {
     pub fn new() -> anyhow::Result<Config> {
-        Self::load()
-    }
-
-    pub fn load() -> anyhow::Result<Config> {
         let path = Self::path()?;
         let figment: Config = Figment::new().merge(Toml::file(&path)).extract()?;
         Ok(figment)
+    }
+
+    pub async fn delete() -> anyhow::Result<()> {
+        let path = Self::path()?;
+        fs::remove_file(path).await?;
+        Ok(())
     }
 
     pub fn load_optional() -> anyhow::Result<Option<Config>> {
@@ -33,17 +35,16 @@ impl Config {
         if !path.exists() {
             return Ok(None);
         }
-
-        Self::load().map(Some)
+        Self::new().map(Some)
     }
 
-    pub fn save(&self) -> anyhow::Result<()> {
+    pub async fn save(&self) -> anyhow::Result<()> {
         let path = Self::path()?;
         let parent = path
             .parent()
             .context("Config path should always have a parent directory")?;
-        fs::create_dir_all(parent)?;
-        fs::write(path, toml::to_string_pretty(self)?)?;
+        fs::create_dir_all(parent).await?;
+        fs::write(path, toml::to_string_pretty(self)?).await?;
         Ok(())
     }
 
@@ -56,7 +57,7 @@ impl Config {
         if let Config::OpenAI(OpenAIConfig { auth, .. }) = &mut self {
             if let crate::openai_config::OpenAIAuthConfig::Codex(codex) = auth {
                 if refresh_codex_tokens(codex).await? {
-                    self.save()?;
+                    self.save().await?;
                 }
             }
         }

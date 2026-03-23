@@ -10,12 +10,14 @@ pub enum ActorToTui {
 #[derive(Debug, Clone)]
 pub enum Command {
     PrintContext,
+    Logout,
 }
 
 impl Command {
     pub fn parse(string: &str) -> anyhow::Result<Command> {
         match string {
             "context" => Ok(Command::PrintContext),
+            "logout" => Ok(Command::Logout),
             _ => Err(anyhow::anyhow!("Invalid command")),
         }
     }

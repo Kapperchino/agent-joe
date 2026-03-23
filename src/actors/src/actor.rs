@@ -226,6 +226,20 @@ impl Actor for Worker {
                     let ctx = state.cur_context.get_ctx().await;
                     let _ = state.reporter.send(ActorToTui::CommandResult(command, ctx));
                 }
+                Command::Logout => match clients::config::Config::delete().await {
+                    Ok(_) => {
+                        let _ = state.reporter.send(ActorToTui::CommandResult(
+                            command,
+                            "Logged out. Removed config".to_string(),
+                        ));
+                    }
+                    Err(err) => {
+                        let _ = state.reporter.send(ActorToTui::CommandResult(
+                            command,
+                            format!("Deletion failed: {err}"),
+                        ));
+                    }
+                },
             },
         }
         Ok(())

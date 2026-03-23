@@ -5,7 +5,7 @@ use clients::openai_codex_auth::{
 };
 use clients::{
     ClaudeAuthConfig, ClaudeConfig, ClaudeEffort, ClaudeKeyConfig, OpenAIAuthConfig,
-    OpenAIConfig, OpenAICodexConfig, OpenAIEffort, OpenAIKeyConfig,
+    OpenAICodexConfig, OpenAIConfig, OpenAIEffort, OpenAIKeyConfig,
 };
 use crossterm::event::{EventStream, KeyCode, KeyEvent};
 use futures::StreamExt;
@@ -132,10 +132,9 @@ impl InitApp {
                 }
                 Ok(None)
             }
-            Event::FocusGained
-            | Event::FocusLost
-            | Event::Mouse(_)
-            | Event::Resize(_, _) => Ok(None),
+            Event::FocusGained | Event::FocusLost | Event::Mouse(_) | Event::Resize(_, _) => {
+                Ok(None)
+            }
         }
     }
 
@@ -171,7 +170,9 @@ impl InitApp {
             KeyCode::Right => {
                 match self.selected_field {
                     InitField::Provider => self.set_provider(self.provider.next()),
-                    InitField::OpenAIAuth => self.set_openai_auth_mode(self.openai_auth_mode.next()),
+                    InitField::OpenAIAuth => {
+                        self.set_openai_auth_mode(self.openai_auth_mode.next())
+                    }
                     field if field.is_text_input() => self.move_cursor_right(),
                     _ => {}
                 }
@@ -198,7 +199,11 @@ impl InitApp {
     }
 
     async fn poll_codex_callback(&mut self) -> Result<Option<Config>> {
-        let event = match self.codex_login.as_mut().and_then(|login| login.callback_rx.as_mut()) {
+        let event = match self
+            .codex_login
+            .as_mut()
+            .and_then(|login| login.callback_rx.as_mut())
+        {
             Some(rx) => match rx.try_recv() {
                 Ok(event) => Some(event),
                 Err(mpsc::error::TryRecvError::Empty)
@@ -219,9 +224,9 @@ impl InitApp {
 
     async fn submit_action(&mut self) -> Result<Option<Config>> {
         match self.provider {
-            Provider::Claude => self.save_claude_config(),
+            Provider::Claude => self.save_claude_config().await,
             Provider::OpenAI => match self.openai_auth_mode {
-                OpenAIAuthMode::ApiKey => self.save_openai_api_key_config(),
+                OpenAIAuthMode::ApiKey => self.save_openai_api_key_config().await,
                 OpenAIAuthMode::Codex => {
                     if self.codex_login.is_some() {
                         self.submit_codex_manual_redirect().await
@@ -234,7 +239,7 @@ impl InitApp {
         }
     }
 
-    fn save_claude_config(&mut self) -> Result<Option<Config>> {
+    async fn save_claude_config(&mut self) -> Result<Option<Config>> {
         let api_key = self.api_key.trim();
         if api_key.is_empty() {
             self.error = Some("API key is required".to_string());
@@ -254,11 +259,11 @@ impl InitApp {
             model: model.to_string(),
             effort: ClaudeEffort::Med,
         });
-        config.save()?;
+        config.save().await?;
         Ok(Some(config))
     }
 
-    fn save_openai_api_key_config(&mut self) -> Result<Option<Config>> {
+    async fn save_openai_api_key_config(&mut self) -> Result<Option<Config>> {
         let api_key = self.api_key.trim();
         if api_key.is_empty() {
             self.error = Some("API key is required".to_string());
@@ -279,7 +284,7 @@ impl InitApp {
             model: model.to_string(),
             effort: OpenAIEffort::Medium,
         });
-        config.save()?;
+        config.save().await?;
         Ok(Some(config))
     }
 
@@ -302,9 +307,15 @@ impl InitApp {
         };
         let browser_opened = open_browser(&flow.auth_url);
         if browser_opened {
-            self.status = Some("Browser login started. Complete auth there or paste the redirect URL here.".to_string());
+            self.status = Some(
+                "Browser login started. Complete auth there or paste the redirect URL here."
+                    .to_string(),
+            );
         } else if self.status.is_none() {
-            self.status = Some("Open the authorization URL manually, then paste the redirect URL here.".to_string());
+            self.status = Some(
+                "Open the authorization URL manually, then paste the redirect URL here."
+                    .to_string(),
+            );
         }
 
         self.error = None;
@@ -346,7 +357,7 @@ impl InitApp {
             .context("Codex login was not initialized")?;
         let codex_auth = exchange_authorization_code(&code, &login.verifier).await?;
         let config = self.build_codex_config(codex_auth)?;
-        config.save()?;
+        config.save().await?;
         Ok(Some(config))
     }
 
@@ -513,7 +524,8 @@ impl InitApp {
     }
 
     fn byte_index(input: &str, character_index: usize) -> usize {
-        input.char_indices()
+        input
+            .char_indices()
             .map(|(i, _)| i)
             .nth(character_index)
             .unwrap_or(input.len())
@@ -589,7 +601,10 @@ impl InitApp {
                     ],
                 ));
                 if self.selected_field == InitField::Credential {
-                    cursor = Some((form_area.x + 12 + self.character_index as u16, form_area.y + y));
+                    cursor = Some((
+                        form_area.x + 12 + self.character_index as u16,
+                        form_area.y + y,
+                    ));
                 }
                 lines.push(Line::default());
             }
@@ -618,8 +633,10 @@ impl InitApp {
                         ],
                     ));
                     if self.selected_field == InitField::RedirectInput {
-                        cursor =
-                            Some((form_area.x + 12 + self.character_index as u16, form_area.y + y));
+                        cursor = Some((
+                            form_area.x + 12 + self.character_index as u16,
+                            form_area.y + y,
+                        ));
                     }
                     lines.push(Line::default());
                 } else {
@@ -648,7 +665,10 @@ impl InitApp {
             ],
         ));
         if self.selected_field == InitField::Model {
-            cursor = Some((form_area.x + 12 + self.character_index as u16, form_area.y + model_y));
+            cursor = Some((
+                form_area.x + 12 + self.character_index as u16,
+                form_area.y + model_y,
+            ));
         }
         lines.push(Line::default());
 
@@ -698,7 +718,11 @@ impl InitApp {
     }
 
     fn form_line(&self, field: InitField, spans: Vec<Span<'static>>) -> Line<'static> {
-        let prefix = if self.selected_field == field { "› " } else { "  " };
+        let prefix = if self.selected_field == field {
+            "› "
+        } else {
+            "  "
+        };
         let prefix_style = if self.selected_field == field {
             Style::default()
                 .fg(Color::Yellow)
@@ -743,7 +767,11 @@ impl InitApp {
     }
 
     fn action_button(&self) -> Span<'static> {
-        let label = match (self.provider, self.openai_auth_mode, self.codex_login.is_some()) {
+        let label = match (
+            self.provider,
+            self.openai_auth_mode,
+            self.codex_login.is_some(),
+        ) {
             (Provider::OpenAI, OpenAIAuthMode::Codex, false) => "[ Start Codex login ]",
             (Provider::OpenAI, OpenAIAuthMode::Codex, true) => "[ Finish Codex login ]",
             _ => "[ Save config ]",
@@ -867,9 +895,14 @@ fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
 fn codex_status_line(login: &CodexLoginState) -> String {
     match (login.browser_opened, login.server_ready) {
         (true, true) => "Browser opened and callback listener is ready.".to_string(),
-        (true, false) => "Browser opened. Paste the redirect URL because local callback is unavailable.".to_string(),
+        (true, false) => {
+            "Browser opened. Paste the redirect URL because local callback is unavailable."
+                .to_string()
+        }
         (false, true) => "Open the auth URL manually. Callback listener is ready.".to_string(),
-        (false, false) => "Open the auth URL manually, then paste the redirect URL here.".to_string(),
+        (false, false) => {
+            "Open the auth URL manually, then paste the redirect URL here.".to_string()
+        }
     }
 }
 
