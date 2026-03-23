@@ -1,3 +1,4 @@
+use crate::config::{ClaudeAuthConfig, ClaudeConfig, ClaudeEffort};
 use crate::llm;
 use crate::llm::{ClientResponse, LLmClientTrait};
 use anyhow::{Error, anyhow};
@@ -8,7 +9,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 use thiserror::Error;
+use tokio::sync::TryAcquireError::NoPermits;
 
+pub const MAX_TOKENS: u32 = 64000;
 #[derive(Error, Debug)]
 pub enum ClaudeError {
     #[error("HTTP request failed: {0}")]
@@ -61,6 +64,8 @@ pub struct ChatRequest {
     pub thinking: Option<Thinking>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<Tool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<ClaudeEffort>,
 }
 
 #[derive(Debug, Serialize)]
@@ -76,6 +81,8 @@ struct ChatRequestStream {
     pub thinking: Option<Thinking>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<Tool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<ClaudeEffort>,
     pub stream: bool,
 }
 
@@ -290,28 +297,6 @@ pub enum ToolProperty {
     },
 }
 
-#[derive(Debug, Clone)]
-pub struct ClaudeConfig {
-    pub api_key: String,
-    pub model: String,
-    pub max_tokens: u32,
-    pub temperature: Option<f32>,
-    pub timeout: Duration,
-    pub tools: Vec<Tool>,
-}
-
-impl Default for ClaudeConfig {
-    fn default() -> Self {
-        Self {
-            api_key: String::new(),
-            model: "claude-sonnet-4-5-20250929".to_string(),
-            max_tokens: 64000,
-            temperature: Some(1.0),
-            timeout: Duration::from_secs(60),
-            tools: vec![],
-        }
-    }
-}
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct CacheControl {
     pub(crate) cache_type: String,
@@ -321,8 +306,8 @@ pub struct CacheControl {
 #[derive(Debug)]
 pub struct ClaudeClient {
     client: Client,
-    config: ClaudeConfig,
     base_url: String,
+    config: ClaudeConfig,
 }
 
 pub struct ClientRequest {
@@ -333,70 +318,23 @@ pub struct ClientRequest {
     // this shit needs to be turned ON
     pub(crate) cache_control: CacheControl,
     pub tools: Vec<Tool>,
-}
-
-impl ClientRequest {
-    pub fn new(messages: Vec<Message>) -> ClientRequest {
-        ClientRequest {
-            messages,
-            thinking: false,
-            system: None,
-            model: None,
-            tools: vec![],
-            cache_control: CacheControl {
-                cache_type: "ephemeral".to_string(),
-                ttl: "5m".to_string(),
-            },
-        }
-    }
-
-    pub fn with_thinking(self) -> ClientRequest {
-        ClientRequest {
-            messages: self.messages,
-            thinking: true,
-            system: self.system,
-            model: self.model,
-            tools: self.tools,
-            cache_control: self.cache_control,
-        }
-    }
-
-    pub fn with_model(self, model: String) -> ClientRequest {
-        ClientRequest {
-            messages: self.messages,
-            thinking: self.thinking,
-            system: self.system,
-            model: Some(model),
-            tools: self.tools,
-            cache_control: self.cache_control,
-        }
-    }
-
-    pub fn with_tools(self, tools: Vec<Tool>) -> ClientRequest {
-        ClientRequest {
-            messages: self.messages,
-            thinking: self.thinking,
-            system: self.system,
-            model: self.model,
-            cache_control: self.cache_control,
-            tools,
-        }
-    }
+    pub effort: Option<ClaudeEffort>,
 }
 
 impl ClaudeClient {
     const BASE_URL: &'static str = "https://api.anthropic.com/v1";
     const API_VERSION: &'static str = "2023-06-01";
     pub fn new(config: ClaudeConfig) -> ClaudeResult<Self> {
-        if config.api_key.is_empty() {
-            return Err(ClaudeError::Config("API key is required".to_string()));
-        }
-
         let mut headers = header::HeaderMap::new();
         headers.insert(
             "x-api-key",
-            header::HeaderValue::from_str(&config.api_key)
-                .map_err(|_| ClaudeError::Config("Invalid API key format".to_string()))?,
+            header::HeaderValue::from_str(
+                &match &config.auth {
+                    ClaudeAuthConfig::APIKey(key) => key,
+                }
+                .api_key,
+            )
+            .map_err(|_| ClaudeError::Config("Invalid API key format".to_string()))?,
         );
         headers.insert(
             "anthropic-version",
@@ -408,7 +346,7 @@ impl ClaudeClient {
         );
 
         let client = Client::builder()
-            .timeout(config.timeout)
+            .timeout(Duration::from_secs(60))
             .default_headers(headers)
             .build()?;
 
@@ -421,10 +359,10 @@ impl ClaudeClient {
     pub async fn chat(&self, req: ClientRequest) -> ClaudeResult<ChatResponse> {
         let inner_req = ChatRequest {
             model: req.model.unwrap_or(self.config.model.clone()),
-            max_tokens: self.config.max_tokens,
+            max_tokens: MAX_TOKENS,
             messages: req.messages,
             system: req.system,
-            temperature: self.config.temperature,
+            temperature: None,
             thinking: match req.thinking {
                 true => Some(Thinking {
                     thinking_type: ThinkingType::Enabled,
@@ -433,6 +371,7 @@ impl ClaudeClient {
                 false => None,
             },
             tools: req.tools,
+            effort: req.effort,
         };
         self.send_request(inner_req).await
     }
@@ -454,10 +393,10 @@ impl ClaudeClient {
 
         let request = ChatRequestStream {
             model: req.model.unwrap_or_else(|| self.config.model.clone()),
-            max_tokens: self.config.max_tokens,
+            max_tokens: MAX_TOKENS,
             messages: req.messages,
             system: req.system,
-            temperature: self.config.temperature,
+            temperature: None,
             thinking: if req.thinking {
                 Some(Thinking {
                     thinking_type: ThinkingType::Enabled,
@@ -468,6 +407,7 @@ impl ClaudeClient {
             },
             tools: req.tools,
             stream: true,
+            effort: req.effort,
         };
 
         match client.post(&url).json(&request).send().await {

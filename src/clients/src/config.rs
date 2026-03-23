@@ -1,28 +1,39 @@
+use figment::Figment;
+use figment::providers::{Env, Format, Toml};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use strum_macros::EnumMessage;
 
+pub const CONFIG_PATH: &str = "~/.turbo-code/config.toml";
+
 #[derive(Debug, Serialize, Deserialize)]
-enum Config {
+pub enum Config {
     Claude(ClaudeConfig),
     OpenAI(OpenAIConfig),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct ClaudeConfig {
-    auth: ClaudeAuthConfig,
-    model: String,
-    effort: ClaudeEffort,
+impl Config {
+    pub fn new() -> anyhow::Result<Config> {
+        let figment: Config = Figment::new().merge(Toml::file(CONFIG_PATH)).extract()?;
+        Ok(figment)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaudeConfig {
+    pub auth: ClaudeAuthConfig,
+    pub model: String,
+    pub effort: ClaudeEffort,
 }
 #[derive(Debug, Serialize, Deserialize)]
 struct OpenAIConfig {
-    auth: OpenAIAuthConfig,
-    model: String,
-    effort: OpenAIEffort,
+    pub auth: OpenAIAuthConfig,
+    pub model: String,
+    pub effort: OpenAIEffort,
 }
 
-#[derive(PartialEq, Eq, Debug, EnumMessage, Serialize, Deserialize)]
-enum ClaudeEffort {
+#[derive(PartialEq, Eq, Debug, Clone, EnumMessage, Serialize, Deserialize)]
+pub enum ClaudeEffort {
     #[strum(message = "low")]
     #[serde(rename = "low")]
     Low,
@@ -53,8 +64,8 @@ enum OpenAIEffort {
 }
 
 // we could add auth login later, could get ppl banned
-#[derive(Debug, Serialize, Deserialize)]
-enum ClaudeAuthConfig {
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ClaudeAuthConfig {
     APIKey(ClaudeKeyConfig),
 }
 
@@ -65,8 +76,8 @@ enum OpenAIAuthConfig {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-struct ClaudeKeyConfig {
-    api_key: String,
+pub struct ClaudeKeyConfig {
+    pub api_key: String,
 }
 #[derive(Debug, Deserialize, Serialize, Clone)]
 struct OpenAIKeyConfig {

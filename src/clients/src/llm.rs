@@ -1,10 +1,13 @@
+use crate::claude;
 use crate::claude::{ClaudeClient, Usage};
+use crate::config::{ClaudeAuthConfig, Config};
 use crate::openai::OpenAIClient;
 use crate::tool_defs::{Tool, ToolId};
 use futures::Stream;
 use futures::future::Either;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::time::Duration;
 
 pub trait LLmClientTrait {
     async fn chat_stream(
@@ -19,6 +22,17 @@ pub enum LLmClient {
 }
 
 impl LLmClient {
+    pub fn new(config: Config) -> anyhow::Result<LLmClient> {
+        match config {
+            Config::Claude(config) => {
+                Ok(LLmClient::Claude(ClaudeClient::new(config)?))
+            }
+            Config::OpenAI(config) => {
+
+            }
+        }
+    }
+
     pub async fn chat_stream(
         &self,
         req: ClientRequest,

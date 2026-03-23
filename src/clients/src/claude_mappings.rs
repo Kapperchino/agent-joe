@@ -107,6 +107,7 @@ impl From<llm::ClientRequest> for ClientRequest {
                 cache_type: "ephemeral".to_string(),
                 ttl: "5m".to_string(),
             },
+            effort: None,
         }
     }
 }
