@@ -94,7 +94,7 @@ impl Default for InitApp {
 }
 
 impl InitApp {
-    pub async fn run(mut self, mut terminal: DefaultTerminal) -> Result<(DefaultTerminal, Config)> {
+    pub async fn run(mut self, mut terminal: DefaultTerminal) -> Result<DefaultTerminal> {
         let mut events = EventStream::new();
         let period = Duration::from_secs_f32(1.0 / 30.0);
         let mut interval = tokio::time::interval(period);
@@ -103,16 +103,16 @@ impl InitApp {
             tokio::select! {
                 _ = interval.tick() => {}
                 Some(Ok(event)) = events.next() => {
-                    if let Some(config) = self.handle_term_event(&event).await? {
+                    if let Some(_) = self.handle_term_event(&event).await? {
                         terminal.clear()?;
-                        return Ok((terminal, config));
+                        return Ok(terminal);
                     }
                 }
             }
 
-            if let Some(config) = self.poll_codex_callback().await? {
+            if let Some(_) = self.poll_codex_callback().await? {
                 terminal.clear()?;
-                return Ok((terminal, config));
+                return Ok(terminal);
             }
 
             terminal.draw(|frame| self.draw(frame))?;

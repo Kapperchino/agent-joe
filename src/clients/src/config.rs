@@ -53,6 +53,7 @@ impl Config {
         Ok(home_dir.join(CONFIG_DIR_NAME).join(CONFIG_FILE_NAME))
     }
 
+    //TODO: wtf is this shit
     pub async fn prepare(mut self) -> anyhow::Result<Config> {
         if let Config::OpenAI(OpenAIConfig { auth, .. }) = &mut self {
             if let crate::openai_config::OpenAIAuthConfig::Codex(codex) = auth {

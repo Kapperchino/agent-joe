@@ -1,11 +1,13 @@
 use crate::openai::{ReasoningConfig, ReasoningSummary};
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use anyhow::Context;
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use strum_macros::EnumMessage;
 
 const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 const CHATGPT_BASE_URL: &str = "https://api.openai.com/v1/responses";
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenAIConfig {
     pub auth: OpenAIAuthConfig,
@@ -26,7 +28,8 @@ impl OpenAIConfig {
     pub fn get_reasoning(&self) -> ReasoningConfig {
         ReasoningConfig {
             effort: self.effort.clone(),
-            summary: ReasoningSummary::Auto }
+            summary: ReasoningSummary::Auto,
+        }
     }
 }
 

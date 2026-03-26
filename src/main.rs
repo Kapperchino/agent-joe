@@ -1,8 +1,8 @@
 use actors::actor::Dependency;
 use actors::supervisor::WorkerSupervisor;
 use actors::worker::Worker;
-use app::app::App;
 use app::init_app::InitApp;
+use app::tui::TUIApp;
 use clients::config::Config;
 use clients::llm::LLmClient;
 use clients::tool_defs::CargoCheck;
@@ -42,17 +42,19 @@ async fn main() {
     });
     execute!(stdout(), EnableBracketedPaste).ok();
 
-    let config = match Config::load_optional().unwrap() {
-        Some(config) => config,
-        None => {
-            let (returned_terminal, config) = InitApp::default().run(terminal).await.unwrap();
-            terminal = returned_terminal;
-            config
-        }
-    }
-    .prepare()
-    .await
-    .unwrap();
+    let config = Config::load_optional().unwrap();
+    let (config, mut terminal) = if config.is_none() {
+        let continue_term = InitApp::default().run(terminal).await.unwrap();
+        let config = Config::load_optional()
+            .unwrap()
+            .unwrap()
+            .prepare()
+            .await
+            .unwrap();
+        (config, continue_term)
+    } else {
+        (config.unwrap(), terminal)
+    };
 
     let client = LLmClient::new(config).unwrap();
     let (tx, rx) = mpsc::unbounded_channel();
@@ -82,7 +84,7 @@ async fn main() {
     .expect("Failed to start actor");
 
     terminal.clear().ok();
-    let app = App::new(joe);
+    let app = TUIApp::new(joe);
     app.run(terminal, rx).await.unwrap();
     actor_handle.await.expect("Actor failed to exit cleanly");
     execute!(stdout(), DisableBracketedPaste).ok();

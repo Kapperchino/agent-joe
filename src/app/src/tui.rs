@@ -24,7 +24,7 @@ use ratatui::{
 use throbber_widgets_tui::{Throbber, ThrobberState};
 use tokio::sync::mpsc::UnboundedReceiver;
 
-pub struct App {
+pub struct TUIApp {
     character_index: usize,
     input: String,
     messages: Vec<String>,
@@ -46,7 +46,7 @@ enum InputMode {
     Editing,
 }
 
-impl App {
+impl TUIApp {
     pub fn new(actor_ref: ActorRef<Message>) -> Self {
         Self {
             character_index: 0,
