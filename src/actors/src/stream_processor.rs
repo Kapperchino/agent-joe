@@ -115,46 +115,6 @@ impl ToolCall {
             }
         }
     }
-
-    pub fn tool_use_line(&self) -> String {
-        self.get_tool()
-            .map(|t| match t {
-                Tool::ReadFile(rf) => match rf.input.range {
-                    Some(range) => format!(
-                        "- read `{}` (lines {}-{})",
-                        rf.input.file_path,
-                        range.start,
-                        range.end.saturating_sub(1)
-                    ),
-                    None => format!("- read `{}`", rf.input.file_path),
-                },
-                Tool::InsertAfterLine(insert) => {
-                    format!(
-                        "- edit `{}` after line {}",
-                        insert.input.file_path, insert.input.line_num
-                    )
-                }
-                Tool::StringReplace(replace) => {
-                    format!("- replace text in `{}`", replace.input.path)
-                }
-                Tool::CargoCheck(check) => {
-                    if check.input.include_warnings.unwrap_or(false) {
-                        "- run `cargo check` (with warnings)".to_string()
-                    } else {
-                        "- run `cargo check`".to_string()
-                    }
-                }
-                Tool::Grep(grep) => format!(
-                    "- grep `{}` (before: {}, after: {})",
-                    grep.input.regex, grep.input.add_start, grep.input.add_end
-                ),
-            })
-            .unwrap_or_else(|_| self.fallback_tool_line())
-    }
-
-    fn fallback_tool_line(&self) -> String {
-        format!("- {}", self.name.replace('_', " "))
-    }
 }
 
 impl StreamNextStep {

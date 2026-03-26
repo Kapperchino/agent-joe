@@ -169,16 +169,17 @@ impl Actor for Worker {
                 state.save_history(res)?;
             }
             Message::UseTool(vec) => {
-                let tool_lines: Vec<String> = vec
+                let tool_lines: Result<Vec<String>, anyhow::Error> = vec
                     .iter()
                     .filter_map(|x| {
                         if let ProcessedItem::Tool(t) = &x.processed {
-                            Some(t.tool_use_line())
+                            Some(t.get_tool().map(|t| t.to_string()))
                         } else {
                             None
                         }
                     })
                     .collect();
+                let tool_lines = tool_lines?;
 
                 if !tool_lines.is_empty() {
                     state.reporter.send(ActorToTui::ToolUse(tool_lines));

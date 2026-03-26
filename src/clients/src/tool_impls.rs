@@ -13,6 +13,7 @@ use anyhow::{Error, anyhow};
 use futures::{StreamExt, TryStreamExt};
 use std::cmp::min;
 use std::collections::HashMap;
+use std::fmt::{Display, Formatter};
 use std::io::SeekFrom;
 use std::path::PathBuf;
 use tokio::fs;
@@ -159,6 +160,45 @@ impl Tool {
             "cargo_check" => Ok(Tool::CargoCheck(CargoCheck::default())),
             "grep" => Ok(Tool::Grep(GrepTool::default())),
             _ => Err(Error::msg("Is not a tool")),
+        }
+    }
+}
+
+impl Display for Tool {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Tool::ReadFile(rf) => match &rf.input.range {
+                Some(range) => write!(
+                    f,
+                    "- read `{}` (lines {}-{})",
+                    rf.input.file_path,
+                    range.start,
+                    range.end.saturating_sub(1)
+                ),
+                None => write!(f, "- read `{}`", rf.input.file_path),
+            },
+            Tool::InsertAfterLine(insert) => {
+                write!(
+                    f,
+                    "- edit `{}` after line {}",
+                    insert.input.file_path, insert.input.line_num
+                )
+            }
+            Tool::StringReplace(replace) => {
+                write!(f, "- replace text in `{}`", replace.input.path)
+            }
+            Tool::CargoCheck(check) => {
+                if check.input.include_warnings.unwrap_or(false) {
+                    write!(f, "- run `cargo check` (with warnings)")
+                } else {
+                    write!(f, "- run `cargo check`")
+                }
+            }
+            Tool::Grep(grep) => write!(
+                f,
+                "- grep `{}` (before: {}, after: {})",
+                grep.input.regex, grep.input.add_start, grep.input.add_end
+            ),
         }
     }
 }
