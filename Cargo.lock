@@ -110,6 +110,7 @@ dependencies = [
  "throbber-widgets-tui",
  "tokio",
  "url",
+ "utils",
 ]
 
 [[package]]
@@ -4954,6 +4955,7 @@ dependencies = [
  "anyhow",
  "blake3",
  "cargo_metadata",
+ "dirs",
  "futures",
  "grep",
  "ignore",

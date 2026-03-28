@@ -26,8 +26,7 @@ pub struct TypedCache<K: CacheKey, V: CacheVal> {
 }
 
 impl<K: CacheKey + 'static, V: CacheVal + 'static> TypedCache<K, V> {
-    pub async fn new(path: Option<PathBuf>) -> anyhow::Result<Self> {
-        let path = path.unwrap_or("/Users/kamranorhun/.turbo-code/".into());
+    pub async fn new(path: PathBuf) -> anyhow::Result<Self> {
         match fs::create_dir(path.clone()).await {
             Ok(_) => Ok(()),
             Err(err) => {

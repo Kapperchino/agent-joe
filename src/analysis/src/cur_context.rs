@@ -22,7 +22,8 @@ impl CurContext {
         let current_dir = env::current_dir()?;
         let files = Utils::get_dir_files(&current_dir).await?;
         let proj = RustProject::new(&current_dir)?;
-        let mut cache = TypedCache::new(None).await?;
+        let store_dir = Utils::get_store_dir()?;
+        let mut cache = TypedCache::new(store_dir).await?;
         let hashes: HashMap<_, _> = ProjMeta::get_file_hashes(&proj)
             .await?
             .into_iter()

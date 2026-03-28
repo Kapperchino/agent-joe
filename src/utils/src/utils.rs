@@ -1,9 +1,11 @@
+use anyhow::Context;
 use futures::future;
 use std::path::PathBuf;
 use tokio::fs;
 use tokio::fs::DirEntry;
 use tokio_stream::wrappers::ReadDirStream;
 
+pub const CONFIG_DIR_NAME: &str = ".turbo-code";
 pub struct Utils {}
 impl Utils {
     pub async fn get_dir_files(dir: &PathBuf) -> anyhow::Result<Vec<DirEntry>> {
@@ -68,5 +70,10 @@ impl Utils {
 
         let res = results.into_iter().collect::<Result<Vec<_>, _>>()?;
         Ok(res)
+    }
+
+    pub fn get_store_dir() -> anyhow::Result<PathBuf> {
+        let home_dir = dirs::home_dir().context("Failed to determine the home directory")?;
+        Ok(home_dir.join(CONFIG_DIR_NAME))
     }
 }

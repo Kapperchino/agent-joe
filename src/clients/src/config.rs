@@ -7,8 +7,7 @@ use figment::providers::{Format, Toml};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tokio::fs;
-
-pub const CONFIG_DIR_NAME: &str = ".turbo-code";
+use utils::utils::Utils;
 pub const CONFIG_FILE_NAME: &str = "config.toml";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,8 +48,8 @@ impl Config {
     }
 
     pub fn path() -> anyhow::Result<PathBuf> {
-        let home_dir = dirs::home_dir().context("Failed to determine the home directory")?;
-        Ok(home_dir.join(CONFIG_DIR_NAME).join(CONFIG_FILE_NAME))
+        let path = Utils::get_store_dir()?;
+        Ok(path.join(CONFIG_FILE_NAME))
     }
 
     //TODO: wtf is this shit
