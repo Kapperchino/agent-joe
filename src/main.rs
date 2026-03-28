@@ -85,6 +85,7 @@ async fn main() {
                 Tool::StringReplace(StringReplace::default()),
                 Tool::CargoCheck(CargoCheck::default()),
                 Tool::Grep(clients::tool_defs::GrepTool::default()),
+                Tool::CargoTest(clients::tool_defs::CargoTest::default()),
             ],
             tui_tx: tx,
             log_streams: false,

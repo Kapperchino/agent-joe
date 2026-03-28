@@ -78,6 +78,7 @@ impl From<&tool_defs::Tool> for Tool {
             tool_defs::Tool::StringReplace(_) => extract!(StringReplace),
             tool_defs::Tool::CargoCheck(_) => extract!(CargoCheck),
             tool_defs::Tool::Grep(_) => extract!(GrepTool),
+            tool_defs::Tool::CargoTest(_) => extract!(CargoTest),
         };
 
         Tool {

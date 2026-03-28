@@ -37,6 +37,7 @@ pub enum Tool {
     StringReplace(StringReplace),
     CargoCheck(CargoCheck),
     Grep(GrepTool),
+    CargoTest(CargoTest),
 }
 
 #[derive(Debug, Clone)]
@@ -136,6 +137,24 @@ pub struct CargoCheckInput {
 }
 
 #[derive(Default, Serialize, Deserialize, Debug, Clone, ToolDef)]
+#[tool(name = "cargo_test", description = "Run cargo test on the project to find failing tests")]
+pub struct CargoTest {
+    #[tool(input)]
+    pub input: CargoTestInput,
+    pub id: String,
+}
+
+#[derive(Default, Serialize, Deserialize, Debug, Clone, ToolInput)]
+pub struct CargoTestInput {
+    #[serde(default)]
+    #[tool(description = "Optional package/workspace member to run tests in")]
+    pub package: Option<String>,
+    #[serde(default)]
+    #[tool(description = "Optional test name/filter to run. Empty runs all tests")]
+    pub test_name: Option<String>,
+}
+
+#[derive(Default, Serialize, Deserialize, Debug, Clone, ToolDef)]
 #[tool(
     name = "grep",
     description = "Search the current project files with a regex and return matching lines with surrounding context"
@@ -176,6 +195,16 @@ pub struct ToolId {
     pub id: String,
 }
 #[derive(Debug)]
+pub enum CargoTestResult {
+    Success {
+        output: String,
+    },
+    Failed {
+        output: String,
+    },
+}
+
+#[derive(Debug)]
 pub enum ToolResult {
     ReadFileResult {
         res: String,
@@ -195,6 +224,12 @@ pub enum ToolResult {
     CargoCheckResult {
         status: String,
         result: CargoCheckResult,
+        tool: Tool,
+        id: ToolId,
+    },
+    CargoTestResult {
+        status: String,
+        result: CargoTestResult,
         tool: Tool,
         id: ToolId,
     },

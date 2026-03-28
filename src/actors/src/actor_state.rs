@@ -159,6 +159,11 @@ impl ActorState {
                     .use_tool(id.clone(), &self.cur_context)
                     .await
             }
+            Tool::CargoTest(test) => {
+                Tool::CargoTest(test)
+                    .use_tool(id.clone(), &self.cur_context)
+                    .await
+            }
         };
         match res {
             Ok(res) => Ok(res),

@@ -31,8 +31,8 @@ impl TextSearch {
         file_path: &PathBuf,
     ) -> anyhow::Result<()> {
         let content = Utils::get_file_content(file_path).await?;
-        anyhow::ensure!(content.contains(old), "Pattern not found in file");
         let replaced = content.replace(old, new);
+        anyhow::ensure!(content != replaced, "Pattern not found in file");
         Utils::write_to_file(file_path, &replaced).await?;
         Ok(())
     }

@@ -5,8 +5,8 @@ use crate::tool_defs::GrepTool;
 use crate::tool_defs::InsertAfterLine;
 use crate::tool_defs::StringReplace;
 use crate::tool_defs::ToolDefTrait;
-use crate::tool_defs::{CargoCheck, ToolId};
-use crate::tool_defs::{CargoCheckResult, Tool};
+use crate::tool_defs::{CargoCheck, CargoTest, ToolId};
+use crate::tool_defs::{CargoCheckResult, CargoTestResult, Tool};
 use crate::tool_defs::{Range, ReadFile, StringReplaceInput, ToolJson, ToolResult};
 use analysis::cur_context::CurContext;
 use anyhow::{Error, anyhow};
@@ -33,6 +33,7 @@ impl Tool {
             Tool::StringReplace(_) => StringReplace::tool_name().to_string(),
             Tool::CargoCheck(_) => CargoCheck::tool_name().to_string(),
             Tool::Grep(_) => GrepTool::tool_name().to_string(),
+            Tool::CargoTest(_) => CargoTest::tool_name().to_string(),
         }
     }
 
@@ -43,6 +44,7 @@ impl Tool {
             Tool::StringReplace(replace) => replace.id.clone(),
             Tool::CargoCheck(check) => check.id.clone(),
             Tool::Grep(grep) => grep.id.clone(),
+            Tool::CargoTest(test) => test.id.clone(),
         }
     }
 
@@ -55,6 +57,7 @@ impl Tool {
                 Tool::StringReplace(_) => StringReplace::tool_description().to_string(),
                 Tool::CargoCheck(_) => CargoCheck::tool_description().to_string(),
                 Tool::Grep(_) => GrepTool::tool_description().to_string(),
+                Tool::CargoTest(_) => CargoTest::tool_description().to_string(),
             },
             input_schema: ToolSchemaDTO {
                 name: self.name(),
@@ -80,6 +83,10 @@ impl Tool {
                         .into_iter()
                         .map(|(k, v)| (k, v.into()))
                         .collect(),
+                    Tool::CargoTest(_) => CargoTest::field_properties()
+                        .into_iter()
+                        .map(|(k, v)| (k, v.into()))
+                        .collect(),
                 },
                 required: match self {
                     Tool::ReadFile(_) => ReadFile::required_fields(),
@@ -87,6 +94,7 @@ impl Tool {
                     Tool::StringReplace(_) => StringReplace::required_fields(),
                     Tool::CargoCheck(_) => CargoCheck::required_fields(),
                     Tool::Grep(_) => GrepTool::required_fields(),
+                    Tool::CargoTest(_) => CargoTest::required_fields(),
                 },
             },
         })
@@ -99,6 +107,7 @@ impl Tool {
             Tool::StringReplace(replace) => replace.req(),
             Tool::CargoCheck(check) => check.req(),
             Tool::Grep(grep) => grep.req(),
+            Tool::CargoTest(test) => test.req(),
         }
     }
 
@@ -141,6 +150,19 @@ impl Tool {
                     id,
                 })
             }
+            Tool::CargoTest(test) => {
+                let res = test.cargo_test().await?;
+                Ok(ToolResult::CargoTestResult {
+                    status: match res {
+                        CargoTestResult::Success { .. } => "success",
+                        CargoTestResult::Failed { .. } => "failed",
+                    }
+                    .to_string(),
+                    result: res,
+                    tool: self.clone(),
+                    id,
+                })
+            }
             Tool::Grep(grep) => {
                 let result = grep.grep(ctx).await?;
                 Ok(ToolResult::GrepResult {
@@ -159,6 +181,7 @@ impl Tool {
             "str_replace" => Ok(Tool::StringReplace(StringReplace::default())),
             "cargo_check" => Ok(Tool::CargoCheck(CargoCheck::default())),
             "grep" => Ok(Tool::Grep(GrepTool::default())),
+            "cargo_test" => Ok(Tool::CargoTest(CargoTest::default())),
             _ => Err(Error::msg("Is not a tool")),
         }
     }
@@ -199,6 +222,13 @@ impl Display for Tool {
                 "- grep `{}` (before: {}, after: {})",
                 grep.input.regex, grep.input.add_start, grep.input.add_end
             ),
+            Tool::CargoTest(test) => {
+                if let Some(test_name) = test.input.test_name.as_ref().filter(|name| !name.trim().is_empty()) {
+                    write!(f, "- run `cargo test {}`", test_name)
+                } else {
+                    write!(f, "- run `cargo test`")
+                }
+            }
         }
     }
 }
@@ -210,6 +240,7 @@ impl ToolResult {
             ToolResult::InsertAfterLineResult { tool, .. } => tool.clone(),
             ToolResult::StringReplaceResult { tool, .. } => tool.clone(),
             ToolResult::CargoCheckResult { tool, .. } => tool.clone(),
+            ToolResult::CargoTestResult { tool, .. } => tool.clone(),
             ToolResult::GrepResult { tool, .. } => tool.clone(),
             ToolResult::Error { tool, .. } => tool.clone(),
         }
@@ -221,6 +252,7 @@ impl ToolResult {
             ToolResult::InsertAfterLineResult { id, .. } => id.clone(),
             ToolResult::StringReplaceResult { id, .. } => id.clone(),
             ToolResult::CargoCheckResult { id, .. } => id.clone(),
+            ToolResult::CargoTestResult { id, .. } => id.clone(),
             ToolResult::GrepResult { id, .. } => id.clone(),
             ToolResult::Error { id, .. } => id.clone(),
         }
@@ -242,6 +274,31 @@ impl ToolResult {
                 tool_id: id.clone(),
                 content: status.to_string(),
                 is_error: None,
+            },
+            ToolResult::CargoTestResult {
+                status,
+                result,
+                id,
+                ..
+            } => match result {
+                CargoTestResult::Success { output } => ContentBlock::ToolResult {
+                    tool_id: id.clone(),
+                    content: if output.trim().is_empty() {
+                        status.clone()
+                    } else {
+                        format!("{}\n{}", status, output)
+                    },
+                    is_error: None,
+                },
+                CargoTestResult::Failed { output } => ContentBlock::ToolResult {
+                    tool_id: id.clone(),
+                    content: if output.trim().is_empty() {
+                        status.clone()
+                    } else {
+                        format!("{}\n{}", status, output)
+                    },
+                    is_error: None,
+                },
             },
             ToolResult::GrepResult { res, id, .. } => ContentBlock::ToolResult {
                 tool_id: id.clone(),
@@ -427,6 +484,20 @@ impl StringReplace {
     }
 }
 
+impl CargoTest {
+    async fn cargo_test(&self) -> anyhow::Result<CargoTestResult> {
+        let res = Cargo::cargo_test(
+            self.input.package.as_deref(),
+            self.input.test_name.as_deref(),
+        )
+        .await?;
+        match res {
+            cargo::CargoTest::TestPasses { output } => Ok(CargoTestResult::Success { output }),
+            cargo::CargoTest::TestFailed { output } => Ok(CargoTestResult::Failed { output }),
+        }
+    }
+}
+
 impl CargoCheck {
     async fn cargo_check(&self) -> anyhow::Result<CargoCheckResult> {
         let res = Cargo::cargo_check().await?;
@@ -516,7 +587,7 @@ mod tests {
     #[tokio::test]
     async fn test_insert_after_line_middle() {
         let path = temp_path("middle");
-        fs::write(&path, "aaa\nbbb\nccc\n").await.unwrap();
+        fs::write(&path, "aaa\nbbb\nccfc\n").await.unwrap();
         let tmp = fs::read_to_string(&path).await.unwrap();
         println!("{tmp}");
 
