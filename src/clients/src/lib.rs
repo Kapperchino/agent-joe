@@ -12,5 +12,6 @@ mod claude_config;
 
 pub use claude_config::{ClaudeAuthConfig, ClaudeConfig, ClaudeEffort, ClaudeKeyConfig};
 pub use openai_config::{
-    OpenAIAuthConfig, OpenAIConfig, OpenAICodexConfig, OpenAIEffort, OpenAIKeyConfig,
+    LocalOpenAIConfig, OpenAIAuthConfig, OpenAIConfig, OpenAICodexConfig, OpenAIEffort,
+    OpenAIKeyConfig, OpenRouterConfig,
 };

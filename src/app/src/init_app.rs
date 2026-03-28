@@ -4,8 +4,9 @@ use clients::openai_codex_auth::{
     REDIRECT_URI, create_authorization_flow, exchange_authorization_code, parse_redirect_input,
 };
 use clients::{
-    ClaudeAuthConfig, ClaudeConfig, ClaudeEffort, ClaudeKeyConfig, OpenAIAuthConfig,
-    OpenAICodexConfig, OpenAIConfig, OpenAIEffort, OpenAIKeyConfig,
+    ClaudeAuthConfig, ClaudeConfig, ClaudeEffort, ClaudeKeyConfig, LocalOpenAIConfig,
+    OpenAIAuthConfig, OpenAICodexConfig, OpenAIConfig, OpenAIEffort, OpenAIKeyConfig,
+    OpenRouterConfig,
 };
 use crossterm::event::{EventStream, KeyCode, KeyEvent};
 use futures::StreamExt;
@@ -24,11 +25,14 @@ use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use url::Url;
 
+// I will desloppify this eventually, trust
+
 pub struct InitApp {
     provider: Provider,
     openai_auth_mode: OpenAIAuthMode,
     selected_field: InitField,
     api_key: String,
+    url: String,
     model: String,
     character_index: usize,
     error: Option<String>,
@@ -41,6 +45,8 @@ pub struct InitApp {
 enum Provider {
     Claude,
     OpenAI,
+    Local,
+    OpenRouter,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -54,6 +60,7 @@ enum InitField {
     Provider,
     OpenAIAuth,
     Credential,
+    Url,
     RedirectInput,
     Model,
     Action,
@@ -83,6 +90,7 @@ impl Default for InitApp {
             openai_auth_mode,
             selected_field: InitField::Provider,
             api_key: String::new(),
+            url: default_url(provider, openai_auth_mode).to_string(),
             model: default_model(provider, openai_auth_mode).to_string(),
             character_index: 0,
             error: None,
@@ -225,6 +233,8 @@ impl InitApp {
     async fn submit_action(&mut self) -> Result<Option<Config>> {
         match self.provider {
             Provider::Claude => self.save_claude_config().await,
+            Provider::Local => self.save_local_config().await,
+            Provider::OpenRouter => self.save_openrouter_config().await,
             Provider::OpenAI => match self.openai_auth_mode {
                 OpenAIAuthMode::ApiKey => self.save_openai_api_key_config().await,
                 OpenAIAuthMode::Codex => {
@@ -280,6 +290,63 @@ impl InitApp {
             auth: OpenAIAuthConfig::APIKey(OpenAIKeyConfig {
                 api_key: api_key.to_string(),
                 url: None,
+            }),
+            model: model.to_string(),
+            effort: OpenAIEffort::Medium,
+        });
+        config.save().await?;
+        Ok(Some(config))
+    }
+
+    async fn save_local_config(&mut self) -> Result<Option<Config>> {
+        let model = self.model.trim();
+        if model.is_empty() {
+            self.error = Some("Model is required".to_string());
+            return Ok(None);
+        }
+
+        let url = self.url.trim();
+        if url.is_empty() {
+            self.error = Some("URL is required".to_string());
+            return Ok(None);
+        }
+
+        let api_key = self.api_key.trim();
+        let config = Config::OpenAI(OpenAIConfig {
+            auth: OpenAIAuthConfig::Local(LocalOpenAIConfig {
+                api_key: (!api_key.is_empty()).then(|| api_key.to_string()),
+                url: url.to_string(),
+            }),
+            model: model.to_string(),
+            effort: OpenAIEffort::Medium,
+        });
+        config.save().await?;
+        Ok(Some(config))
+    }
+
+    async fn save_openrouter_config(&mut self) -> Result<Option<Config>> {
+        let api_key = self.api_key.trim();
+        if api_key.is_empty() {
+            self.error = Some("Token is required".to_string());
+            return Ok(None);
+        }
+
+        let model = self.model.trim();
+        if model.is_empty() {
+            self.error = Some("Model is required".to_string());
+            return Ok(None);
+        }
+
+        let url = self.url.trim();
+        if url.is_empty() {
+            self.error = Some("URL is required".to_string());
+            return Ok(None);
+        }
+
+        let config = Config::OpenAI(OpenAIConfig {
+            auth: OpenAIAuthConfig::OpenRouter(OpenRouterConfig {
+                api_key: api_key.to_string(),
+                url: Some(url.to_string()),
             }),
             model: model.to_string(),
             effort: OpenAIEffort::Medium,
@@ -380,10 +447,14 @@ impl InitApp {
             return;
         }
 
-        let previous_default = default_model(self.provider, self.openai_auth_mode);
+        let previous_default_model = default_model(self.provider, self.openai_auth_mode);
+        let previous_default_url = default_url(self.provider, self.openai_auth_mode);
         self.provider = provider;
-        if self.model.is_empty() || self.model == previous_default {
+        if self.model.is_empty() || self.model == previous_default_model {
             self.model = default_model(self.provider, self.openai_auth_mode).to_string();
+        }
+        if self.url.is_empty() || self.url == previous_default_url {
+            self.url = default_url(self.provider, self.openai_auth_mode).to_string();
         }
         self.reset_openai_login_if_needed();
         self.error = None;
@@ -396,10 +467,14 @@ impl InitApp {
             return;
         }
 
-        let previous_default = default_model(self.provider, self.openai_auth_mode);
+        let previous_default_model = default_model(self.provider, self.openai_auth_mode);
+        let previous_default_url = default_url(self.provider, self.openai_auth_mode);
         self.openai_auth_mode = auth_mode;
-        if self.model.is_empty() || self.model == previous_default {
+        if self.model.is_empty() || self.model == previous_default_model {
             self.model = default_model(self.provider, self.openai_auth_mode).to_string();
+        }
+        if self.url.is_empty() || self.url == previous_default_url {
+            self.url = default_url(self.provider, self.openai_auth_mode).to_string();
         }
         self.reset_openai_login_if_needed();
         self.error = None;
@@ -448,15 +523,25 @@ impl InitApp {
     fn visible_fields(&self) -> Vec<InitField> {
         let mut fields = vec![InitField::Provider];
 
-        if self.provider == Provider::OpenAI {
-            fields.push(InitField::OpenAIAuth);
-            if self.openai_auth_mode == OpenAIAuthMode::ApiKey {
+        match self.provider {
+            Provider::Claude => {
                 fields.push(InitField::Credential);
-            } else if self.codex_login.is_some() {
-                fields.push(InitField::RedirectInput);
             }
-        } else {
-            fields.push(InitField::Credential);
+            Provider::OpenAI => {
+                fields.push(InitField::OpenAIAuth);
+                match self.openai_auth_mode {
+                    OpenAIAuthMode::ApiKey => fields.push(InitField::Credential),
+                    OpenAIAuthMode::Codex => {
+                        if self.codex_login.is_some() {
+                            fields.push(InitField::RedirectInput);
+                        }
+                    }
+                }
+            }
+            Provider::Local | Provider::OpenRouter => {
+                fields.push(InitField::Credential);
+                fields.push(InitField::Url);
+            }
         }
 
         fields.push(InitField::Model);
@@ -552,7 +637,7 @@ impl InitApp {
                 Style::default().fg(Color::Gray),
             )),
             Line::from(Span::styled(
-                "OpenAI now supports API-key auth or direct Codex browser login from this screen.",
+                "Use dedicated tabs for Claude, OpenAI, local-compatible endpoints, and OpenRouter.",
                 Style::default().fg(Color::Gray),
             )),
         ]);
@@ -568,6 +653,10 @@ impl InitApp {
                 self.provider_chip(Provider::Claude),
                 Span::raw(" "),
                 self.provider_chip(Provider::OpenAI),
+                Span::raw(" "),
+                self.provider_chip(Provider::Local),
+                Span::raw(" "),
+                self.provider_chip(Provider::OpenRouter),
             ],
         ));
         lines.push(Line::default());
@@ -585,8 +674,8 @@ impl InitApp {
             lines.push(Line::default());
         }
 
-        match (self.provider, self.openai_auth_mode) {
-            (Provider::Claude, _) | (Provider::OpenAI, OpenAIAuthMode::ApiKey) => {
+        match self.provider {
+            Provider::Claude => {
                 let api_key_display = if self.api_key.is_empty() {
                     String::new()
                 } else {
@@ -608,51 +697,118 @@ impl InitApp {
                 }
                 lines.push(Line::default());
             }
-            (Provider::OpenAI, OpenAIAuthMode::Codex) => {
-                if let Some(login) = &self.codex_login {
-                    let auth_url = format!("Auth URL: {}", login.auth_url);
-                    lines.push(Line::from(Span::styled(
-                        auth_url,
-                        Style::default().fg(Color::DarkGray),
-                    )));
-                    lines.push(Line::from(Span::styled(
-                        codex_status_line(login),
-                        Style::default().fg(Color::DarkGray),
-                    )));
-                    lines.push(Line::default());
-
+            Provider::OpenAI => match self.openai_auth_mode {
+                OpenAIAuthMode::ApiKey => {
+                    let api_key_display = if self.api_key.is_empty() {
+                        String::new()
+                    } else {
+                        "*".repeat(self.api_key.chars().count())
+                    };
                     let y = lines.len() as u16;
                     lines.push(self.form_line(
-                        InitField::RedirectInput,
+                        InitField::Credential,
                         vec![
-                            Span::styled("Redirect: ", self.label_style()),
-                            Span::styled(
-                                login.redirect_input.clone(),
-                                self.value_style(InitField::RedirectInput),
-                            ),
+                            Span::styled("API Key:  ", self.label_style()),
+                            Span::styled(api_key_display, self.value_style(InitField::Credential)),
                         ],
                     ));
-                    if self.selected_field == InitField::RedirectInput {
+                    if self.selected_field == InitField::Credential {
                         cursor = Some((
                             form_area.x + 12 + self.character_index as u16,
                             form_area.y + y,
                         ));
                     }
                     lines.push(Line::default());
-                } else {
-                    lines.push(Line::from(Span::styled(
-                        format!(
-                            "Codex login uses a PKCE browser flow and expects a callback on {}.",
-                            REDIRECT_URI
-                        ),
-                        Style::default().fg(Color::DarkGray),
-                    )));
-                    lines.push(Line::from(Span::styled(
-                        "Start login to open the browser. If the callback cannot reach the app, paste the full redirect URL manually.",
-                        Style::default().fg(Color::DarkGray),
-                    )));
-                    lines.push(Line::default());
                 }
+                OpenAIAuthMode::Codex => {
+                    if let Some(login) = &self.codex_login {
+                        let auth_url = format!("Auth URL: {}", login.auth_url);
+                        lines.push(Line::from(Span::styled(
+                            auth_url,
+                            Style::default().fg(Color::DarkGray),
+                        )));
+                        lines.push(Line::from(Span::styled(
+                            codex_status_line(login),
+                            Style::default().fg(Color::DarkGray),
+                        )));
+                        lines.push(Line::default());
+
+                        let y = lines.len() as u16;
+                        lines.push(self.form_line(
+                            InitField::RedirectInput,
+                            vec![
+                                Span::styled("Redirect: ", self.label_style()),
+                                Span::styled(
+                                    login.redirect_input.clone(),
+                                    self.value_style(InitField::RedirectInput),
+                                ),
+                            ],
+                        ));
+                        if self.selected_field == InitField::RedirectInput {
+                            cursor = Some((
+                                form_area.x + 12 + self.character_index as u16,
+                                form_area.y + y,
+                            ));
+                        }
+                        lines.push(Line::default());
+                    } else {
+                        lines.push(Line::from(Span::styled(
+                            format!(
+                                "Codex login uses a PKCE browser flow and expects a callback on {}.",
+                                REDIRECT_URI
+                            ),
+                            Style::default().fg(Color::DarkGray),
+                        )));
+                        lines.push(Line::from(Span::styled(
+                            "Start login to open the browser. If the callback cannot reach the app, paste the full redirect URL manually.",
+                            Style::default().fg(Color::DarkGray),
+                        )));
+                        lines.push(Line::default());
+                    }
+                }
+            },
+            Provider::Local | Provider::OpenRouter => {
+                let token_optional = self.provider == Provider::Local;
+                let token_display = if self.api_key.is_empty() {
+                    if token_optional {
+                        "<optional>".to_string()
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    "*".repeat(self.api_key.chars().count())
+                };
+                let token_y = lines.len() as u16;
+                lines.push(self.form_line(
+                    InitField::Credential,
+                    vec![
+                        Span::styled("Token:    ", self.label_style()),
+                        Span::styled(token_display, self.value_style(InitField::Credential)),
+                    ],
+                ));
+                if self.selected_field == InitField::Credential {
+                    cursor = Some((
+                        form_area.x + 12 + self.character_index as u16,
+                        form_area.y + token_y,
+                    ));
+                }
+                lines.push(Line::default());
+
+                let url_y = lines.len() as u16;
+                lines.push(self.form_line(
+                    InitField::Url,
+                    vec![
+                        Span::styled("URL:      ", self.label_style()),
+                        Span::styled(self.url.clone(), self.value_style(InitField::Url)),
+                    ],
+                ));
+                if self.selected_field == InitField::Url {
+                    cursor = Some((
+                        form_area.x + 12 + self.character_index as u16,
+                        form_area.y + url_y,
+                    ));
+                }
+                lines.push(Line::default());
             }
         }
 
@@ -795,18 +951,27 @@ impl Provider {
         match self {
             Provider::Claude => "Claude",
             Provider::OpenAI => "OpenAI",
+            Provider::Local => "Local",
+            Provider::OpenRouter => "OpenRouter",
         }
     }
 
     fn next(self) -> Self {
         match self {
             Provider::Claude => Provider::OpenAI,
-            Provider::OpenAI => Provider::Claude,
+            Provider::OpenAI => Provider::Local,
+            Provider::Local => Provider::OpenRouter,
+            Provider::OpenRouter => Provider::Claude,
         }
     }
 
     fn previous(self) -> Self {
-        self.next()
+        match self {
+            Provider::Claude => Provider::OpenRouter,
+            Provider::OpenAI => Provider::Claude,
+            Provider::Local => Provider::OpenAI,
+            Provider::OpenRouter => Provider::Local,
+        }
     }
 }
 
@@ -834,13 +999,14 @@ impl InitField {
     fn is_text_input(self) -> bool {
         matches!(
             self,
-            InitField::Credential | InitField::RedirectInput | InitField::Model
+            InitField::Credential | InitField::Url | InitField::RedirectInput | InitField::Model
         )
     }
 
     fn current_text<'a>(self, app: &'a InitApp) -> Option<&'a String> {
         match self {
             InitField::Credential => Some(&app.api_key),
+            InitField::Url => Some(&app.url),
             InitField::Model => Some(&app.model),
             InitField::RedirectInput => app.codex_login.as_ref().map(|login| &login.redirect_input),
             InitField::Provider | InitField::OpenAIAuth | InitField::Action => None,
@@ -850,6 +1016,7 @@ impl InitField {
     fn current_text_mut<'a>(self, app: &'a mut InitApp) -> Option<&'a mut String> {
         match self {
             InitField::Credential => Some(&mut app.api_key),
+            InitField::Url => Some(&mut app.url),
             InitField::Model => Some(&mut app.model),
             InitField::RedirectInput => app
                 .codex_login
@@ -860,9 +1027,21 @@ impl InitField {
     }
 }
 
+fn default_url(provider: Provider, auth_mode: OpenAIAuthMode) -> &'static str {
+    match (provider, auth_mode) {
+        (Provider::Claude, _) => "",
+        (Provider::Local, _) => "http://localhost:11434/v1",
+        (Provider::OpenRouter, _) => "https://openrouter.ai/api/v1",
+        (Provider::OpenAI, OpenAIAuthMode::ApiKey) => "",
+        (Provider::OpenAI, OpenAIAuthMode::Codex) => "",
+    }
+}
+
 fn default_model(provider: Provider, auth_mode: OpenAIAuthMode) -> &'static str {
     match (provider, auth_mode) {
         (Provider::Claude, _) => "claude-sonnet-4-20250514",
+        (Provider::Local, _) => "qwen2.5-coder:latest",
+        (Provider::OpenRouter, _) => "openai/gpt-5",
         (Provider::OpenAI, OpenAIAuthMode::ApiKey) => "gpt-5.4",
         (Provider::OpenAI, OpenAIAuthMode::Codex) => "gpt-5.4",
     }
