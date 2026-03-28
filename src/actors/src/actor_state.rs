@@ -24,8 +24,6 @@ pub struct ActorState {
     pub history: Vec<Message>,
     pub llm: LLmClient,
     pub tools: Vec<Tool>,
-    pub acc_map: HashMap<usize, Vec<StreamAccu>>,
-    pub delta_buf: HashMap<usize, Vec<Delta>>,
     pub file_actor: ActorRef<file_actor::Message>,
     pub stream_processor: StreamProcessor,
     pub reporter: EventReporter,
@@ -63,8 +61,6 @@ impl ActorState {
             )],
             llm: dependency.claude,
             tools: dependency.tools,
-            acc_map: Default::default(),
-            delta_buf: Default::default(),
             stream_actor: None,
             reporter: EventReporter {
                 tui_tx: dependency.tui_tx.clone(),
