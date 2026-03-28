@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use crate::draw_line::DrawLine;
 use color_eyre::Result;
-use crossterm::event::{EventStream, KeyEvent};
+use crossterm::event::{EventStream, KeyEvent, KeyModifiers};
 use futures::StreamExt;
 use ractor::ActorRef;
 use ratatui::layout::Position;
@@ -489,8 +489,15 @@ impl TUIApp {
             },
             InputMode::Editing => match key.code {
                 KeyCode::Enter => {
-                    self.submit_message();
-                    self.input_mode = InputMode::Normal;
+                    if key.modifiers.is_empty() {
+                        self.submit_message();
+                        self.input_mode = InputMode::Normal;
+                    } else {
+                        self.enter_char('\n');
+                    }
+                }
+                KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.enter_char('\n');
                 }
                 KeyCode::Char(to_insert) => self.enter_char(to_insert),
                 KeyCode::Backspace => self.delete_char(),

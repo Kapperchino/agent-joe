@@ -10,7 +10,10 @@ use clients::tool_defs::InsertAfterLine;
 use clients::tool_defs::ReadFile;
 use clients::tool_defs::StringReplace;
 use clients::tool_defs::Tool;
-use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
+use crossterm::event::{
+    DisableBracketedPaste, EnableBracketedPaste, KeyboardEnhancementFlags,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+};
 use crossterm::execute;
 use ractor::Actor;
 use ratatui::{TerminalOptions, Viewport};
@@ -40,7 +43,15 @@ async fn main() {
     let mut terminal = ratatui::init_with_options(TerminalOptions {
         viewport: Viewport::Inline(INLINE_VIEWPORT_HEIGHT),
     });
-    execute!(stdout(), EnableBracketedPaste).ok();
+    execute!(
+        stdout(),
+        EnableBracketedPaste,
+        PushKeyboardEnhancementFlags(
+            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+        )
+    )
+    .ok();
 
     let config = Config::load_optional().unwrap();
     let (config, mut terminal) = if config.is_none() {
@@ -87,6 +98,6 @@ async fn main() {
     let app = TUIApp::new(joe);
     app.run(terminal, rx).await.unwrap();
     actor_handle.await.expect("Actor failed to exit cleanly");
-    execute!(stdout(), DisableBracketedPaste).ok();
+    execute!(stdout(), PopKeyboardEnhancementFlags, DisableBracketedPaste).ok();
     ratatui::restore();
 }
