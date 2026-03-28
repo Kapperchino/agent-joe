@@ -558,9 +558,9 @@ impl OpenAIClient {
                 if let Some(api_key) = local.api_key.as_ref().filter(|key| !key.trim().is_empty()) {
                     headers.insert(
                         header::AUTHORIZATION,
-                        header::HeaderValue::from_str(&format!("Bearer {}", api_key)).map_err(|_| {
-                            OpenAIError::Config("Invalid API key format".to_string())
-                        })?,
+                        header::HeaderValue::from_str(&format!("Bearer {}", api_key)).map_err(
+                            |_| OpenAIError::Config("Invalid API key format".to_string()),
+                        )?,
                     );
                 }
                 headers

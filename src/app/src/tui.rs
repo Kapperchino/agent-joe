@@ -47,6 +47,9 @@ enum InputMode {
 }
 
 impl TUIApp {
+    const COMMAND_PROMPT: &str = "/ ";
+    const COMMAND_CONTINUATION: &str = "  ";
+
     pub fn new(actor_ref: ActorRef<Message>) -> Self {
         Self {
             character_index: 0,
@@ -89,7 +92,7 @@ impl TUIApp {
 
     fn paste(&mut self, string: &String) {
         self.input.push_str(string);
-        let cursor_moved_right = self.character_index.saturating_add(string.len());
+        let cursor_moved_right = self.character_index.saturating_add(string.chars().count());
         self.character_index = self.clamp_cursor(cursor_moved_right);
     }
 
@@ -238,17 +241,115 @@ impl TUIApp {
         lines
     }
 
-    fn command_lines(&self) -> Vec<Line<'static>> {
-        vec![
-            Line::from(vec![
-                Span::styled(
-                    "/ ",
-                    Style::default()
-                        .fg(Color::Green)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(self.input.clone(), Style::default().fg(Color::Green)),
-            ]),
+    fn input_wrap_width(total_width: u16) -> usize {
+        usize::from(total_width.saturating_sub(2).max(1))
+    }
+
+    fn wrap_input_text(
+        text: &str,
+        wrap_width: usize,
+        initial_indent: &str,
+        subsequent_indent: &str,
+    ) -> Vec<String> {
+        let wrap_width = wrap_width.max(1);
+        let initial_indent_width = textwrap::core::display_width(initial_indent);
+        let subsequent_indent_width = textwrap::core::display_width(subsequent_indent);
+
+        let mut lines = Vec::new();
+        let mut current_line = initial_indent.to_string();
+        let mut current_width = initial_indent_width;
+
+        for ch in text.chars() {
+            if ch == '\n' {
+                lines.push(current_line);
+                current_line = subsequent_indent.to_string();
+                current_width = subsequent_indent_width;
+                continue;
+            }
+
+            let ch_width = textwrap::core::display_width(ch.encode_utf8(&mut [0; 4]));
+            if current_width + ch_width > wrap_width {
+                lines.push(current_line);
+                current_line = subsequent_indent.to_string();
+                current_width = subsequent_indent_width;
+            }
+
+            current_line.push(ch);
+            current_width += ch_width;
+        }
+
+        lines.push(current_line);
+        lines
+    }
+
+    fn cursor_wrap_position(
+        &self,
+        wrap_width: usize,
+        initial_indent: &str,
+        subsequent_indent: &str,
+    ) -> (u16, u16) {
+        let cursor_prefix: String = self.input.chars().take(self.character_index).collect();
+        let wrapped_prefix = Self::wrap_input_text(
+            &cursor_prefix,
+            wrap_width,
+            initial_indent,
+            subsequent_indent,
+        );
+        let mut cursor_y = wrapped_prefix.len().saturating_sub(1);
+        let mut cursor_x = wrapped_prefix
+            .last()
+            .map(|line| textwrap::core::display_width(line))
+            .unwrap_or_default();
+
+        if cursor_x >= wrap_width {
+            cursor_y = cursor_y.saturating_add(1);
+            cursor_x = textwrap::core::display_width(subsequent_indent);
+        }
+
+        (cursor_x as u16, cursor_y as u16)
+    }
+
+    fn input_lines(&self, wrap_width: usize, min_lines: usize) -> Vec<Line<'static>> {
+        let mut lines = Self::wrap_input_text(&self.input, wrap_width, "", "");
+        lines.resize_with(min_lines.max(1), String::new);
+        lines.into_iter().map(Line::from).collect()
+    }
+
+    fn command_lines(&self, wrap_width: usize, min_input_lines: usize) -> Vec<Line<'static>> {
+        let mut command_input = Self::wrap_input_text(
+            &self.input,
+            wrap_width,
+            Self::COMMAND_PROMPT,
+            Self::COMMAND_CONTINUATION,
+        );
+        command_input.resize_with(min_input_lines.max(1), || {
+            Self::COMMAND_CONTINUATION.to_string()
+        });
+
+        let mut lines = vec![Line::from(vec![
+            Span::styled(
+                Self::COMMAND_PROMPT,
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                command_input
+                    .remove(0)
+                    .strip_prefix(Self::COMMAND_PROMPT)
+                    .unwrap_or_default()
+                    .to_string(),
+                Style::default().fg(Color::Green),
+            ),
+        ])];
+
+        lines.extend(
+            command_input
+                .into_iter()
+                .map(|line| Line::from(Span::styled(line, Style::default().fg(Color::Green)))),
+        );
+
+        lines.extend([
             Line::from(Span::styled(
                 "Enter to run, Esc to cancel",
                 Style::default().fg(Color::DarkGray),
@@ -269,7 +370,9 @@ impl TUIApp {
                 Span::raw("  "),
                 Span::styled("Print current context", Style::default().fg(Color::Gray)),
             ]),
-        ]
+        ]);
+
+        lines
     }
 
     fn thinking_throbber() -> Throbber<'static> {
@@ -413,10 +516,28 @@ impl TUIApp {
 
     #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
     fn draw(&mut self, frame: &mut Frame) {
+        let input_wrap_width = Self::input_wrap_width(frame.area().width);
+        let editing_display_lines =
+            Self::wrap_input_text(&self.input, input_wrap_width, "", "").len();
+        let command_display_lines = Self::wrap_input_text(
+            &self.input,
+            input_wrap_width,
+            Self::COMMAND_PROMPT,
+            Self::COMMAND_CONTINUATION,
+        )
+        .len();
+        let editing_cursor = self.cursor_wrap_position(input_wrap_width, "", "");
+        let command_cursor = self.cursor_wrap_position(
+            input_wrap_width,
+            Self::COMMAND_PROMPT,
+            Self::COMMAND_CONTINUATION,
+        );
+        let editing_input_lines = editing_display_lines.max(usize::from(editing_cursor.1) + 1);
+        let command_input_lines = command_display_lines.max(usize::from(command_cursor.1) + 1);
         let input_height = if matches!(self.input_mode, InputMode::InputCommand) {
-            6
+            command_input_lines as u16 + 5
         } else {
-            3
+            editing_input_lines as u16 + 2
         };
         let chunks = Layout::vertical([
             Constraint::Min(1),
@@ -464,11 +585,12 @@ impl TUIApp {
         match self.input_mode {
             InputMode::InputCommand => {
                 let command_section =
-                    Paragraph::new(self.command_lines()).block(Block::bordered().title("Command"));
+                    Paragraph::new(self.command_lines(input_wrap_width, command_input_lines))
+                        .block(Block::bordered().title("Command"));
                 frame.render_widget(command_section, input_area);
             }
             _ => {
-                let input = Paragraph::new(self.input.as_str())
+                let input = Paragraph::new(self.input_lines(input_wrap_width, editing_input_lines))
                     .style(match self.input_mode {
                         InputMode::Normal => Style::default(),
                         InputMode::Editing => Style::default().fg(Color::Yellow),
@@ -484,19 +606,16 @@ impl TUIApp {
             InputMode::Normal => {}
 
             InputMode::InputCommand => frame.set_cursor_position(Position::new(
-                input_area.x + self.character_index as u16 + 3,
-                input_area.y + 1,
+                input_area.x + command_cursor.0 + 1,
+                input_area.y + command_cursor.1 + 1,
             )),
 
             // Make the cursor visible and ask ratatui to put it at the specified coordinates after
             // rendering
             #[allow(clippy::cast_possible_truncation)]
             InputMode::Editing => frame.set_cursor_position(Position::new(
-                // Draw the cursor at the current position in the input field.
-                // This position is can be controlled via the left and right arrow key
-                input_area.x + self.character_index as u16 + 1,
-                // Move one line down, from the border to the input line
-                input_area.y + 1,
+                input_area.x + editing_cursor.0 + 1,
+                input_area.y + editing_cursor.1 + 1,
             )),
         }
 

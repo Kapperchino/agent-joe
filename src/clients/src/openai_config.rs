@@ -1,9 +1,9 @@
 use crate::openai::{ReasoningConfig, ReasoningSummary};
-use serde::{Deserialize, Serialize};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::Context;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use serde::{Deserialize, Serialize};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use strum_macros::EnumMessage;
 
 const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
@@ -24,10 +24,9 @@ impl OpenAIConfig {
             }
             OpenAIAuthConfig::Codex(_) => CHATGPT_CODEX_BASE_URL.to_string(),
             OpenAIAuthConfig::Local(conf) => conf.url.clone(),
-            OpenAIAuthConfig::OpenRouter(conf) => conf
-                .url
-                .clone()
-                .unwrap_or(OPENROUTER_BASE_URL.to_string()),
+            OpenAIAuthConfig::OpenRouter(conf) => {
+                conf.url.clone().unwrap_or(OPENROUTER_BASE_URL.to_string())
+            }
         }
     }
 

@@ -150,9 +150,15 @@ pub struct GrepTool {
 pub struct GrepInput {
     #[tool(description = "The regex pattern to search for", required)]
     pub regex: String,
-    #[tool(description = "Number of context lines to include before each match", required)]
+    #[tool(
+        description = "Number of context lines to include before each match",
+        required
+    )]
     pub add_start: usize,
-    #[tool(description = "Number of context lines to include after each match", required)]
+    #[tool(
+        description = "Number of context lines to include after each match",
+        required
+    )]
     pub add_end: usize,
 }
 
