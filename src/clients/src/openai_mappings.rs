@@ -237,7 +237,18 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
                     message,
                 },
             }),
-            _ => None,
+            StreamEvent::ResponseQueued { .. } => Some(llm::StreamEvent::Accum),
+            StreamEvent::ResponseInProgress { .. } => Some(llm::StreamEvent::Accum),
+            StreamEvent::ContentPartAdded { .. } => Some(llm::StreamEvent::Accum),
+            StreamEvent::ContentPartDone { .. } => Some(llm::StreamEvent::Accum),
+            StreamEvent::OutputTextDone { .. } => Some(llm::StreamEvent::Accum),
+            StreamEvent::OutputTextAnnotationAdded { .. } => Some(llm::StreamEvent::Accum),
+            StreamEvent::FunctionCallArgumentsDone { .. } => Some(llm::StreamEvent::Accum),
+            StreamEvent::ReasoningSummaryPartAdded { .. } => Some(llm::StreamEvent::Accum),
+            StreamEvent::ReasoningSummaryPartDone { .. } => Some(llm::StreamEvent::Accum),
+            StreamEvent::RefusalDelta { .. } => None,
+            StreamEvent::RefusalDone { .. } => None,
+            StreamEvent::Unknown => None,
         }
     }
 }

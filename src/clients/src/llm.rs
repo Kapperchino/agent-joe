@@ -68,6 +68,7 @@ pub enum StreamEvent {
     },
     MessageStop,
     Ping,
+    Accum,
     Error {
         error: ApiErrorDetail,
     },

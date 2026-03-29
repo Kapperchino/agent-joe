@@ -216,6 +216,7 @@ impl StreamProcessor {
                 Some(reason) => Ok(StreamNextStep::new(&reason)?),
                 None => Ok(StreamNextStep::Noop),
             },
+            StreamEvent::Accum => Ok(StreamNextStep::Accum),
             _ => Ok(StreamNextStep::Noop),
         }
     }
@@ -264,6 +265,7 @@ impl StreamProcessor {
             StreamEvent::MessageStop => self.change_state(State::StreamStop),
             StreamEvent::Ping => {}
             StreamEvent::Error { .. } => {}
+            _ => {}
         }
     }
 
