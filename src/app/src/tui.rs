@@ -235,9 +235,19 @@ impl TUIApp {
 
     fn output_lines(&self) -> Vec<Line<'static>> {
         let mut lines = DrawLine::render_lines(&self.messages);
-        if matches!(self.actor_state, State::ThinkingStart) {
-            lines.push(Self::thinking_throbber().to_line(&self.throbber_state));
-        }
+        match self.actor_state {
+            State::ThinkingStart => {
+                lines.push(
+                    Self::thinking_throbber("thinking".to_string()).to_line(&self.throbber_state),
+                );
+            }
+            State::ToolStart => {
+                lines.push(
+                    Self::thinking_throbber("working".to_string()).to_line(&self.throbber_state),
+                );
+            }
+            _ => {}
+        };
         lines
     }
 
@@ -375,9 +385,9 @@ impl TUIApp {
         lines
     }
 
-    fn thinking_throbber() -> Throbber<'static> {
+    fn thinking_throbber(label: String) -> Throbber<'static> {
         Throbber::default()
-            .label("thinking")
+            .label(label)
             .style(Style::default().fg(Color::Yellow))
             .throbber_style(
                 Style::default()

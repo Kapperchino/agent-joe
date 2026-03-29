@@ -346,7 +346,7 @@ impl ClaudeClient {
         );
 
         let client = Client::builder()
-            .timeout(Duration::from_secs(60))
+            .connect_timeout(Duration::from_secs(60))
             .default_headers(headers)
             .build()?;
 
