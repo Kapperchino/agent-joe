@@ -233,7 +233,7 @@ impl StreamProcessor {
                 index: _,
                 content_block,
             } => match content_block {
-                ContentBlockInfo::ToolUse { .. } => {}
+                ContentBlockInfo::ToolUse { .. } => self.change_state(State::ToolStart),
                 ContentBlockInfo::Thinking { .. } => self.change_state(State::ThinkingStart),
                 ContentBlockInfo::Text { .. } => self.change_state(State::MessageStart),
             },
@@ -251,7 +251,7 @@ impl StreamProcessor {
                     .inspect(|t| match t {
                         Delta::TextDelta { .. } => self.change_state(State::MessageStop),
                         Delta::ThinkingDelta { .. } => self.change_state(State::ThinkingStop),
-                        Delta::InputJsonDelta { .. } => {}
+                        Delta::InputJsonDelta { .. } => self.change_state(State::ToolStop),
                         Delta::SignatureDelta { .. } => {}
                     });
             }

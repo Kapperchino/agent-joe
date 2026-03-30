@@ -2,6 +2,7 @@ use crate::llm::{ContentBlock, ContentBlockInfo, Delta};
 use crate::openai::{ClientRequest, InputItem, OutputItem, Role, StreamEvent, StreamOutputItem};
 use crate::tool_defs::ToolId;
 use crate::{llm, openai, tool_defs};
+use tracing::error;
 
 impl From<llm::ClientRequest> for ClientRequest {
     fn from(llm_req: llm::ClientRequest) -> Self {
@@ -247,7 +248,16 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
             StreamEvent::ReasoningSummaryPartAdded { .. } => Some(llm::StreamEvent::Accum),
             StreamEvent::ReasoningSummaryPartDone { .. } => Some(llm::StreamEvent::Accum),
             StreamEvent::RefusalDelta { .. } => None,
-            StreamEvent::RefusalDone { .. } => None,
+            StreamEvent::RefusalDone {
+                item_id,
+                output_index,
+                content_index,
+                refusal,
+                sequence_number,
+            } => {
+                error!("{refusal}");
+                None
+            }
             StreamEvent::Unknown => None,
         }
     }
