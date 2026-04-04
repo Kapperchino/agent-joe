@@ -71,7 +71,7 @@ pub struct Dependency {
     pub claude: LLmClient,
     pub tools: Vec<Tool>,
     pub tui_tx: mpsc::UnboundedSender<ActorToTui>,
-    pub log_streams: bool,
+    pub debug_mode: bool,
 }
 
 impl Message {}
@@ -142,9 +142,11 @@ impl Actor for Worker {
                 prompt.map(|p| {
                     state.history.push(llm::Message::new(p));
                 });
-                let req = ClientRequest::new(state.history.clone())
-                    .with_thinking()
+                let mut req = ClientRequest::new(state.history.clone())
                     .with_tools(state.tools.clone());
+                if state.debug_mode {
+                    req = req.with_thinking();
+                }
 
                 let stream = state.llm.chat_stream(req).await?;
 

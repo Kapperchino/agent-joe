@@ -27,6 +27,7 @@ pub struct ActorState {
     pub file_actor: ActorRef<file_actor::Message>,
     pub stream_processor: StreamProcessor,
     pub reporter: EventReporter,
+    pub debug_mode: bool,
 }
 impl ActorState {
     pub async fn new(
@@ -36,7 +37,7 @@ impl ActorState {
     ) -> anyhow::Result<Self> {
         let cur_context_str = cur_context.get_ctx().await;
 
-        let stream_log_path = if dependency.log_streams {
+        let stream_log_path = if dependency.debug_mode {
             let path = PathBuf::from(format!(
                 "./logs/stream_{}.jsonl",
                 std::time::SystemTime::now()
@@ -65,6 +66,7 @@ impl ActorState {
             reporter: EventReporter {
                 tui_tx: dependency.tui_tx.clone(),
             },
+            debug_mode: dependency.debug_mode,
             file_actor,
             stream_processor: StreamProcessor {
                 acc_map: Default::default(),

@@ -3,6 +3,7 @@ use actors::supervisor::WorkerSupervisor;
 use actors::worker::Worker;
 use app::init_app::InitApp;
 use app::tui::TUIApp;
+use clap::Parser;
 use clients::config::Config;
 use clients::llm::LLmClient;
 use clients::tool_defs::CargoCheck;
@@ -26,14 +27,26 @@ use tracing_subscriber::FmtSubscriber;
 
 const INLINE_VIEWPORT_HEIGHT: u16 = 12;
 
+#[derive(Parser)]
+#[command(name = "joe")]
+struct Cli {
+    #[arg(long)]
+    debug: bool,
+}
+
 #[main]
 async fn main() {
+    let cli = Cli::parse();
+    if cli.debug {
+        println!("Debug mode enabled");
+    }
     let file_appender = RollingFileAppender::new(Rotation::HOURLY, "./logs", "err.log");
     let (file_appender, _guard) = tracing_appender::non_blocking(file_appender);
 
-    // a builder for `FmtSubscriber`.
+    let log_level = if cli.debug { Level::DEBUG } else { Level::WARN };
+
     let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::WARN)
+        .with_max_level(log_level)
         .with_writer(file_appender)
         .finish();
 
@@ -88,7 +101,7 @@ async fn main() {
                 Tool::CargoTest(clients::tool_defs::CargoTest::default()),
             ],
             tui_tx: tx,
-            log_streams: false,
+            debug_mode: cli.debug,
         },
         supervisor.get_cell(),
     )
@@ -96,7 +109,7 @@ async fn main() {
     .expect("Failed to start actor");
 
     terminal.clear().ok();
-    let app = TUIApp::new(joe);
+    let app = TUIApp::new(joe, cli.debug);
     app.run(terminal, rx).await.unwrap();
     actor_handle.await.expect("Actor failed to exit cleanly");
     execute!(stdout(), PopKeyboardEnhancementFlags, DisableBracketedPaste).ok();
