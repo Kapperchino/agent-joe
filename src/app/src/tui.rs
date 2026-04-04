@@ -37,6 +37,7 @@ pub struct TUIApp {
     throbber_state: ThrobberState,
     throbber_tick: usize,
     token_count: TokenCount,
+    debug_mode: bool,
 }
 #[derive(Default)]
 enum InputMode {
@@ -50,7 +51,7 @@ impl TUIApp {
     const COMMAND_PROMPT: &str = "/ ";
     const COMMAND_CONTINUATION: &str = "  ";
 
-    pub fn new(actor_ref: ActorRef<Message>) -> Self {
+    pub fn new(actor_ref: ActorRef<Message>, debug_mode: bool) -> Self {
         Self {
             character_index: 0,
             input: String::new(),
@@ -64,6 +65,7 @@ impl TUIApp {
             throbber_state: ThrobberState::default(),
             throbber_tick: 0,
             token_count: TokenCount::default(),
+            debug_mode,
         }
     }
 
@@ -433,7 +435,21 @@ impl TUIApp {
                 State::Ready => {}
                 State::StreamStart => {}
                 State::StreamStop => {}
-                State::ThinkingStart => {}
+                State::ThinkingStart => {
+                    let last = self.messages.last_mut().cloned();
+                    match last {
+                        None => {
+                            let mut wrapped = self.wrap_str(&data);
+                            self.messages.append(&mut wrapped);
+                        }
+                        Some(mut buff) => {
+                            buff.push_str(data.as_str());
+                            let mut wrapped = self.wrap_str(&buff);
+                            self.messages.pop();
+                            self.messages.append(&mut wrapped)
+                        }
+                    }
+                }
                 State::ThinkingStop => {}
                 State::MessageStart => {
                     let last = self.messages.last_mut().cloned();
