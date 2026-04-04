@@ -38,6 +38,7 @@ pub struct TUIApp {
     throbber_tick: usize,
     token_count: TokenCount,
     debug_mode: bool,
+    draw_line: DrawLine,
 }
 #[derive(Default)]
 enum InputMode {
@@ -66,6 +67,7 @@ impl TUIApp {
             throbber_tick: 0,
             token_count: TokenCount::default(),
             debug_mode,
+            draw_line: DrawLine::new(),
         }
     }
 
@@ -218,7 +220,7 @@ impl TUIApp {
         }
 
         let flushed_lines = self.messages.drain(0..flush_count).collect::<Vec<_>>();
-        let rendered_lines = DrawLine::render_lines(&flushed_lines);
+        let rendered_lines = self.draw_line.render_lines(&flushed_lines);
 
         terminal.insert_before(flush_count as u16, |buf| {
             Paragraph::new(rendered_lines).render(buf.area, buf);
@@ -271,7 +273,7 @@ impl TUIApp {
     }
 
     fn output_lines(&self) -> Vec<Line<'static>> {
-        let mut lines = DrawLine::render_lines(&self.messages);
+        let mut lines = self.draw_line.render_lines(&self.messages);
         match self.actor_state {
             State::ThinkingStart => {
                 lines.push(

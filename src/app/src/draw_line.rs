@@ -1,17 +1,16 @@
 use std::sync::LazyLock;
 
-use markdown::mdast::Node;
 use markdown::ParseOptions;
+use markdown::mdast::Node;
 use ratatui::prelude::{Color, Line, Modifier, Span, Style};
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{self, ThemeSet};
 use syntect::parsing::SyntaxSet;
 use syntect::util::LinesWithEndings;
-
-static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
-static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
-
-pub struct DrawLine {}
+pub struct DrawLine {
+    syntax_set: SyntaxSet,
+    theme_set: ThemeSet,
+}
 
 enum Section {
     Code {
@@ -22,12 +21,18 @@ enum Section {
 }
 
 impl DrawLine {
-    pub fn render_lines(lines: &[String]) -> Vec<Line<'static>> {
+    pub fn new() -> Self {
+        DrawLine {
+            syntax_set: SyntaxSet::load_defaults_newlines(),
+            theme_set: ThemeSet::load_defaults(),
+        }
+    }
+    pub fn render_lines(&self, lines: &[String]) -> Vec<Line<'static>> {
         let sections = Self::split_sections(lines);
         sections
             .into_iter()
             .flat_map(|section| match section {
-                Section::Code { lang, lines } => Self::render_code_section(&lang, &lines),
+                Section::Code { lang, lines } => self.render_code_section(&lang, &lines),
                 Section::Markdown(text) => Self::render_markdown_section(&text),
             })
             .collect()
@@ -52,9 +57,7 @@ impl DrawLine {
             if in_code {
                 let trimmed = line.trim();
                 let backtick_count = trimmed.chars().take_while(|&c| c == '`').count();
-                if backtick_count >= fence_len
-                    && trimmed.len() == backtick_count
-                {
+                if backtick_count >= fence_len && trimmed.len() == backtick_count {
                     // Closing fence: only backticks, at least as many as the opening
                     sections.push(Section::Code {
                         lang: code_lang.take(),
@@ -74,9 +77,8 @@ impl DrawLine {
                     // (info string must not contain backticks per CommonMark)
                     if !rest.contains('`') {
                         if !md_lines.is_empty() {
-                            sections.push(Section::Markdown(
-                                std::mem::take(&mut md_lines).join("\n"),
-                            ));
+                            sections
+                                .push(Section::Markdown(std::mem::take(&mut md_lines).join("\n")));
                         }
                         in_code = true;
                         fence_len = backtick_count;
@@ -106,20 +108,16 @@ impl DrawLine {
         sections
     }
 
-    fn render_code_section(lang: &Option<String>, lines: &[String]) -> Vec<Line<'static>> {
-        let label = match lang {
-            Some(l) => format!("code {}", l),
-            None => "code".to_string(),
-        };
-        let fence_style = Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::DIM | Modifier::BOLD);
+    fn render_code_section(&self, lang: &Option<String>, lines: &[String]) -> Vec<Line<'static>> {
+        if lines.is_empty() {
+            return vec![Line::from("")];
+        }
 
-        let mut result = vec![Line::from(Span::styled(label, fence_style))];
+        let mut result = Vec::new();
 
         let code = lines.join("\n");
-        let ps = &*SYNTAX_SET;
-        let theme = &THEME_SET.themes["base16-eighties.dark"];
+        let ps = &self.syntax_set;
+        let theme = &self.theme_set.themes["base16-eighties.dark"];
 
         let syntax = lang
             .as_deref()
@@ -158,11 +156,13 @@ impl DrawLine {
         let fg = style.foreground;
         Style::default()
             .fg(Color::Rgb(fg.r, fg.g, fg.b))
-            .add_modifier(if style.font_style.contains(highlighting::FontStyle::BOLD) {
-                Modifier::BOLD
-            } else {
-                Modifier::empty()
-            })
+            .add_modifier(
+                if style.font_style.contains(highlighting::FontStyle::BOLD) {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                },
+            )
             .add_modifier(
                 if style.font_style.contains(highlighting::FontStyle::ITALIC) {
                     Modifier::ITALIC
@@ -183,10 +183,7 @@ impl DrawLine {
     }
     fn render_markdown_section(text: &str) -> Vec<Line<'static>> {
         if text.trim().is_empty() {
-            return text
-                .lines()
-                .map(|l| Line::from(l.to_string()))
-                .collect();
+            return text.lines().map(|l| Line::from(l.to_string())).collect();
         }
         let tree = match markdown::to_mdast(text, &ParseOptions::default()) {
             Ok(tree) => tree,
@@ -197,11 +194,7 @@ impl DrawLine {
 
     fn render_block(node: &Node) -> Vec<Line<'static>> {
         match node {
-            Node::Root(root) => root
-                .children
-                .iter()
-                .flat_map(Self::render_block)
-                .collect(),
+            Node::Root(root) => root.children.iter().flat_map(Self::render_block).collect(),
 
             Node::Paragraph(para) => {
                 let spans = Self::render_inline_children(&para.children, Style::default());
@@ -227,18 +220,14 @@ impl DrawLine {
             // Fallback for indented code blocks that the AST parser finds
             // (fenced blocks are already handled by split_sections)
             Node::Code(code) => {
-                let label = match &code.lang {
-                    Some(lang) => format!("code {}", lang),
-                    None => "code".to_string(),
-                };
-                let fence_style = Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::DIM | Modifier::BOLD);
                 let code_style = Style::default().fg(Color::Yellow);
 
-                let mut lines = vec![Line::from(Span::styled(label, fence_style))];
+                let mut lines = Vec::new();
                 for line in code.value.lines() {
                     lines.push(Line::from(Span::styled(line.to_string(), code_style)));
+                }
+                if lines.is_empty() {
+                    lines.push(Line::from(""));
                 }
                 lines
             }
@@ -335,10 +324,7 @@ impl DrawLine {
                     let mut spans = Vec::new();
                     for (c, cell) in row.iter().enumerate() {
                         if c > 0 {
-                            spans.push(Span::styled(
-                                " │ ",
-                                Style::default().fg(Color::DarkGray),
-                            ));
+                            spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
                         }
                         let padded = format!("{:<width$}", cell, width = col_widths[c]);
                         let style = if r == 0 {
