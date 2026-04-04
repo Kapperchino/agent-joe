@@ -211,7 +211,12 @@ impl TUIApp {
             return Ok(());
         }
 
-        let flush_count = self.messages.len().saturating_sub(max_live_messages);
+        let desired = self.messages.len().saturating_sub(max_live_messages);
+        let flush_count = Self::safe_flush_point(&self.messages, desired);
+        if flush_count == 0 {
+            return Ok(());
+        }
+
         let flushed_lines = self.messages.drain(0..flush_count).collect::<Vec<_>>();
         let rendered_lines = DrawLine::render_lines(&flushed_lines);
 
@@ -220,6 +225,36 @@ impl TUIApp {
         })?;
 
         Ok(())
+    }
+
+    /// Find a flush point that doesn't split inside a code block.
+    fn safe_flush_point(messages: &[String], desired: usize) -> usize {
+        let mut in_code = false;
+        let mut fence_len: usize = 0;
+        let mut code_block_start: usize = 0;
+
+        for (i, line) in messages.iter().enumerate() {
+            if i >= desired {
+                break;
+            }
+            if in_code {
+                let trimmed = line.trim();
+                let backticks = trimmed.chars().take_while(|&c| c == '`').count();
+                if backticks >= fence_len && trimmed.len() == backticks {
+                    in_code = false;
+                }
+            } else {
+                let trimmed = line.trim_start();
+                let backticks = trimmed.chars().take_while(|&c| c == '`').count();
+                if backticks >= 3 && !trimmed[backticks..].contains('`') {
+                    in_code = true;
+                    fence_len = backticks;
+                    code_block_start = i;
+                }
+            }
+        }
+
+        if in_code { code_block_start } else { desired }
     }
 
     fn advance_throbber(&mut self) {

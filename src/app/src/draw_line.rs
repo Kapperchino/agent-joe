@@ -1,6 +1,15 @@
+use std::sync::LazyLock;
+
 use markdown::mdast::Node;
 use markdown::ParseOptions;
 use ratatui::prelude::{Color, Line, Modifier, Span, Style};
+use syntect::easy::HighlightLines;
+use syntect::highlighting::{self, ThemeSet};
+use syntect::parsing::SyntaxSet;
+use syntect::util::LinesWithEndings;
+
+static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
+static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
 
 pub struct DrawLine {}
 
@@ -105,15 +114,73 @@ impl DrawLine {
         let fence_style = Style::default()
             .fg(Color::Cyan)
             .add_modifier(Modifier::DIM | Modifier::BOLD);
-        let code_style = Style::default().fg(Color::Yellow);
 
         let mut result = vec![Line::from(Span::styled(label, fence_style))];
-        for line in lines {
-            result.push(Line::from(Span::styled(line.clone(), code_style)));
+
+        let code = lines.join("\n");
+        let ps = &*SYNTAX_SET;
+        let theme = &THEME_SET.themes["base16-eighties.dark"];
+
+        let syntax = lang
+            .as_deref()
+            .and_then(|l| ps.find_syntax_by_token(l))
+            .unwrap_or_else(|| ps.find_syntax_plain_text());
+
+        let mut h = HighlightLines::new(syntax, theme);
+        for line in LinesWithEndings::from(&code) {
+            let ranges = h.highlight_line(line, ps).unwrap_or_default();
+            let spans: Vec<Span<'static>> = ranges
+                .into_iter()
+                .map(|(style, text)| {
+                    Span::styled(
+                        text.trim_end_matches('\n').to_string(),
+                        Self::syntect_to_ratatui_style(style),
+                    )
+                })
+                .collect();
+            if spans.is_empty() {
+                result.push(Line::from(""));
+            } else {
+                result.push(Line::from(spans));
+            }
         }
+        // Handle trailing empty lines that LinesWithEndings skips
+        if code.ends_with('\n') || lines.last().is_some_and(|l| l.is_empty()) {
+            if !lines.is_empty() && lines.last().is_some_and(|l| l.is_empty()) {
+                result.push(Line::from(""));
+            }
+        }
+
         result
     }
 
+    fn syntect_to_ratatui_style(style: highlighting::Style) -> Style {
+        let fg = style.foreground;
+        Style::default()
+            .fg(Color::Rgb(fg.r, fg.g, fg.b))
+            .add_modifier(if style.font_style.contains(highlighting::FontStyle::BOLD) {
+                Modifier::BOLD
+            } else {
+                Modifier::empty()
+            })
+            .add_modifier(
+                if style.font_style.contains(highlighting::FontStyle::ITALIC) {
+                    Modifier::ITALIC
+                } else {
+                    Modifier::empty()
+                },
+            )
+            .add_modifier(
+                if style
+                    .font_style
+                    .contains(highlighting::FontStyle::UNDERLINE)
+                {
+                    Modifier::UNDERLINED
+                } else {
+                    Modifier::empty()
+                },
+            )
+    }
     fn render_markdown_section(text: &str) -> Vec<Line<'static>> {
         if text.trim().is_empty() {
             return text
