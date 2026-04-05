@@ -186,9 +186,18 @@ impl TUIApp {
 
     fn wrap_str(&self, string: &str) -> Vec<String> {
         let wrap_width = self.msg_area_width.saturating_sub(2).max(1);
-        textwrap::wrap(string, textwrap::Options::new(wrap_width))
-            .into_iter()
-            .map(|x| x.to_string())
+        string
+            .split('\n')
+            .flat_map(|line| {
+                if line.len() <= wrap_width {
+                    vec![line.to_string()]
+                } else {
+                    textwrap::wrap(line, textwrap::Options::new(wrap_width))
+                        .into_iter()
+                        .map(|x| x.to_string())
+                        .collect::<Vec<_>>()
+                }
+            })
             .collect()
     }
 

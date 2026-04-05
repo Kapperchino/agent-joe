@@ -223,7 +223,12 @@ impl Display for Tool {
                 grep.input.regex, grep.input.add_start, grep.input.add_end
             ),
             Tool::CargoTest(test) => {
-                if let Some(test_name) = test.input.test_name.as_ref().filter(|name| !name.trim().is_empty()) {
+                if let Some(test_name) = test
+                    .input
+                    .test_name
+                    .as_ref()
+                    .filter(|name| !name.trim().is_empty())
+                {
                     write!(f, "- run `cargo test {}`", test_name)
                 } else {
                     write!(f, "- run `cargo test`")
@@ -276,10 +281,7 @@ impl ToolResult {
                 is_error: None,
             },
             ToolResult::CargoTestResult {
-                status,
-                result,
-                id,
-                ..
+                status, result, id, ..
             } => match result {
                 CargoTestResult::Success { output } => ContentBlock::ToolResult {
                     tool_id: id.clone(),

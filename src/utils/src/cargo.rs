@@ -60,7 +60,10 @@ impl Cargo {
         }
     }
 
-    pub async fn cargo_test(package: Option<&str>, test_name: Option<&str>) -> anyhow::Result<CargoTest> {
+    pub async fn cargo_test(
+        package: Option<&str>,
+        test_name: Option<&str>,
+    ) -> anyhow::Result<CargoTest> {
         let mut command = Command::new("cargo");
         command.arg("test");
         if let Some(package) = package.filter(|name| !name.trim().is_empty()) {

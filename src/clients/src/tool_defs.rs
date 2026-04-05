@@ -137,7 +137,10 @@ pub struct CargoCheckInput {
 }
 
 #[derive(Default, Serialize, Deserialize, Debug, Clone, ToolDef)]
-#[tool(name = "cargo_test", description = "Run cargo test on the project to find failing tests")]
+#[tool(
+    name = "cargo_test",
+    description = "Run cargo test on the project to find failing tests"
+)]
 pub struct CargoTest {
     #[tool(input)]
     pub input: CargoTestInput,
@@ -196,12 +199,8 @@ pub struct ToolId {
 }
 #[derive(Debug)]
 pub enum CargoTestResult {
-    Success {
-        output: String,
-    },
-    Failed {
-        output: String,
-    },
+    Success { output: String },
+    Failed { output: String },
 }
 
 #[derive(Debug)]
