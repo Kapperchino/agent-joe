@@ -24,7 +24,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use url::Url;
-use utils::utils::Utils;
 // I will desloppify this eventually, trust
 
 pub struct InitApp {

@@ -1,5 +1,3 @@
-use std::sync::LazyLock;
-
 use markdown::ParseOptions;
 use markdown::mdast::Node;
 use ratatui::prelude::{Color, Line, Modifier, Span, Style};
@@ -185,11 +183,51 @@ impl DrawLine {
         if text.trim().is_empty() {
             return text.lines().map(|l| Line::from(l.to_string())).collect();
         }
-        let tree = match markdown::to_mdast(text, &ParseOptions::default()) {
+        let normalized = Self::normalize_markdown(text);
+        let tree = match markdown::to_mdast(&normalized, &ParseOptions::default()) {
             Ok(tree) => tree,
             Err(_) => return text.lines().map(|l| Line::from(l.to_string())).collect(),
         };
         Self::render_block(&tree)
+    }
+
+    fn normalize_markdown(text: &str) -> String {
+        text.split('\n')
+            .map(Self::normalize_markdown_line)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn normalize_markdown_line(line: &str) -> String {
+        let indent_len = line.bytes().take_while(|b| *b == b' ').count();
+        if indent_len > 3 {
+            return line.to_string();
+        }
+
+        let rest = &line[indent_len..];
+        let hash_count = rest.bytes().take_while(|b| *b == b'#').count();
+        if !(1..=6).contains(&hash_count) {
+            return line.to_string();
+        }
+
+        let after_hashes = &rest[hash_count..];
+        if after_hashes.is_empty() || after_hashes.starts_with([' ', '\t']) {
+            return line.to_string();
+        }
+        if !after_hashes
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_ascii_digit())
+        {
+            return line.to_string();
+        }
+
+        format!(
+            "{}{} {}",
+            &line[..indent_len],
+            &rest[..hash_count],
+            after_hashes
+        )
     }
 
     fn render_block(node: &Node) -> Vec<Line<'static>> {
@@ -514,5 +552,39 @@ impl DrawLine {
                 })
                 .unwrap_or_default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DrawLine;
+    use ratatui::prelude::{Color, Modifier, Style};
+
+    #[test]
+    fn compact_numbered_heading_is_highlighted() {
+        let rendered = DrawLine::render_markdown_section("##8. Findings");
+
+        assert_eq!(rendered.len(), 1);
+        assert_eq!(rendered[0].spans.len(), 1);
+        assert_eq!(rendered[0].spans[0].content.as_ref(), "8. Findings");
+        assert_eq!(
+            rendered[0].spans[0].style,
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD)
+        );
+    }
+
+    #[test]
+    fn indented_text_is_not_rewritten_into_heading() {
+        assert_eq!(
+            DrawLine::normalize_markdown_line("    ##8. Findings"),
+            "    ##8. Findings"
+        );
+    }
+
+    #[test]
+    fn non_numbered_compact_hash_prefix_stays_plain_text() {
+        assert_eq!(DrawLine::normalize_markdown_line("#include"), "#include");
     }
 }
