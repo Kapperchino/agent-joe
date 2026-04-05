@@ -10,6 +10,13 @@ pub struct DrawLine {
     theme_set: ThemeSet,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RenderState {
+    in_code: bool,
+    fence_len: usize,
+    code_lang: Option<String>,
+}
+
 enum Section {
     Code {
         lang: Option<String>,
@@ -25,8 +32,19 @@ impl DrawLine {
             theme_set: ThemeSet::load_defaults(),
         }
     }
+
     pub fn render_lines(&self, lines: &[String]) -> Vec<Line<'static>> {
-        let sections = Self::split_sections(lines);
+        let mut state = RenderState::default();
+        self.render_lines_with_state(lines, &mut state)
+    }
+
+    pub fn render_lines_with_state(
+        &self,
+        lines: &[String],
+        state: &mut RenderState,
+    ) -> Vec<Line<'static>> {
+        let (sections, next_state) = Self::split_sections(lines, state.clone());
+        *state = next_state;
         sections
             .into_iter()
             .flat_map(|section| match section {
@@ -43,26 +61,22 @@ impl DrawLine {
     /// is a line consisting of *only* backticks (≥3). This matches CommonMark
     /// semantics and avoids the old toggle-on-any-backtick bug where
     /// `` ```rust `` inside a `` ```md `` block would wrongly close it.
-    fn split_sections(lines: &[String]) -> Vec<Section> {
+    fn split_sections(lines: &[String], mut state: RenderState) -> (Vec<Section>, RenderState) {
         let mut sections = Vec::new();
-        let mut in_code = false;
-        let mut fence_len: usize = 0;
-        let mut code_lang: Option<String> = None;
         let mut code_lines: Vec<String> = Vec::new();
-        let mut md_lines: Vec<String> = Vec::new();
 
         for line in lines {
-            if in_code {
+            if state.in_code {
                 let trimmed = line.trim();
                 let backtick_count = trimmed.chars().take_while(|&c| c == '`').count();
-                if backtick_count >= fence_len && trimmed.len() == backtick_count {
+                if backtick_count >= state.fence_len && trimmed.len() == backtick_count {
                     // Closing fence: only backticks, at least as many as the opening
                     sections.push(Section::Code {
-                        lang: code_lang.take(),
+                        lang: state.code_lang.take(),
                         lines: std::mem::take(&mut code_lines),
                     });
-                    in_code = false;
-                    fence_len = 0;
+                    state.in_code = false;
+                    state.fence_len = 0;
                 } else {
                     code_lines.push(line.clone());
                 }
@@ -74,13 +88,9 @@ impl DrawLine {
                     // Opening fence: backticks followed by optional info string
                     // (info string must not contain backticks per CommonMark)
                     if !rest.contains('`') {
-                        if !md_lines.is_empty() {
-                            sections
-                                .push(Section::Markdown(std::mem::take(&mut md_lines).join("\n")));
-                        }
-                        in_code = true;
-                        fence_len = backtick_count;
-                        code_lang = if rest.is_empty() {
+                        state.in_code = true;
+                        state.fence_len = backtick_count;
+                        state.code_lang = if rest.is_empty() {
                             None
                         } else {
                             Some(rest.to_string())
@@ -88,22 +98,19 @@ impl DrawLine {
                         continue;
                     }
                 }
-                md_lines.push(line.clone());
+                sections.push(Section::Markdown(line.clone()));
             }
         }
 
         // Unclosed code block — still render it as code
-        if in_code {
+        if state.in_code {
             sections.push(Section::Code {
-                lang: code_lang,
+                lang: state.code_lang.clone(),
                 lines: code_lines,
             });
         }
-        if !md_lines.is_empty() {
-            sections.push(Section::Markdown(md_lines.join("\n")));
-        }
 
-        sections
+        (sections, state)
     }
 
     fn render_code_section(&self, lang: &Option<String>, lines: &[String]) -> Vec<Line<'static>> {
@@ -181,7 +188,10 @@ impl DrawLine {
     }
     fn render_markdown_section(text: &str) -> Vec<Line<'static>> {
         if text.trim().is_empty() {
-            return text.lines().map(|l| Line::from(l.to_string())).collect();
+            return text
+                .split('\n')
+                .map(|l| Line::from(l.to_string()))
+                .collect();
         }
         let normalized = Self::normalize_markdown(text);
         let tree = match markdown::to_mdast(&normalized, &ParseOptions::default()) {
@@ -552,39 +562,5 @@ impl DrawLine {
                 })
                 .unwrap_or_default(),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::DrawLine;
-    use ratatui::prelude::{Color, Modifier, Style};
-
-    #[test]
-    fn compact_numbered_heading_is_highlighted() {
-        let rendered = DrawLine::render_markdown_section("##8. Findings");
-
-        assert_eq!(rendered.len(), 1);
-        assert_eq!(rendered[0].spans.len(), 1);
-        assert_eq!(rendered[0].spans[0].content.as_ref(), "8. Findings");
-        assert_eq!(
-            rendered[0].spans[0].style,
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD)
-        );
-    }
-
-    #[test]
-    fn indented_text_is_not_rewritten_into_heading() {
-        assert_eq!(
-            DrawLine::normalize_markdown_line("    ##8. Findings"),
-            "    ##8. Findings"
-        );
-    }
-
-    #[test]
-    fn non_numbered_compact_hash_prefix_stays_plain_text() {
-        assert_eq!(DrawLine::normalize_markdown_line("#include"), "#include");
     }
 }

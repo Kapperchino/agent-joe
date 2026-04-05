@@ -7,7 +7,7 @@ use common_models::tui_models::State;
 use common_models::tui_models::TokenCount;
 use std::time::Duration;
 
-use crate::draw_line::DrawLine;
+use crate::draw_line::{DrawLine, RenderState};
 use color_eyre::Result;
 use crossterm::event::{EventStream, KeyEvent, KeyModifiers};
 use futures::StreamExt;
@@ -39,6 +39,7 @@ pub struct TUIApp {
     token_count: TokenCount,
     debug_mode: bool,
     draw_line: DrawLine,
+    scrollback_render_state: RenderState,
 }
 #[derive(Default)]
 enum InputMode {
@@ -68,6 +69,7 @@ impl TUIApp {
             token_count: TokenCount::default(),
             debug_mode,
             draw_line: DrawLine::new(),
+            scrollback_render_state: RenderState::default(),
         }
     }
 
@@ -213,50 +215,17 @@ impl TUIApp {
             return Ok(());
         }
 
-        let desired = self.messages.len().saturating_sub(max_live_messages);
-        let flush_count = Self::safe_flush_point(&self.messages, desired);
-        if flush_count == 0 {
-            return Ok(());
-        }
-
+        let flush_count = self.messages.len().saturating_sub(max_live_messages);
         let flushed_lines = self.messages.drain(0..flush_count).collect::<Vec<_>>();
-        let rendered_lines = self.draw_line.render_lines(&flushed_lines);
+        let rendered_lines = self
+            .draw_line
+            .render_lines_with_state(&flushed_lines, &mut self.scrollback_render_state);
 
-        terminal.insert_before(flush_count as u16, |buf| {
+        terminal.insert_before(rendered_lines.len() as u16, |buf| {
             Paragraph::new(rendered_lines).render(buf.area, buf);
         })?;
 
         Ok(())
-    }
-
-    /// Find a flush point that doesn't split inside a code block.
-    fn safe_flush_point(messages: &[String], desired: usize) -> usize {
-        let mut in_code = false;
-        let mut fence_len: usize = 0;
-        let mut code_block_start: usize = 0;
-
-        for (i, line) in messages.iter().enumerate() {
-            if i >= desired {
-                break;
-            }
-            if in_code {
-                let trimmed = line.trim();
-                let backticks = trimmed.chars().take_while(|&c| c == '`').count();
-                if backticks >= fence_len && trimmed.len() == backticks {
-                    in_code = false;
-                }
-            } else {
-                let trimmed = line.trim_start();
-                let backticks = trimmed.chars().take_while(|&c| c == '`').count();
-                if backticks >= 3 && !trimmed[backticks..].contains('`') {
-                    in_code = true;
-                    fence_len = backticks;
-                    code_block_start = i;
-                }
-            }
-        }
-
-        if in_code { code_block_start } else { desired }
     }
 
     fn advance_throbber(&mut self) {
@@ -273,7 +242,10 @@ impl TUIApp {
     }
 
     fn output_lines(&self) -> Vec<Line<'static>> {
-        let mut lines = self.draw_line.render_lines(&self.messages);
+        let mut render_state = self.scrollback_render_state.clone();
+        let mut lines = self
+            .draw_line
+            .render_lines_with_state(&self.messages, &mut render_state);
         match self.actor_state {
             State::ThinkingStart => {
                 lines.push(
