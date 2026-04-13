@@ -104,7 +104,9 @@ impl InputBoxState {
                 KeyCode::Enter => {
                     if key.modifiers.is_empty() {
                         self.input_mode = InputMode::Normal;
-                    } else if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    } else if key.modifiers.contains(KeyModifiers::ALT)
+                        || key.modifiers.contains(KeyModifiers::SHIFT)
+                    {
                         self.enter_char('\n');
                     }
                 }

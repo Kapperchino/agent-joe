@@ -356,7 +356,7 @@ impl TUIApp {
     fn draw(&mut self, frame: &mut Frame) {
         let chunks = Layout::vertical([
             Constraint::Min(1),
-            Constraint::Length(frame.area().width),
+            Constraint::Length(self.input_box.get_height(frame.area().width)),
             Constraint::Length(1),
         ]);
 
