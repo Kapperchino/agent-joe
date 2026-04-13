@@ -1,9 +1,5 @@
 use crate::tui::InputMode;
-use actors::actor::Message;
-use common_models::tui_models::{Command, State};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
-use ractor::ActorRef;
-use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::prelude::{Color, Line, Modifier, Span, Style};
@@ -14,7 +10,7 @@ pub struct InputBox {}
 pub struct InputBoxState {
     character_index: usize,
     input: String,
-    input_mode: InputMode,
+    pub input_mode: InputMode,
 }
 
 impl StatefulWidget for InputBox {
@@ -91,63 +87,6 @@ impl InputBoxState {
         self.input.is_empty()
     }
 
-    fn handle_key_event(&mut self, key: &KeyEvent) {
-        match self.input_mode {
-            InputMode::Normal => match key.code {
-                KeyCode::Char('i') => {
-                    self.input_mode = InputMode::Editing;
-                }
-                KeyCode::Char('/') => self.input_mode = InputMode::InputCommand,
-                _ => {}
-            },
-            InputMode::Editing => match key.code {
-                KeyCode::Enter => {
-                    if key.modifiers.is_empty() {
-                        self.input_mode = InputMode::Normal;
-                    } else if key.modifiers.contains(KeyModifiers::ALT)
-                        || key.modifiers.contains(KeyModifiers::SHIFT)
-                    {
-                        self.enter_char('\n');
-                    }
-                }
-                KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.enter_char('\n');
-                }
-                KeyCode::Char(to_insert) => self.enter_char(to_insert),
-                KeyCode::Backspace => self.delete_char(),
-                KeyCode::Left => self.move_cursor_left(),
-                KeyCode::Right => self.move_cursor_right(),
-                KeyCode::Esc => self.input_mode = InputMode::Normal,
-                _ => {}
-            },
-            InputMode::InputCommand => match key.code {
-                KeyCode::Enter => {
-                    self.input_mode = InputMode::Normal;
-                }
-                KeyCode::Char(to_insert) => self.enter_char(to_insert),
-                KeyCode::Backspace => self.delete_char(),
-                KeyCode::Left => self.move_cursor_left(),
-                KeyCode::Right => self.move_cursor_right(),
-                KeyCode::Esc => self.input_mode = InputMode::Normal,
-                _ => {}
-            },
-        }
-    }
-
-    pub fn handle_term_event(&mut self, event: &Event) {
-        match event {
-            Event::FocusGained => {}
-            Event::FocusLost => {}
-            Event::Key(key) => self.handle_key_event(key),
-            Event::Mouse(_) => {}
-            Event::Paste(text) => match self.input_mode {
-                InputMode::Editing | InputMode::InputCommand => self.paste(text),
-                InputMode::Normal => {}
-            },
-            Event::Resize(_, _) => {}
-        }
-    }
-
     pub fn get_cursor_pos(&self, area: &Rect) -> Position {
         let input_wrap_width = Self::input_wrap_width(area.width);
         let editing_cursor = self.cursor_wrap_position(input_wrap_width, "", "");
@@ -181,23 +120,23 @@ impl InputBoxState {
         }
     }
 
-    fn move_cursor_left(&mut self) {
+    pub(crate) fn move_cursor_left(&mut self) {
         let cursor_moved_left = self.character_index.saturating_sub(1);
         self.character_index = self.clamp_cursor(cursor_moved_left);
     }
 
-    fn move_cursor_right(&mut self) {
+    pub(crate) fn move_cursor_right(&mut self) {
         let cursor_moved_right = self.character_index.saturating_add(1);
         self.character_index = self.clamp_cursor(cursor_moved_right);
     }
 
-    fn enter_char(&mut self, new_char: char) {
+    pub fn enter_char(&mut self, new_char: char) {
         let index = self.byte_index();
         self.input.insert(index, new_char);
         self.move_cursor_right();
     }
 
-    fn paste(&mut self, string: &String) {
+    pub(crate) fn paste(&mut self, string: &String) {
         self.input.push_str(string);
         let cursor_moved_right = self.character_index.saturating_add(string.chars().count());
         self.character_index = self.clamp_cursor(cursor_moved_right);
@@ -211,7 +150,7 @@ impl InputBoxState {
         self.character_index = 0;
     }
 
-    fn delete_char(&mut self) {
+    pub(crate) fn delete_char(&mut self) {
         let is_not_cursor_leftmost = self.character_index != 0;
         if is_not_cursor_leftmost {
             // Method "remove" is not used on the saved text for deleting the selected char.

@@ -41,7 +41,7 @@ pub struct TUIApp {
     scrollback_render_state: RenderState,
     input_box: InputBoxState,
 }
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub enum InputMode {
     #[default]
     Normal,
@@ -118,6 +118,11 @@ impl TUIApp {
 
             self.input_box.clear();
         }
+    }
+
+    fn update_input_mode(&mut self, mode: InputMode) {
+        self.input_mode = mode.clone();
+        self.input_box.input_mode = mode;
     }
 
     fn wrap_str(&self, string: &str) -> Vec<String> {
@@ -307,13 +312,15 @@ impl TUIApp {
     }
 
     fn handle_term_event(&mut self, event: &Event) {
-        self.input_box.handle_term_event(event);
         match event {
             Event::FocusGained => {}
             Event::FocusLost => {}
             Event::Key(key) => self.handle_key_event(key),
             Event::Mouse(_) => {}
-            Event::Paste(_) => {}
+            Event::Paste(text) => match self.input_mode {
+                InputMode::Editing | InputMode::InputCommand => self.input_box.paste(text),
+                InputMode::Normal => {}
+            },
             Event::Resize(_, _) => {}
         }
     }
@@ -321,10 +328,8 @@ impl TUIApp {
     fn handle_key_event(&mut self, key: &KeyEvent) {
         match self.input_mode {
             InputMode::Normal => match key.code {
-                KeyCode::Char('i') => {
-                    self.input_mode = InputMode::Editing;
-                }
-                KeyCode::Char('/') => self.input_mode = InputMode::InputCommand,
+                KeyCode::Char('i') => self.update_input_mode(InputMode::Editing),
+                KeyCode::Char('/') => self.update_input_mode(InputMode::InputCommand),
                 KeyCode::Char('q') => {
                     self.do_quit = true;
                     self.actor_ref.kill();
@@ -335,18 +340,33 @@ impl TUIApp {
                 KeyCode::Enter => {
                     if key.modifiers.is_empty() {
                         self.submit_message();
-                        self.input_mode = InputMode::Normal;
+                        self.update_input_mode(InputMode::Normal);
+                    } else if key.modifiers.contains(KeyModifiers::ALT)
+                        || key.modifiers.contains(KeyModifiers::SHIFT)
+                    {
+                        self.input_box.enter_char('\n');
                     }
                 }
-                KeyCode::Esc => self.input_mode = InputMode::Normal,
+                KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.input_box.enter_char('\n');
+                }
+                KeyCode::Char(to_insert) => self.input_box.enter_char(to_insert),
+                KeyCode::Backspace => self.input_box.delete_char(),
+                KeyCode::Left => self.input_box.move_cursor_left(),
+                KeyCode::Right => self.input_box.move_cursor_right(),
+                KeyCode::Esc => self.update_input_mode(InputMode::Normal),
                 _ => {}
             },
             InputMode::InputCommand => match key.code {
                 KeyCode::Enter => {
                     self.submit_command();
-                    self.input_mode = InputMode::Normal;
+                    self.update_input_mode(InputMode::Normal);
                 }
-                KeyCode::Esc => self.input_mode = InputMode::Normal,
+                KeyCode::Char(to_insert) => self.input_box.enter_char(to_insert),
+                KeyCode::Backspace => self.input_box.delete_char(),
+                KeyCode::Left => self.input_box.move_cursor_left(),
+                KeyCode::Right => self.input_box.move_cursor_right(),
+                KeyCode::Esc => self.update_input_mode(InputMode::Normal),
                 _ => {}
             },
         }
