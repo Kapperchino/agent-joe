@@ -1,15 +1,14 @@
 use crate::claude_config::{ClaudeAuthConfig, ClaudeConfig, ClaudeEffort};
 use crate::llm;
 use crate::llm::{ClientResponse, LLmClientTrait};
-use anyhow::{Error, anyhow};
+use anyhow::{anyhow, Error};
 use async_stream::try_stream;
 use futures::{Stream, StreamExt};
-use reqwest::{Client, header};
+use reqwest::{header, Client};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 use thiserror::Error;
-use tokio::sync::TryAcquireError::NoPermits;
 
 pub const MAX_TOKENS: u32 = 64000;
 #[derive(Error, Debug)]

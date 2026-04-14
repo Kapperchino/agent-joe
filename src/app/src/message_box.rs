@@ -1,12 +1,10 @@
 use crate::draw_line::{DrawLine, RenderState};
-use crate::input_box::{InputBox, InputBoxState};
-use crate::tui::InputMode;
 use common_models::tui_models::State;
-use ratatui::DefaultTerminal;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::{Color, Line, Modifier, StatefulWidget, Style};
 use ratatui::widgets::{Paragraph, Widget};
+use ratatui::DefaultTerminal;
 use throbber_widgets_tui::{Throbber, ThrobberState};
 
 pub enum Msg {

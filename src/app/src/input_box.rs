@@ -1,5 +1,4 @@
 use crate::tui::InputMode;
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::prelude::{Color, Line, Modifier, Span, Style};

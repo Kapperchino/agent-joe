@@ -1,7 +1,7 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use clients::config::Config;
 use clients::openai_codex_auth::{
-    REDIRECT_URI, create_authorization_flow, exchange_authorization_code, parse_redirect_input,
+    create_authorization_flow, exchange_authorization_code, parse_redirect_input, REDIRECT_URI,
 };
 use clients::{
     ClaudeAuthConfig, ClaudeConfig, ClaudeEffort, ClaudeKeyConfig, LocalOpenAIConfig,
@@ -11,12 +11,12 @@ use clients::{
 use crossterm::event::{EventStream, KeyCode, KeyEvent};
 use futures::StreamExt;
 use ratatui::{
-    DefaultTerminal, Frame,
-    crossterm::event::Event,
-    layout::{Constraint, Flex, Layout, Rect},
+    crossterm::event::Event, layout::{Constraint, Flex, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Clear, Paragraph},
+    DefaultTerminal,
+    Frame,
 };
 use std::process::Command;
 use std::time::Duration;

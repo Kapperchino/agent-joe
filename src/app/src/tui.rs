@@ -7,22 +7,19 @@ use common_models::tui_models::State;
 use common_models::tui_models::TokenCount;
 use std::time::Duration;
 
-use crate::draw_line::{DrawLine, RenderState};
 use crate::input_box::{InputBox, InputBoxState};
 use crate::message_box::{MessageBox, MessageBoxState, Msg};
-use actors::actor_state::ActorState;
 use color_eyre::Result;
 use crossterm::event::{EventStream, KeyEvent, KeyModifiers};
 use futures::StreamExt;
 use ractor::ActorRef;
-use ratatui::layout::Position;
 use ratatui::{
-    DefaultTerminal, Frame,
-    crossterm::event::{Event, KeyCode},
-    layout::{Constraint, Layout},
+    crossterm::event::{Event, KeyCode}, layout::{Constraint, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Paragraph, Widget},
+    widgets::Block,
+    DefaultTerminal,
+    Frame,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 

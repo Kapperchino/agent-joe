@@ -1,17 +1,17 @@
 use crate::llm;
 use crate::llm::{ClientResponse, LLmClientTrait};
 use crate::openai_config::{OpenAIAuthConfig, OpenAIConfig, OpenAIEffort};
-use anyhow::{Error, anyhow};
+use anyhow::{anyhow, Error};
 use async_stream::try_stream;
 use futures::{Stream, StreamExt};
-use reqwest::{Client, header};
+use reqwest::{header, Client};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::future::ready;
 use std::str::FromStr;
 use std::time::Duration;
 use thiserror::Error;
-use tracing::{error, warn};
+use tracing::error;
 
 #[derive(Error, Debug)]
 pub enum OpenAIError {

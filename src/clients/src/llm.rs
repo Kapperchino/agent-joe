@@ -2,8 +2,8 @@ use crate::claude::{ClaudeClient, Usage};
 use crate::config::Config;
 use crate::openai::OpenAIClient;
 use crate::tool_defs::{Tool, ToolId};
-use futures::Stream;
 use futures::future::Either;
+use futures::Stream;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
