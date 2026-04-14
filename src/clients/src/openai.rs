@@ -126,6 +126,7 @@ struct ResponseRequest {
     pub tools: Vec<Tool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<ReasoningConfig>,
+    pub parallel_tool_calls: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub stream: bool,
     pub store: bool,
@@ -595,6 +596,7 @@ impl OpenAIClient {
             max_output_tokens: None,
             tools: req.tools,
             reasoning: Some(self.config.get_reasoning()),
+            parallel_tool_calls: true,
             stream: false,
             store: false,
         };
@@ -627,6 +629,7 @@ impl OpenAIClient {
             max_output_tokens: None,
             tools: req.tools,
             reasoning: Some(self.config.get_reasoning()),
+            parallel_tool_calls: true,
             stream: true,
             store: false,
         };

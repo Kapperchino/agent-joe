@@ -9,7 +9,7 @@ use crate::tool_defs::{CargoCheck, CargoTest, ToolId};
 use crate::tool_defs::{CargoCheckResult, CargoTestResult, Tool};
 use crate::tool_defs::{Range, ReadFile, StringReplaceInput, ToolJson, ToolResult};
 use analysis::cur_context::CurContext;
-use anyhow::{anyhow, Error};
+use anyhow::{Error, anyhow};
 use futures::{StreamExt, TryStreamExt};
 use std::cmp::min;
 use std::collections::HashMap;
@@ -466,6 +466,7 @@ impl InsertAfterLine {
         let insert_lines: Vec<_> = self.input.content.lines().collect();
         let file_content = fs::read_to_string(&path).await?;
         let mut lines: Vec<_> = file_content.lines().collect();
+        let line_num = min(line_num, lines.len() - 1);
         lines.splice(line_num..line_num, insert_lines);
         let mut res = lines.join("\n");
         res.push_str("\n");
