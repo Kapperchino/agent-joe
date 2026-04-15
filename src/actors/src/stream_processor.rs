@@ -1,4 +1,5 @@
 use crate::event_reporter::EventReporter;
+use crate::tool_call::ToolCall;
 use anyhow::{Error, anyhow};
 use clients::llm::{ContentBlockInfo, Delta, StopReason, StreamEvent};
 use clients::tool_defs::{
@@ -8,11 +9,11 @@ use clients::tool_defs::{
 };
 use common_models::tui_models::{ActorToTui, State, TokenCount};
 use std::collections::HashMap;
+use std::iter::Map;
 use std::path::PathBuf;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
 use tracing::error;
-use crate::tool_call::ToolCall;
 
 pub struct StreamProcessor {
     pub batches: Vec<Batch>,
@@ -64,15 +65,136 @@ pub enum ProcessedItem {
     Tool(ToolCall),
 }
 
+pub struct BatchData {
+    delta_buf: HashMap<usize, Vec<Delta>>,
+    acc_map: HashMap<usize, Vec<StreamAccu>>,
+}
+
+impl BatchData {
+    pub fn accum(&mut self, index: usize, delta: Delta) {
+        match self.delta_buf.get_mut(&index) {
+            None => {
+                self.delta_buf.insert(index, vec![delta]);
+            }
+            Some(vec) => vec.push(delta),
+        }
+    }
+
+    fn reduce(&mut self, index: usize) -> Option<StreamAccu> {
+        self.delta_buf.remove(&index).and_then(|buf| {
+            buf.into_iter()
+                .filter_map(|delta| match delta {
+                    Delta::TextDelta { text } => Some(StreamAccu::String(text)),
+                    Delta::InputJsonDelta { partial_json } => Some(StreamAccu::Json(partial_json)),
+                    Delta::ThinkingDelta {
+                        thinking,
+                        reasoning_id,
+                    } => Some(StreamAccu::Thinking {
+                        thinking,
+                        signature: "".to_string(),
+                        reasoning_id,
+                    }),
+                    Delta::SignatureDelta { signature } => Some(StreamAccu::Thinking {
+                        thinking: "".to_string(),
+                        signature,
+                        reasoning_id: None,
+                    }),
+                })
+                .reduce(|mut acc, delta| {
+                    match (&mut acc, delta) {
+                        (StreamAccu::String(buffer), StreamAccu::String(delta)) => {
+                            buffer.push_str(&delta)
+                        }
+                        (
+                            StreamAccu::Thinking {
+                                thinking: think_buf,
+                                signature: sig,
+                                reasoning_id: acc_id,
+                            },
+                            StreamAccu::Thinking {
+                                thinking,
+                                signature,
+                                reasoning_id,
+                            },
+                        ) => {
+                            think_buf.push_str(&thinking);
+                            if !signature.is_empty() {
+                                sig.push_str(&signature)
+                            }
+                            if reasoning_id.is_some() {
+                                *acc_id = reasoning_id;
+                            }
+                        }
+                        (StreamAccu::Json(buffer), StreamAccu::Json(delta)) => {
+                            buffer.push_str(&delta)
+                        }
+                        _ => {
+                            unreachable!("mixed Text and InputJson deltas")
+                        }
+                    }
+                    acc
+                })
+        })
+    }
+
+    pub fn apply_reduce(&mut self, index: usize, id: Option<String>) {
+        match self.reduce(index) {
+            Some(buf) => match self.acc_map.get_mut(&index) {
+                Some(vec) => vec.push(buf.clone()),
+                None => {
+                    self.acc_map.insert(index, vec![buf.clone()]);
+                }
+            },
+            // special case here for openai
+            None => {
+                id.map(|t| {
+                    if t.starts_with("rs_") && !self.acc_map.contains_key(&index) {
+                        self.acc_map.insert(
+                            index,
+                            vec![StreamAccu::Thinking {
+                                thinking: "".to_string(),
+                                signature: "".to_string(),
+                                reasoning_id: Some(t),
+                            }],
+                        );
+                    } else {
+                        ()
+                    }
+                });
+            }
+        }
+    }
+}
+
 // tracking current progress
-pub struct Batch {
-    pub acc_map: HashMap<usize, Vec<StreamAccu>>,
+pub enum Batch {
+    Tool(BatchData),
+    Thinking(BatchData),
+    Text(BatchData),
+}
+
+impl Batch {
+    pub fn accum(&mut self, index: usize, delta: Delta) {
+        match self {
+            Batch::Tool(tool) => tool.accum(index, delta),
+            Batch::Thinking(thinking) => thinking.accum(index, delta),
+            Batch::Text(text) => text.accum(index, delta),
+        }
+    }
+
+    pub fn apply_reduce(&mut self, index: usize, id: Option<String>) {
+        match self {
+            Batch::Tool(tool) => tool.apply_reduce(index, id),
+            Batch::Thinking(thinking) => thinking.apply_reduce(index, id),
+            Batch::Text(text) => text.apply_reduce(index, id),
+        }
+    }
 }
 
 impl StreamNextStep {
     pub fn new(reason: &StopReason) -> anyhow::Result<Self> {
         match reason {
-            StopReason::EndTurn => Ok(StreamNextStep::Done),
+            StopReason::EndTurn => Ok(StreamNextStep::ToolUse),
             StopReason::MaxTokens => Ok(StreamNextStep::NewStream),
             StopReason::StopSequence => Ok(StreamNextStep::Done),
             StopReason::ToolUse => Ok(StreamNextStep::ToolUse),
@@ -93,12 +215,9 @@ impl StreamProcessor {
         self.handle_stream_state(&item);
         match item {
             StreamEvent::ContentBlockDelta { index, delta } => {
-                match self.delta_buf.get_mut(&index) {
-                    None => {
-                        self.delta_buf.insert(index, vec![delta]);
-                    }
-                    Some(vec) => vec.push(delta),
-                }
+                self.batches
+                    .last_mut()
+                    .map(|batch| batch.accum(index, delta));
                 Ok(StreamNextStep::Accum)
             }
             StreamEvent::ContentBlockStart {
@@ -118,31 +237,9 @@ impl StreamProcessor {
                 _ => Ok(StreamNextStep::Accum),
             },
             StreamEvent::ContentBlockStop { index, id } => {
-                match self.accumulate(index) {
-                    Some(buf) => match self.acc_map.get_mut(&index) {
-                        Some(vec) => vec.push(buf.clone()),
-                        None => {
-                            self.acc_map.insert(index, vec![buf.clone()]);
-                        }
-                    },
-                    // special case here for openai
-                    None => {
-                        id.map(|t| {
-                            if t.starts_with("rs_") && !self.acc_map.contains_key(&index) {
-                                self.acc_map.insert(
-                                    index,
-                                    vec![StreamAccu::Thinking {
-                                        thinking: "".to_string(),
-                                        signature: "".to_string(),
-                                        reasoning_id: Some(t),
-                                    }],
-                                );
-                            } else {
-                                ()
-                            }
-                        });
-                    }
-                }
+                self.batches
+                    .last_mut()
+                    .map(|batch| batch.apply_reduce(index, id));
                 Ok(StreamNextStep::Accum)
             }
             StreamEvent::MessageStop {} => Ok(StreamNextStep::Noop),
@@ -272,63 +369,6 @@ impl StreamProcessor {
         } else {
             Err(anyhow::Error::msg("Type shit"))
         }
-    }
-
-    fn accumulate(&mut self, index: usize) -> Option<StreamAccu> {
-        self.delta_buf.remove(&index).and_then(|buf| {
-            buf.into_iter()
-                .filter_map(|delta| match delta {
-                    Delta::TextDelta { text } => Some(StreamAccu::String(text)),
-                    Delta::InputJsonDelta { partial_json } => Some(StreamAccu::Json(partial_json)),
-                    Delta::ThinkingDelta {
-                        thinking,
-                        reasoning_id,
-                    } => Some(StreamAccu::Thinking {
-                        thinking,
-                        signature: "".to_string(),
-                        reasoning_id,
-                    }),
-                    Delta::SignatureDelta { signature } => Some(StreamAccu::Thinking {
-                        thinking: "".to_string(),
-                        signature,
-                        reasoning_id: None,
-                    }),
-                })
-                .reduce(|mut acc, delta| {
-                    match (&mut acc, delta) {
-                        (StreamAccu::String(buffer), StreamAccu::String(delta)) => {
-                            buffer.push_str(&delta)
-                        }
-                        (
-                            StreamAccu::Thinking {
-                                thinking: think_buf,
-                                signature: sig,
-                                reasoning_id: acc_id,
-                            },
-                            StreamAccu::Thinking {
-                                thinking,
-                                signature,
-                                reasoning_id,
-                            },
-                        ) => {
-                            think_buf.push_str(&thinking);
-                            if !signature.is_empty() {
-                                sig.push_str(&signature)
-                            }
-                            if reasoning_id.is_some() {
-                                *acc_id = reasoning_id;
-                            }
-                        }
-                        (StreamAccu::Json(buffer), StreamAccu::Json(delta)) => {
-                            buffer.push_str(&delta)
-                        }
-                        _ => {
-                            unreachable!("mixed Text and InputJson deltas")
-                        }
-                    }
-                    acc
-                })
-        })
     }
 
     async fn log_stream_item(&self, item: &StreamEvent) {
