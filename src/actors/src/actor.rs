@@ -1,7 +1,7 @@
 use crate::actor_state::ActorState;
 use crate::cache_actor::CacheActor;
 use crate::file_actor::FileActor;
-use crate::stream_processor::{PreprocessedStreamItem, ProcessedItem, StreamNextStep, ToolCall};
+use crate::stream_processor::{PreprocessedStreamItem, ProcessedItem, StreamNextStep};
 use crate::worker::Worker;
 use crate::{cache_actor, file_actor};
 use analysis::cur_context::CurContext;

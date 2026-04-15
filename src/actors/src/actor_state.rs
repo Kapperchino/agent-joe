@@ -1,9 +1,8 @@
 use crate::actor::{Dependency, StreamRes};
 use crate::event_reporter::EventReporter;
 use crate::file_actor;
-use crate::stream_processor::{
-    PreprocessedStreamItem, ProcessedItem, StreamAccu, StreamProcessor, ToolCall,
-};
+use crate::stream_processor::{PreprocessedStreamItem, ProcessedItem, StreamAccu, StreamProcessor};
+use crate::tool_call::ToolCall;
 use analysis::cur_context::CurContext;
 use anyhow::anyhow;
 use clients::llm::{ContentBlock, Delta, LLmClient, Message, Role};
@@ -69,6 +68,7 @@ impl ActorState {
             debug_mode: dependency.debug_mode,
             file_actor,
             stream_processor: StreamProcessor {
+                batches: vec![],
                 acc_map: Default::default(),
                 delta_buf: Default::default(),
                 stream_log_path,

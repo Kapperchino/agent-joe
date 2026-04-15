@@ -1,17 +1,17 @@
 use crate::llm;
 use crate::llm::{ClientResponse, LLmClientTrait};
 use crate::openai_config::{OpenAIAuthConfig, OpenAIConfig, OpenAIEffort};
-use anyhow::{anyhow, Error};
+use anyhow::{Error, anyhow};
 use async_stream::try_stream;
 use futures::{Stream, StreamExt};
-use reqwest::{header, Client};
+use reqwest::{Client, header};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::future::ready;
 use std::str::FromStr;
 use std::time::Duration;
 use thiserror::Error;
-use tracing::error;
+use tracing::{error, info, warn};
 
 #[derive(Error, Debug)]
 pub enum OpenAIError {
@@ -651,6 +651,7 @@ impl OpenAIClient {
                 buffer.push_str(&String::from_utf8_lossy(&chunk));
 
                 while let Some(event) = Self::extract_sse_event(&mut buffer)? {
+                    info!("{:?}", event);
                     yield event;
                 }
             }

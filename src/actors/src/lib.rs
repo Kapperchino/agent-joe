@@ -9,3 +9,4 @@ mod event_reporter;
 mod stream_processor;
 #[cfg(test)]
 mod stream_replay_test;
+mod tool_call;

@@ -43,7 +43,7 @@ async fn main() {
     let file_appender = RollingFileAppender::new(Rotation::HOURLY, "./logs", "err.log");
     let (file_appender, _guard) = tracing_appender::non_blocking(file_appender);
 
-    let log_level = if cli.debug { Level::DEBUG } else { Level::WARN };
+    let log_level = if cli.debug { Level::INFO } else { Level::WARN };
 
     let subscriber = FmtSubscriber::builder()
         .with_max_level(log_level)

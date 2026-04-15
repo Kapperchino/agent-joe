@@ -1,5 +1,5 @@
 use crate::event_reporter::EventReporter;
-use anyhow::{anyhow, Error};
+use anyhow::{Error, anyhow};
 use clients::llm::{ContentBlockInfo, Delta, StopReason, StreamEvent};
 use clients::tool_defs::{
     CargoCheckInput, CargoTest, CargoTestInput, GrepInput, GrepTool, InsertAfterLine,
@@ -12,20 +12,16 @@ use std::path::PathBuf;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
 use tracing::error;
+use crate::tool_call::ToolCall;
 
 pub struct StreamProcessor {
+    pub batches: Vec<Batch>,
     pub acc_map: HashMap<usize, Vec<StreamAccu>>,
     pub delta_buf: HashMap<usize, Vec<Delta>>,
     pub stream_log_path: Option<PathBuf>,
     pub token_count: TokenCount,
     pub reporter: EventReporter,
     pub cur_state: State,
-}
-#[derive(Debug, Clone)]
-pub struct ToolCall {
-    pub id: ToolId,
-    pub name: String,
-    pub json: String,
 }
 
 pub enum StreamNextStep {
@@ -68,67 +64,9 @@ pub enum ProcessedItem {
     Tool(ToolCall),
 }
 
-impl ToolCall {
-    pub fn get_tool(&self) -> anyhow::Result<Tool> {
-        let tool = Tool::from_str(self.name.as_str())?;
-        match tool {
-            Tool::ReadFile(_) => {
-                let input = ReadFileInput::deserialize_lenient(&self.json)?;
-                Ok(Tool::ReadFile(ReadFile {
-                    id: self.id.id.clone(),
-                    input,
-                }))
-            }
-            Tool::InsertAfterLine(_) => {
-                let input = InsertAfterLineInput::deserialize_lenient(&self.json)?;
-                Ok(Tool::InsertAfterLine(InsertAfterLine {
-                    id: self.id.id.clone(),
-                    input,
-                }))
-            }
-            Tool::StringReplace(_) => {
-                let input = StringReplaceInput::deserialize_lenient(&self.json)?;
-                Ok(Tool::StringReplace(StringReplace {
-                    id: self.id.id.clone(),
-                    input,
-                }))
-            }
-            Tool::CargoCheck(_) => {
-                let input = if self.json.is_empty() {
-                    CargoCheckInput {
-                        include_warnings: None,
-                    }
-                } else {
-                    CargoCheckInput::deserialize_lenient(&self.json)?
-                };
-                Ok(Tool::CargoCheck(clients::tool_defs::CargoCheck {
-                    id: self.id.id.clone(),
-                    input,
-                }))
-            }
-            Tool::Grep(_) => {
-                let input = GrepInput::deserialize_lenient(&self.json)?;
-                Ok(Tool::Grep(GrepTool {
-                    id: self.id.id.clone(),
-                    input,
-                }))
-            }
-            Tool::CargoTest(_) => {
-                let input = if self.json.is_empty() {
-                    CargoTestInput {
-                        package: None,
-                        test_name: None,
-                    }
-                } else {
-                    CargoTestInput::deserialize_lenient(&self.json)?
-                };
-                Ok(Tool::CargoTest(CargoTest {
-                    id: self.id.id.clone(),
-                    input,
-                }))
-            }
-        }
-    }
+// tracking current progress
+pub struct Batch {
+    pub acc_map: HashMap<usize, Vec<StreamAccu>>,
 }
 
 impl StreamNextStep {
