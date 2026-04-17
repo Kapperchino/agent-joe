@@ -1,7 +1,7 @@
 use crate::batch::{Batch, ContentBlock};
 use crate::event_reporter::EventReporter;
 use crate::tool_call::ToolCall;
-use anyhow::{Error, anyhow};
+use anyhow::{anyhow, Error};
 use clients::llm::{ContentBlockInfo, Delta, StopReason, StreamEvent};
 use clients::tool_defs::{
     CargoCheckInput, CargoTest, CargoTestInput, GrepInput, GrepTool, InsertAfterLine,

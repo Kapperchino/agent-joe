@@ -1,12 +1,12 @@
 use crate::draw_line::{DrawLine, RenderState};
 use common_models::tui_models::State;
-use markdown::ParseOptions;
 use markdown::mdast::Node;
-use ratatui::DefaultTerminal;
+use markdown::ParseOptions;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::{Color, Line, Modifier, StatefulWidget, Style};
 use ratatui::widgets::{Paragraph, Widget};
+use ratatui::DefaultTerminal;
 use textwrap::core::display_width;
 use throbber_widgets_tui::{Throbber, ThrobberState};
 
