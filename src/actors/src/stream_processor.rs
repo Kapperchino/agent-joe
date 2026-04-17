@@ -1,4 +1,4 @@
-use crate::batch::Batch;
+use crate::batch::{Batch, ContentBlock};
 use crate::event_reporter::EventReporter;
 use crate::tool_call::ToolCall;
 use anyhow::{Error, anyhow};
@@ -66,9 +66,9 @@ pub enum ProcessedItem {
 
 impl StreamNextStep {
     pub fn new(reason: &StopReason, batch: &Batch) -> anyhow::Result<Self> {
-        match batch {
-            Batch::Tool(_) => Ok(StreamNextStep::ToolUse),
-            _ => match reason {
+        match batch.has_tool() {
+            true => Ok(StreamNextStep::ToolUse),
+            false => match reason {
                 StopReason::EndTurn => Ok(StreamNextStep::Done),
                 StopReason::MaxTokens => Ok(StreamNextStep::NewStream),
                 StopReason::StopSequence => Ok(StreamNextStep::Done),
@@ -90,23 +90,29 @@ impl StreamProcessor {
         self.log_stream_item(&item).await;
         self.handle_stream_state(&item);
         match item {
+            StreamEvent::MessageStart { .. } => {
+                self.batches.push(Batch::new());
+                Ok(StreamNextStep::Accum)
+            }
             StreamEvent::ContentBlockDelta { index, delta } => {
                 self.batches
                     .last_mut()
-                    .map(|batch| batch.accum(index, delta));
+                    .map(|batch| batch.accum(&index, delta));
                 Ok(StreamNextStep::Accum)
             }
             StreamEvent::ContentBlockStart {
                 index,
                 content_block,
             } => {
-                self.batches.push(Batch::new(index, content_block));
+                self.batches
+                    .last_mut()
+                    .map(|batch| batch.put(index, ContentBlock::new(index, content_block)));
                 Ok(StreamNextStep::Accum)
             }
             StreamEvent::ContentBlockStop { index, id } => {
                 self.batches
                     .last_mut()
-                    .map(|batch| batch.apply_reduce(index, id));
+                    .map(|batch| batch.apply_reduce(&index, id));
                 Ok(StreamNextStep::Accum)
             }
             StreamEvent::MessageStop {} => Ok(StreamNextStep::Noop),
@@ -175,7 +181,7 @@ impl StreamProcessor {
             _ => {}
         }
     }
-    
+
     pub fn clear(&mut self) {
         self.batches.clear();
         self.cur_state = State::Ready
