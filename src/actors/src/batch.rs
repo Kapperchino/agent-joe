@@ -29,7 +29,7 @@ impl Batch {
     pub fn put(&mut self, index: usize, block: ContentBlock) {
         self.blocks.insert(index, block);
     }
-    pub fn extract_and_pre_process(mut self) -> anyhow::Result<Vec<PreprocessedStreamItem>> {
+    pub fn extract_and_pre_process(&mut self) -> anyhow::Result<Vec<PreprocessedStreamItem>> {
         let mut vec: Vec<(usize, ContentBlock)> = self.blocks.drain().into_iter().collect();
         vec.sort_by(|(i1, _), (i2, _)| i1.cmp(i2));
         let res: Result<_, _> = vec
@@ -252,7 +252,7 @@ impl ContentData {
     pub fn extract_tool(self) -> anyhow::Result<ToolCall> {
         let tool_info = self
             .acc
-            .get(0)
+            .first()
             .cloned()
             .map(|t| match t {
                 StreamAccu::Tool { id, name } => Ok(StreamAccu::Tool { id, name }),

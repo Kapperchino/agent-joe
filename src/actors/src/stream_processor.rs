@@ -121,10 +121,10 @@ impl StreamProcessor {
                 Ok(StreamNextStep::Noop)
             }
             StreamEvent::MessageDelta { delta, usage } => {
-                if let Some(batch) = self.batches.pop()
+                if let Some(batch) = self.batches.last()
                     && let Some(reason) = delta.stop_reason
                 {
-                    StreamNextStep::new(&reason, &batch)
+                    StreamNextStep::new(&reason, batch)
                 } else {
                     error!("No reason provided to stop");
                     Ok(StreamNextStep::Noop)
@@ -192,7 +192,7 @@ impl StreamProcessor {
         self.reporter.state_changed(new_state.clone())
     }
     pub fn extract_and_pre_process(&mut self) -> anyhow::Result<Vec<PreprocessedStreamItem>> {
-        match self.batches.pop() {
+        match self.batches.last_mut() {
             Some(batch) => batch.extract_and_pre_process(),
             None => Err(anyhow!("Can't extract this, batch shouldn't be empty")),
         }
