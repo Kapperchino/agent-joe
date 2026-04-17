@@ -69,8 +69,6 @@ impl ActorState {
             file_actor,
             stream_processor: StreamProcessor {
                 batches: vec![],
-                acc_map: Default::default(),
-                delta_buf: Default::default(),
                 stream_log_path,
                 token_count: Default::default(),
                 reporter: EventReporter {

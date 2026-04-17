@@ -206,8 +206,7 @@ impl Actor for Worker {
                         }
                         StreamNextStep::NewStream => {
                             // clear intermediate states
-                            state.stream_processor.acc_map.clear();
-                            state.stream_processor.delta_buf.clear();
+                            state.stream_processor.clear();
                             myself.send_message(Message::StartWork(None))?;
                         }
                         StreamNextStep::Done => {

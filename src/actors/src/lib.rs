@@ -5,6 +5,7 @@ pub mod file_actor;
 pub mod supervisor;
 pub mod worker;
 
+mod batch;
 mod event_reporter;
 mod stream_processor;
 #[cfg(test)]
