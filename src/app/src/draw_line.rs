@@ -1,10 +1,17 @@
-use markdown::mdast::Node;
 use markdown::ParseOptions;
+use markdown::mdast::{AlignKind, Node};
 use ratatui::prelude::{Color, Line, Modifier, Span, Style};
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{self, ThemeSet};
 use syntect::parsing::SyntaxSet;
 use syntect::util::LinesWithEndings;
+use textwrap::core::display_width;
+
+const TABLE_CONTINUATION_MARKER: &str = "<!--__table_continue__-->";
+const TABLE_BLOCK_CONTINUATION_MARKER: &str = "<!--__table_block_continue__-->";
+const TABLE_WIDTH_MARKER_PREFIX: &str = "<!--__table_widths__:";
+const HTML_COMMENT_SUFFIX: &str = "-->";
+
 pub struct DrawLine {
     syntax_set: SyntaxSet,
     theme_set: ThemeSet,
@@ -64,6 +71,16 @@ impl DrawLine {
     fn split_sections(lines: &[String], mut state: RenderState) -> (Vec<Section>, RenderState) {
         let mut sections = Vec::new();
         let mut code_lines: Vec<String> = Vec::new();
+        let mut markdown_lines: Vec<String> = Vec::new();
+
+        let flush_markdown = |sections: &mut Vec<Section>, markdown_lines: &mut Vec<String>| {
+            if markdown_lines.is_empty() {
+                return;
+            }
+
+            sections.push(Section::Markdown(markdown_lines.join("\n")));
+            markdown_lines.clear();
+        };
 
         for line in lines {
             if state.in_code {
@@ -88,6 +105,7 @@ impl DrawLine {
                     // Opening fence: backticks followed by optional info string
                     // (info string must not contain backticks per CommonMark)
                     if !rest.contains('`') {
+                        flush_markdown(&mut sections, &mut markdown_lines);
                         state.in_code = true;
                         state.fence_len = backtick_count;
                         state.code_lang = if rest.is_empty() {
@@ -98,7 +116,7 @@ impl DrawLine {
                         continue;
                     }
                 }
-                sections.push(Section::Markdown(line.clone()));
+                markdown_lines.push(line.clone());
             }
         }
 
@@ -108,6 +126,8 @@ impl DrawLine {
                 lang: state.code_lang.clone(),
                 lines: code_lines,
             });
+        } else {
+            flush_markdown(&mut sections, &mut markdown_lines);
         }
 
         (sections, state)
@@ -194,7 +214,7 @@ impl DrawLine {
                 .collect();
         }
         let normalized = Self::normalize_markdown(text);
-        let tree = match markdown::to_mdast(&normalized, &ParseOptions::default()) {
+        let tree = match markdown::to_mdast(&normalized, &Self::markdown_parse_options()) {
             Ok(tree) => tree,
             Err(_) => return text.lines().map(|l| Line::from(l.to_string())).collect(),
         };
@@ -240,9 +260,35 @@ impl DrawLine {
         )
     }
 
+    fn is_table_block(node: &Node) -> bool {
+        matches!(node, Node::Table(_))
+    }
+
     fn render_block(node: &Node) -> Vec<Line<'static>> {
         match node {
-            Node::Root(root) => root.children.iter().flat_map(Self::render_block).collect(),
+            Node::Root(root) => {
+                let mut lines = Vec::new();
+
+                for (index, child) in root.children.iter().enumerate() {
+                    if Self::is_table_block(child)
+                        && index > 0
+                        && !Self::is_table_block(&root.children[index - 1])
+                    {
+                        lines.push(Line::from(""));
+                    }
+
+                    lines.extend(Self::render_block(child));
+
+                    if Self::is_table_block(child)
+                        && index + 1 < root.children.len()
+                        && !Self::is_table_block(&root.children[index + 1])
+                    {
+                        lines.push(Line::from(""));
+                    }
+                }
+
+                lines
+            }
 
             Node::Paragraph(para) => {
                 let spans = Self::render_inline_children(&para.children, Style::default());
@@ -346,58 +392,7 @@ impl DrawLine {
                 ))]
             }
 
-            Node::Table(table) => {
-                let mut all_rows: Vec<Vec<String>> = Vec::new();
-                for row_node in &table.children {
-                    if let Node::TableRow(tr) = row_node {
-                        let cells: Vec<String> = tr
-                            .children
-                            .iter()
-                            .map(|cell| Self::collect_text(cell))
-                            .collect();
-                        all_rows.push(cells);
-                    }
-                }
-
-                let col_count = all_rows.iter().map(|r| r.len()).max().unwrap_or(0);
-                let mut col_widths = vec![0usize; col_count];
-                for row in &all_rows {
-                    for (c, cell) in row.iter().enumerate() {
-                        col_widths[c] = col_widths[c].max(cell.len());
-                    }
-                }
-
-                let mut lines = Vec::new();
-                for (r, row) in all_rows.iter().enumerate() {
-                    let mut spans = Vec::new();
-                    for (c, cell) in row.iter().enumerate() {
-                        if c > 0 {
-                            spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
-                        }
-                        let padded = format!("{:<width$}", cell, width = col_widths[c]);
-                        let style = if r == 0 {
-                            Style::default().add_modifier(Modifier::BOLD)
-                        } else {
-                            Style::default()
-                        };
-                        spans.push(Span::styled(padded, style));
-                    }
-                    lines.push(Line::from(spans));
-
-                    if r == 0 {
-                        let separator: String = col_widths
-                            .iter()
-                            .map(|w| "─".repeat(*w))
-                            .collect::<Vec<_>>()
-                            .join("─┼─");
-                        lines.push(Line::from(Span::styled(
-                            separator,
-                            Style::default().fg(Color::DarkGray),
-                        )));
-                    }
-                }
-                lines
-            }
+            Node::Table(table) => Self::render_table(table),
 
             Node::Html(html) => html
                 .value
@@ -551,6 +546,9 @@ impl DrawLine {
             Node::Text(t) => t.value.clone(),
             Node::InlineCode(c) => c.value.clone(),
             Node::Code(c) => c.value.clone(),
+            Node::Html(html) if html.value == TABLE_CONTINUATION_MARKER => String::new(),
+            Node::Html(html) if html.value == TABLE_BLOCK_CONTINUATION_MARKER => String::new(),
+            Node::Html(html) if Self::is_table_width_marker_value(&html.value) => String::new(),
             other => other
                 .children()
                 .map(|children| {
@@ -562,5 +560,270 @@ impl DrawLine {
                 })
                 .unwrap_or_default(),
         }
+    }
+
+    fn render_table(table: &markdown::mdast::Table) -> Vec<Line<'static>> {
+        let rows: Vec<&markdown::mdast::TableRow> = table
+            .children
+            .iter()
+            .filter_map(|row| match row {
+                Node::TableRow(table_row) => Some(table_row),
+                _ => None,
+            })
+            .collect();
+
+        if rows.is_empty() {
+            return vec![Line::from("")];
+        }
+
+        let column_count = table
+            .align
+            .len()
+            .max(rows.iter().map(|row| row.children.len()).max().unwrap_or(0));
+        if column_count == 0 {
+            return vec![Line::from("")];
+        }
+
+        let is_continuation = rows
+            .first()
+            .is_some_and(|row| Self::is_table_block_continuation_row(row));
+        let column_widths = rows
+            .first()
+            .and_then(|row| Self::table_row_width_hint(row))
+            .map(|widths| Self::normalize_table_width_hint(widths, column_count))
+            .unwrap_or_else(|| {
+                (0..column_count)
+                    .map(|column| {
+                        rows.iter()
+                            .filter_map(|row| row.children.get(column))
+                            .map(Self::node_display_width)
+                            .max()
+                            .unwrap_or(0)
+                            .max(1)
+                    })
+                    .collect()
+            });
+
+        let mut logical_rows: Vec<Vec<&markdown::mdast::TableRow>> = Vec::new();
+        for (row_index, row) in rows.iter().copied().enumerate() {
+            if is_continuation && row_index == 0 {
+                continue;
+            }
+
+            if Self::is_table_continuation_row(row) {
+                if let Some(logical_row) = logical_rows.last_mut() {
+                    logical_row.push(row);
+                    continue;
+                }
+            }
+
+            logical_rows.push(vec![row]);
+        }
+
+        let mut lines = Vec::with_capacity(logical_rows.len() * 2);
+        if is_continuation && !logical_rows.is_empty() {
+            lines.push(Self::render_table_separator(&column_widths));
+        }
+
+        for (row_index, logical_row) in logical_rows.iter().enumerate() {
+            for (line_index, row) in logical_row.iter().enumerate() {
+                lines.push(Self::render_table_row(
+                    row,
+                    &column_widths,
+                    &table.align,
+                    !is_continuation && row_index == 0 && line_index == 0,
+                ));
+            }
+
+            if row_index < logical_rows.len().saturating_sub(1) {
+                lines.push(Self::render_table_separator(&column_widths));
+            }
+        }
+
+        lines
+    }
+
+    fn render_table_row(
+        row: &markdown::mdast::TableRow,
+        column_widths: &[usize],
+        alignments: &[AlignKind],
+        is_header: bool,
+    ) -> Line<'static> {
+        let border_style = Style::default().fg(Color::DarkGray);
+        let cell_style = if is_header {
+            Style::default().add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+
+        let mut spans = Vec::new();
+        for (column, width) in column_widths.iter().copied().enumerate() {
+            if column > 0 {
+                spans.push(Span::styled(" │ ", border_style));
+            }
+
+            let align = alignments.get(column).copied().unwrap_or(AlignKind::None);
+            let cell = row.children.get(column);
+            let content_width = cell.map_or(0, Self::node_display_width);
+            let (left_padding, right_padding) =
+                Self::table_padding(width.saturating_sub(content_width), align);
+
+            if left_padding > 0 {
+                spans.push(Span::styled(" ".repeat(left_padding), cell_style));
+            }
+
+            if let Some(cell) = cell {
+                spans.extend(Self::render_table_cell(cell, cell_style));
+            }
+
+            if right_padding > 0 {
+                spans.push(Span::styled(" ".repeat(right_padding), cell_style));
+            }
+        }
+
+        Line::from(spans)
+    }
+
+    fn render_table_cell(cell: &Node, base_style: Style) -> Vec<Span<'static>> {
+        match cell {
+            Node::TableCell(table_cell) => table_cell
+                .children
+                .iter()
+                .filter(|child| !Self::is_table_hidden_marker(child))
+                .flat_map(|child| Self::render_inline(child, base_style))
+                .collect(),
+            other => Self::render_inline(other, base_style),
+        }
+    }
+
+    fn is_table_continuation_row(row: &markdown::mdast::TableRow) -> bool {
+        row.children
+            .first()
+            .is_some_and(Self::table_cell_has_continuation_marker)
+    }
+
+    fn is_table_block_continuation_row(row: &markdown::mdast::TableRow) -> bool {
+        row.children
+            .first()
+            .is_some_and(Self::table_cell_has_block_continuation_marker)
+    }
+
+    fn table_cell_has_continuation_marker(node: &Node) -> bool {
+        match node {
+            Node::TableCell(table_cell) => table_cell
+                .children
+                .iter()
+                .any(Self::is_table_continuation_marker),
+            _ => false,
+        }
+    }
+
+    fn table_cell_has_block_continuation_marker(node: &Node) -> bool {
+        match node {
+            Node::TableCell(table_cell) => table_cell
+                .children
+                .iter()
+                .any(Self::is_table_block_continuation_marker),
+            _ => false,
+        }
+    }
+
+    fn is_table_continuation_marker(node: &Node) -> bool {
+        matches!(node, Node::Html(html) if html.value == TABLE_CONTINUATION_MARKER)
+    }
+
+    fn is_table_block_continuation_marker(node: &Node) -> bool {
+        matches!(node, Node::Html(html) if html.value == TABLE_BLOCK_CONTINUATION_MARKER)
+    }
+
+    fn is_table_width_marker(node: &Node) -> bool {
+        matches!(node, Node::Html(html) if Self::is_table_width_marker_value(&html.value))
+    }
+
+    fn is_table_hidden_marker(node: &Node) -> bool {
+        Self::is_table_continuation_marker(node)
+            || Self::is_table_block_continuation_marker(node)
+            || Self::is_table_width_marker(node)
+    }
+
+    fn render_table_separator(column_widths: &[usize]) -> Line<'static> {
+        let separator = column_widths
+            .iter()
+            .map(|width| "─".repeat(*width))
+            .collect::<Vec<_>>()
+            .join("─┼─");
+
+        Line::from(Span::styled(
+            separator,
+            Style::default().fg(Color::DarkGray),
+        ))
+    }
+
+    fn node_display_width(node: &Node) -> usize {
+        display_width(&Self::collect_text(node))
+    }
+
+    fn table_row_width_hint(row: &markdown::mdast::TableRow) -> Option<Vec<usize>> {
+        row.children.first().and_then(Self::table_cell_width_hint)
+    }
+
+    fn table_cell_width_hint(node: &Node) -> Option<Vec<usize>> {
+        match node {
+            Node::TableCell(table_cell) => {
+                table_cell.children.iter().find_map(|child| match child {
+                    Node::Html(html) => Self::parse_table_width_marker(&html.value),
+                    _ => None,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    fn parse_table_width_marker(value: &str) -> Option<Vec<usize>> {
+        if !Self::is_table_width_marker_value(value) {
+            return None;
+        }
+
+        let payload =
+            &value[TABLE_WIDTH_MARKER_PREFIX.len()..value.len() - HTML_COMMENT_SUFFIX.len()];
+        let widths = payload
+            .split(',')
+            .map(|part| part.parse::<usize>().ok())
+            .collect::<Option<Vec<_>>>()?;
+
+        if widths.is_empty() {
+            None
+        } else {
+            Some(widths)
+        }
+    }
+
+    fn is_table_width_marker_value(value: &str) -> bool {
+        value.starts_with(TABLE_WIDTH_MARKER_PREFIX) && value.ends_with(HTML_COMMENT_SUFFIX)
+    }
+
+    fn normalize_table_width_hint(mut widths: Vec<usize>, column_count: usize) -> Vec<usize> {
+        widths.truncate(column_count);
+        while widths.len() < column_count {
+            widths.push(1);
+        }
+        widths.into_iter().map(|width| width.max(1)).collect()
+    }
+
+    fn table_padding(total_padding: usize, align: AlignKind) -> (usize, usize) {
+        match align {
+            AlignKind::Right => (total_padding, 0),
+            AlignKind::Center => {
+                let left = total_padding / 2;
+                (left, total_padding - left)
+            }
+            AlignKind::Left | AlignKind::None => (0, total_padding),
+        }
+    }
+
+    fn markdown_parse_options() -> ParseOptions {
+        let mut options = ParseOptions::default();
+        options.constructs.gfm_table = true;
+        options
     }
 }

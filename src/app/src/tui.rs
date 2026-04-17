@@ -14,12 +14,12 @@ use crossterm::event::{EventStream, KeyEvent, KeyModifiers};
 use futures::StreamExt;
 use ractor::ActorRef;
 use ratatui::{
-    crossterm::event::{Event, KeyCode}, layout::{Constraint, Layout},
+    DefaultTerminal, Frame,
+    crossterm::event::{Event, KeyCode},
+    layout::{Constraint, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Block,
-    DefaultTerminal,
-    Frame,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -137,8 +137,10 @@ impl TUIApp {
             ActorToTui::StateChanged(state) => {
                 self.update_actor_state(state);
                 match self.actor_state {
-                    State::MessageStart => self.message_box.append(Msg::Empty),
-                    State::MessageStop => self.message_box.append(Msg::Empty),
+                    State::ThinkingStart => self.message_box.start_stream_message(false),
+                    State::ThinkingStop => self.message_box.finish_stream_message(false),
+                    State::MessageStart => self.message_box.start_stream_message(true),
+                    State::MessageStop => self.message_box.finish_stream_message(true),
                     _ => {}
                 }
             }
@@ -146,33 +148,9 @@ impl TUIApp {
                 State::Ready => {}
                 State::StreamStart => {}
                 State::StreamStop => {}
-                State::ThinkingStart => {
-                    let last = self.message_box.get_last();
-                    match last {
-                        None => {
-                            self.message_box.append(Msg::Message(data));
-                        }
-                        Some(mut buff) => {
-                            buff.push_str(data.as_str());
-                            self.message_box.pop();
-                            self.message_box.append(Msg::Message(buff))
-                        }
-                    }
-                }
+                State::ThinkingStart => self.message_box.push_stream_message(&data),
                 State::ThinkingStop => {}
-                State::MessageStart => {
-                    let last = self.message_box.get_last();
-                    match last {
-                        None => {
-                            self.message_box.append(Msg::Message(data));
-                        }
-                        Some(mut buff) => {
-                            buff.push_str(data.as_str());
-                            self.message_box.pop();
-                            self.message_box.append(Msg::Message(buff))
-                        }
-                    }
-                }
+                State::MessageStart => self.message_box.push_stream_message(&data),
                 State::MessageStop => {}
                 State::ToolStart => {}
                 State::ToolStop => {}
