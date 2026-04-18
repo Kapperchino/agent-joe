@@ -195,12 +195,7 @@ impl TUIApp {
                 }
                 KeyCode::Char('c') => {
                     if key.modifiers.contains(KeyModifiers::CONTROL) {
-                        match self.actor_ref.send_message(Message::Interrupt) {
-                            Ok(_) => {}
-                            Err(_) => {
-                                eprintln!("it's joever")
-                            }
-                        };
+                        self.interrupt();
                     }
                 }
                 _ => {}
@@ -239,6 +234,17 @@ impl TUIApp {
                 _ => {}
             },
         }
+    }
+
+    fn interrupt(&mut self) {
+        match self.actor_ref.send_message(Message::Interrupt) {
+            Ok(_) => {}
+            Err(_) => {
+                eprintln!("it's joever")
+            }
+        };
+        self.message_box
+            .append(Msg::Message("Interrupted".to_string()))
     }
 
     #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]

@@ -252,6 +252,7 @@ impl Actor for Worker {
                 state.stream_processor.clear();
                 state.stream_actor.as_ref().map(|cell| cell.stop(None));
                 state.stream_actor = None;
+                state.change_state(State::Ready);
             }
         }
         Ok(())
