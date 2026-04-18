@@ -13,6 +13,8 @@ use clients::tool_defs::{
 use common_models::tui_models::ActorToTui;
 use common_models::tui_models::Command;
 use common_models::tui_models::State;
+use futures::StreamExt;
+use ra_ap_vfs::FileExcluded::No;
 use ractor::Actor;
 use ractor::ActorProcessingErr;
 use ractor::ActorRef;
@@ -64,6 +66,7 @@ pub enum Message {
     UseTool(Vec<PreprocessedStreamItem>),
     Noop(Vec<PreprocessedStreamItem>),
     ProcessStreamItem(StreamItem),
+    Interrupt,
     KYS,
 }
 
@@ -164,6 +167,8 @@ impl Actor for Worker {
                 )
                 .await?;
 
+                state.stream_actor.as_ref().map(|cell| cell.stop(None));
+
                 state.stream_actor = Some(actor)
             }
             Message::Noop(res) => {
@@ -243,6 +248,11 @@ impl Actor for Worker {
                     }
                 },
             },
+            Message::Interrupt => {
+                state.stream_processor.clear();
+                state.stream_actor.as_ref().map(|cell| cell.stop(None));
+                state.stream_actor = None;
+            }
         }
         Ok(())
     }

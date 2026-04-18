@@ -193,6 +193,16 @@ impl TUIApp {
                     self.do_quit = true;
                     self.actor_ref.kill();
                 }
+                KeyCode::Char('c') => {
+                    if key.modifiers.contains(KeyModifiers::CONTROL) {
+                        match self.actor_ref.send_message(Message::Interrupt) {
+                            Ok(_) => {}
+                            Err(_) => {
+                                eprintln!("it's joever")
+                            }
+                        };
+                    }
+                }
                 _ => {}
             },
             InputMode::Editing => match key.code {
