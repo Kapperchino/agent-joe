@@ -14,6 +14,7 @@
       <sourceFolder url="file://$MODULE_DIR$/src/turbo-code-macros/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/src/utils/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/utils/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/commands/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />
