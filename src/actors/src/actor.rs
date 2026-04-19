@@ -10,8 +10,8 @@ use clients::llm::{ClientRequest, LLmClient, StreamEvent};
 use clients::tool_defs::{
     CargoCheckInput, InsertAfterLineInput, ReadFileInput, StringReplaceInput, Tool, ToolResult,
 };
+use commands::command::Command;
 use common_models::tui_models::ActorToTui;
-use common_models::tui_models::Command;
 use common_models::tui_models::State;
 use futures::StreamExt;
 use ra_ap_vfs::FileExcluded::No;
@@ -248,6 +248,9 @@ impl Actor for Worker {
                         ));
                     }
                 },
+                Command::Clear => {
+                    myself.send_message(Message::Clear)?;
+                }
             },
             Message::Interrupt => {
                 state.stream_processor.clear();

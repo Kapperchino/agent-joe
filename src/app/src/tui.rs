@@ -1,8 +1,8 @@
 #![warn(clippy::pedantic)]
 
+use std::str::FromStr;
 use actors::actor::Message;
 use common_models::tui_models::ActorToTui;
-use common_models::tui_models::Command;
 use common_models::tui_models::State;
 use common_models::tui_models::TokenCount;
 use std::time::Duration;
@@ -22,6 +22,7 @@ use ratatui::{
     Frame,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
+use commands::command::Command;
 
 pub struct TUIApp {
     input_mode: InputMode,
@@ -77,7 +78,7 @@ impl TUIApp {
         if !self.input_box.is_empty() {
             let input = self.input_box.get_input();
             let submitted_command = format!("/{}", &input);
-            let command = Command::parse(&input);
+            let command = Command::from_str(&input);
             match command {
                 Ok(command) => {
                     match self.actor_ref.send_message(Message::Command(command)) {

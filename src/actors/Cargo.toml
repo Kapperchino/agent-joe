@@ -7,6 +7,7 @@ edition = "2024"
 analysis = { path = "../analysis" }
 clients = { path = "../clients" }
 common-models = { path = "../common-models" }
+commands = { path = "../commands" }
 ractor_actors = "0.4.9"
 ractor = "0.15"
 thiserror = "2.0.18"

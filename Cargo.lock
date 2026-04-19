@@ -9,6 +9,7 @@ dependencies = [
  "analysis",
  "anyhow",
  "clients",
+ "commands",
  "common-models",
  "futures",
  "itertools 0.14.0",
@@ -151,6 +152,7 @@ dependencies = [
  "anyhow",
  "clients",
  "color-eyre",
+ "commands",
  "common-models",
  "crossterm",
  "futures",
@@ -646,7 +648,7 @@ dependencies = [
 name = "common-models"
 version = "0.1.0"
 dependencies = [
- "anyhow",
+ "commands",
 ]
 
 [[package]]

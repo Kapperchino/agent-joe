@@ -8,6 +8,15 @@ pub struct CommandContext {
     nucleo: Nucleo<String>,
 }
 
+#[derive(Debug, PartialEq, EnumString, VariantNames, Clone)]
+#[strum(serialize_all = "lowercase")]
+pub enum Command {
+    #[strum(serialize = "context")]
+    PrintContext,
+    Logout,
+    Clear,
+}
+
 impl CommandContext {
     pub fn new() -> CommandContext {
         // there will be no new matcher states
@@ -36,14 +45,6 @@ impl CommandContext {
             .map(|x| x.data.clone())
             .collect()
     }
-}
-
-#[derive(Debug, PartialEq, EnumString, VariantNames)]
-#[strum(serialize_all = "lowercase")]
-pub enum Command {
-    PrintContext,
-    Logout,
-    Clear,
 }
 
 impl Command {

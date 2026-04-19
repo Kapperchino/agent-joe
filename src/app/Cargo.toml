@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 common-models = { path = "../common-models" }
+commands = { path = "../commands" }
 utils = { path = "../utils" }
 actors = { path = "../actors" }
 clients = { path = "../clients" }
