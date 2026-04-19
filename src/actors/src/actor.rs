@@ -67,6 +67,7 @@ pub enum Message {
     Noop(Vec<PreprocessedStreamItem>),
     ProcessStreamItem(StreamItem),
     Interrupt,
+    Clear,
     KYS,
 }
 
@@ -249,6 +250,13 @@ impl Actor for Worker {
                 },
             },
             Message::Interrupt => {
+                state.stream_processor.clear();
+                state.stream_actor.as_ref().map(|cell| cell.stop(None));
+                state.stream_actor = None;
+                state.change_state(State::Ready);
+            }
+            Message::Clear => {
+                state.history.clear();
                 state.stream_processor.clear();
                 state.stream_actor.as_ref().map(|cell| cell.stop(None));
                 state.stream_actor = None;
