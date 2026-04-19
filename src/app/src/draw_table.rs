@@ -2,9 +2,9 @@ use textwrap::core::display_width;
 
 pub struct DrawTable {}
 
-const TABLE_CONTINUATION_MARKER: &str = "<!--__codex_table_continue__-->";
-const TABLE_BLOCK_CONTINUATION_MARKER: &str = "<!--__codex_table_block_continue__-->";
-const TABLE_WIDTH_MARKER_PREFIX: &str = "<!--__codex_table_widths__:";
+const TABLE_CONTINUATION_MARKER: &str = "<!--__table_continue__-->";
+const TABLE_BLOCK_CONTINUATION_MARKER: &str = "<!--__table_block_continue__-->";
+const TABLE_WIDTH_MARKER_PREFIX: &str = "<!--__table_widths__:";
 const HTML_COMMENT_SUFFIX: &str = "-->";
 
 #[derive(Clone, Copy)]
