@@ -5,6 +5,7 @@ use ratatui::prelude::{Color, Line, Modifier, Span, StatefulWidget, Style};
 use ratatui::widgets::{Block, Paragraph, Widget};
 use std::str::FromStr;
 use strum::EnumMessage;
+use textwrap::core::display_width;
 
 pub struct CommandBox {}
 
@@ -48,20 +49,31 @@ impl CommandBoxState {
             command_context: CommandContext::new(),
         }
     }
+
     fn get_lines(&'_ mut self) -> Vec<Line<'_>> {
-        self.command_context
-            .search(&self.input)
+        let commands = self.command_context.search(&self.input);
+        let max_command_width = commands
+            .iter()
+            .map(|command| display_width(command.as_str()))
+            .max()
+            .unwrap_or(0);
+
+        commands
             .into_iter()
-            .map(|x| {
-                let command = Command::from_str(&x).unwrap_or(Command::Clear);
+            .map(|command_name| {
+                let command = Command::from_str(&command_name).unwrap_or(Command::Clear);
+                let padding = " ".repeat(
+                    max_command_width.saturating_sub(display_width(command_name.as_str())) + 2,
+                );
+
                 Line::from(vec![
                     Span::styled(
-                        x,
+                        command_name,
                         Style::default()
                             .fg(Color::Green)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::raw("  "),
+                    Span::raw(padding),
                     Span::styled(
                         command.get_message().unwrap(),
                         Style::default().fg(Color::Gray),
