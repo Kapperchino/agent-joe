@@ -159,6 +159,7 @@ dependencies = [
  "markdown",
  "ractor",
  "ratatui",
+ "strum 0.28.0",
  "syntect",
  "textwrap",
  "throbber-widgets-tui",

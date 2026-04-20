@@ -1,0 +1,73 @@
+use commands::command::{Command, CommandContext};
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::prelude::{Color, Line, Modifier, Span, StatefulWidget, Style};
+use ratatui::widgets::{Block, Paragraph, Widget};
+use std::str::FromStr;
+use strum::EnumMessage;
+
+pub struct CommandBox {}
+
+pub struct CommandBoxState {
+    pub input: String,
+    command_context: CommandContext,
+}
+
+const COMMAND_PROMPT: &'static str = "/ ";
+const COMMAND_CONTINUATION: &'static str = "  ";
+
+impl StatefulWidget for CommandBox {
+    type State = CommandBoxState;
+
+    fn render(self, area: Rect, buf: &mut Buffer, state: &mut CommandBoxState)
+    where
+        Self: Sized,
+    {
+        let mut lines = vec![
+            Line::from(Span::styled(
+                "Enter to run, Esc to cancel",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(Span::styled(
+                "Available commands",
+                Style::default()
+                    .fg(Color::Gray)
+                    .add_modifier(Modifier::BOLD),
+            )),
+        ];
+        lines.extend(state.get_lines());
+        let paragraph = Paragraph::new(lines).block(Block::bordered().title("Command"));
+        paragraph.render(area, buf);
+    }
+}
+
+impl CommandBoxState {
+    pub fn new() -> CommandBoxState {
+        CommandBoxState {
+            input: "".to_string(),
+            command_context: CommandContext::new(),
+        }
+    }
+    fn get_lines(&'_ mut self) -> Vec<Line<'_>> {
+        self.command_context
+            .search(&self.input)
+            .into_iter()
+            .map(|x| {
+                let command = Command::from_str(&x).unwrap_or(Command::Clear);
+                Line::from(vec![
+                    Span::styled(
+                        x,
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw("  "),
+                    Span::styled(
+                        command.get_message().unwrap(),
+                        Style::default().fg(Color::Gray),
+                    ),
+                ])
+            })
+            .collect()
+    }
+}

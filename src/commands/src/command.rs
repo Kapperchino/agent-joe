@@ -2,18 +2,21 @@ use nucleo::pattern::{CaseMatching, Normalization};
 use nucleo::{Config, Nucleo};
 use std::sync::Arc;
 use strum::VariantNames;
-use strum_macros::{EnumString, VariantNames};
+use strum_macros::{EnumMessage, EnumString, VariantNames};
 
 pub struct CommandContext {
     nucleo: Nucleo<String>,
 }
 
-#[derive(Debug, PartialEq, EnumString, VariantNames, Clone)]
+#[derive(Debug, PartialEq, EnumString, VariantNames, Clone,EnumMessage)]
 #[strum(serialize_all = "lowercase")]
 pub enum Command {
     #[strum(serialize = "context")]
+    #[strum(message="prints out the context")]
     PrintContext,
+    #[strum(message="logs out the user")]
     Logout,
+    #[strum(message="clears the state")]
     Clear,
 }
 

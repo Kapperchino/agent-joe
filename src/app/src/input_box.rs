@@ -1,3 +1,4 @@
+use crate::command_box::{CommandBox, CommandBoxState};
 use crate::tui::InputMode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
@@ -10,6 +11,7 @@ pub struct InputBoxState {
     character_index: usize,
     input: String,
     pub input_mode: InputMode,
+    command_box: CommandBoxState,
 }
 
 impl StatefulWidget for InputBox {
@@ -45,6 +47,8 @@ impl StatefulWidget for InputBox {
                     Paragraph::new(state.command_lines(input_wrap_width, command_input_lines))
                         .block(Block::bordered().title("Command"));
                 command_section.render(area, buf);
+                state.command_box.input = state.input.clone();
+                CommandBox {}.render(area, buf, &mut state.command_box)
             }
             _ => {
                 let input =
@@ -70,6 +74,7 @@ impl InputBoxState {
             character_index: 0,
             input: "".to_string(),
             input_mode: Default::default(),
+            command_box: CommandBoxState::new(),
         }
     }
 
@@ -280,30 +285,6 @@ impl InputBoxState {
                 .into_iter()
                 .map(|line| Line::from(Span::styled(line, Style::default().fg(Color::Green)))),
         );
-
-        lines.extend([
-            Line::from(Span::styled(
-                "Enter to run, Esc to cancel",
-                Style::default().fg(Color::DarkGray),
-            )),
-            Line::from(Span::styled(
-                "Available commands",
-                Style::default()
-                    .fg(Color::Gray)
-                    .add_modifier(Modifier::BOLD),
-            )),
-            Line::from(vec![
-                Span::styled(
-                    "context",
-                    Style::default()
-                        .fg(Color::Green)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw("  "),
-                Span::styled("Print current context", Style::default().fg(Color::Gray)),
-            ]),
-        ]);
-
         lines
     }
     fn input_lines(&self, wrap_width: usize, min_lines: usize) -> Vec<Line<'static>> {
