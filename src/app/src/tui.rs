@@ -1,15 +1,16 @@
 #![warn(clippy::pedantic)]
 
-use std::str::FromStr;
 use actors::actor::Message;
 use common_models::tui_models::ActorToTui;
 use common_models::tui_models::State;
 use common_models::tui_models::TokenCount;
+use std::str::FromStr;
 use std::time::Duration;
 
 use crate::input_box::{InputBox, InputBoxState};
 use crate::message_box::{MessageBox, MessageBoxState, Msg};
 use color_eyre::Result;
+use commands::command::Command;
 use crossterm::event::{EventStream, KeyEvent, KeyModifiers};
 use futures::StreamExt;
 use ractor::ActorRef;
@@ -22,7 +23,6 @@ use ratatui::{
     Frame,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
-use commands::command::Command;
 
 pub struct TUIApp {
     input_mode: InputMode,
@@ -226,6 +226,9 @@ impl TUIApp {
                 KeyCode::Enter => {
                     self.submit_command();
                     self.update_input_mode(InputMode::Normal);
+                }
+                KeyCode::Tab => {
+                    self.input_box.auto_comp_command();
                 }
                 KeyCode::Char(to_insert) => self.input_box.enter_char(to_insert),
                 KeyCode::Backspace => self.input_box.delete_char(),

@@ -1,5 +1,6 @@
-use crate::command_box::{CommandBox, CommandBoxState};
+use crate::command_box::CommandBox;
 use crate::tui::InputMode;
+use commands::command::CommandContext;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::prelude::{Color, Line, Modifier, Span, Style};
@@ -11,7 +12,7 @@ pub struct InputBoxState {
     character_index: usize,
     input: String,
     pub input_mode: InputMode,
-    command_box: CommandBoxState,
+    command_context: CommandContext,
 }
 
 impl StatefulWidget for InputBox {
@@ -43,7 +44,6 @@ impl StatefulWidget for InputBox {
 
         match state.input_mode {
             InputMode::InputCommand => {
-                state.command_box.input = state.input.clone();
                 let command_input_height = command_input_lines as u16 + 2;
                 let [command_input_area, command_box_area] = Layout::vertical([
                     Constraint::Length(command_input_height),
@@ -55,7 +55,10 @@ impl StatefulWidget for InputBox {
                     Paragraph::new(state.command_lines(input_wrap_width, command_input_lines))
                         .block(Block::bordered().title("Command"));
                 command_section.render(command_input_area, buf);
-                CommandBox {}.render(command_box_area, buf, &mut state.command_box);
+                CommandBox {
+                    commands: state.command_context.search(&state.input),
+                }
+                .render(command_box_area, buf);
             }
             _ => {
                 let input =
@@ -81,7 +84,7 @@ impl InputBoxState {
             character_index: 0,
             input: "".to_string(),
             input_mode: Default::default(),
-            command_box: CommandBoxState::new(),
+            command_context: CommandContext::new(),
         }
     }
 
@@ -169,6 +172,13 @@ impl InputBoxState {
 
     fn reset_cursor(&mut self) {
         self.character_index = 0;
+    }
+
+    pub fn auto_comp_command(&mut self) {
+        self.command_context.search(&self.input).first().map(|cmd| {
+            self.input = cmd.clone();
+            self.character_index = self.clamp_cursor(cmd.len());
+        });
     }
 
     pub(crate) fn delete_char(&mut self) {

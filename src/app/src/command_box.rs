@@ -1,23 +1,18 @@
-use commands::command::{Command, CommandContext};
+use commands::command::Command;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::prelude::{Color, Line, Modifier, Span, StatefulWidget, Style};
+use ratatui::prelude::{Color, Line, Modifier, Span, Style};
 use ratatui::widgets::{Block, Paragraph, Widget};
 use std::str::FromStr;
 use strum::EnumMessage;
 use textwrap::core::display_width;
 
-pub struct CommandBox {}
-
-pub struct CommandBoxState {
-    pub input: String,
-    command_context: CommandContext,
+pub struct CommandBox {
+    pub commands: Vec<String>,
 }
 
-impl StatefulWidget for CommandBox {
-    type State = CommandBoxState;
-
-    fn render(self, area: Rect, buf: &mut Buffer, state: &mut CommandBoxState)
+impl Widget for CommandBox {
+    fn render(self, area: Rect, buf: &mut Buffer)
     where
         Self: Sized,
     {
@@ -33,30 +28,23 @@ impl StatefulWidget for CommandBox {
                     .add_modifier(Modifier::BOLD),
             )),
         ];
-        lines.extend(state.get_lines());
+        lines.extend(self.get_lines());
         let paragraph = Paragraph::new(lines).block(Block::bordered().title("Command"));
         paragraph.render(area, buf);
     }
 }
 
-impl CommandBoxState {
-    pub fn new() -> CommandBoxState {
-        CommandBoxState {
-            input: "".to_string(),
-            command_context: CommandContext::new(),
-        }
-    }
-
-    fn get_lines(&'_ mut self) -> Vec<Line<'_>> {
-        let commands = self.command_context.search(&self.input);
-        let max_command_width = commands
+impl CommandBox {
+    fn get_lines(&'_ self) -> Vec<Line<'_>> {
+        let max_command_width = self
+            .commands
             .iter()
             .map(|command| display_width(command.as_str()))
             .max()
             .unwrap_or(0);
 
-        commands
-            .into_iter()
+        self.commands
+            .iter()
             .map(|command_name| {
                 let command = Command::from_str(&command_name).unwrap_or(Command::Clear);
                 let padding = " ".repeat(
