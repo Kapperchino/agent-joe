@@ -1,7 +1,7 @@
 use crate::command_box::{CommandBox, CommandBoxState};
 use crate::tui::InputMode;
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Position, Rect};
+use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::prelude::{Color, Line, Modifier, Span, Style};
 use ratatui::widgets::{Block, Paragraph, StatefulWidget, Widget};
 
@@ -43,12 +43,19 @@ impl StatefulWidget for InputBox {
 
         match state.input_mode {
             InputMode::InputCommand => {
+                state.command_box.input = state.input.clone();
+                let command_input_height = command_input_lines as u16 + 2;
+                let [command_input_area, command_box_area] = Layout::vertical([
+                    Constraint::Length(command_input_height),
+                    Constraint::Min(3),
+                ])
+                .areas(area);
+
                 let command_section =
                     Paragraph::new(state.command_lines(input_wrap_width, command_input_lines))
                         .block(Block::bordered().title("Command"));
-                command_section.render(area, buf);
-                state.command_box.input = state.input.clone();
-                CommandBox {}.render(area, buf, &mut state.command_box)
+                command_section.render(command_input_area, buf);
+                CommandBox {}.render(command_box_area, buf, &mut state.command_box);
             }
             _ => {
                 let input =
@@ -67,7 +74,7 @@ impl StatefulWidget for InputBox {
 
 impl InputBoxState {
     const COMMAND_PROMPT: &'static str = "/ ";
-    const COMMAND_CONTINUATION: &'static str = "  ";
+    const COMMAND_CONTINUATION: &'static str = "   ";
 
     pub fn new() -> InputBoxState {
         InputBoxState {
@@ -93,8 +100,18 @@ impl InputBoxState {
 
     pub fn get_cursor_pos(&self, area: &Rect) -> Position {
         let input_wrap_width = Self::input_wrap_width(area.width);
-        let editing_cursor = self.cursor_wrap_position(input_wrap_width, "", "");
-        Position::new(area.x + editing_cursor.0 + 1, area.y + editing_cursor.1 + 1)
+        let (cursor_x, cursor_y) = match self.input_mode {
+            InputMode::InputCommand => self.cursor_wrap_position(
+                input_wrap_width,
+                Self::COMMAND_PROMPT,
+                Self::COMMAND_CONTINUATION,
+            ),
+            InputMode::Normal | InputMode::Editing => {
+                self.cursor_wrap_position(input_wrap_width, "", "")
+            }
+        };
+
+        Position::new(area.x + cursor_x + 1, area.y + cursor_y + 1)
     }
 
     pub fn get_height(&self, width: u16) -> u16 {
@@ -118,7 +135,7 @@ impl InputBoxState {
         let editing_input_lines = editing_display_lines.max(usize::from(editing_cursor.1) + 1);
         let command_input_lines = command_display_lines.max(usize::from(command_cursor.1) + 1);
         if matches!(self.input_mode, InputMode::InputCommand) {
-            command_input_lines as u16 + 5
+            command_input_lines as u16 + 9
         } else {
             editing_input_lines as u16 + 2
         }
@@ -276,14 +293,14 @@ impl InputBoxState {
                     .strip_prefix(Self::COMMAND_PROMPT)
                     .unwrap_or_default()
                     .to_string(),
-                Style::default().fg(Color::Green),
+                Style::default(),
             ),
         ])];
 
         lines.extend(
             command_input
                 .into_iter()
-                .map(|line| Line::from(Span::styled(line, Style::default().fg(Color::Green)))),
+                .map(|line| Line::from(Span::styled(line, Style::default()))),
         );
         lines
     }

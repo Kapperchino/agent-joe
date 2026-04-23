@@ -14,9 +14,6 @@ pub struct CommandBoxState {
     command_context: CommandContext,
 }
 
-const COMMAND_PROMPT: &'static str = "/ ";
-const COMMAND_CONTINUATION: &'static str = "  ";
-
 impl StatefulWidget for CommandBox {
     type State = CommandBoxState;
 
