@@ -52,6 +52,10 @@ impl MessageBoxState {
         self.messages.pop();
     }
 
+    pub fn clear(&mut self) {
+        self.messages.clear();
+    }
+
     pub fn get_last(&self) -> Option<String> {
         self.messages.last().cloned()
     }

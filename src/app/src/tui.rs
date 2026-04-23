@@ -162,8 +162,13 @@ impl TUIApp {
                     self.message_box.append(Msg::Tool(line));
                 });
             }
-            ActorToTui::CommandResult(_, command_res) => {
-                self.message_box.append(Msg::Message(command_res))
+            ActorToTui::CommandResult(command, command_res) => {
+                self.message_box.append(Msg::Message(command_res));
+                match command {
+                    Command::Logout => self.kill(),
+                    Command::Clear => self.message_box.clear(),
+                    Command::PrintContext => {}
+                }
             }
             ActorToTui::TokensUpdated(token_count) => {
                 self.token_count = token_count;
@@ -190,15 +195,11 @@ impl TUIApp {
             InputMode::Normal => match key.code {
                 KeyCode::Char('i') => self.update_input_mode(InputMode::Editing),
                 KeyCode::Char('/') => self.update_input_mode(InputMode::InputCommand),
-                KeyCode::Char('q') => {
-                    self.do_quit = true;
-                    self.actor_ref.kill();
-                }
+                KeyCode::Char('q') => self.kill(),
                 KeyCode::Char('c') => {
                     if key.modifiers.contains(KeyModifiers::CONTROL) {
                         if let State::Ready = self.actor_state {
-                            self.do_quit = true;
-                            self.actor_ref.kill();
+                            self.kill()
                         } else {
                             self.interrupt();
                         }
@@ -271,6 +272,11 @@ impl TUIApp {
                 _ => {}
             },
         }
+    }
+
+    fn kill(&mut self) {
+        self.do_quit = true;
+        self.actor_ref.kill();
     }
 
     fn interrupt(&mut self) {

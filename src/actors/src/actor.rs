@@ -250,6 +250,10 @@ impl Actor for Worker {
                 },
                 Command::Clear => {
                     myself.send_message(Message::Clear)?;
+                    let _ = state.reporter.send(ActorToTui::CommandResult(
+                        command,
+                        "History cleared".to_string(),
+                    ));
                 }
             },
             Message::Interrupt => {
