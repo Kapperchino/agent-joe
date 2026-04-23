@@ -196,7 +196,12 @@ impl TUIApp {
                 }
                 KeyCode::Char('c') => {
                     if key.modifiers.contains(KeyModifiers::CONTROL) {
-                        self.interrupt();
+                        if let State::Ready = self.actor_state {
+                            self.do_quit = true;
+                            self.actor_ref.kill();
+                        } else {
+                            self.interrupt();
+                        }
                     }
                 }
                 _ => {}
@@ -215,8 +220,20 @@ impl TUIApp {
                 KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     self.input_box.enter_char('\n');
                 }
+                KeyCode::Char('c') => {
+                    if key.modifiers.contains(KeyModifiers::CONTROL) {
+                        self.input_box.clear();
+                        self.update_input_mode(InputMode::Normal);
+                    }
+                }
                 KeyCode::Char(to_insert) => self.input_box.enter_char(to_insert),
-                KeyCode::Backspace => self.input_box.delete_char(),
+                KeyCode::Backspace => {
+                    if self.input_box.is_empty() {
+                        self.update_input_mode(InputMode::Normal)
+                    } else {
+                        self.input_box.delete_char()
+                    }
+                }
                 KeyCode::Left => self.input_box.move_cursor_left(),
                 KeyCode::Right => self.input_box.move_cursor_right(),
                 KeyCode::Esc => self.update_input_mode(InputMode::Normal),
@@ -230,8 +247,24 @@ impl TUIApp {
                 KeyCode::Tab => {
                     self.input_box.auto_comp_command();
                 }
-                KeyCode::Char(to_insert) => self.input_box.enter_char(to_insert),
-                KeyCode::Backspace => self.input_box.delete_char(),
+                KeyCode::Char(to_insert) => match to_insert {
+                    'c' => {
+                        if key.modifiers.contains(KeyModifiers::CONTROL) {
+                            self.input_box.clear();
+                            self.update_input_mode(InputMode::Normal);
+                        } else {
+                            self.input_box.enter_char(to_insert)
+                        }
+                    }
+                    _ => self.input_box.enter_char(to_insert),
+                },
+                KeyCode::Backspace => {
+                    if self.input_box.is_empty() {
+                        self.update_input_mode(InputMode::Normal)
+                    } else {
+                        self.input_box.delete_char()
+                    }
+                }
                 KeyCode::Left => self.input_box.move_cursor_left(),
                 KeyCode::Right => self.input_box.move_cursor_right(),
                 KeyCode::Esc => self.update_input_mode(InputMode::Normal),
