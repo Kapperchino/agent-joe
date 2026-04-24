@@ -133,7 +133,8 @@ impl TUIApp {
                 Some(actor_msg) = actor_rx.recv() => self.handle_actor_msg(actor_msg),
             }
 
-            self.message_box.flush_scrollback(&mut terminal,self.do_clear_terminal)?;
+            self.message_box
+                .flush_scrollback(&mut terminal, self.do_clear_terminal)?;
             terminal.draw(|frame| self.draw(frame))?;
 
             if self.do_clear_terminal {
@@ -228,16 +229,25 @@ impl TUIApp {
                         self.input_box.enter_char('\n');
                     }
                 }
-                KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.input_box.enter_char('\n');
-                }
-                KeyCode::Char('c') => {
-                    if key.modifiers.contains(KeyModifiers::CONTROL) {
-                        self.input_box.clear();
-                        self.update_input_mode(InputMode::Normal);
+                KeyCode::Char(char) => match char {
+                    'n' => {
+                        if key.modifiers.contains(KeyModifiers::CONTROL) {
+                            self.input_box.enter_char('\n');
+                        } else {
+                            self.input_box.enter_char(char)
+                        }
                     }
-                }
-                KeyCode::Char(to_insert) => self.input_box.enter_char(to_insert),
+                    'c' => {
+                        if key.modifiers.contains(KeyModifiers::CONTROL) {
+                            self.input_box.clear();
+                            self.update_input_mode(InputMode::Normal);
+                        } else {
+                            self.input_box.enter_char(char)
+                        }
+                    }
+                    _ => self.input_box.enter_char(char),
+                },
+
                 KeyCode::Backspace => {
                     if self.input_box.is_empty() {
                         self.update_input_mode(InputMode::Normal)
