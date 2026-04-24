@@ -33,6 +33,7 @@ pub struct TUIApp {
     debug_mode: bool,
     input_box: InputBoxState,
     message_box: MessageBoxState,
+    do_clear_terminal: bool,
 }
 #[derive(Default, Clone)]
 pub enum InputMode {
@@ -53,6 +54,7 @@ impl TUIApp {
             debug_mode,
             input_box: InputBoxState::new(),
             message_box: MessageBoxState::new(),
+            do_clear_terminal: false,
         }
     }
 
@@ -81,6 +83,10 @@ impl TUIApp {
             let command = Command::from_str(&input);
             match command {
                 Ok(command) => {
+                    if command == Command::Clear {
+                        self.clear_messages_and_terminal();
+                    }
+
                     match self.actor_ref.send_message(Message::Command(command)) {
                         Ok(_) => {}
                         Err(_) => {
@@ -127,8 +133,12 @@ impl TUIApp {
                 Some(actor_msg) = actor_rx.recv() => self.handle_actor_msg(actor_msg),
             }
 
-            self.message_box.flush_scrollback(&mut terminal)?;
+            self.message_box.flush_scrollback(&mut terminal,self.do_clear_terminal)?;
             terminal.draw(|frame| self.draw(frame))?;
+
+            if self.do_clear_terminal {
+                self.do_clear_terminal = false;
+            }
         }
         Ok(())
     }
@@ -166,7 +176,7 @@ impl TUIApp {
                 self.message_box.append(Msg::Message(command_res));
                 match command {
                     Command::Logout => self.kill(),
-                    Command::Clear => self.message_box.clear(),
+                    Command::Clear => self.clear_messages_and_terminal(),
                     Command::PrintContext => {}
                 }
             }
@@ -288,6 +298,11 @@ impl TUIApp {
         };
         self.message_box
             .append(Msg::Message("Interrupted".to_string()))
+    }
+
+    fn clear_messages_and_terminal(&mut self) {
+        self.message_box.clear();
+        self.do_clear_terminal = true;
     }
 
     #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]

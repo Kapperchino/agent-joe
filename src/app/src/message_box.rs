@@ -1,6 +1,9 @@
 use crate::draw_line::{DrawLine, RenderState};
 use crate::draw_table::DrawTable;
 use common_models::tui_models::State;
+use crossterm::cursor::MoveTo;
+use crossterm::execute;
+use crossterm::terminal::{Clear, ClearType};
 use markdown::mdast::Node;
 use markdown::ParseOptions;
 use ratatui::buffer::Buffer;
@@ -54,6 +57,8 @@ impl MessageBoxState {
 
     pub fn clear(&mut self) {
         self.messages.clear();
+        self.active_message = None;
+        self.scrollback_render_state = Default::default();
     }
 
     pub fn get_last(&self) -> Option<String> {
@@ -134,27 +139,38 @@ impl MessageBoxState {
     pub(crate) fn flush_scrollback(
         &mut self,
         terminal: &mut DefaultTerminal,
+        do_clear: bool,
     ) -> color_eyre::Result<()> {
-        self.compact_active_message();
+        match do_clear {
+            true => {
+                execute!(
+                    terminal.backend_mut(),
+                    MoveTo(0, 0),
+                    Clear(ClearType::All),
+                    Clear(ClearType::Purge),
+                )?;
+                terminal.clear()?;
+            }
+            false => {
+                self.compact_active_message();
+                let active_line_count = self.active_message_line_count();
+                let max_live_messages = self.max_live_messages().saturating_sub(active_line_count);
+                if self.messages.len() > max_live_messages {
+                    let flush_count = Self::adjust_flush_count_for_tables(
+                        &self.messages,
+                        self.messages.len().saturating_sub(max_live_messages),
+                    );
+                    let flushed_lines = self.messages.drain(0..flush_count).collect::<Vec<_>>();
+                    let rendered_lines = self
+                        .draw_line
+                        .render_lines_with_state(&flushed_lines, &mut self.scrollback_render_state);
 
-        let active_line_count = self.active_message_line_count();
-        let max_live_messages = self.max_live_messages().saturating_sub(active_line_count);
-        if self.messages.len() <= max_live_messages {
-            return Ok(());
+                    terminal.insert_before(rendered_lines.len() as u16, |buf| {
+                        Paragraph::new(rendered_lines).render(buf.area, buf);
+                    })?;
+                }
+            }
         }
-
-        let flush_count = Self::adjust_flush_count_for_tables(
-            &self.messages,
-            self.messages.len().saturating_sub(max_live_messages),
-        );
-        let flushed_lines = self.messages.drain(0..flush_count).collect::<Vec<_>>();
-        let rendered_lines = self
-            .draw_line
-            .render_lines_with_state(&flushed_lines, &mut self.scrollback_render_state);
-
-        terminal.insert_before(rendered_lines.len() as u16, |buf| {
-            Paragraph::new(rendered_lines).render(buf.area, buf);
-        })?;
 
         Ok(())
     }
