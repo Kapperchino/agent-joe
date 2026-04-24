@@ -160,6 +160,7 @@ dependencies = [
  "ractor",
  "ratatui",
  "strum 0.28.0",
+ "strum_macros 0.28.0",
  "syntect",
  "textwrap",
  "throbber-widgets-tui",

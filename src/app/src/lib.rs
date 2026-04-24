@@ -6,3 +6,6 @@ pub mod tui;
 mod draw_table;
 mod command_box;
 mod utils;
+mod model_box;
+mod openai_models;
+mod claude_models;
