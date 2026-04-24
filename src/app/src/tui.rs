@@ -179,6 +179,7 @@ impl TUIApp {
                     Command::Logout => self.kill(),
                     Command::Clear => self.clear_messages_and_terminal(),
                     Command::PrintContext => {}
+                    Command::ChangeModel(_, _) => {}
                 }
             }
             ActorToTui::TokensUpdated(token_count) => {

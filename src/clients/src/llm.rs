@@ -2,10 +2,12 @@ use crate::claude::{ClaudeClient, Usage};
 use crate::config::Config;
 use crate::openai::OpenAIClient;
 use crate::tool_defs::{Tool, ToolId};
+use crate::{ClaudeEffort, OpenAIEffort};
 use futures::future::Either;
 use futures::Stream;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::str::FromStr;
 
 pub trait LLmClientTrait {
     async fn chat_stream(
@@ -15,15 +17,27 @@ pub trait LLmClientTrait {
     async fn send_request(&self, request: ClientRequest) -> anyhow::Result<ClientResponse>;
 }
 pub enum LLmClient {
-    Claude(ClaudeClient),
-    OpenApi(OpenAIClient),
+    Claude {
+        client: ClaudeClient,
+        config: Config,
+    },
+    OpenApi {
+        client: OpenAIClient,
+        config: Config,
+    },
 }
 
 impl LLmClient {
     pub fn new(config: Config) -> anyhow::Result<LLmClient> {
-        match config {
-            Config::Claude(config) => Ok(LLmClient::Claude(ClaudeClient::new(config)?)),
-            Config::OpenAI(config) => Ok(LLmClient::OpenApi(OpenAIClient::new(config)?)),
+        match &config {
+            Config::Claude(claude_config) => Ok(LLmClient::Claude {
+                client: ClaudeClient::new(claude_config.clone())?,
+                config,
+            }),
+            Config::OpenAI(openai_config) => Ok(LLmClient::OpenApi {
+                client: OpenAIClient::new(openai_config.clone())?,
+                config,
+            }),
         }
     }
 
@@ -33,13 +47,38 @@ impl LLmClient {
     ) -> Result<impl Stream<Item = anyhow::Result<StreamEvent>> + Send + 'static, anyhow::Error>
     {
         match self {
-            LLmClient::Claude(claude) => Ok(Either::Left(claude.chat_stream(req).await?)),
-            LLmClient::OpenApi(openai) => Ok(Either::Right(openai.chat_stream(req).await?)),
+            LLmClient::Claude { client, .. } => Ok(Either::Left(client.chat_stream(req).await?)),
+            LLmClient::OpenApi { client, .. } => Ok(Either::Right(client.chat_stream(req).await?)),
         }
     }
 
     async fn send_request(&self, request: ClientRequest) -> anyhow::Result<ClientResponse> {
         todo!()
+    }
+
+    pub async fn change_model_and_effort(
+        &mut self,
+        name: String,
+        effort: String,
+    ) -> anyhow::Result<()> {
+        match self.get_config() {
+            Config::Claude(config) => {
+                config.model = name;
+                config.effort = ClaudeEffort::from_str(effort.as_str())?;
+            }
+            Config::OpenAI(config) => {
+                config.model = name;
+                config.effort = OpenAIEffort::from_str(effort.as_str())?;
+            }
+        };
+        self.get_config().save().await
+    }
+
+    fn get_config(&mut self) -> &mut Config {
+        match self {
+            LLmClient::Claude { config, .. } => config,
+            LLmClient::OpenApi { config, .. } => config,
+        }
     }
 }
 

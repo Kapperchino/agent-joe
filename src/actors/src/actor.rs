@@ -255,6 +255,9 @@ impl Actor for Worker {
                         "History cleared".to_string(),
                     ));
                 }
+                Command::ChangeModel(name, effort) => {
+                    state.llm.change_model_and_effort(name, effort).await?;
+                }
             },
             Message::Interrupt => {
                 state.stream_processor.clear();

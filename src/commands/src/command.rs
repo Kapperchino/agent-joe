@@ -18,6 +18,8 @@ pub enum Command {
     Logout,
     #[strum(message="clears the state")]
     Clear,
+    #[strum(message="changes the model name effort")]
+    ChangeModel(String,String)
 }
 
 impl CommandContext {
