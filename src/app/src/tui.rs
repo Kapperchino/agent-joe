@@ -15,12 +15,12 @@ use crossterm::event::{EventStream, KeyEvent, KeyModifiers};
 use futures::StreamExt;
 use ractor::ActorRef;
 use ratatui::{
-    crossterm::event::{Event, KeyCode}, layout::{Constraint, Layout},
+    DefaultTerminal, Frame,
+    crossterm::event::{Event, KeyCode},
+    layout::{Constraint, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Block,
-    DefaultTerminal,
-    Frame,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -35,12 +35,31 @@ pub struct TUIApp {
     message_box: MessageBoxState,
     do_clear_terminal: bool,
 }
-#[derive(Default, Clone)]
+#[derive(Clone, Copy)]
 pub enum InputMode {
+    None,
+    HomeMenu(HomeMenu),
+    CommandMenu(CommandMenu),
+}
+
+impl Default for InputMode {
+    fn default() -> Self {
+        Self::HomeMenu(HomeMenu::Normal)
+    }
+}
+
+#[derive(Default, Clone, Copy)]
+pub enum HomeMenu {
     #[default]
     Normal,
     InputCommand,
     Editing,
+}
+
+#[derive(Default, Clone, Copy)]
+pub enum CommandMenu {
+    #[default]
+    ModelSelector,
 }
 
 impl TUIApp {
@@ -107,7 +126,7 @@ impl TUIApp {
     }
 
     fn update_input_mode(&mut self, mode: InputMode) {
-        self.input_mode = mode.clone();
+        self.input_mode = mode;
         self.input_box.input_mode = mode;
     }
 
@@ -195,8 +214,12 @@ impl TUIApp {
             Event::Key(key) => self.handle_key_event(key),
             Event::Mouse(_) => {}
             Event::Paste(text) => match self.input_mode {
-                InputMode::Editing | InputMode::InputCommand => self.input_box.paste(text),
-                InputMode::Normal => {}
+                InputMode::HomeMenu(HomeMenu::Editing | HomeMenu::InputCommand) => {
+                    self.input_box.paste(text);
+                }
+                InputMode::HomeMenu(HomeMenu::Normal)
+                | InputMode::CommandMenu(CommandMenu::ModelSelector)
+                | InputMode::None => {}
             },
             Event::Resize(_, _) => {}
         }
@@ -204,9 +227,13 @@ impl TUIApp {
 
     fn handle_key_event(&mut self, key: &KeyEvent) {
         match self.input_mode {
-            InputMode::Normal => match key.code {
-                KeyCode::Char('i') => self.update_input_mode(InputMode::Editing),
-                KeyCode::Char('/') => self.update_input_mode(InputMode::InputCommand),
+            InputMode::HomeMenu(HomeMenu::Normal) | InputMode::None => match key.code {
+                KeyCode::Char('i') => {
+                    self.update_input_mode(InputMode::HomeMenu(HomeMenu::Editing));
+                }
+                KeyCode::Char('/') => {
+                    self.update_input_mode(InputMode::HomeMenu(HomeMenu::InputCommand));
+                }
                 KeyCode::Char('q') => self.kill(),
                 KeyCode::Char('c') => {
                     if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -219,11 +246,11 @@ impl TUIApp {
                 }
                 _ => {}
             },
-            InputMode::Editing => match key.code {
+            InputMode::HomeMenu(HomeMenu::Editing) => match key.code {
                 KeyCode::Enter => {
                     if key.modifiers.is_empty() {
                         self.submit_message();
-                        self.update_input_mode(InputMode::Normal);
+                        self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
                     } else if key.modifiers.contains(KeyModifiers::ALT)
                         || key.modifiers.contains(KeyModifiers::SHIFT)
                     {
@@ -241,7 +268,7 @@ impl TUIApp {
                     'c' => {
                         if key.modifiers.contains(KeyModifiers::CONTROL) {
                             self.input_box.clear();
-                            self.update_input_mode(InputMode::Normal);
+                            self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
                         } else {
                             self.input_box.enter_char(char)
                         }
@@ -251,20 +278,20 @@ impl TUIApp {
 
                 KeyCode::Backspace => {
                     if self.input_box.is_empty() {
-                        self.update_input_mode(InputMode::Normal)
+                        self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
                     } else {
                         self.input_box.delete_char()
                     }
                 }
                 KeyCode::Left => self.input_box.move_cursor_left(),
                 KeyCode::Right => self.input_box.move_cursor_right(),
-                KeyCode::Esc => self.update_input_mode(InputMode::Normal),
+                KeyCode::Esc => self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal)),
                 _ => {}
             },
-            InputMode::InputCommand => match key.code {
+            InputMode::HomeMenu(HomeMenu::InputCommand) => match key.code {
                 KeyCode::Enter => {
                     self.submit_command();
-                    self.update_input_mode(InputMode::Normal);
+                    self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
                 }
                 KeyCode::Tab => {
                     self.input_box.auto_comp_command();
@@ -273,7 +300,7 @@ impl TUIApp {
                     'c' => {
                         if key.modifiers.contains(KeyModifiers::CONTROL) {
                             self.input_box.clear();
-                            self.update_input_mode(InputMode::Normal);
+                            self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
                         } else {
                             self.input_box.enter_char(to_insert)
                         }
@@ -282,15 +309,18 @@ impl TUIApp {
                 },
                 KeyCode::Backspace => {
                     if self.input_box.is_empty() {
-                        self.update_input_mode(InputMode::Normal)
+                        self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
                     } else {
                         self.input_box.delete_char()
                     }
                 }
                 KeyCode::Left => self.input_box.move_cursor_left(),
                 KeyCode::Right => self.input_box.move_cursor_right(),
-                KeyCode::Esc => self.update_input_mode(InputMode::Normal),
+                KeyCode::Esc => self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal)),
                 _ => {}
+            },
+            InputMode::CommandMenu(menu) => match menu {
+                CommandMenu::ModelSelector => {}
             },
         }
     }
@@ -367,14 +397,15 @@ impl TUIApp {
 
         match self.input_mode {
             // Hide the cursor. `Frame` does this by default, so we don't need to do anything here
-            InputMode::Normal => {}
+            InputMode::HomeMenu(HomeMenu::Normal) | InputMode::None => {}
 
-            InputMode::InputCommand => frame.set_cursor_position(cursor_pos),
+            InputMode::HomeMenu(HomeMenu::InputCommand) => frame.set_cursor_position(cursor_pos),
 
             // Make the cursor visible and ask ratatui to put it at the specified coordinates after
             // rendering
             #[allow(clippy::cast_possible_truncation)]
-            InputMode::Editing => frame.set_cursor_position(cursor_pos),
+            InputMode::HomeMenu(HomeMenu::Editing) => frame.set_cursor_position(cursor_pos),
+            InputMode::CommandMenu(_) => {}
         }
 
         frame.render_stateful_widget(MessageBox {}, msg_area, &mut self.message_box);

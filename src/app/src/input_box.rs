@@ -1,5 +1,5 @@
 use crate::command_box::CommandBox;
-use crate::tui::InputMode;
+use crate::tui::{HomeMenu, InputMode};
 use commands::command::CommandContext;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
@@ -42,35 +42,42 @@ impl StatefulWidget for InputBox {
         let editing_input_lines = editing_display_lines.max(usize::from(editing_cursor.1) + 1);
         let command_input_lines = command_display_lines.max(usize::from(command_cursor.1) + 1);
 
-        match state.input_mode {
-            InputMode::InputCommand => {
-                let command_input_height = command_input_lines as u16 + 2;
-                let [command_input_area, command_box_area] = Layout::vertical([
-                    Constraint::Length(command_input_height),
-                    Constraint::Min(3),
-                ])
-                .areas(area);
+        match &state.input_mode {
+            InputMode::HomeMenu(home) => match home {
+                HomeMenu::InputCommand => {
+                    let command_input_height = command_input_lines as u16 + 2;
+                    let [command_input_area, command_box_area] = Layout::vertical([
+                        Constraint::Length(command_input_height),
+                        Constraint::Min(3),
+                    ])
+                    .areas(area);
 
-                let command_section =
-                    Paragraph::new(state.command_lines(input_wrap_width, command_input_lines))
-                        .block(Block::bordered().title("Command"));
-                command_section.render(command_input_area, buf);
-                CommandBox {
-                    commands: state.command_context.search(&state.input),
+                    let command_section =
+                        Paragraph::new(state.command_lines(input_wrap_width, command_input_lines))
+                            .block(Block::bordered().title("Command"));
+                    command_section.render(command_input_area, buf);
+                    CommandBox {
+                        commands: state.command_context.search(&state.input),
+                    }
+                    .render(command_box_area, buf);
                 }
-                .render(command_box_area, buf);
-            }
-            _ => {
-                let input =
-                    Paragraph::new(state.input_lines(input_wrap_width, editing_input_lines))
-                        .style(match state.input_mode {
-                            InputMode::Normal => Style::default(),
-                            InputMode::Editing => Style::default().fg(Color::Yellow),
-                            InputMode::InputCommand => Style::default().fg(Color::Green),
-                        })
-                        .block(Block::bordered().title("Input"));
-                input.render(area, buf);
-            }
+                _ => {
+                    let input =
+                        Paragraph::new(state.input_lines(input_wrap_width, editing_input_lines))
+                            .style(match &state.input_mode {
+                                InputMode::HomeMenu(home) => match home {
+                                    HomeMenu::Normal => Style::default(),
+                                    HomeMenu::Editing => Style::default().fg(Color::Yellow),
+                                    HomeMenu::InputCommand => Style::default().fg(Color::Green),
+                                },
+                                InputMode::CommandMenu(_) | InputMode::None => Style::default(),
+                            })
+                            .block(Block::bordered().title("Input"));
+                    input.render(area, buf);
+                }
+            },
+            InputMode::CommandMenu(_) => todo!(),
+            InputMode::None => (),
         }
     }
 }
@@ -103,13 +110,18 @@ impl InputBoxState {
 
     pub fn get_cursor_pos(&self, area: &Rect) -> Position {
         let input_wrap_width = Self::input_wrap_width(area.width);
-        let (cursor_x, cursor_y) = match self.input_mode {
-            InputMode::InputCommand => self.cursor_wrap_position(
-                input_wrap_width,
-                Self::COMMAND_PROMPT,
-                Self::COMMAND_CONTINUATION,
-            ),
-            InputMode::Normal | InputMode::Editing => {
+        let (cursor_x, cursor_y) = match &self.input_mode {
+            InputMode::HomeMenu(home) => match home {
+                HomeMenu::InputCommand => self.cursor_wrap_position(
+                    input_wrap_width,
+                    Self::COMMAND_PROMPT,
+                    Self::COMMAND_CONTINUATION,
+                ),
+                HomeMenu::Normal | HomeMenu::Editing => {
+                    self.cursor_wrap_position(input_wrap_width, "", "")
+                }
+            },
+            InputMode::CommandMenu(_) | InputMode::None => {
                 self.cursor_wrap_position(input_wrap_width, "", "")
             }
         };
@@ -137,7 +149,7 @@ impl InputBoxState {
         );
         let editing_input_lines = editing_display_lines.max(usize::from(editing_cursor.1) + 1);
         let command_input_lines = command_display_lines.max(usize::from(command_cursor.1) + 1);
-        if matches!(self.input_mode, InputMode::InputCommand) {
+        if matches!(self.input_mode, InputMode::HomeMenu(HomeMenu::InputCommand)) {
             command_input_lines as u16 + 9
         } else {
             editing_input_lines as u16 + 2

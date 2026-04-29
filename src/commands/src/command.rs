@@ -8,18 +8,19 @@ pub struct CommandContext {
     nucleo: Nucleo<String>,
 }
 
-#[derive(Debug, PartialEq, EnumString, VariantNames, Clone,EnumMessage)]
+#[derive(Debug, PartialEq, EnumString, VariantNames, Clone, EnumMessage)]
 #[strum(serialize_all = "lowercase")]
 pub enum Command {
     #[strum(serialize = "context")]
-    #[strum(message="prints out the context")]
+    #[strum(message = "prints out the context")]
     PrintContext,
-    #[strum(message="logs out the user")]
+    #[strum(message = "logs out the user")]
     Logout,
-    #[strum(message="clears the state")]
+    #[strum(message = "clears the state")]
     Clear,
-    #[strum(message="changes the model name effort")]
-    ChangeModel(String,String)
+    #[strum(serialize = "model")]
+    #[strum(message = "changes the model name effort")]
+    ChangeModel(String, String),
 }
 
 impl CommandContext {

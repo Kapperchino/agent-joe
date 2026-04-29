@@ -2,7 +2,7 @@ use crate::analysis::AnalysisSession;
 use crate::symbol_info::SymbolInfo;
 use ra_ap_ide::{AnalysisHost, TextSize};
 use ra_ap_ide_db::SymbolKind;
-use ra_ap_load_cargo::{load_workspace_at, LoadCargoConfig, ProcMacroServerChoice};
+use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
 use ra_ap_project_model::CargoConfig;
 use ra_ap_vfs::{FileId, Vfs, VfsPath};
 use std::path::PathBuf;

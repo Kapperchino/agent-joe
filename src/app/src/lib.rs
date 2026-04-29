@@ -1,11 +1,11 @@
+mod claude_models;
+mod command_box;
 pub mod draw_line;
+mod draw_table;
 pub mod init_app;
 mod input_box;
 mod message_box;
-pub mod tui;
-mod draw_table;
-mod command_box;
-mod utils;
 mod model_box;
 mod openai_models;
-mod claude_models;
+pub mod tui;
+mod utils;

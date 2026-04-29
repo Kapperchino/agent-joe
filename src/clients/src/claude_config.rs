@@ -8,7 +8,7 @@ pub struct ClaudeConfig {
     pub effort: ClaudeEffort,
 }
 
-#[derive(PartialEq, Eq, Debug, Clone, EnumString,EnumMessage, Serialize, Deserialize)]
+#[derive(PartialEq, Eq, Debug, Clone, EnumString, EnumMessage, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClaudeEffort {
     #[strum(message = "low")]
