@@ -3,10 +3,10 @@ use ratatui::layout::Rect;
 use ratatui::prelude::{Color, Line, Modifier, Style};
 use ratatui::widgets::{Block, List, ListItem, ListState, StatefulWidget};
 
-pub struct SelectList<'a> {
-    title: Line<'a>,
-    empty_message: Line<'a>,
-    selected_symbol: &'a str,
+pub struct SelectList {
+    title: String,
+    empty_message: String,
+    selected_symbol: String,
     style: Style,
     selected_style: Style,
 }
@@ -17,12 +17,12 @@ pub struct SelectListState {
     list_state: ListState,
 }
 
-impl Default for SelectList<'_> {
+impl Default for SelectList {
     fn default() -> Self {
         Self {
-            title: Line::from("Select"),
-            empty_message: Line::from("No items"),
-            selected_symbol: "> ",
+            title: "Select".to_string(),
+            empty_message: "No items".to_string(),
+            selected_symbol: "> ".to_string(),
             style: Style::default(),
             selected_style: Style::default()
                 .fg(Color::Yellow)
@@ -31,38 +31,13 @@ impl Default for SelectList<'_> {
     }
 }
 
-impl<'a> SelectList<'a> {
+impl SelectList {
     pub fn new() -> Self {
         Self::default()
     }
-
-    pub fn title(mut self, title: impl Into<Line<'a>>) -> Self {
-        self.title = title.into();
-        self
-    }
-
-    pub fn empty_message(mut self, empty_message: impl Into<Line<'a>>) -> Self {
-        self.empty_message = empty_message.into();
-        self
-    }
-
-    pub fn selected_symbol(mut self, selected_symbol: &'a str) -> Self {
-        self.selected_symbol = selected_symbol;
-        self
-    }
-
-    pub fn style(mut self, style: Style) -> Self {
-        self.style = style;
-        self
-    }
-
-    pub fn selected_style(mut self, selected_style: Style) -> Self {
-        self.selected_style = selected_style;
-        self
-    }
 }
 
-impl StatefulWidget for SelectList<'_> {
+impl StatefulWidget for SelectList {
     type State = SelectListState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut SelectListState)
