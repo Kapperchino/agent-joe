@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use strum_macros::{EnumMessage, EnumString};
+use strum_macros::{EnumMessage, EnumString, VariantNames};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClaudeConfig {
@@ -8,7 +8,9 @@ pub struct ClaudeConfig {
     pub effort: ClaudeEffort,
 }
 
-#[derive(PartialEq, Eq, Debug, Clone, EnumString, EnumMessage, Serialize, Deserialize)]
+#[derive(
+    PartialEq, Eq, Debug, Clone, EnumString, EnumMessage, VariantNames, Serialize, Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ClaudeEffort {
     #[strum(message = "low")]

@@ -1,7 +1,7 @@
 use crate::openai::{ReasoningConfig, ReasoningSummary};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use strum_macros::{EnumMessage, EnumString};
+use strum_macros::{EnumMessage, EnumString, VariantNames};
 
 const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 const CHATGPT_BASE_URL: &str = "https://api.openai.com/v1";
@@ -35,7 +35,9 @@ impl OpenAIConfig {
     }
 }
 
-#[derive(PartialEq, Eq, Debug, Clone, EnumString, EnumMessage, Serialize, Deserialize)]
+#[derive(
+    PartialEq, Eq, Debug, Clone, EnumString, EnumMessage, VariantNames, Serialize, Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum OpenAIEffort {
     #[strum(message = "low")]
