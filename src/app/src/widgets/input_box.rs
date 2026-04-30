@@ -1,4 +1,4 @@
-use crate::command_box::CommandBox;
+use crate::widgets::command_box::CommandBox;
 use crate::tui::{HomeMenu, InputMode};
 use commands::command::CommandContext;
 use ratatui::buffer::Buffer;

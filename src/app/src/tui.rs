@@ -7,8 +7,8 @@ use common_models::tui_models::TokenCount;
 use std::str::FromStr;
 use std::time::Duration;
 
-use crate::input_box::{InputBox, InputBoxState};
-use crate::message_box::{MessageBox, MessageBoxState, Msg};
+use crate::widgets::input_box::{InputBox, InputBoxState};
+use crate::widgets::message_box::{MessageBox, MessageBoxState, Msg};
 use color_eyre::Result;
 use commands::command::Command;
 use crossterm::event::{EventStream, KeyEvent, KeyModifiers};

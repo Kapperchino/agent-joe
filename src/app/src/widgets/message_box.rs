@@ -1,16 +1,16 @@
-use crate::draw_line::{DrawLine, RenderState};
-use crate::draw_table::DrawTable;
+use crate::utils::draw_line::{DrawLine, RenderState};
+use crate::utils::draw_table::DrawTable;
 use common_models::tui_models::State;
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
 use crossterm::terminal::{Clear, ClearType};
-use markdown::ParseOptions;
 use markdown::mdast::Node;
-use ratatui::DefaultTerminal;
+use markdown::ParseOptions;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::{Color, Line, Modifier, StatefulWidget, Style};
 use ratatui::widgets::{Paragraph, Widget};
+use ratatui::DefaultTerminal;
 use throbber_widgets_tui::{Throbber, ThrobberState};
 
 pub enum Msg {
