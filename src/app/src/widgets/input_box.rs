@@ -1,18 +1,24 @@
-use crate::tui::{HomeMenu, InputMode};
+use crate::models::{EffortsSelection, ModelSelections};
+use crate::tui::{CommandMenu, HomeMenu, InputMode};
 use crate::widgets::command_box::CommandBox;
+use crate::widgets::model_box::{ModelBox, ModelBoxState};
+use clients::config::Config;
 use commands::command::CommandContext;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::prelude::{Color, Line, Modifier, Span, Style};
 use ratatui::widgets::{Block, Paragraph, StatefulWidget, Widget};
 
-pub struct InputBox {}
+pub struct InputBox {
+    model_box: ModelBox,
+}
 
 pub struct InputBoxState {
     character_index: usize,
     input: String,
     pub input_mode: InputMode,
     command_context: CommandContext,
+    model_box_state: ModelBoxState,
 }
 
 impl StatefulWidget for InputBox {
@@ -76,8 +82,18 @@ impl StatefulWidget for InputBox {
                     input.render(area, buf);
                 }
             },
-            InputMode::CommandMenu(_) => todo!(),
+            InputMode::CommandMenu(menu) => match menu {
+                CommandMenu::ModelSelector => {}
+            },
             InputMode::None => (),
+        }
+    }
+}
+
+impl InputBox {
+    pub fn new() -> InputBox {
+        InputBox {
+            model_box: ModelBox::new(),
         }
     }
 }
@@ -86,12 +102,21 @@ impl InputBoxState {
     const COMMAND_PROMPT: &'static str = "/ ";
     const COMMAND_CONTINUATION: &'static str = "   ";
 
-    pub fn new() -> InputBoxState {
+    pub fn new(config: Config) -> InputBoxState {
+        let model_box_state = match config {
+            Config::Claude(_) => {
+                ModelBoxState::new(ModelSelections::Claude, EffortsSelection::Claude)
+            }
+            Config::OpenAI(_) => {
+                ModelBoxState::new(ModelSelections::OpenAI, EffortsSelection::OpenAI)
+            }
+        };
         InputBoxState {
             character_index: 0,
             input: "".to_string(),
             input_mode: Default::default(),
             command_context: CommandContext::new(),
+            model_box_state,
         }
     }
 

@@ -1,5 +1,5 @@
 use crate::claude::{ClaudeClient, Usage};
-use crate::config::Config;
+use crate::config::{Config, ConfigContext};
 use crate::openai::OpenAIClient;
 use crate::tool_defs::{Tool, ToolId};
 use crate::{ClaudeEffort, OpenAIEffort};
@@ -19,24 +19,25 @@ pub trait LLmClientTrait {
 pub enum LLmClient {
     Claude {
         client: ClaudeClient,
-        config: Config,
+        config: ConfigContext,
     },
     OpenApi {
         client: OpenAIClient,
-        config: Config,
+        config: ConfigContext,
     },
 }
 
 impl LLmClient {
-    pub fn new(config: Config) -> anyhow::Result<LLmClient> {
+    pub fn new(config_context: ConfigContext) -> anyhow::Result<LLmClient> {
+        let config = config_context.get_config();
         match &config {
             Config::Claude(claude_config) => Ok(LLmClient::Claude {
                 client: ClaudeClient::new(claude_config.clone())?,
-                config,
+                config: config_context.clone(),
             }),
             Config::OpenAI(openai_config) => Ok(LLmClient::OpenApi {
                 client: OpenAIClient::new(openai_config.clone())?,
-                config,
+                config: config_context.clone(),
             }),
         }
     }
@@ -61,7 +62,8 @@ impl LLmClient {
         name: String,
         effort: String,
     ) -> anyhow::Result<()> {
-        match self.get_config() {
+        let mut conf = self.get_config();
+        match &mut conf {
             Config::Claude(config) => {
                 config.model = name;
                 config.effort = ClaudeEffort::from_str(effort.as_str())?;
@@ -71,14 +73,26 @@ impl LLmClient {
                 config.effort = OpenAIEffort::from_str(effort.as_str())?;
             }
         };
-        self.get_config().save().await
+
+        self.save_config(conf).await
     }
 
-    fn get_config(&mut self) -> &mut Config {
+    fn get_config(&self) -> Config {
         match self {
-            LLmClient::Claude { config, .. } => config,
-            LLmClient::OpenApi { config, .. } => config,
+            LLmClient::Claude { config, .. } => self.get_config(),
+            LLmClient::OpenApi { config, .. } => self.get_config(),
         }
+    }
+    async fn save_config(&mut self, config: Config) -> anyhow::Result<()> {
+        match self {
+            LLmClient::Claude {
+                config: context, ..
+            } => context.update_config(config),
+            LLmClient::OpenApi {
+                config: context, ..
+            } => context.update_config(config),
+        };
+        self.get_config().save().await
     }
 }
 

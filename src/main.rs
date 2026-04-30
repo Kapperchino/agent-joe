@@ -4,7 +4,7 @@ use actors::worker::Worker;
 use app::init_app::InitApp;
 use app::tui::TUIApp;
 use clap::Parser;
-use clients::config::Config;
+use clients::config::{Config, ConfigContext};
 use clients::llm::LLmClient;
 use clients::tool_defs::CargoCheck;
 use clients::tool_defs::InsertAfterLine;
@@ -79,8 +79,9 @@ async fn main() {
     } else {
         (config.unwrap(), terminal)
     };
+    let config_context = ConfigContext::new(config);
 
-    let client = LLmClient::new(config).unwrap();
+    let client = LLmClient::new(config_context.clone()).unwrap();
     let (tx, rx) = mpsc::unbounded_channel();
 
     let (supervisor, _) = Actor::spawn(None, WorkerSupervisor, ())
@@ -109,7 +110,7 @@ async fn main() {
     .expect("Failed to start actor");
 
     terminal.clear().ok();
-    let app = TUIApp::new(joe, cli.debug);
+    let app = TUIApp::new(joe, config_context.clone(), cli.debug);
     app.run(terminal, rx).await.unwrap();
     actor_handle.await.expect("Actor failed to exit cleanly");
     execute!(stdout(), PopKeyboardEnhancementFlags, DisableBracketedPaste).ok();

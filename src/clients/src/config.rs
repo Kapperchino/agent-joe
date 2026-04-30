@@ -6,6 +6,7 @@ use figment::providers::{Format, Toml};
 use figment::Figment;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use tokio::fs;
 use utils::utils::Utils;
 pub const CONFIG_FILE_NAME: &str = "config.toml";
@@ -14,6 +15,29 @@ pub const CONFIG_FILE_NAME: &str = "config.toml";
 pub enum Config {
     Claude(ClaudeConfig),
     OpenAI(OpenAIConfig),
+}
+
+#[derive(Debug, Clone)]
+pub struct ConfigContext {
+    config: Arc<Mutex<Config>>,
+}
+
+impl ConfigContext {
+    pub fn new(config: Config) -> ConfigContext {
+        ConfigContext {
+            config: Arc::new(Mutex::new(config)),
+        }
+    }
+
+    pub fn get_config(&self) -> Config {
+        let c = self.config.lock().unwrap();
+        c.clone()
+    }
+
+    pub fn update_config(&mut self, new_conf: Config) {
+        let mut c = self.config.lock().unwrap();
+        *c = new_conf
+    }
 }
 
 impl Config {

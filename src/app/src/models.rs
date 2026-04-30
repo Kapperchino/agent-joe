@@ -4,25 +4,25 @@ use strum_macros::{EnumString, VariantNames};
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum EffortsSelection {
-    OpenAI(OpenAIEffort),
-    Claude(ClaudeEffort),
+    OpenAI,
+    Claude,
     Other,
 }
 #[derive(Debug, PartialEq, Clone)]
 pub enum ModelSelections {
-    OpenAI(OpenAIModels),
-    Claude(ClaudeModels),
+    OpenAI,
+    Claude,
     Other,
 }
 
 impl ModelSelections {
     pub fn get_models(&self) -> Vec<String> {
         match self {
-            ModelSelections::OpenAI(_) => OpenAIModels::VARIANTS
+            ModelSelections::OpenAI => OpenAIModels::VARIANTS
                 .into_iter()
                 .map(|x| x.to_string())
                 .collect(),
-            ModelSelections::Claude(_) => ClaudeModels::VARIANTS
+            ModelSelections::Claude => ClaudeModels::VARIANTS
                 .into_iter()
                 .map(|x| x.to_string())
                 .collect(),
@@ -36,11 +36,11 @@ impl ModelSelections {
 impl EffortsSelection {
     pub fn get_efforts(&self) -> Vec<String> {
         match self {
-            EffortsSelection::OpenAI(_) => OpenAIEffort::VARIANTS
+            EffortsSelection::OpenAI => OpenAIEffort::VARIANTS
                 .into_iter()
                 .map(|x| x.to_string())
                 .collect(),
-            EffortsSelection::Claude(_) => ClaudeEffort::VARIANTS
+            EffortsSelection::Claude => ClaudeEffort::VARIANTS
                 .into_iter()
                 .map(|x| x.to_string())
                 .collect(),

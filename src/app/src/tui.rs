@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use crate::widgets::input_box::{InputBox, InputBoxState};
 use crate::widgets::message_box::{MessageBox, MessageBoxState, Msg};
+use clients::config::ConfigContext;
 use color_eyre::Result;
 use commands::command::Command;
 use crossterm::event::{EventStream, KeyEvent, KeyModifiers};
@@ -34,6 +35,7 @@ pub struct TUIApp {
     input_box: InputBoxState,
     message_box: MessageBoxState,
     do_clear_terminal: bool,
+    config_context: ConfigContext,
 }
 #[derive(Clone, Copy)]
 pub enum InputMode {
@@ -63,7 +65,12 @@ pub enum CommandMenu {
 }
 
 impl TUIApp {
-    pub fn new(actor_ref: ActorRef<Message>, debug_mode: bool) -> Self {
+    pub fn new(
+        actor_ref: ActorRef<Message>,
+        config_context: ConfigContext,
+        debug_mode: bool,
+    ) -> Self {
+        let config = config_context.get_config();
         Self {
             input_mode: Default::default(),
             do_quit: false,
@@ -71,9 +78,10 @@ impl TUIApp {
             actor_state: State::Ready,
             token_count: TokenCount::default(),
             debug_mode,
-            input_box: InputBoxState::new(),
+            input_box: InputBoxState::new(config),
             message_box: MessageBoxState::new(),
             do_clear_terminal: false,
+            config_context,
         }
     }
 
@@ -409,7 +417,7 @@ impl TUIApp {
         let token_block = Block::new().title_bottom(token_line);
         frame.render_widget(token_block, token_area);
 
-        frame.render_stateful_widget(InputBox {}, input_area, &mut self.input_box);
+        frame.render_stateful_widget(InputBox::new(), input_area, &mut self.input_box);
 
         let cursor_pos = self.input_box.get_cursor_pos(&input_area);
 
