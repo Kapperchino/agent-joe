@@ -8,13 +8,15 @@ pub struct ModelBox {
     select_list: SelectList,
 }
 
-enum PageState {
+#[derive(Debug, Clone)]
+pub enum PageState {
     SelectModel,
     SelectEffort,
 }
 
 pub struct ModelBoxState {
     pub models: Vec<String>,
+    pub model: String,
     pub efforts: Vec<String>,
     pub list_state: SelectListState,
     page_state: PageState,
@@ -29,15 +31,27 @@ impl StatefulWidget for ModelBox {
 }
 
 impl ModelBoxState {
-    pub fn new(models: ModelSelections, efforts: EffortsSelection) -> ModelBoxState {
+    pub fn new(
+        models: ModelSelections,
+        efforts: EffortsSelection,
+        model_name: String,
+    ) -> ModelBoxState {
         let models = models.get_models();
         let efforts = efforts.get_efforts();
+        let mut list_state = SelectListState::new(models.clone(), &model_name);
+        list_state.select_first();
         ModelBoxState {
-            models: models.clone(),
+            model: model_name,
+            models,
             efforts,
-            list_state: SelectListState::new(models),
+            list_state,
             page_state: PageState::SelectModel,
         }
+    }
+
+    pub fn height(&self) -> u16 {
+        let content_height = self.list_state.len().max(1).saturating_add(2);
+        u16::try_from(content_height).unwrap_or(u16::MAX)
     }
 
     pub fn on_arrow_down(&mut self) {
@@ -48,7 +62,22 @@ impl ModelBoxState {
         self.list_state.select_previous()
     }
 
-    pub fn on_enter(&mut self) {}
+    pub fn on_enter(&mut self) -> PageState {
+        let cur_page = self.page_state.clone();
+        match &self.page_state {
+            PageState::SelectModel => {
+                self.model = self.list_state.selected_item().unwrap_or("").to_string();
+                self.list_state.set_items(self.efforts.clone());
+                self.update_state(PageState::SelectEffort)
+            }
+            PageState::SelectEffort => {}
+        }
+        cur_page
+    }
+
+    fn update_state(&mut self, new_state: PageState) {
+        self.page_state = new_state
+    }
 }
 
 impl ModelBox {

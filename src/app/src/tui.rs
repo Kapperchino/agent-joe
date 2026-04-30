@@ -118,6 +118,7 @@ impl TUIApp {
                                     eprintln!("it's joever")
                                 }
                             };
+                            self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
                         }
                         Command::Logout => {
                             match self.actor_ref.send_message(Message::Command(command)) {
@@ -126,6 +127,7 @@ impl TUIApp {
                                     eprintln!("it's joever")
                                 }
                             };
+                            self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
                         }
                         Command::Clear => {
                             self.clear_messages_and_terminal();
@@ -135,6 +137,7 @@ impl TUIApp {
                                     eprintln!("it's joever")
                                 }
                             };
+                            self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
                         }
                         Command::ChangeModel(_, _) => self
                             .update_input_mode(InputMode::CommandMenu(CommandMenu::ModelSelector)),
@@ -317,7 +320,6 @@ impl TUIApp {
             InputMode::HomeMenu(HomeMenu::InputCommand) => match key.code {
                 KeyCode::Enter => {
                     self.submit_command();
-                    self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
                 }
                 KeyCode::Tab => {
                     self.input_box.auto_comp_command();
@@ -346,7 +348,13 @@ impl TUIApp {
                 _ => {}
             },
             InputMode::CommandMenu(menu) => match menu {
-                CommandMenu::ModelSelector => {}
+                CommandMenu::ModelSelector => match key.code {
+                    KeyCode::Down | KeyCode::Char('j') => self.input_box.select_next_model(),
+                    KeyCode::Up | KeyCode::Char('k') => self.input_box.select_previous_model(),
+                    KeyCode::Esc => self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal)),
+                    KeyCode::Enter => self.input_box.confirm_select_model(),
+                    _ => {}
+                },
             },
         }
     }

@@ -76,6 +76,13 @@ impl Config {
         Ok(path.join(CONFIG_FILE_NAME))
     }
 
+    pub fn get_model(&self) -> String {
+        match self {
+            Config::Claude(conf) => conf.model.clone(),
+            Config::OpenAI(conf) => conf.model.clone(),
+        }
+    }
+
     //TODO: wtf is this shit
     pub async fn prepare(mut self) -> anyhow::Result<Config> {
         if let Config::OpenAI(OpenAIConfig { auth, .. }) = &mut self {

@@ -83,7 +83,9 @@ impl StatefulWidget for InputBox {
                 }
             },
             InputMode::CommandMenu(menu) => match menu {
-                CommandMenu::ModelSelector => {}
+                CommandMenu::ModelSelector => {
+                    self.model_box.render(area, buf, &mut state.model_box_state)
+                }
             },
             InputMode::None => (),
         }
@@ -104,12 +106,16 @@ impl InputBoxState {
 
     pub fn new(config: Config) -> InputBoxState {
         let model_box_state = match config {
-            Config::Claude(_) => {
-                ModelBoxState::new(ModelSelections::Claude, EffortsSelection::Claude)
-            }
-            Config::OpenAI(_) => {
-                ModelBoxState::new(ModelSelections::OpenAI, EffortsSelection::OpenAI)
-            }
+            Config::Claude(_) => ModelBoxState::new(
+                ModelSelections::Claude,
+                EffortsSelection::Claude,
+                config.get_model(),
+            ),
+            Config::OpenAI(_) => ModelBoxState::new(
+                ModelSelections::OpenAI,
+                EffortsSelection::OpenAI,
+                config.get_model(),
+            ),
         };
         InputBoxState {
             character_index: 0,
@@ -174,10 +180,12 @@ impl InputBoxState {
         );
         let editing_input_lines = editing_display_lines.max(usize::from(editing_cursor.1) + 1);
         let command_input_lines = command_display_lines.max(usize::from(command_cursor.1) + 1);
-        if matches!(self.input_mode, InputMode::HomeMenu(HomeMenu::InputCommand)) {
-            command_input_lines as u16 + 9
-        } else {
-            editing_input_lines as u16 + 2
+        match self.input_mode {
+            InputMode::HomeMenu(HomeMenu::InputCommand) => command_input_lines as u16 + 9,
+            InputMode::CommandMenu(CommandMenu::ModelSelector) => self.model_box_state.height(),
+            InputMode::HomeMenu(HomeMenu::Normal | HomeMenu::Editing) | InputMode::None => {
+                editing_input_lines as u16 + 2
+            }
         }
     }
 
@@ -216,6 +224,18 @@ impl InputBoxState {
             self.input = cmd.clone();
             self.character_index = self.clamp_cursor(cmd.len());
         });
+    }
+
+    pub fn select_next_model(&mut self) {
+        self.model_box_state.on_arrow_down();
+    }
+
+    pub fn select_previous_model(&mut self) {
+        self.model_box_state.on_arrow_up();
+    }
+
+    pub fn confirm_select_model(&mut self) {
+        self.model_box_state.on_enter();
     }
 
     pub(crate) fn delete_char(&mut self) {
