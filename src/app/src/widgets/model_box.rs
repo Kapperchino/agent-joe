@@ -54,7 +54,7 @@ impl ModelBoxState {
 impl ModelBox {
     pub fn new() -> ModelBox {
         ModelBox {
-            select_list: Default::default(),
+            select_list: SelectList::new().title("Model"),
         }
     }
 }

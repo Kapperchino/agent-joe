@@ -9,7 +9,7 @@ use crate::tool_defs::{CargoCheck, CargoTest, ToolId};
 use crate::tool_defs::{CargoCheckResult, CargoTestResult, Tool};
 use crate::tool_defs::{Range, ReadFile, StringReplaceInput, ToolJson, ToolResult};
 use analysis::cur_context::CurContext;
-use anyhow::{Error, anyhow};
+use anyhow::{anyhow, Error};
 use futures::{StreamExt, TryStreamExt};
 use std::cmp::min;
 use std::collections::HashMap;

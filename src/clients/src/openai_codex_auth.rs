@@ -1,9 +1,9 @@
 use crate::openai_config::OpenAICodexConfig;
-use anyhow::{Context, anyhow};
-use base64::Engine;
+use anyhow::{anyhow, Context};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use getrandom::fill as getrandom_fill;
-use reqwest::{Client, Url, header};
+use reqwest::{header, Client, Url};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};

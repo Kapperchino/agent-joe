@@ -15,12 +15,12 @@ use crossterm::event::{EventStream, KeyEvent, KeyModifiers};
 use futures::StreamExt;
 use ractor::ActorRef;
 use ratatui::{
-    DefaultTerminal, Frame,
-    crossterm::event::{Event, KeyCode},
-    layout::{Constraint, Layout},
+    crossterm::event::{Event, KeyCode}, layout::{Constraint, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Block,
+    DefaultTerminal,
+    Frame,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -102,18 +102,36 @@ impl TUIApp {
             let command = Command::from_str(&input);
             match command {
                 Ok(command) => {
-                    if command == Command::Clear {
-                        self.clear_messages_and_terminal();
-                    }
-
-                    match self.actor_ref.send_message(Message::Command(command)) {
-                        Ok(_) => {}
-                        Err(_) => {
-                            eprintln!("it's joever")
+                    match command {
+                        Command::PrintContext => {
+                            match self.actor_ref.send_message(Message::Command(command)) {
+                                Ok(_) => {}
+                                Err(_) => {
+                                    eprintln!("it's joever")
+                                }
+                            };
                         }
-                    };
-
-                    self.message_box.append(Msg::Message(submitted_command));
+                        Command::Logout => {
+                            match self.actor_ref.send_message(Message::Command(command)) {
+                                Ok(_) => {}
+                                Err(_) => {
+                                    eprintln!("it's joever")
+                                }
+                            };
+                        }
+                        Command::Clear => {
+                            self.clear_messages_and_terminal();
+                            match self.actor_ref.send_message(Message::Command(command)) {
+                                Ok(_) => {}
+                                Err(_) => {
+                                    eprintln!("it's joever")
+                                }
+                            };
+                        }
+                        Command::ChangeModel(_, _) => self
+                            .update_input_mode(InputMode::CommandMenu(CommandMenu::ModelSelector)),
+                    }
+                    //self.message_box.append(Msg::Message(submitted_command));
                 }
                 Err(err) => {
                     self.message_box.append(Msg::Message(submitted_command));

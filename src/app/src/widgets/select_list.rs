@@ -1,6 +1,6 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::prelude::{Color, Line, Modifier, Style};
+use ratatui::prelude::{Color, Modifier, Style};
 use ratatui::widgets::{Block, List, ListItem, ListState, StatefulWidget};
 
 pub struct SelectList {
@@ -34,6 +34,11 @@ impl Default for SelectList {
 impl SelectList {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn title(mut self, title: impl Into<String>) -> Self {
+        self.title = title.into();
+        self
     }
 }
 
