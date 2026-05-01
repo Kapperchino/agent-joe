@@ -46,8 +46,7 @@ impl ModelBoxState {
     ) -> ModelBoxState {
         let models = models.get_models();
         let efforts = efforts.get_efforts();
-        let mut list_state = SelectListState::new(models.clone(), &model_name);
-        list_state.select_first();
+        let list_state = SelectListState::new(models.clone(), &model_name);
         ModelBoxState {
             model: model_name,
             models,
@@ -75,13 +74,15 @@ impl ModelBoxState {
         match &self.page_state {
             ModelBoxPageState::SelectModel => {
                 self.model = self.list_state.selected_item().unwrap_or("").to_string();
-                self.list_state.set_items(self.efforts.clone());
+                self.list_state
+                    .set_items_selected(self.efforts.clone(), &self.effort);
                 self.update_state(ModelBoxPageState::SelectEffort);
                 ModelBoxResult::SelectModel
             }
             ModelBoxPageState::SelectEffort => {
                 self.effort = self.list_state.selected_item().unwrap_or("").to_string();
-                self.list_state.set_items(self.models.clone());
+                self.list_state
+                    .set_items_selected(self.models.clone(), &self.model);
                 self.update_state(ModelBoxPageState::SelectModel);
                 ModelBoxResult::SelectEffort(self.model.clone(), self.effort.clone())
             }

@@ -1,7 +1,7 @@
 use crate::models::{EffortsSelection, ModelSelections};
 use crate::tui::{CommandMenu, HomeMenu, InputMode};
 use crate::widgets::command_box::CommandBox;
-use crate::widgets::model_box::{ModelBox, ModelBoxState, ModelBoxPageState, ModelBoxResult};
+use crate::widgets::model_box::{ModelBox, ModelBoxResult, ModelBoxState};
 use clients::config::Config;
 use commands::command::CommandContext;
 use ratatui::buffer::Buffer;

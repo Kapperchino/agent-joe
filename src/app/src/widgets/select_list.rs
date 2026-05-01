@@ -77,13 +77,18 @@ impl StatefulWidget for SelectList {
 
 impl SelectListState {
     pub fn new(items: Vec<String>, selected: &str) -> Self {
-        let selected = items.iter().position(|x| x == selected).unwrap_or(0);
+        let selected = (!items.is_empty()).then_some(
+            items
+                .iter()
+                .position(|item| item == selected)
+                .unwrap_or(0),
+        );
         let mut list_state = ListState::default();
-        list_state.select(Some(selected));
+        list_state.select(selected);
 
         Self {
             items,
-            selected: Some(selected),
+            selected,
             list_state,
         }
     }
@@ -116,6 +121,17 @@ impl SelectListState {
             .selected
             .filter(|selected| *selected < self.items.len())
             .or_else(|| (!self.items.is_empty()).then_some(0));
+        self.sync_list_state();
+    }
+
+    pub fn set_items_selected(&mut self, items: Vec<String>, selected: &str) {
+        self.items = items;
+        self.selected = (!self.items.is_empty()).then_some(
+            self.items
+                .iter()
+                .position(|item| item == selected)
+                .unwrap_or(0),
+        );
         self.sync_list_state();
     }
 
