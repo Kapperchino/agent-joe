@@ -1,7 +1,7 @@
 use crate::models::{EffortsSelection, ModelSelections};
 use crate::tui::{CommandMenu, HomeMenu, InputMode};
 use crate::widgets::command_box::CommandBox;
-use crate::widgets::model_box::{ModelBox, ModelBoxState};
+use crate::widgets::model_box::{ModelBox, ModelBoxState, ModelBoxPageState, ModelBoxResult};
 use clients::config::Config;
 use commands::command::CommandContext;
 use ratatui::buffer::Buffer;
@@ -110,11 +110,13 @@ impl InputBoxState {
                 ModelSelections::Claude,
                 EffortsSelection::Claude,
                 config.get_model(),
+                config.get_effort(),
             ),
             Config::OpenAI(_) => ModelBoxState::new(
                 ModelSelections::OpenAI,
                 EffortsSelection::OpenAI,
                 config.get_model(),
+                config.get_effort(),
             ),
         };
         InputBoxState {
@@ -234,8 +236,8 @@ impl InputBoxState {
         self.model_box_state.on_arrow_up();
     }
 
-    pub fn confirm_select_model(&mut self) {
-        self.model_box_state.on_enter();
+    pub fn confirm_select_model(&mut self) -> ModelBoxResult {
+        self.model_box_state.on_enter()
     }
 
     pub(crate) fn delete_char(&mut self) {

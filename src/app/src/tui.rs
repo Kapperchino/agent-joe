@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use crate::widgets::input_box::{InputBox, InputBoxState};
 use crate::widgets::message_box::{MessageBox, MessageBoxState, Msg};
+use crate::widgets::model_box::{ModelBoxPageState, ModelBoxResult};
 use clients::config::ConfigContext;
 use color_eyre::Result;
 use commands::command::Command;
@@ -352,7 +353,13 @@ impl TUIApp {
                     KeyCode::Down | KeyCode::Char('j') => self.input_box.select_next_model(),
                     KeyCode::Up | KeyCode::Char('k') => self.input_box.select_previous_model(),
                     KeyCode::Esc => self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal)),
-                    KeyCode::Enter => self.input_box.confirm_select_model(),
+                    KeyCode::Enter => {
+                        let page_res = self.input_box.confirm_select_model();
+                        match page_res {
+                            ModelBoxResult::SelectModel => {}
+                            ModelBoxResult::SelectEffort(_, _) => {}
+                        }
+                    }
                     _ => {}
                 },
             },

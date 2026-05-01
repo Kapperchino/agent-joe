@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
-use strum_macros::{EnumMessage, EnumString, VariantNames};
+use strum_macros::{AsRefStr, EnumMessage, EnumString, VariantNames};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ClaudeConfig {
     pub auth: ClaudeAuthConfig,
     pub model: String,
@@ -9,7 +9,16 @@ pub struct ClaudeConfig {
 }
 
 #[derive(
-    PartialEq, Eq, Debug, Clone, EnumString, EnumMessage, VariantNames, Serialize, Deserialize,
+    PartialEq,
+    Eq,
+    Debug,
+    Clone,
+    EnumString,
+    EnumMessage,
+    VariantNames,
+    Serialize,
+    Deserialize,
+    AsRefStr,
 )]
 #[serde(rename_all = "snake_case")]
 pub enum ClaudeEffort {
@@ -24,12 +33,12 @@ pub enum ClaudeEffort {
 }
 
 // we could add auth login later, could get ppl banned
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ClaudeAuthConfig {
     APIKey(ClaudeKeyConfig),
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 pub struct ClaudeKeyConfig {
     pub api_key: String,
 }

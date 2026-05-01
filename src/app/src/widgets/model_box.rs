@@ -9,17 +9,24 @@ pub struct ModelBox {
 }
 
 #[derive(Debug, Clone)]
-pub enum PageState {
+pub enum ModelBoxPageState {
     SelectModel,
     SelectEffort,
+}
+
+#[derive(Debug, Clone)]
+pub enum ModelBoxResult {
+    SelectModel,
+    SelectEffort(String, String),
 }
 
 pub struct ModelBoxState {
     pub models: Vec<String>,
     pub model: String,
+    pub effort: String,
     pub efforts: Vec<String>,
     pub list_state: SelectListState,
-    page_state: PageState,
+    page_state: ModelBoxPageState,
 }
 
 impl StatefulWidget for ModelBox {
@@ -35,6 +42,7 @@ impl ModelBoxState {
         models: ModelSelections,
         efforts: EffortsSelection,
         model_name: String,
+        effort: String,
     ) -> ModelBoxState {
         let models = models.get_models();
         let efforts = efforts.get_efforts();
@@ -43,9 +51,10 @@ impl ModelBoxState {
         ModelBoxState {
             model: model_name,
             models,
+            effort,
             efforts,
             list_state,
-            page_state: PageState::SelectModel,
+            page_state: ModelBoxPageState::SelectModel,
         }
     }
 
@@ -62,20 +71,24 @@ impl ModelBoxState {
         self.list_state.select_previous()
     }
 
-    pub fn on_enter(&mut self) -> PageState {
-        let cur_page = self.page_state.clone();
+    pub fn on_enter(&mut self) -> ModelBoxResult {
         match &self.page_state {
-            PageState::SelectModel => {
+            ModelBoxPageState::SelectModel => {
                 self.model = self.list_state.selected_item().unwrap_or("").to_string();
                 self.list_state.set_items(self.efforts.clone());
-                self.update_state(PageState::SelectEffort)
+                self.update_state(ModelBoxPageState::SelectEffort);
+                ModelBoxResult::SelectModel
             }
-            PageState::SelectEffort => {}
+            ModelBoxPageState::SelectEffort => {
+                self.effort = self.list_state.selected_item().unwrap_or("").to_string();
+                self.list_state.set_items(self.models.clone());
+                self.update_state(ModelBoxPageState::SelectModel);
+                ModelBoxResult::SelectEffort(self.model.clone(), self.effort.clone())
+            }
         }
-        cur_page
     }
 
-    fn update_state(&mut self, new_state: PageState) {
+    fn update_state(&mut self, new_state: ModelBoxPageState) {
         self.page_state = new_state
     }
 }

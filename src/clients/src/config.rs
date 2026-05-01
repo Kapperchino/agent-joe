@@ -11,7 +11,7 @@ use tokio::fs;
 use utils::utils::Utils;
 pub const CONFIG_FILE_NAME: &str = "config.toml";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Config {
     Claude(ClaudeConfig),
     OpenAI(OpenAIConfig),
@@ -80,6 +80,13 @@ impl Config {
         match self {
             Config::Claude(conf) => conf.model.clone(),
             Config::OpenAI(conf) => conf.model.clone(),
+        }
+    }
+
+    pub fn get_effort(&self) -> String {
+        match self {
+            Config::Claude(conf) => conf.effort.clone().as_ref().to_string(),
+            Config::OpenAI(conf) => conf.effort.clone().as_ref().to_string(),
         }
     }
 

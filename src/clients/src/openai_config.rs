@@ -1,12 +1,12 @@
 use crate::openai::{ReasoningConfig, ReasoningSummary};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use strum_macros::{EnumMessage, EnumString, VariantNames};
+use strum_macros::{AsRefStr, EnumMessage, EnumString, VariantNames};
 
 const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 const CHATGPT_BASE_URL: &str = "https://api.openai.com/v1";
 const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OpenAIConfig {
     pub auth: OpenAIAuthConfig,
     pub model: String,
@@ -36,7 +36,16 @@ impl OpenAIConfig {
 }
 
 #[derive(
-    PartialEq, Eq, Debug, Clone, EnumString, EnumMessage, VariantNames, Serialize, Deserialize,
+    PartialEq,
+    Eq,
+    Debug,
+    Clone,
+    EnumString,
+    EnumMessage,
+    VariantNames,
+    Serialize,
+    Deserialize,
+    AsRefStr,
 )]
 #[serde(rename_all = "snake_case")]
 pub enum OpenAIEffort {
@@ -50,7 +59,7 @@ pub enum OpenAIEffort {
     Xhigh,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum OpenAIAuthConfig {
     APIKey(OpenAIKeyConfig),
     Codex(OpenAICodexConfig),
@@ -58,25 +67,25 @@ pub enum OpenAIAuthConfig {
     OpenRouter(OpenRouterConfig),
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Eq, PartialEq, Deserialize, Serialize, Clone)]
 pub struct OpenAIKeyConfig {
     pub api_key: String,
     pub url: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Eq, PartialEq, Deserialize, Serialize, Clone)]
 pub struct LocalOpenAIConfig {
     pub api_key: Option<String>,
     pub url: String,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Eq, PartialEq, Deserialize, Serialize, Clone)]
 pub struct OpenRouterConfig {
     pub api_key: String,
     pub url: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Eq, PartialEq, Deserialize, Serialize, Clone)]
 pub struct OpenAICodexConfig {
     pub id_token: String,
     pub access_token: String,
