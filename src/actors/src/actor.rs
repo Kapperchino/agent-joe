@@ -146,11 +146,9 @@ impl Actor for Worker {
                 prompt.map(|p| {
                     state.history.push(llm::Message::new(p));
                 });
-                let mut req =
-                    ClientRequest::new(state.history.clone()).with_tools(state.tools.clone());
-                if state.debug_mode {
-                    req = req.with_thinking();
-                }
+                let req = ClientRequest::new(state.history.clone())
+                    .with_tools(state.tools.clone())
+                    .with_thinking();
 
                 let stream = state.llm.chat_stream(req).await?;
 

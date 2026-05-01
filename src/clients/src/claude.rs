@@ -482,7 +482,8 @@ impl LLmClientTrait for ClaudeClient {
         &self,
         req: llm::ClientRequest,
     ) -> Result<impl Stream<Item = anyhow::Result<llm::StreamEvent>> + Send + 'static, Error> {
-        let claude_req: ClientRequest = req.into();
+        let mut claude_req: ClientRequest = req.into();
+        claude_req.effort = Some(self.config.effort.clone());
         let stream = self.chat_stream_claude(claude_req).await?;
         Ok(stream.map(|res| match res {
             Ok(event) => Ok(event.into()),
