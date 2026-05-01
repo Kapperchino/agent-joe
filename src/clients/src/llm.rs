@@ -91,8 +91,8 @@ impl LLmClient {
             LLmClient::OpenApi {
                 config: context, ..
             } => context.update_config(config),
-        };
-        self.get_config().save().await
+        }
+        .await
     }
 }
 

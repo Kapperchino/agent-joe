@@ -1,11 +1,13 @@
 use crate::claude_config::ClaudeConfig;
 use crate::openai_codex_auth::refresh_codex_tokens;
 use crate::openai_config::OpenAIConfig;
+use crate::{ClaudeEffort, OpenAIEffort};
 use anyhow::Context;
 use figment::providers::{Format, Toml};
 use figment::Figment;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use tokio::fs;
 use utils::utils::Utils;
@@ -31,12 +33,18 @@ impl ConfigContext {
 
     pub fn get_config(&self) -> Config {
         let c = self.config.lock().unwrap();
-        c.clone()
+        let config: Config = c.clone();
+        drop(c);
+        config
     }
 
-    pub fn update_config(&mut self, new_conf: Config) {
-        let mut c = self.config.lock().unwrap();
-        *c = new_conf
+    pub async fn update_config(&mut self, new_conf: Config) -> anyhow::Result<()> {
+        let config = {
+            let mut c = self.config.lock().unwrap();
+            *c = new_conf.clone();
+            new_conf
+        };
+        config.save().await
     }
 }
 
@@ -88,6 +96,21 @@ impl Config {
             Config::Claude(conf) => conf.effort.clone().as_ref().to_string(),
             Config::OpenAI(conf) => conf.effort.clone().as_ref().to_string(),
         }
+    }
+
+    pub fn set_model(&mut self, model: String) {
+        match self {
+            Config::Claude(conf) => conf.model = model,
+            Config::OpenAI(conf) => conf.model = model,
+        }
+    }
+
+    pub fn set_effort(&mut self, effort: String) -> anyhow::Result<()> {
+        match self {
+            Config::Claude(conf) => conf.effort = ClaudeEffort::from_str(effort.as_str())?,
+            Config::OpenAI(conf) => conf.effort = OpenAIEffort::from_str(effort.as_str())?,
+        }
+        Ok(())
     }
 
     //TODO: wtf is this shit

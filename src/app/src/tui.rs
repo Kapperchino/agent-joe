@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use crate::widgets::input_box::{InputBox, InputBoxState};
 use crate::widgets::message_box::{MessageBox, MessageBoxState, Msg};
-use crate::widgets::model_box::{ModelBoxPageState, ModelBoxResult};
+use crate::widgets::model_box::ModelBoxResult;
 use clients::config::ConfigContext;
 use color_eyre::Result;
 use commands::command::Command;
@@ -25,6 +25,7 @@ use ratatui::{
     Frame,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
+use tracing::error;
 
 pub struct TUIApp {
     input_mode: InputMode,
@@ -357,7 +358,24 @@ impl TUIApp {
                         let page_res = self.input_box.confirm_select_model();
                         match page_res {
                             ModelBoxResult::SelectModel => {}
-                            ModelBoxResult::SelectEffort(_, _) => {}
+                            ModelBoxResult::SelectEffort(model, effort) => {
+                                let mut config = self.config_context.get_config();
+                                config.set_model(model);
+                                match config.set_effort(effort) {
+                                    Ok(_) => {}
+                                    Err(e) => {
+                                        error!("error during setting model {}", e)
+                                    }
+                                };
+                                let mut context_clone = self.config_context.clone();
+                                let _ = tokio::spawn(async move {
+                                    let _ = context_clone.update_config(config).await.inspect_err(
+                                        |x| error!("Error accured saving config {}", x),
+                                    );
+                                });
+
+                                self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal))
+                            }
                         }
                     }
                     _ => {}
