@@ -2,6 +2,7 @@ use crate::cache::TypedCache;
 use crate::proj_meta::ProjMeta;
 use crate::rust_proj::RustProject;
 use crate::symbol_info::SymbolInfo;
+use crate::utils::RPath;
 use futures::StreamExt;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -107,11 +108,10 @@ impl CurContext {
 
         cache.transaction(|db| {
             paths.iter().try_for_each(|path| {
-                let iter = db.prefix_iter(path.to_string_lossy().to_string())?;
+                let rpath = RPath::new(path.clone(), proj.root.clone())?;
+                let iter = db.prefix_iter(rpath.inner)?;
                 let invalidates: Vec<_> = iter.collect();
-                invalidates
-                    .iter()
-                    .try_for_each(|(_, v)| db.delete(v))
+                invalidates.iter().try_for_each(|(_, v)| db.delete(v))
             })?;
             meta.iter().try_for_each(|s| db.put(s, s))?;
             Ok(())
