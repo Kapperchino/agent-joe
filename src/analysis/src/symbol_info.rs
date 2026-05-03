@@ -1,6 +1,7 @@
 use crate::analysis::Range;
 use crate::cache::{TypedCache, TypedCacheDb};
 use crate::rust_proj::RustProject;
+use crate::utils::RPath;
 use anyhow::anyhow;
 use itertools::Itertools;
 use ra_ap_ide::{LineIndex, NavigationTarget, StructureNode, StructureNodeKind};
@@ -46,7 +47,7 @@ enum SymbolKindDef {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq, Hash)]
 pub struct SymbolInfo {
-    pub rpath: String,
+    pub rpath: RPath,
     pub full_range: Range,
     pub focus_range: Option<Range>,
     pub name: String,
@@ -63,15 +64,19 @@ impl SymbolInfo {
         vfs: &Vfs,
         line_ind: Arc<LineIndex>,
         root: &str,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         let start = line_ind.line_col(n.full_range.start()).line + 1;
         let end = line_ind.line_col(n.full_range.end()).line + 1;
-        let path = vfs.file_path(n.file_id).as_path().unwrap().as_str();
-        let rpath = path
-            .strip_prefix(&(root.to_owned() + "/"))
+        let path: PathBuf = vfs
+            .file_path(n.file_id)
+            .as_path()
             .unwrap()
-            .to_string();
-        SymbolInfo {
+            .to_path_buf()
+            .into();
+
+        let rpath = RPath::new(path, root.to_string())?;
+
+        Ok(SymbolInfo {
             rpath,
             full_range: Range { start, end },
             focus_range: n.focus_range.map(|t| Range {
@@ -83,7 +88,7 @@ impl SymbolInfo {
             container_name: n.container_name.map(|s| s.to_string()),
             docs: n.docs.map(|d| d.as_str().to_string()),
             description: n.description,
-        }
+        })
     }
 
     pub fn from_file_structs(
@@ -92,7 +97,7 @@ impl SymbolInfo {
         path_buf: PathBuf,
         line_ind: Arc<LineIndex>,
         root: &str,
-    ) -> Vec<Self> {
+    ) -> anyhow::Result<Vec<Self>> {
         file_structs
             .iter()
             .filter(|fs| match fs.kind {
@@ -102,12 +107,9 @@ impl SymbolInfo {
             .map(|fs| {
                 let start = line_ind.line_col(fs.node_range.start()).line + 1;
                 let end = line_ind.line_col(fs.node_range.end()).line + 1;
-                let rpath = path_buf
-                    .strip_prefix(root.to_owned() + "/")
-                    .unwrap()
-                    .to_string_lossy()
-                    .to_string();
-                SymbolInfo {
+
+                let rpath = RPath::new(path_buf.clone(), root.to_string())?;
+                Ok::<SymbolInfo, anyhow::Error>(SymbolInfo {
                     rpath,
                     full_range: Range { start, end },
                     focus_range: Some(Range {
@@ -133,9 +135,9 @@ impl SymbolInfo {
                         }),
                     docs: None,
                     description: fs.detail.clone(),
-                }
+                })
             })
-            .collect()
+            .collect::<Result<Vec<_>, anyhow::Error>>()
     }
 
     pub async fn get_symbols_from_cache(

@@ -70,7 +70,7 @@ impl Actor for CacheActor {
                                 x.path.clone(),
                                 line_ind,
                                 &state.proj.root,
-                            )
+                            )?
                         } else {
                             Vec::new()
                         };

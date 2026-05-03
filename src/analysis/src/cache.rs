@@ -109,6 +109,11 @@ impl<K: CacheKey, V: CacheVal> TypedCacheDb<'_, '_, K, V> {
         Ok(())
     }
 
+    pub fn delete_string_key(&mut self, key: &str) -> anyhow::Result<()> {
+        self.db.delete(self.txn, key)?;
+        Ok(())
+    }
+
     pub fn is_empty(&self) -> anyhow::Result<bool> {
         Ok(self.db.is_empty(self.txn)?)
     }

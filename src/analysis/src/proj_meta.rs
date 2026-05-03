@@ -12,6 +12,7 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 use utils::utils::Utils;
+use crate::utils::RPath;
 
 pub struct FileMeta {
     pub line_index: triomphe::Arc<LineIndex>,
@@ -30,7 +31,7 @@ pub struct ProjMeta {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct EnumMeta {
-    pub rpath: String,
+    pub rpath: RPath,
     pub full_range: Range,
     pub name: String,
     pub variants: Vec<EVariantMeta>,
@@ -39,41 +40,41 @@ pub struct EnumMeta {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct EVariantMeta {
-    pub rpath: String,
+    pub rpath: RPath,
     pub full_range: Range,
     pub name: String,
     pub functions: Vec<FunctionMeta>,
 }
 #[derive(Serialize, Deserialize, Clone)]
 pub struct StructMeta {
-    pub rpath: String,
+    pub rpath: RPath,
     pub full_range: Range,
     pub name: String,
     pub functions: Vec<FunctionMeta>,
 }
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct FunctionMeta {
-    pub rpath: String,
+    pub rpath: RPath,
     pub full_range: Range,
     pub name: String,
     pub discription: Option<String>,
 }
 #[derive(Serialize, Deserialize, Clone)]
 pub struct TypeAliasMeta {
-    pub rpath: String,
+    pub rpath: RPath,
     pub full_range: Range,
     pub name: String,
 }
 #[derive(Serialize, Deserialize, Clone)]
 pub struct TraitMeta {
-    pub rpath: String,
+    pub rpath: RPath,
     pub full_range: Range,
     pub name: String,
     pub functions: Vec<FunctionMeta>,
 }
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ImplMeta {
-    pub rpath: String,
+    pub rpath: RPath,
     pub full_range: Range,
     pub name: String,
     pub functions: Vec<FunctionMeta>,

@@ -77,7 +77,7 @@ impl RustProject {
                     let id = vfs
                         .lock()
                         .unwrap()
-                        .file_id(&VfsPath::new_real_path(info.rpath))
+                        .file_id(&VfsPath::new_real_path(info.rpath.inner))
                         .unwrap()
                         .0;
                     session.go_to_impl(id, TextSize::new(t.start)).ok()

@@ -93,20 +93,26 @@ impl CurContext {
     ) -> anyhow::Result<Vec<SymbolInfo>> {
         let session = proj.new_analysis().await;
 
-        let meta = paths.into_iter().try_fold(Vec::new(), |mut acc, p| {
+        let meta = paths.iter().try_fold(Vec::new(), |mut acc, p| {
             let nodes = if let Some(f_id) = proj.get_file_id(p.clone()) {
                 let file_structs = session.get_file_structure(f_id);
                 let line_ind = session.get_line_indecies(f_id)?;
                 SymbolInfo::from_file_structs(f_id, file_structs, p.clone(), line_ind, &proj.root)
             } else {
-                Vec::new()
-            };
+                Ok(Vec::new())
+            }?;
             acc.extend(nodes);
             Ok::<Vec<_>, anyhow::Error>(acc)
         })?;
 
         cache.transaction(|db| {
-            meta.iter().try_for_each(|s| db.delete(s))?;
+            paths.iter().try_for_each(|path| {
+                let iter = db.prefix_iter(path.to_string_lossy().to_string())?;
+                let invalidates: Vec<_> = iter.collect();
+                invalidates
+                    .iter()
+                    .try_for_each(|(_, v)| db.delete(v))
+            })?;
             meta.iter().try_for_each(|s| db.put(s, s))?;
             Ok(())
         })?;
