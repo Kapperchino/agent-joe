@@ -16,18 +16,7 @@ impl Widget for CommandBox {
     where
         Self: Sized,
     {
-        let mut lines = vec![
-            Line::from(Span::styled(
-                "Enter to run, Esc to cancel",
-                Style::default().fg(Color::DarkGray),
-            )),
-            Line::from(Span::styled(
-                "Available commands",
-                Style::default()
-                    .fg(Color::Gray)
-                    .add_modifier(Modifier::BOLD),
-            )),
-        ];
+        let mut lines = vec![];
         lines.extend(self.get_lines());
         let paragraph = Paragraph::new(lines).block(Block::bordered().title("Command"));
         paragraph.render(area, buf);
