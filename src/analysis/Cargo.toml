@@ -21,3 +21,4 @@ tokio = { version = "1.0", features = ["full"] }
 turbo-code-macros = { path = "../turbo-code-macros" }
 blake3 = "1.8.3"
 triomphe = "0.1.15"
+async-trait = "0.1.89"

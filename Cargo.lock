@@ -61,6 +61,7 @@ name = "analysis"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "blake3",
  "futures",
  "heed",

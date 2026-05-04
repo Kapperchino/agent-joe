@@ -8,7 +8,7 @@ use crate::tool_defs::ToolDefTrait;
 use crate::tool_defs::{CargoCheck, CargoTest, ToolId};
 use crate::tool_defs::{CargoCheckResult, CargoTestResult, Tool};
 use crate::tool_defs::{Range, ReadFile, StringReplaceInput, ToolJson, ToolResult};
-use analysis::cur_context::CurContext;
+use analysis::rust_context::{Context, RustContext};
 use anyhow::{anyhow, Error};
 use futures::{StreamExt, TryStreamExt};
 use std::cmp::min;
@@ -111,7 +111,7 @@ impl Tool {
         }
     }
 
-    pub async fn use_tool(&self, id: ToolId, ctx: &CurContext) -> anyhow::Result<ToolResult> {
+    pub async fn use_tool<C: Context>(&self, id: ToolId, ctx: &C) -> anyhow::Result<ToolResult> {
         match self {
             Tool::ReadFile(read_file) => {
                 let result = read_file.read_file(ctx).await?;
@@ -363,12 +363,11 @@ impl ToolResult {
 }
 
 impl ReadFile {
-    pub async fn read_file(&self, cur_context: &CurContext) -> anyhow::Result<String> {
+    pub async fn read_file<C: Context>(&self, cur_context: &C) -> anyhow::Result<String> {
         let file_path: PathBuf = self.input.file_path.clone().into();
-        let file_path = if file_path.starts_with(&cur_context.rust_proj.root) {
-            file_path
-                .strip_prefix(&cur_context.rust_proj.root)
-                .map(|t| t.to_path_buf())
+        let root = cur_context.get_root();
+        let file_path = if file_path.starts_with(&root) {
+            file_path.strip_prefix(root).map(|t| t.to_path_buf())
         } else {
             Ok(file_path)
         }?;
@@ -415,7 +414,7 @@ impl ReadFile {
     async fn read_range(
         file_path: &PathBuf,
         range: Range,
-        cur_context: &CurContext,
+        cur_context: &RustContext,
     ) -> anyhow::Result<String> {
         let meta = cur_context.get_proj_meta().await?;
         match meta.files.get(&file_path.to_string_lossy().to_string()) {
@@ -539,9 +538,8 @@ impl CargoCheck {
 }
 
 impl GrepTool {
-    async fn grep(&self, cur_context: &CurContext) -> anyhow::Result<String> {
-        let meta = cur_context.get_proj_meta().await?;
-        let mut file_paths: Vec<PathBuf> = meta.files.keys().map(PathBuf::from).collect();
+    async fn grep<C: Context>(&self, cur_context: &C) -> anyhow::Result<String> {
+        let mut file_paths: Vec<PathBuf> = cur_context.get_files().await?;
         file_paths.sort();
         let matches = ProjectGrep::grep(
             &self.input.regex,

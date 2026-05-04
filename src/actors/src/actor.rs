@@ -4,7 +4,7 @@ use crate::file_actor::FileActor;
 use crate::stream_processor::{PreprocessedStreamItem, ProcessedItem, StreamNextStep};
 use crate::worker::Worker;
 use crate::{cache_actor, file_actor};
-use analysis::cur_context::CurContext;
+use analysis::rust_context::{Context, RustContext};
 use clients::llm;
 use clients::llm::{ClientRequest, LLmClient, StreamEvent};
 use clients::tool_defs::{
@@ -71,11 +71,12 @@ pub enum Message {
     KYS,
 }
 
-pub struct Dependency {
-    pub claude: LLmClient,
+pub struct Dependency<C: Context> {
+    pub client: LLmClient,
     pub tools: Vec<Tool>,
     pub tui_tx: mpsc::UnboundedSender<ActorToTui>,
     pub debug_mode: bool,
+    pub context: C,
 }
 
 impl Message {}
@@ -92,17 +93,20 @@ pub enum StreamRes {
 }
 
 #[cfg_attr(feature = "async-trait", ractor::async_trait)]
-impl Actor for Worker {
+impl<C: Context> Actor for Worker<C>
+where
+    C: Context + Send + Sync + 'static,
+{
     type Msg = Message;
-    type State = ActorState;
-    type Arguments = Dependency;
+    type State = ActorState<C>;
+    type Arguments = Dependency<C>;
 
     async fn pre_start(
         &self,
         myself: ActorRef<Self::Msg>,
-        dependency: Dependency,
+        dependency: Dependency<C>,
     ) -> Result<Self::State, ActorProcessingErr> {
-        let cur_context = CurContext::new().await?;
+        let cur_context = RustContext::new().await?;
 
         let (cache_actor_ref, _) = Actor::spawn_linked(
             None,
@@ -128,7 +132,7 @@ impl Actor for Worker {
         )
         .await?;
 
-        let state = ActorState::new(dependency, cur_context, file_actor_ref)
+        let state = ActorState::new(dependency, file_actor_ref)
             .await
             .actor_err()?;
 

@@ -3,6 +3,7 @@ use crate::proj_meta::ProjMeta;
 use crate::rust_proj::RustProject;
 use crate::symbol_info::SymbolInfo;
 use crate::utils::RPath;
+use async_trait::async_trait;
 use futures::StreamExt;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -12,14 +13,44 @@ use std::fmt::Display;
 use std::path::PathBuf;
 use utils::utils::Utils;
 
-pub struct CurContext {
+#[async_trait]
+pub trait Context {
+    async fn get_ctx(&self) -> String;
+    fn get_root(&self) -> PathBuf;
+    async fn get_files(&self) -> anyhow::Result<Vec<PathBuf>>;
+}
+
+#[async_trait]
+impl Context for RustContext {
+    async fn get_ctx(&self) -> String {
+        let dir = self.cur_dir.to_str().unwrap_or("");
+        let analytical_ctx = self.get_analytical_context().await.unwrap_or_default();
+        format!("project_root: {dir}\n{analytical_ctx}")
+    }
+
+    fn get_root(&self) -> PathBuf {
+        self.cur_dir.clone()
+    }
+
+    async fn get_files(&self) -> anyhow::Result<Vec<PathBuf>> {
+        Ok(self
+            .get_proj_meta()
+            .await?
+            .files
+            .keys()
+            .map(PathBuf::from)
+            .collect())
+    }
+}
+
+pub struct RustContext {
     pub cur_dir: PathBuf,
     pub rust_proj: RustProject,
     pub symbol_cache: TypedCache<SymbolInfo, SymbolInfo>,
 }
 
-impl CurContext {
-    pub async fn new() -> Result<CurContext, anyhow::Error> {
+impl RustContext {
+    pub async fn new() -> Result<RustContext, anyhow::Error> {
         let current_dir = env::current_dir()?;
         let files = Utils::get_dir_files(&current_dir).await?;
         let proj = RustProject::new(&current_dir)?;
@@ -33,17 +64,11 @@ impl CurContext {
         let proj_meta = Self::get_proj_meta_init(&mut cache, &proj).await?;
         let _ = Self::validate_and_update_cache(hashes, &proj_meta, &mut cache, &proj).await?;
 
-        Ok(CurContext {
+        Ok(RustContext {
             cur_dir: current_dir,
             rust_proj: proj,
             symbol_cache: cache,
         })
-    }
-
-    pub async fn get_ctx(&self) -> String {
-        let dir = self.cur_dir.to_str().unwrap_or("");
-        let analytical_ctx = self.get_analytical_context().await.unwrap_or_default();
-        format!("project_root: {dir}\n{analytical_ctx}")
     }
 
     pub async fn get_analytical_context(&self) -> anyhow::Result<String> {
@@ -148,7 +173,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_analytical_context() {
-        let mut ctx = CurContext::new()
+        let mut ctx = RustContext::new()
             .await
             .expect("Failed to create CurContext");
         let context = ctx.get_ctx().await;

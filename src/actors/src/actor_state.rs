@@ -3,7 +3,7 @@ use crate::event_reporter::EventReporter;
 use crate::file_actor;
 use crate::stream_processor::{PreprocessedStreamItem, ProcessedItem, StreamAccu, StreamProcessor};
 use crate::tool_call::ToolCall;
-use analysis::cur_context::CurContext;
+use analysis::rust_context::{Context, RustContext};
 use anyhow::anyhow;
 use clients::llm::{ContentBlock, Delta, LLmClient, Message, Role};
 use clients::tool_defs::{
@@ -17,8 +17,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use tracing::{error, warn};
 
-pub struct ActorState {
-    pub cur_context: CurContext,
+pub struct ActorState<C: Context> {
+    pub cur_context: C,
     pub stream_actor: Option<ActorCell>,
     pub history: Vec<Message>,
     pub llm: LLmClient,
@@ -28,13 +28,12 @@ pub struct ActorState {
     pub reporter: EventReporter,
     pub debug_mode: bool,
 }
-impl ActorState {
+impl<C: Context> ActorState<C> {
     pub async fn new(
-        dependency: Dependency,
-        cur_context: CurContext,
+        dependency: Dependency<C>,
         file_actor: ActorRef<file_actor::Message>,
     ) -> anyhow::Result<Self> {
-        let cur_context_str = cur_context.get_ctx().await;
+        let cur_context_str = dependency.context.get_ctx().await;
 
         let stream_log_path = if dependency.debug_mode {
             let path = PathBuf::from(format!(
@@ -54,12 +53,12 @@ impl ActorState {
         };
 
         Ok(Self {
-            cur_context,
+            cur_context: dependency.context,
             history: vec![Message::new(
                 "This is the initial context in the environment: \n".to_owned()
                     + cur_context_str.as_str(),
             )],
-            llm: dependency.claude,
+            llm: dependency.client,
             tools: dependency.tools,
             stream_actor: None,
             reporter: EventReporter {

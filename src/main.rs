@@ -92,7 +92,7 @@ async fn main() {
         None,
         Worker {},
         Dependency {
-            claude: client,
+            client: client,
             tools: vec![
                 Tool::ReadFile(ReadFile::default()),
                 Tool::InsertAfterLine(InsertAfterLine::default()),
