@@ -2,6 +2,7 @@ use crate::file_actor::ValidPath;
 use analysis::cache::TypedCache;
 use analysis::rust_proj::RustProject;
 use analysis::symbol_info::SymbolInfo;
+use analysis::utils::RPath;
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 
 pub struct CacheActor {}
@@ -55,9 +56,8 @@ impl Actor for CacheActor {
                 let session = state.proj.new_analysis().await;
                 for x in buffer {
                     let _ = state.symbol_cache.transaction(|db| {
-                        let remove_keys: Vec<_> = db
-                            .prefix_iter(x.path.to_string_lossy().to_string())?
-                            .collect();
+                        let rpath = RPath::new(x.path.clone(), state.proj.root.clone())?;
+                        let remove_keys: Vec<_> = db.prefix_iter(rpath.inner)?.collect();
 
                         remove_keys.iter().try_for_each(|(_, v)| db.delete(v))?;
 
