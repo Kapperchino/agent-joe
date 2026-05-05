@@ -1,6 +1,6 @@
-use crate::cache_actor;
-use crate::cache_actor::Message::ApplyChanges;
-use crate::file_actor::Message::{ApplyVFS, FileCreated, FileModified, FileRemoved};
+use crate::background_actors::cache_actor;
+use crate::background_actors::cache_actor::Message::ApplyChanges;
+use crate::background_actors::file_actor::Message::{ApplyVFS, FileCreated, FileModified, FileRemoved};
 use anyhow::anyhow;
 use futures::future::OptionFuture;
 use itertools::cloned;
@@ -78,8 +78,8 @@ impl Actor for FileActor {
         // spawning file watcher actor, forwarding messages to our own actor
         let fw = FileWatcher;
         let config = FileWatcherConfig {
-            directories: vec![dependency.main_dir.join("src")],
-            files: vec![dependency.main_dir.join("Cargo.toml")],
+            directories: vec![dependency.main_dir.join("../../..")],
+            files: vec![dependency.main_dir.join("../../../../Cargo.toml")],
         };
 
         let (fwactor, fwhandle) = Actor::spawn(None, fw, config).await?;

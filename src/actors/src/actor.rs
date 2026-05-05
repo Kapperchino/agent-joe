@@ -1,10 +1,6 @@
 use crate::actor_state::ActorState;
-use crate::cache_actor::CacheActor;
-use crate::file_actor::FileActor;
 use crate::stream_processor::{PreprocessedStreamItem, ProcessedItem, StreamNextStep};
-use crate::worker::BaseWorker;
-use crate::{cache_actor, file_actor};
-use analysis::rust_context::{Context, RustContext};
+use analysis::rust_context::Context;
 use clients::llm;
 use clients::llm::{ClientRequest, LLmClient, StreamEvent};
 use clients::tool_defs::{
@@ -25,6 +21,8 @@ use std::collections::HashMap;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing::error;
+use crate::worker::Worker;
+use crate::workers::base_worker::BaseWorker;
 
 #[derive(Error, Debug)]
 pub enum WorkerError {
@@ -42,7 +40,7 @@ pub enum WorkerError {
 }
 
 // Define a trait to convert errors
-trait IntoActorErr<T> {
+pub trait IntoActorErr<T> {
     fn actor_err(self) -> Result<T, ActorProcessingErr>;
 }
 
@@ -106,37 +104,7 @@ where
         myself: ActorRef<Self::Msg>,
         dependency: Dependency<C>,
     ) -> Result<Self::State, ActorProcessingErr> {
-        let cur_context = RustContext::new().await?;
-
-        let (cache_actor_ref, _) = Actor::spawn_linked(
-            None,
-            CacheActor {},
-            cache_actor::Dependency {
-                symbol_cache: cur_context.symbol_cache.clone(),
-                proj: cur_context.rust_proj.clone(),
-            },
-            myself.get_cell(),
-        )
-        .await?;
-
-        let (file_actor_ref, _) = Actor::spawn_linked(
-            None,
-            FileActor {},
-            file_actor::Dependency {
-                main_dir: cur_context.cur_dir.clone(),
-                vfs: cur_context.rust_proj.vfs.clone(),
-                a_host: cur_context.rust_proj.analysis_host.clone(),
-                cache_actor: cache_actor_ref,
-            },
-            myself.get_cell(),
-        )
-        .await?;
-
-        let state = ActorState::new(dependency, file_actor_ref)
-            .await
-            .actor_err()?;
-
-        Ok(state)
+        self.startup_hook(myself, dependency).await
     }
 
     async fn handle(

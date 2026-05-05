@@ -1,6 +1,6 @@
 use crate::actor::{Dependency, StreamRes};
 use crate::event_reporter::EventReporter;
-use crate::file_actor;
+use crate::background_actors::file_actor;
 use crate::stream_processor::{PreprocessedStreamItem, ProcessedItem, StreamAccu, StreamProcessor};
 use crate::tool_call::ToolCall;
 use analysis::rust_context::{Context, RustContext};

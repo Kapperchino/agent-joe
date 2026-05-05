@@ -1,4 +1,4 @@
-use crate::file_actor::ValidPath;
+use crate::background_actors::file_actor::ValidPath;
 use analysis::cache::TypedCache;
 use analysis::rust_proj::RustProject;
 use analysis::symbol_info::SymbolInfo;

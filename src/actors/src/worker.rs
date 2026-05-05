@@ -1,36 +1,24 @@
-use analysis::rust_context::Context;
-use ractor::{Actor, ActorCell};
+use crate::actor::Message;
+use crate::actor::{Dependency, IntoActorErr};
+use crate::actor_state::ActorState;
+use crate::background_actors::cache_actor::CacheActor;
+use crate::background_actors::file_actor::FileActor;
+use crate::background_actors::file_actor;
+use analysis::rust_context::{Context, RustContext};
+use async_trait::async_trait;
+use ractor::{Actor, ActorCell, ActorProcessingErr, ActorRef};
 use std::marker::PhantomData;
+use crate::background_actors::cache_actor;
 
-pub trait Worker: Actor {
-    type Context: Context;
-    fn get_background_actors(&self) -> Vec<ActorParams<Self>>;
-}
-
-pub struct BaseWorker<C: Context> {
-    _ctx: PhantomData<C>,
-}
-
-impl<C: Context> Worker for BaseWorker<C>
-where
-    BaseWorker<C>: Actor,
+#[async_trait]
+pub trait Worker:
+    Actor<Msg = Message, State = ActorState<Self::C>, Arguments = Dependency<Self::C>>
 {
-    type Context = C;
+    type C: Context;
 
-    fn get_background_actors(&self) -> Vec<ActorParams<Self>> {
-        todo!()
-    }
-}
-
-impl<C: Context> BaseWorker<C> {
-    pub fn new() -> Self {
-        Self { _ctx: PhantomData }
-    }
-}
-
-pub struct ActorParams<A: Actor> {
-    name: Option<String>,
-    handler: A,
-    dep: A::Arguments,
-    supervisor: ActorCell,
+    async fn startup_hook(
+        &self,
+        myself: ActorRef<Self::Msg>,
+        dependency: Self::Arguments,
+    ) -> Result<Self::State, ActorProcessingErr>;
 }

@@ -1,7 +1,5 @@
 pub mod actor;
 pub mod actor_state;
-pub mod cache_actor;
-pub mod file_actor;
 pub mod supervisor;
 pub mod worker;
 
@@ -11,3 +9,5 @@ mod stream_processor;
 #[cfg(test)]
 mod stream_replay_test;
 mod tool_call;
+pub mod background_actors;
+pub mod workers;
