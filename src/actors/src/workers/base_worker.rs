@@ -4,8 +4,10 @@ use crate::background_actors::cache_actor::CacheActor;
 use crate::background_actors::file_actor::FileActor;
 use crate::background_actors::{cache_actor, file_actor};
 use crate::worker::Worker;
-use analysis::rust_context::{Context, RustContext};
+use analysis::contexts::context::Context;
+use analysis::contexts::rust_context::RustContext;
 use async_trait::async_trait;
+use clients::tool_defs::{CargoCheck, InsertAfterLine, ReadFile, StringReplace, Tool};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use std::marker::PhantomData;
 
@@ -48,11 +50,22 @@ impl Worker for BaseWorker<RustContext> {
         )
         .await?;
 
-        let state = ActorState::new(dependency, file_actor_ref)
+        let state = ActorState::new(dependency, Some(file_actor_ref))
             .await
             .actor_err()?;
 
         Ok(state)
+    }
+
+    fn tools() -> Vec<Tool> {
+        vec![
+            Tool::ReadFile(ReadFile::default()),
+            Tool::InsertAfterLine(InsertAfterLine::default()),
+            Tool::StringReplace(StringReplace::default()),
+            Tool::CargoCheck(CargoCheck::default()),
+            Tool::Grep(clients::tool_defs::GrepTool::default()),
+            Tool::CargoTest(clients::tool_defs::CargoTest::default()),
+        ]
     }
 }
 

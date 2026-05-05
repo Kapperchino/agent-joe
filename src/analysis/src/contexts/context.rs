@@ -1,0 +1,19 @@
+use crate::proj_meta::ProjMeta;
+use anyhow::anyhow;
+use async_trait::async_trait;
+use ra_ap_ide::LineIndex;
+use std::path::PathBuf;
+use triomphe::Arc;
+
+#[async_trait]
+pub trait Context: Send + Sync {
+    type LineIndexCreator: LineIndexCreator;
+    async fn get_ctx(&self) -> String;
+    fn get_root(&self) -> PathBuf;
+    async fn get_files(&self) -> anyhow::Result<Vec<PathBuf>>;
+    async fn line_index_creator(&self) -> anyhow::Result<Box<Self::LineIndexCreator>>;
+}
+
+pub trait LineIndexCreator: Send + Sync {
+    fn create_index(&self, file_path: &PathBuf) -> anyhow::Result<triomphe::Arc<LineIndex>>;
+}

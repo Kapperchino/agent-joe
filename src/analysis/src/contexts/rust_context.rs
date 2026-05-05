@@ -1,4 +1,5 @@
 use crate::cache::TypedCache;
+use crate::contexts::context::{Context, LineIndexCreator};
 use crate::proj_meta::ProjMeta;
 use crate::rust_proj::RustProject;
 use crate::symbol_info::SymbolInfo;
@@ -15,19 +16,6 @@ use std::fmt::Display;
 use std::path::PathBuf;
 use triomphe::Arc;
 use utils::utils::Utils;
-
-#[async_trait]
-pub trait Context: Send + Sync {
-    type LineIndexCreator: LineIndexCreator;
-    async fn get_ctx(&self) -> String;
-    fn get_root(&self) -> PathBuf;
-    async fn get_files(&self) -> anyhow::Result<Vec<PathBuf>>;
-    async fn line_index_creator(&self) -> anyhow::Result<Box<Self::LineIndexCreator>>;
-}
-
-pub trait LineIndexCreator: Send + Sync {
-    fn create_index(&self, file_path: &PathBuf) -> anyhow::Result<triomphe::Arc<LineIndex>>;
-}
 
 pub struct RustContextLineIndexCreator {
     proj_meta: Arc<ProjMeta>,

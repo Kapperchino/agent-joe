@@ -1,9 +1,9 @@
 use crate::actor::{Dependency, StreamRes};
-use crate::event_reporter::EventReporter;
 use crate::background_actors::file_actor;
+use crate::event_reporter::EventReporter;
 use crate::stream_processor::{PreprocessedStreamItem, ProcessedItem, StreamAccu, StreamProcessor};
 use crate::tool_call::ToolCall;
-use analysis::rust_context::{Context, RustContext};
+use analysis::contexts::context::Context;
 use anyhow::anyhow;
 use clients::llm::{ContentBlock, Delta, LLmClient, Message, Role};
 use clients::tool_defs::{
@@ -23,7 +23,7 @@ pub struct ActorState<C: Context> {
     pub history: Vec<Message>,
     pub llm: LLmClient,
     pub tools: Vec<Tool>,
-    pub file_actor: ActorRef<file_actor::Message>,
+    pub file_actor: Option<ActorRef<file_actor::Message>>,
     pub stream_processor: StreamProcessor,
     pub reporter: EventReporter,
     pub debug_mode: bool,
@@ -31,7 +31,7 @@ pub struct ActorState<C: Context> {
 impl<C: Context> ActorState<C> {
     pub async fn new(
         dependency: Dependency<C>,
-        file_actor: ActorRef<file_actor::Message>,
+        file_actor: Option<ActorRef<file_actor::Message>>,
     ) -> anyhow::Result<Self> {
         let cur_context_str = dependency.context.get_ctx().await;
 

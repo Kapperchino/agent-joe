@@ -1,7 +1,6 @@
 use crate::actor_state::ActorState;
 use crate::stream_processor::{PreprocessedStreamItem, ProcessedItem, StreamNextStep};
 use crate::worker::{Worker, WorkerAdapter};
-use analysis::rust_context::Context;
 use clients::llm;
 use clients::llm::{ClientRequest, LLmClient, StreamEvent};
 use clients::tool_defs::{Tool, ToolResult};
@@ -19,6 +18,7 @@ use std::collections::HashMap;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing::error;
+use analysis::contexts::context::Context;
 
 #[derive(Error, Debug)]
 pub enum WorkerError {

@@ -8,7 +8,7 @@ use crate::tool_defs::ToolDefTrait;
 use crate::tool_defs::{CargoCheck, CargoTest, ToolId};
 use crate::tool_defs::{CargoCheckResult, CargoTestResult, Tool};
 use crate::tool_defs::{Range, ReadFile, StringReplaceInput, ToolJson, ToolResult};
-use analysis::rust_context::{Context, LineIndexCreator};
+use analysis::contexts::context::{Context, LineIndexCreator};
 use anyhow::Error;
 use futures::{StreamExt, TryStreamExt};
 use std::cmp::min;

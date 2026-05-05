@@ -1,8 +1,8 @@
 use actors::actor::Dependency;
 use actors::supervisor::WorkerSupervisor;
-use actors::worker::WorkerAdapter;
+use actors::worker::{Worker, WorkerAdapter};
 use actors::workers::base_worker::BaseWorker;
-use analysis::rust_context::RustContext;
+use analysis::contexts::rust_context::RustContext;
 use app::init_app::InitApp;
 use app::tui::TUIApp;
 use clap::Parser;
@@ -97,14 +97,7 @@ async fn main() {
         WorkerAdapter::new(BaseWorker::new()),
         Dependency {
             client: client,
-            tools: vec![
-                Tool::ReadFile(ReadFile::default()),
-                Tool::InsertAfterLine(InsertAfterLine::default()),
-                Tool::StringReplace(StringReplace::default()),
-                Tool::CargoCheck(CargoCheck::default()),
-                Tool::Grep(clients::tool_defs::GrepTool::default()),
-                Tool::CargoTest(clients::tool_defs::CargoTest::default()),
-            ],
+            tools: BaseWorker::tools(),
             tui_tx: tx,
             debug_mode: cli.debug,
             context,
