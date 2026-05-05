@@ -78,8 +78,8 @@ impl Actor for FileActor {
         // spawning file watcher actor, forwarding messages to our own actor
         let fw = FileWatcher;
         let config = FileWatcherConfig {
-            directories: vec![dependency.main_dir.join("../../..")],
-            files: vec![dependency.main_dir.join("../../../../Cargo.toml")],
+            directories: vec![dependency.main_dir.clone()],
+            files: Vec::new(),
         };
 
         let (fwactor, fwhandle) = Actor::spawn(None, fw, config).await?;

@@ -1,3 +1,4 @@
+use crate::actor::{Dependency, IntoActorErr, Message};
 use crate::actor_state::ActorState;
 use crate::background_actors::cache_actor::CacheActor;
 use crate::background_actors::file_actor::FileActor;
@@ -7,24 +8,21 @@ use analysis::rust_context::{Context, RustContext};
 use async_trait::async_trait;
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use std::marker::PhantomData;
-use crate::actor::IntoActorErr;
 
 pub struct BaseWorker<C: Context> {
     _ctx: PhantomData<C>,
 }
 
 #[async_trait]
-impl<C> Worker for BaseWorker<C>
-where
-    C: Context + 'static,
-{
-    type C = C;
+impl Worker for BaseWorker<RustContext> {
+    type C = RustContext;
+
     async fn startup_hook(
         &self,
-        myself: ActorRef<Self::Msg>,
-        dependency: Self::Arguments,
-    ) -> Result<Self::State, ActorProcessingErr> {
-        let cur_context = RustContext::new().await?;
+        myself: ActorRef<Message>,
+        dependency: Dependency<Self::C>,
+    ) -> Result<ActorState<Self::C>, ActorProcessingErr> {
+        let cur_context = &dependency.context;
 
         let (cache_actor_ref, _) = Actor::spawn_linked(
             None,

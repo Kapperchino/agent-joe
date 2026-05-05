@@ -1,24 +1,31 @@
+use crate::actor::Dependency;
 use crate::actor::Message;
-use crate::actor::{Dependency, IntoActorErr};
 use crate::actor_state::ActorState;
-use crate::background_actors::cache_actor::CacheActor;
-use crate::background_actors::file_actor::FileActor;
-use crate::background_actors::file_actor;
-use analysis::rust_context::{Context, RustContext};
+use analysis::rust_context::Context;
 use async_trait::async_trait;
-use ractor::{Actor, ActorCell, ActorProcessingErr, ActorRef};
-use std::marker::PhantomData;
-use crate::background_actors::cache_actor;
+use ractor::{ActorProcessingErr, ActorRef};
+
+pub struct WorkerAdapter<W> {
+    pub(crate) worker: W,
+}
+
+impl<W> WorkerAdapter<W> {
+    pub fn new(worker: W) -> Self {
+        Self { worker }
+    }
+
+    pub fn into_inner(self) -> W {
+        self.worker
+    }
+}
 
 #[async_trait]
-pub trait Worker:
-    Actor<Msg = Message, State = ActorState<Self::C>, Arguments = Dependency<Self::C>>
-{
-    type C: Context;
+pub trait Worker: Send + Sync + 'static {
+    type C: Context + Send + Sync + 'static;
 
     async fn startup_hook(
         &self,
-        myself: ActorRef<Self::Msg>,
-        dependency: Self::Arguments,
-    ) -> Result<Self::State, ActorProcessingErr>;
+        myself: ActorRef<Message>,
+        dependency: Dependency<Self::C>,
+    ) -> Result<ActorState<Self::C>, ActorProcessingErr>;
 }

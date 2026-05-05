@@ -1,16 +1,14 @@
 use crate::actor_state::ActorState;
 use crate::stream_processor::{PreprocessedStreamItem, ProcessedItem, StreamNextStep};
+use crate::worker::{Worker, WorkerAdapter};
 use analysis::rust_context::Context;
 use clients::llm;
 use clients::llm::{ClientRequest, LLmClient, StreamEvent};
-use clients::tool_defs::{
-    CargoCheckInput, InsertAfterLineInput, ReadFileInput, StringReplaceInput, Tool, ToolResult,
-};
+use clients::tool_defs::{Tool, ToolResult};
 use commands::command::Command;
 use common_models::tui_models::ActorToTui;
 use common_models::tui_models::State;
 use futures::StreamExt;
-use ra_ap_vfs::FileExcluded::No;
 use ractor::Actor;
 use ractor::ActorProcessingErr;
 use ractor::ActorRef;
@@ -21,8 +19,6 @@ use std::collections::HashMap;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing::error;
-use crate::worker::Worker;
-use crate::workers::base_worker::BaseWorker;
 
 #[derive(Error, Debug)]
 pub enum WorkerError {
@@ -91,20 +87,17 @@ pub enum StreamRes {
 }
 
 #[cfg_attr(feature = "async-trait", ractor::async_trait)]
-impl<C: Context> Actor for BaseWorker<C>
-where
-    C: Context + Send + Sync + 'static,
-{
+impl<W: Worker> Actor for WorkerAdapter<W> {
     type Msg = Message;
-    type State = ActorState<C>;
-    type Arguments = Dependency<C>;
+    type State = ActorState<W::C>;
+    type Arguments = Dependency<W::C>;
 
     async fn pre_start(
         &self,
         myself: ActorRef<Self::Msg>,
-        dependency: Dependency<C>,
+        dependency: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
-        self.startup_hook(myself, dependency).await
+        self.worker.startup_hook(myself, dependency).await
     }
 
     async fn handle(
