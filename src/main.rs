@@ -1,6 +1,7 @@
 use actors::actor::Dependency;
 use actors::supervisor::WorkerSupervisor;
 use actors::worker::Worker;
+use analysis::rust_context::RustContext;
 use app::init_app::InitApp;
 use app::tui::TUIApp;
 use clap::Parser;
@@ -88,9 +89,11 @@ async fn main() {
         .await
         .expect("Failed to start supervisor");
 
+    let context = RustContext::new().await.unwrap();
+
     let (joe, actor_handle) = Actor::spawn_linked(
         None,
-        Worker {},
+        Worker::new(),
         Dependency {
             client: client,
             tools: vec![
@@ -103,6 +106,7 @@ async fn main() {
             ],
             tui_tx: tx,
             debug_mode: cli.debug,
+            context,
         },
         supervisor.get_cell(),
     )

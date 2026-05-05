@@ -5072,6 +5072,7 @@ name = "turbo-code"
 version = "0.1.0"
 dependencies = [
  "actors",
+ "analysis",
  "app",
  "clap",
  "clients",

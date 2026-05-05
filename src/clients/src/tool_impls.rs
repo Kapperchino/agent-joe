@@ -8,8 +8,8 @@ use crate::tool_defs::ToolDefTrait;
 use crate::tool_defs::{CargoCheck, CargoTest, ToolId};
 use crate::tool_defs::{CargoCheckResult, CargoTestResult, Tool};
 use crate::tool_defs::{Range, ReadFile, StringReplaceInput, ToolJson, ToolResult};
-use analysis::rust_context::{Context, RustContext};
-use anyhow::{anyhow, Error};
+use analysis::rust_context::{Context, LineIndexCreator};
+use anyhow::Error;
 use futures::{StreamExt, TryStreamExt};
 use std::cmp::min;
 use std::collections::HashMap;
@@ -411,49 +411,44 @@ impl ReadFile {
 
         Ok(res)
     }
-    async fn read_range(
+    async fn read_range<C: Context>(
         file_path: &PathBuf,
         range: Range,
-        cur_context: &RustContext,
+        cur_context: &C,
     ) -> anyhow::Result<String> {
-        let meta = cur_context.get_proj_meta().await?;
-        match meta.files.get(&file_path.to_string_lossy().to_string()) {
-            Some(meta) => {
-                let start: u32 = meta
-                    .line_index
-                    .line(range.start.saturating_sub(1))
-                    .unwrap()
-                    .start()
-                    .into();
-                let end: u32 = meta
-                    .line_index
-                    .line(range.end.saturating_sub(1))
-                    .map(|l| l.end().into())
-                    .unwrap_or(u32::MAX);
-                let start_line = range.start.saturating_sub(1);
-                let mut file = File::open(file_path).await?;
-                file.seek(SeekFrom::Start(start as u64)).await?;
-                let file_size = file.metadata().await?.len();
-                let remaining: usize = (file_size - file.stream_position().await?) as usize;
-                let buf_size = min(remaining, (end - start) as usize);
-                let mut buf = vec![0; buf_size];
-                file.read_exact(&mut buf).await?;
-                let res = String::from_utf8(buf)?;
-                let res = res
-                    .lines()
-                    .enumerate()
-                    .fold(String::new(), |acc, (i, line)| {
-                        let i = start_line + i as u32 + 1;
-                        if acc.is_empty() {
-                            format!("{i}: {line}")
-                        } else {
-                            format!("{acc}\n{i}: {line}")
-                        }
-                    });
-                Ok(res)
-            }
-            None => Err(anyhow!("File not found!")),
-        }
+        let line_index = cur_context.line_index_creator().await?;
+        let line_index = line_index.create_index(file_path)?;
+
+        let start: u32 = line_index
+            .line(range.start.saturating_sub(1))
+            .unwrap()
+            .start()
+            .into();
+        let end: u32 = line_index
+            .line(range.end.saturating_sub(1))
+            .map(|l| l.end().into())
+            .unwrap_or(u32::MAX);
+        let start_line = range.start.saturating_sub(1);
+        let mut file = File::open(file_path).await?;
+        file.seek(SeekFrom::Start(start as u64)).await?;
+        let file_size = file.metadata().await?.len();
+        let remaining: usize = (file_size - file.stream_position().await?) as usize;
+        let buf_size = min(remaining, (end - start) as usize);
+        let mut buf = vec![0; buf_size];
+        file.read_exact(&mut buf).await?;
+        let res = String::from_utf8(buf)?;
+        let res = res
+            .lines()
+            .enumerate()
+            .fold(String::new(), |acc, (i, line)| {
+                let i = start_line + i as u32 + 1;
+                if acc.is_empty() {
+                    format!("{i}: {line}")
+                } else {
+                    format!("{acc}\n{i}: {line}")
+                }
+            });
+        Ok(res)
     }
 }
 

@@ -3,25 +3,53 @@ use crate::proj_meta::ProjMeta;
 use crate::rust_proj::RustProject;
 use crate::symbol_info::SymbolInfo;
 use crate::utils::RPath;
+use anyhow::anyhow;
 use async_trait::async_trait;
 use futures::StreamExt;
 use itertools::Itertools;
+use ra_ap_ide::LineIndex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fmt::Display;
 use std::path::PathBuf;
+use triomphe::Arc;
 use utils::utils::Utils;
 
 #[async_trait]
-pub trait Context {
+pub trait Context: Send + Sync {
+    type LineIndexCreator: LineIndexCreator;
     async fn get_ctx(&self) -> String;
     fn get_root(&self) -> PathBuf;
     async fn get_files(&self) -> anyhow::Result<Vec<PathBuf>>;
+    async fn line_index_creator(&self) -> anyhow::Result<Box<Self::LineIndexCreator>>;
+}
+
+pub trait LineIndexCreator: Send + Sync {
+    fn create_index(&self, file_path: &PathBuf) -> anyhow::Result<triomphe::Arc<LineIndex>>;
+}
+
+pub struct RustContextLineIndexCreator {
+    proj_meta: Arc<ProjMeta>,
+}
+
+impl LineIndexCreator for RustContextLineIndexCreator {
+    fn create_index(&self, file_path: &PathBuf) -> anyhow::Result<triomphe::Arc<LineIndex>> {
+        match self
+            .proj_meta
+            .files
+            .get(&file_path.to_string_lossy().to_string())
+        {
+            Some(meta) => Ok(meta.line_index.clone()),
+            None => Err(anyhow!("File not found!")),
+        }
+    }
 }
 
 #[async_trait]
 impl Context for RustContext {
+    type LineIndexCreator = RustContextLineIndexCreator;
+
     async fn get_ctx(&self) -> String {
         let dir = self.cur_dir.to_str().unwrap_or("");
         let analytical_ctx = self.get_analytical_context().await.unwrap_or_default();
@@ -40,6 +68,13 @@ impl Context for RustContext {
             .keys()
             .map(PathBuf::from)
             .collect())
+    }
+
+    async fn line_index_creator(&self) -> anyhow::Result<Box<Self::LineIndexCreator>> {
+        let proj = self.get_proj_meta().await?;
+        Ok(Box::new(RustContextLineIndexCreator {
+            proj_meta: Arc::new(proj),
+        }))
     }
 }
 

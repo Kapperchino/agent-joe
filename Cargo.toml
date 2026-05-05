@@ -12,6 +12,7 @@ opt-level = 3
 [dependencies]
 actors = { path = "src/actors" }
 app = { path = "src/app" }
+analysis = {path = "src/analysis"}
 clients = { path = "src/clients" }
 tokio = { version = "1.0", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["fs", "io-util"] }
