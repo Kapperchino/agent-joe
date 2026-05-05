@@ -2,7 +2,7 @@ use crate::actor_state::ActorState;
 use crate::cache_actor::CacheActor;
 use crate::file_actor::FileActor;
 use crate::stream_processor::{PreprocessedStreamItem, ProcessedItem, StreamNextStep};
-use crate::worker::Worker;
+use crate::worker::BaseWorker;
 use crate::{cache_actor, file_actor};
 use analysis::rust_context::{Context, RustContext};
 use clients::llm;
@@ -93,7 +93,7 @@ pub enum StreamRes {
 }
 
 #[cfg_attr(feature = "async-trait", ractor::async_trait)]
-impl<C: Context> Actor for Worker<C>
+impl<C: Context> Actor for BaseWorker<C>
 where
     C: Context + Send + Sync + 'static,
 {

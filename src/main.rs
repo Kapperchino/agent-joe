@@ -1,6 +1,6 @@
 use actors::actor::Dependency;
 use actors::supervisor::WorkerSupervisor;
-use actors::worker::Worker;
+use actors::worker::BaseWorker;
 use analysis::rust_context::RustContext;
 use app::init_app::InitApp;
 use app::tui::TUIApp;
@@ -93,7 +93,7 @@ async fn main() {
 
     let (joe, actor_handle) = Actor::spawn_linked(
         None,
-        Worker::new(),
+        BaseWorker::new(),
         Dependency {
             client: client,
             tools: vec![
