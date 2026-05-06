@@ -1,6 +1,8 @@
 use crate::{claude, openai};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use strum_macros::{AsRefStr, Display};
+use strum_macros::EnumString;
 use turbo_code_macros::ToolDef;
 use turbo_code_macros::ToolInput;
 
@@ -30,14 +32,22 @@ pub enum ToolJson {
     Claude(claude::Tool),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, EnumString, AsRefStr)]
 pub enum Tool {
+    #[strum(serialize = "read_file")]
     ReadFile(ReadFile),
+    #[strum(serialize = "insert_after_line")]
     InsertAfterLine(InsertAfterLine),
+    #[strum(serialize = "str_replace")]
     StringReplace(StringReplace),
+    #[strum(serialize = "cargo_check")]
     CargoCheck(CargoCheck),
+    #[strum(serialize = "grep")]
     Grep(GrepTool),
+    #[strum(serialize = "cargo_test")]
     CargoTest(CargoTest),
+    #[strum(serialize = "gather_context")]
+    GatherContext(GatherContext),
 }
 
 #[derive(Debug, Clone)]
@@ -184,6 +194,23 @@ pub struct GrepInput {
     pub add_end: usize,
 }
 
+#[derive(Default, Serialize, Deserialize, Debug, Clone, ToolDef)]
+#[tool(
+    name = "gather_context",
+    description = "Create an agent to gather context"
+)]
+pub struct GatherContext {
+    #[tool(input)]
+    pub input: GatherContextInput,
+    pub id: String,
+}
+
+#[derive(Default, Serialize, Deserialize, Debug, Clone, ToolInput)]
+pub struct GatherContextInput {
+    #[tool(description = "Context to give to the agent", required)]
+    pub context: String,
+}
+
 #[derive(Debug)]
 pub enum CargoCheckResult {
     Success(Vec<String>),
@@ -233,6 +260,11 @@ pub enum ToolResult {
         id: ToolId,
     },
     GrepResult {
+        res: String,
+        tool: Tool,
+        id: ToolId,
+    },
+    GatherContextResult {
         res: String,
         tool: Tool,
         id: ToolId,

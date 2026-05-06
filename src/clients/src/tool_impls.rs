@@ -1,15 +1,12 @@
-use crate::claude;
-use crate::claude::ToolSchemaDTO;
-use crate::llm::ContentBlock;
-use crate::tool_defs::GrepTool;
+use crate::llm::{ContentBlock, LLmClientTrait};
 use crate::tool_defs::InsertAfterLine;
 use crate::tool_defs::StringReplace;
 use crate::tool_defs::ToolDefTrait;
 use crate::tool_defs::{CargoCheck, CargoTest, ToolId};
 use crate::tool_defs::{CargoCheckResult, CargoTestResult, Tool};
-use crate::tool_defs::{Range, ReadFile, StringReplaceInput, ToolJson, ToolResult};
+use crate::tool_defs::{GrepTool, ToolInputSchema};
+use crate::tool_defs::{Range, ReadFile, StringReplaceInput, ToolResult};
 use analysis::contexts::context::{Context, LineIndexCreator};
-use anyhow::Error;
 use futures::{StreamExt, TryStreamExt};
 use std::cmp::min;
 use std::collections::HashMap;
@@ -27,77 +24,7 @@ use utils::text_search::TextSearch;
 
 impl Tool {
     pub fn name(&self) -> String {
-        match self {
-            Tool::ReadFile(_) => ReadFile::tool_name().to_string(),
-            Tool::InsertAfterLine(_) => InsertAfterLine::tool_name().to_string(),
-            Tool::StringReplace(_) => StringReplace::tool_name().to_string(),
-            Tool::CargoCheck(_) => CargoCheck::tool_name().to_string(),
-            Tool::Grep(_) => GrepTool::tool_name().to_string(),
-            Tool::CargoTest(_) => CargoTest::tool_name().to_string(),
-        }
-    }
-
-    pub fn id(&self) -> String {
-        match self {
-            Tool::ReadFile(file) => file.id.clone(),
-            Tool::InsertAfterLine(insert) => insert.id.clone(),
-            Tool::StringReplace(replace) => replace.id.clone(),
-            Tool::CargoCheck(check) => check.id.clone(),
-            Tool::Grep(grep) => grep.id.clone(),
-            Tool::CargoTest(test) => test.id.clone(),
-        }
-    }
-
-    pub fn to_json(&self) -> ToolJson {
-        ToolJson::Claude(claude::Tool {
-            name: self.name(),
-            description: match self {
-                Tool::ReadFile(_) => ReadFile::tool_description().to_string(),
-                Tool::InsertAfterLine(_) => InsertAfterLine::tool_description().to_string(),
-                Tool::StringReplace(_) => StringReplace::tool_description().to_string(),
-                Tool::CargoCheck(_) => CargoCheck::tool_description().to_string(),
-                Tool::Grep(_) => GrepTool::tool_description().to_string(),
-                Tool::CargoTest(_) => CargoTest::tool_description().to_string(),
-            },
-            input_schema: ToolSchemaDTO {
-                name: self.name(),
-                tool_type: "object".to_string(),
-                properties: match self {
-                    Tool::ReadFile(_) => ReadFile::field_properties()
-                        .into_iter()
-                        .map(|(k, v)| (k, v.into()))
-                        .collect(),
-                    Tool::InsertAfterLine(_) => InsertAfterLine::field_properties()
-                        .into_iter()
-                        .map(|(k, v)| (k, v.into()))
-                        .collect(),
-                    Tool::StringReplace(_) => StringReplace::field_properties()
-                        .into_iter()
-                        .map(|(k, v)| (k, v.into()))
-                        .collect(),
-                    Tool::CargoCheck(_) => CargoCheck::field_properties()
-                        .into_iter()
-                        .map(|(k, v)| (k, v.into()))
-                        .collect(),
-                    Tool::Grep(_) => GrepTool::field_properties()
-                        .into_iter()
-                        .map(|(k, v)| (k, v.into()))
-                        .collect(),
-                    Tool::CargoTest(_) => CargoTest::field_properties()
-                        .into_iter()
-                        .map(|(k, v)| (k, v.into()))
-                        .collect(),
-                },
-                required: match self {
-                    Tool::ReadFile(_) => ReadFile::required_fields(),
-                    Tool::InsertAfterLine(_) => InsertAfterLine::required_fields(),
-                    Tool::StringReplace(_) => StringReplace::required_fields(),
-                    Tool::CargoCheck(_) => CargoCheck::required_fields(),
-                    Tool::Grep(_) => GrepTool::required_fields(),
-                    Tool::CargoTest(_) => CargoTest::required_fields(),
-                },
-            },
-        })
+        self.as_ref().to_string()
     }
 
     pub fn to_req(&self) -> anyhow::Result<HashMap<String, String>> {
@@ -108,6 +35,7 @@ impl Tool {
             Tool::CargoCheck(check) => check.req(),
             Tool::Grep(grep) => grep.req(),
             Tool::CargoTest(test) => test.req(),
+            Tool::GatherContext(input) => input.req(),
         }
     }
 
@@ -171,18 +99,7 @@ impl Tool {
                     id,
                 })
             }
-        }
-    }
-
-    pub fn from_str(name: &str) -> anyhow::Result<Self> {
-        match name {
-            "read_file" => Ok(Tool::ReadFile(ReadFile::default())),
-            "insert_after_line" => Ok(Tool::InsertAfterLine(InsertAfterLine::default())),
-            "str_replace" => Ok(Tool::StringReplace(StringReplace::default())),
-            "cargo_check" => Ok(Tool::CargoCheck(CargoCheck::default())),
-            "grep" => Ok(Tool::Grep(GrepTool::default())),
-            "cargo_test" => Ok(Tool::CargoTest(CargoTest::default())),
-            _ => Err(Error::msg("Is not a tool")),
+            Tool::GatherContext(gather) => todo!(),
         }
     }
 }
@@ -234,6 +151,20 @@ impl Display for Tool {
                     write!(f, "- run `cargo test`")
                 }
             }
+            Tool::GatherContext(gather) => {
+                let context = gather.input.context.trim();
+                if context.is_empty() {
+                    write!(f, "- gather context")
+                } else {
+                    let summary = context.lines().next().unwrap_or(context).trim();
+                    let summary: String = summary.chars().take(80).collect();
+                    if context.chars().count() > 80 {
+                        write!(f, "- gather context: `{summary}…`")
+                    } else {
+                        write!(f, "- gather context: `{summary}`")
+                    }
+                }
+            }
         }
     }
 }
@@ -248,6 +179,7 @@ impl ToolResult {
             ToolResult::CargoTestResult { tool, .. } => tool.clone(),
             ToolResult::GrepResult { tool, .. } => tool.clone(),
             ToolResult::Error { tool, .. } => tool.clone(),
+            ToolResult::GatherContextResult { tool, .. } => tool.clone(),
         }
     }
 
@@ -260,6 +192,7 @@ impl ToolResult {
             ToolResult::CargoTestResult { id, .. } => id.clone(),
             ToolResult::GrepResult { id, .. } => id.clone(),
             ToolResult::Error { id, .. } => id.clone(),
+            ToolResult::GatherContextResult { id, .. } => id.clone(),
         }
     }
 
@@ -357,6 +290,11 @@ impl ToolResult {
                 tool_id: id.clone(),
                 content: message.clone(),
                 is_error: Some(true),
+            },
+            ToolResult::GatherContextResult { res, tool, id } => ContentBlock::ToolResult {
+                tool_id: id.clone(),
+                content: res.clone(),
+                is_error: None,
             },
         }
     }

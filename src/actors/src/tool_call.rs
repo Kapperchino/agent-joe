@@ -1,8 +1,9 @@
 use clients::tool_defs::{
-    CargoCheckInput, CargoTest, CargoTestInput, GrepInput, GrepTool, InsertAfterLine,
-    InsertAfterLineInput, LenientDeserialize, ReadFile, ReadFileInput, StringReplace,
-    StringReplaceInput, Tool, ToolId,
+    CargoCheckInput, CargoTest, CargoTestInput, GatherContext, GatherContextInput, GrepInput,
+    GrepTool, InsertAfterLine, InsertAfterLineInput, LenientDeserialize, ReadFile, ReadFileInput,
+    StringReplace, StringReplaceInput, Tool, ToolId,
 };
+use std::str::FromStr;
 
 #[derive(Debug, Clone)]
 pub struct ToolCall {
@@ -67,6 +68,13 @@ impl ToolCall {
                 Ok(Tool::CargoTest(CargoTest {
                     id: self.id.id.clone(),
                     input,
+                }))
+            }
+            Tool::GatherContext(_) => {
+                let input = GatherContextInput::deserialize_lenient(&self.json)?;
+                Ok(Tool::GatherContext(GatherContext {
+                    input,
+                    id: self.id.id.clone(),
                 }))
             }
         }

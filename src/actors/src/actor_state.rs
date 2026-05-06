@@ -159,6 +159,11 @@ impl<C: Context> ActorState<C> {
                     .use_tool(id.clone(), &self.cur_context)
                     .await
             }
+            Tool::GatherContext(gather) => {
+                Tool::GatherContext(gather)
+                    .use_tool(id.clone(), &self.cur_context)
+                    .await
+            }
         };
         match res {
             Ok(res) => Ok(res),

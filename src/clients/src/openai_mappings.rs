@@ -75,6 +75,7 @@ impl From<tool_defs::Tool> for openai::Tool {
             tool_defs::Tool::CargoCheck(_) => extract!(CargoCheck),
             tool_defs::Tool::Grep(_) => extract!(GrepTool),
             tool_defs::Tool::CargoTest(_) => extract!(CargoTest),
+            tool_defs::Tool::GatherContext(_) => extract!(GatherContext),
         };
 
         openai::Tool {
