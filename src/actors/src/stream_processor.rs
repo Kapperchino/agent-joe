@@ -1,16 +1,10 @@
 use crate::batch::{Batch, ContentBlock};
 use crate::event_reporter::EventReporter;
 use crate::tool_call::ToolCall;
-use anyhow::{Error, anyhow};
+use anyhow::anyhow;
 use clients::llm::{ContentBlockInfo, Delta, StopReason, StreamEvent};
-use clients::tool_defs::{
-    CargoCheckInput, CargoTest, CargoTestInput, GrepInput, GrepTool, InsertAfterLine,
-    InsertAfterLineInput, LenientDeserialize, ReadFile, ReadFileInput, StringReplace,
-    StringReplaceInput, Tool, ToolId, ToolUse,
-};
+use tools::tool_defs::ToolId;
 use common_models::tui_models::{ActorToTui, State, TokenCount};
-use std::collections::HashMap;
-use std::iter::Map;
 use std::path::PathBuf;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;

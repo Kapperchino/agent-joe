@@ -7,8 +7,7 @@ pub mod openai;
 pub mod openai_codex_auth;
 mod openai_config;
 mod openai_mappings;
-pub mod tool_defs;
-pub mod tool_impls;
+pub mod tools;
 
 pub use claude_config::{ClaudeAuthConfig, ClaudeConfig, ClaudeEffort, ClaudeKeyConfig};
 pub use openai_config::{

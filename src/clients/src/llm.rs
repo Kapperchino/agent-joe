@@ -1,7 +1,7 @@
 use crate::claude::{ClaudeClient, Usage};
 use crate::config::{Config, ConfigContext};
 use crate::openai::OpenAIClient;
-use crate::tool_defs::{Tool, ToolId};
+use tools::tool_defs::{ToolDefinition, ToolId};
 use crate::{ClaudeEffort, OpenAIEffort};
 use futures::Stream;
 use futures::future::Either;
@@ -175,7 +175,7 @@ pub struct ClientRequest {
     pub thinking: bool,
     pub system: Option<String>,
     pub model: Option<String>,
-    pub tools: Vec<Tool>,
+    pub tools: Vec<ToolDefinition>,
 }
 
 impl ClientRequest {
@@ -209,7 +209,7 @@ impl ClientRequest {
         }
     }
 
-    pub fn with_tools(self, tools: Vec<Tool>) -> ClientRequest {
+    pub fn with_tools(self, tools: Vec<ToolDefinition>) -> ClientRequest {
         ClientRequest {
             messages: self.messages,
             thinking: self.thinking,

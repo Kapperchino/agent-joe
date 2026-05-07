@@ -4,9 +4,11 @@ use crate::worker::Worker;
 use analysis::contexts::context::Context;
 use analysis::contexts::rust_context::RustContext;
 use async_trait::async_trait;
-use clients::tool_defs::{ReadFile, Tool};
 use ractor::{ActorProcessingErr, ActorRef};
 use std::marker::PhantomData;
+use tools::grep::GrepTool;
+use tools::read_file::ReadFile;
+use tools::tool_defs::{erased_tool, ErasedToolRef};
 
 pub struct ReadWorker<C: Context> {
     _ctx: PhantomData<C>,
@@ -25,10 +27,10 @@ impl Worker for ReadWorker<RustContext> {
         Ok(state)
     }
 
-    fn tools() -> Vec<Tool> {
+    fn tools() -> Vec<ErasedToolRef<Self::C>> {
         vec![
-            Tool::ReadFile(ReadFile::default()),
-            Tool::Grep(clients::tool_defs::GrepTool::default()),
+            erased_tool::<ReadFile, Self::C>(),
+            erased_tool::<GrepTool, Self::C>(),
         ]
     }
 }

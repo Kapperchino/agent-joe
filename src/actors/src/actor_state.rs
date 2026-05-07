@@ -6,15 +6,12 @@ use crate::tool_call::ToolCall;
 use analysis::contexts::context::Context;
 use anyhow::anyhow;
 use clients::llm::{ContentBlock, Delta, LLmClient, Message, Role};
-use clients::tool_defs::{
-    CargoCheckInput, InsertAfterLineInput, LenientDeserialize, ReadFileInput, StringReplaceInput,
-    Tool, ToolId, ToolResult,
-};
 use common_models::tui_models::State;
 use futures::future;
 use ractor::{ActorCell, ActorRef};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use tools::tool_defs::{ErasedToolRef, ToolDefinition, ToolInvocation, ToolResult};
 use tracing::{error, warn};
 
 pub struct ActorState<C: Context> {
@@ -22,7 +19,7 @@ pub struct ActorState<C: Context> {
     pub stream_actor: Option<ActorCell>,
     pub history: Vec<Message>,
     pub llm: LLmClient,
-    pub tools: Vec<Tool>,
+    pub tools: Vec<ErasedToolRef<C>>,
     pub file_actor: Option<ActorRef<file_actor::Message>>,
     pub stream_processor: StreamProcessor,
     pub reporter: EventReporter,
@@ -101,18 +98,17 @@ impl<C: Context> ActorState<C> {
                     Ok(())
                 }
                 StreamRes::Tool(tool_res) => {
-                    let input = tool_res.tool().to_req()?;
                     self.history.push(Message {
                         role: Role::Assistant,
                         content: vec![ContentBlock::ToolBlock {
                             tool_id: tool_res.id(),
-                            name: tool_res.tool().name(),
-                            input,
+                            name: tool_res.invocation.name.clone(),
+                            input: tool_res.invocation.input.clone(),
                         }],
                     });
                     self.history.push(Message {
                         role: Role::User,
-                        content: vec![tool_res.to_res_json()],
+                        content: vec![Self::tool_res_to_json(tool_res)],
                     });
                     Ok(())
                 }
@@ -125,55 +121,45 @@ impl<C: Context> ActorState<C> {
         Ok(())
     }
 
+    pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
+        self.tools.iter().map(|tool| tool.definition()).collect()
+    }
+
+    fn find_tool(&self, name: &str) -> Option<ErasedToolRef<C>> {
+        self.tools.iter().find(|tool| tool.name() == name).cloned()
+    }
+
+    pub fn tool_display(&self, tool_call: &ToolCall) -> anyhow::Result<String> {
+        let tool = self
+            .find_tool(&tool_call.name)
+            .ok_or_else(|| anyhow!("unknown tool `{}`", tool_call.name))?;
+        let input = tool_call.input_value()?;
+        tool.display_erased(&input)
+    }
+
     async fn tool_use(&self, tool_call: ToolCall) -> anyhow::Result<ToolResult> {
-        let tool = tool_call.get_tool()?;
-        let ToolCall { id, name, json } = tool_call;
-        let res: anyhow::Result<ToolResult> = match tool.clone() {
-            Tool::ReadFile(rf) => {
-                Tool::ReadFile(rf)
-                    .use_tool(id.clone(), &self.cur_context)
-                    .await
-            }
-            Tool::InsertAfterLine(insert) => {
-                Tool::InsertAfterLine(insert)
-                    .use_tool(id.clone(), &self.cur_context)
-                    .await
-            }
-            Tool::StringReplace(replace) => {
-                Tool::StringReplace(replace)
-                    .use_tool(id.clone(), &self.cur_context)
-                    .await
-            }
-            Tool::CargoCheck(check) => {
-                Tool::CargoCheck(check)
-                    .use_tool(id.clone(), &self.cur_context)
-                    .await
-            }
-            Tool::Grep(grep) => {
-                Tool::Grep(grep)
-                    .use_tool(id.clone(), &self.cur_context)
-                    .await
-            }
-            Tool::CargoTest(test) => {
-                Tool::CargoTest(test)
-                    .use_tool(id.clone(), &self.cur_context)
-                    .await
-            }
-            Tool::GatherContext(gather) => {
-                Tool::GatherContext(gather)
-                    .use_tool(id.clone(), &self.cur_context)
-                    .await
-            }
+        let tool = self
+            .find_tool(&tool_call.name)
+            .ok_or_else(|| anyhow!("unknown tool `{}`", tool_call.name))?;
+        let id = tool_call.id.clone();
+        let input = tool_call.input_value()?;
+        let invocation = ToolInvocation {
+            name: tool_call.name.clone(),
+            input: tool.input_req_erased(&input)?,
+            display: tool.display_erased(&input)?,
         };
-        match res {
-            Ok(res) => Ok(res),
+
+        match tool
+            .run_erased(input.clone(), id.clone(), &self.cur_context)
+            .await
+        {
+            Ok(output) => {
+                let content = tool.output_to_content_erased(&input, &output)?;
+                Ok(ToolResult::success(id, invocation, content))
+            }
             Err(err) => {
                 warn!("{:?}", err.to_string());
-                Ok(ToolResult::Error {
-                    message: err.to_string(),
-                    tool,
-                    id: id.clone(),
-                })
+                Ok(ToolResult::error(id, invocation, err.to_string()))
             }
         }
     }
@@ -231,5 +217,13 @@ impl<C: Context> ActorState<C> {
 
     pub fn change_state(&mut self, new_state: State) {
         self.stream_processor.change_state(new_state)
+    }
+
+    pub fn tool_res_to_json(res: ToolResult) -> ContentBlock {
+        ContentBlock::ToolResult {
+            tool_id: res.id,
+            content: res.content,
+            is_error: Some(res.is_error),
+        }
     }
 }

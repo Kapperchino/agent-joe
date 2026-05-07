@@ -7,9 +7,15 @@ use crate::worker::Worker;
 use analysis::contexts::context::Context;
 use analysis::contexts::rust_context::RustContext;
 use async_trait::async_trait;
-use clients::tool_defs::{CargoCheck, InsertAfterLine, ReadFile, StringReplace, Tool};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use std::marker::PhantomData;
+use tools::cargo_check::CargoCheck;
+use tools::cargo_test::CargoTest;
+use tools::grep::GrepTool;
+use tools::insert_after_line::InsertAfterLine;
+use tools::read_file::ReadFile;
+use tools::string_replace::StringReplace;
+use tools::tool_defs::{erased_tool, ErasedToolRef};
 
 pub struct BaseWorker<C: Context> {
     _ctx: PhantomData<C>,
@@ -57,14 +63,14 @@ impl Worker for BaseWorker<RustContext> {
         Ok(state)
     }
 
-    fn tools() -> Vec<Tool> {
+    fn tools() -> Vec<ErasedToolRef<Self::C>> {
         vec![
-            Tool::ReadFile(ReadFile::default()),
-            Tool::InsertAfterLine(InsertAfterLine::default()),
-            Tool::StringReplace(StringReplace::default()),
-            Tool::CargoCheck(CargoCheck::default()),
-            Tool::Grep(clients::tool_defs::GrepTool::default()),
-            Tool::CargoTest(clients::tool_defs::CargoTest::default()),
+            erased_tool::<ReadFile, Self::C>(),
+            erased_tool::<InsertAfterLine, Self::C>(),
+            erased_tool::<StringReplace, Self::C>(),
+            erased_tool::<CargoCheck, Self::C>(),
+            erased_tool::<GrepTool, Self::C>(),
+            erased_tool::<CargoTest, Self::C>(),
         ]
     }
 }

@@ -1,10 +1,11 @@
+use tools::tool_defs;
 use crate::claude::{
     CacheControl, ChatResponse, ClientRequest, ContentBlock, ContentBlockInfo, Delta, Message,
     Role, StreamEvent, Tool, ToolSchemaDTO,
 };
 use crate::llm::ClientResponse;
-use crate::tool_defs::ToolId;
-use crate::{claude, llm, tool_defs};
+use tools::tool_defs::ToolId;
+use crate::{claude, llm};
 
 impl From<llm::Role> for claude::Role {
     fn from(value: llm::Role) -> Self {
@@ -58,38 +59,21 @@ impl From<llm::Message> for Message {
     }
 }
 
-impl From<&tool_defs::Tool> for Tool {
-    fn from(value: &tool_defs::Tool) -> Self {
-        use tool_defs::ToolDefTrait;
-        macro_rules! extract {
-            ($variant:ident) => {{
-                (
-                    tool_defs::$variant::tool_name(),
-                    tool_defs::$variant::tool_description(),
-                    tool_defs::$variant::field_properties(),
-                    tool_defs::$variant::required_fields(),
-                )
-            }};
-        }
-
-        let (name, description, properties, required) = match value {
-            tool_defs::Tool::ReadFile(_) => extract!(ReadFile),
-            tool_defs::Tool::InsertAfterLine(_) => extract!(InsertAfterLine),
-            tool_defs::Tool::StringReplace(_) => extract!(StringReplace),
-            tool_defs::Tool::CargoCheck(_) => extract!(CargoCheck),
-            tool_defs::Tool::Grep(_) => extract!(GrepTool),
-            tool_defs::Tool::CargoTest(_) => extract!(CargoTest),
-            &tool_defs::Tool::GatherContext(_) => extract!(GatherContext),
-        };
-
+impl From<&tool_defs::ToolDefinition> for Tool {
+    fn from(value: &tool_defs::ToolDefinition) -> Self {
         Tool {
-            name: name.to_string(),
-            description: description.to_string(),
+            name: value.name.clone(),
+            description: value.description.clone(),
             input_schema: ToolSchemaDTO {
-                name: name.to_string(),
+                name: value.name.clone(),
                 tool_type: "object".to_string(),
-                properties: properties.into_iter().map(|(k, v)| (k, v.into())).collect(),
-                required,
+                properties: value
+                    .properties
+                    .clone()
+                    .into_iter()
+                    .map(|(k, v)| (k, v.into()))
+                    .collect(),
+                required: value.required.clone(),
             },
         }
     }
