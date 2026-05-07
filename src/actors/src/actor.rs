@@ -4,7 +4,7 @@ use crate::worker::{Worker, WorkerAdapter};
 use analysis::contexts::context::Context;
 use clients::llm;
 use clients::llm::{ClientRequest, LLmClient, StreamEvent};
-use clients::tool_defs::{Tool, ToolResult};
+use tools::tool_defs::{ErasedToolRef, ToolResult};
 use commands::command::Command;
 use common_models::tui_models::ActorToTui;
 use common_models::tui_models::State;
@@ -67,7 +67,7 @@ pub enum Message {
 
 pub struct Dependency<C: Context> {
     pub client: LLmClient,
-    pub tools: Vec<Tool>,
+    pub tools: Vec<ErasedToolRef<C>>,
     pub tui_tx: mpsc::UnboundedSender<ActorToTui>,
     pub debug_mode: bool,
     pub context: C,
@@ -112,7 +112,7 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
                     state.history.push(llm::Message::new(p));
                 });
                 let req = ClientRequest::new(state.history.clone())
-                    .with_tools(state.tools.clone())
+                    .with_tools(state.tool_definitions())
                     .with_thinking();
 
                 let stream = state.llm.chat_stream(req).await?;
@@ -144,7 +144,7 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
                     .iter()
                     .filter_map(|x| {
                         if let ProcessedItem::Tool(t) = &x.processed {
-                            Some(t.get_tool().map(|t| t.to_string()))
+                            Some(state.tool_display(t))
                         } else {
                             None
                         }

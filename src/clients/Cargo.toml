@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 analysis = { path = "../analysis" }
-turbo-code-macros = { path = "../turbo-code-macros" }
+tools = { path = "../tools" }
 utils = { path = "../utils" }
 reqwest = { version = "0.13.2", features = ["json", "stream"] }
 async-stream = "0.3.6"
@@ -27,3 +27,4 @@ base64 = "0.22"
 getrandom = "0.3"
 sha2 = "0.10"
 serde_urlencoded = "0.7"
+async-trait = "0.1.89"

@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "src/actors", "src/analysis", "src/app", "src/clients", "src/commands", "src/common-models", "src/turbo-code-macros", "src/utils"]
+members = [".", "src/actors", "src/analysis", "src/app", "src/clients", "src/commands", "src/common-models", "src/tools", "src/turbo-code-macros", "src/utils"]
 
 [package]
 name = "turbo-code"

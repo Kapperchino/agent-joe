@@ -1,7 +1,8 @@
 use crate::llm::{ContentBlock, ContentBlockInfo, Delta};
 use crate::openai::{ClientRequest, InputItem, OutputItem, Role, StreamEvent, StreamOutputItem};
-use crate::tool_defs::ToolId;
-use crate::{llm, openai, tool_defs};
+use crate::{llm, openai};
+use tools::tool_defs;
+use tools::tool_defs::ToolId;
 use tracing::error;
 
 impl From<llm::ClientRequest> for ClientRequest {
@@ -54,38 +55,20 @@ impl From<llm::Role> for Role {
     }
 }
 
-impl From<tool_defs::Tool> for openai::Tool {
-    fn from(value: tool_defs::Tool) -> Self {
-        use tool_defs::ToolDefTrait;
-        macro_rules! extract {
-            ($variant:ident) => {{
-                (
-                    tool_defs::$variant::tool_name(),
-                    tool_defs::$variant::tool_description(),
-                    tool_defs::$variant::field_properties(),
-                    tool_defs::$variant::required_fields(),
-                )
-            }};
-        }
-
-        let (name, description, properties, required) = match value {
-            tool_defs::Tool::ReadFile(_) => extract!(ReadFile),
-            tool_defs::Tool::InsertAfterLine(_) => extract!(InsertAfterLine),
-            tool_defs::Tool::StringReplace(_) => extract!(StringReplace),
-            tool_defs::Tool::CargoCheck(_) => extract!(CargoCheck),
-            tool_defs::Tool::Grep(_) => extract!(GrepTool),
-            tool_defs::Tool::CargoTest(_) => extract!(CargoTest),
-            tool_defs::Tool::GatherContext(_) => extract!(GatherContext),
-        };
-
+impl From<tool_defs::ToolDefinition> for openai::Tool {
+    fn from(value: tool_defs::ToolDefinition) -> Self {
         openai::Tool {
             tool_type: "function".to_string(),
-            name: name.to_string(),
-            description: description.to_string(),
+            name: value.name,
+            description: value.description,
             parameters: openai::FunctionParameters {
                 param_type: "object".to_string(),
-                properties: properties.into_iter().map(|(k, v)| (k, v.into())).collect(),
-                required,
+                properties: value
+                    .properties
+                    .into_iter()
+                    .map(|(k, v)| (k, v.into()))
+                    .collect(),
+                required: value.required,
             },
         }
     }

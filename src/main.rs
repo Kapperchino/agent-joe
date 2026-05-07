@@ -8,11 +8,6 @@ use app::tui::TUIApp;
 use clap::Parser;
 use clients::config::{Config, ConfigContext};
 use clients::llm::LLmClient;
-use clients::tool_defs::CargoCheck;
-use clients::tool_defs::InsertAfterLine;
-use clients::tool_defs::ReadFile;
-use clients::tool_defs::StringReplace;
-use clients::tool_defs::Tool;
 use crossterm::event::{
     DisableBracketedPaste, EnableBracketedPaste, KeyboardEnhancementFlags,
     PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,

@@ -3,7 +3,7 @@ use crate::actor::Message;
 use crate::actor_state::ActorState;
 use analysis::contexts::context::Context;
 use async_trait::async_trait;
-use clients::tool_defs::Tool;
+use tools::tool_defs::ErasedToolRef;
 use ractor::{ActorProcessingErr, ActorRef};
 
 pub struct WorkerAdapter<W> {
@@ -30,5 +30,5 @@ pub trait Worker: Send + Sync + 'static {
         dependency: Dependency<Self::C>,
     ) -> Result<ActorState<Self::C>, ActorProcessingErr>;
 
-    fn tools() -> Vec<Tool>;
+    fn tools() -> Vec<ErasedToolRef<Self::C>>;
 }
