@@ -1,4 +1,5 @@
 use crate::tool_defs::ToolInputSchema;
+use crate::tool_defs::{ToolDefTrait, ToolId, ToolTrait};
 use analysis::contexts::context::Context;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -6,7 +7,6 @@ use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 use turbo_code_macros::{ToolDef, ToolInput};
 use utils::grep::Grep as ProjectGrep;
-use crate::tool_defs::{ToolDefTrait, ToolId, ToolTrait};
 
 #[async_trait]
 impl ToolTrait for GrepTool {

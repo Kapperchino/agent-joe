@@ -4,7 +4,6 @@ use crate::worker::{Worker, WorkerAdapter};
 use analysis::contexts::context::Context;
 use clients::llm;
 use clients::llm::{ClientRequest, LLmClient, StreamEvent};
-use tools::tool_defs::{ErasedToolRef, ToolResult};
 use commands::command::Command;
 use common_models::tui_models::ActorToTui;
 use common_models::tui_models::State;
@@ -18,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
 use tokio::sync::mpsc;
+use tools::tool_defs::{ErasedToolRef, ToolResult};
 use tracing::error;
 
 #[derive(Error, Debug)]

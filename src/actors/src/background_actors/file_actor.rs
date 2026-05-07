@@ -13,7 +13,7 @@ use ra_ap_vfs::file_set::FileSet;
 use ra_ap_vfs::{Change, ChangeKind, FileId, Vfs, VfsPath};
 use ractor::concurrency::Duration;
 use ractor::{
-    Actor, ActorCell, ActorProcessingErr, ActorRef, MessagingErr, SupervisionEvent, call,
+    call, Actor, ActorCell, ActorProcessingErr, ActorRef, MessagingErr, SupervisionEvent,
 };
 use ractor_actors::filewatcher::{
     FileWatcher, FileWatcherConfig, FileWatcherMessage, FileWatcherSubscriber, SubscriptionResult,

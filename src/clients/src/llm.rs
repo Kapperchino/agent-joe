@@ -1,13 +1,13 @@
 use crate::claude::{ClaudeClient, Usage};
 use crate::config::{Config, ConfigContext};
 use crate::openai::OpenAIClient;
-use tools::tool_defs::{ToolDefinition, ToolId};
 use crate::{ClaudeEffort, OpenAIEffort};
-use futures::Stream;
 use futures::future::Either;
+use futures::Stream;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
+use tools::tool_defs::{ToolDefinition, ToolId};
 
 pub trait LLmClientTrait {
     async fn chat_stream(

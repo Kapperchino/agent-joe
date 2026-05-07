@@ -1,5 +1,5 @@
-use tools::tool_defs::ToolId;
 use serde_json::Value;
+use tools::tool_defs::ToolId;
 
 #[derive(Debug, Clone)]
 pub struct ToolCall {

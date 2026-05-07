@@ -3,11 +3,11 @@ use crate::event_reporter::EventReporter;
 use crate::tool_call::ToolCall;
 use anyhow::anyhow;
 use clients::llm::{ContentBlockInfo, Delta, StopReason, StreamEvent};
-use tools::tool_defs::ToolId;
 use common_models::tui_models::{ActorToTui, State, TokenCount};
 use std::path::PathBuf;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
+use tools::tool_defs::ToolId;
 use tracing::error;
 
 pub struct StreamProcessor {

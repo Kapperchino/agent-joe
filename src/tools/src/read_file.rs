@@ -1,4 +1,5 @@
 use crate::tool_defs::ToolInputSchema;
+use crate::tool_defs::{Range, ToolDefTrait, ToolId, ToolTrait};
 use analysis::contexts::context::{Context, LineIndexCreator};
 use async_trait::async_trait;
 use futures::{StreamExt, TryStreamExt};
@@ -11,7 +12,6 @@ use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, BufReader};
 use tokio_stream::wrappers::LinesStream;
 use turbo_code_macros::{ToolDef, ToolInput};
-use crate::tool_defs::{Range, ToolDefTrait, ToolId, ToolTrait};
 
 #[async_trait]
 impl ToolTrait for ReadFile {

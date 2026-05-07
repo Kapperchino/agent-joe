@@ -1,11 +1,11 @@
-use tools::tool_defs;
 use crate::claude::{
     CacheControl, ChatResponse, ClientRequest, ContentBlock, ContentBlockInfo, Delta, Message,
     Role, StreamEvent, Tool, ToolSchemaDTO,
 };
 use crate::llm::ClientResponse;
-use tools::tool_defs::ToolId;
 use crate::{claude, llm};
+use tools::tool_defs;
+use tools::tool_defs::ToolId;
 
 impl From<llm::Role> for claude::Role {
     fn from(value: llm::Role) -> Self {

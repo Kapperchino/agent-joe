@@ -1,5 +1,5 @@
-use markdown::ParseOptions;
 use markdown::mdast::{AlignKind, Node};
+use markdown::ParseOptions;
 use ratatui::prelude::{Color, Line, Modifier, Span, Style};
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{self, ThemeSet};

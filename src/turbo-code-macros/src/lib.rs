@@ -2,8 +2,8 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::spanned::Spanned;
 use syn::{
-    parse_macro_input, Attribute, Data, DeriveInput, Fields, GenericArgument, LitStr,
-    PathArguments, Type,
+    parse_macro_input, Attribute, Data, DeriveInput, Fields, GenericArgument, LitStr, PathArguments,
+    Type,
 };
 
 #[proc_macro_derive(ToolDef, attributes(tool))]

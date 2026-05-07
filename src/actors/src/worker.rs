@@ -3,8 +3,8 @@ use crate::actor::Message;
 use crate::actor_state::ActorState;
 use analysis::contexts::context::Context;
 use async_trait::async_trait;
-use tools::tool_defs::ErasedToolRef;
 use ractor::{ActorProcessingErr, ActorRef};
+use tools::tool_defs::ErasedToolRef;
 
 pub struct WorkerAdapter<W> {
     pub(crate) worker: W,

@@ -22,14 +22,14 @@ cargo run
 
 ## Keybindings
 
-| Key                  | Mode         | Action              |
-|----------------------|--------------|---------------------|
-| `i`                  | Normal       | Enter edit mode     |
-| `/`                  | Normal       | Enter command mode  |
-| `q`                  | Normal       | Quit                |
-| Terminal scrollback  | Normal       | Scroll history      |
-| `Enter`              | Edit/Command | Submit              |
-| `Esc`                | Edit/Command | Back to normal mode |
+| Key                 | Mode         | Action              |
+|---------------------|--------------|---------------------|
+| `i`                 | Normal       | Enter edit mode     |
+| `/`                 | Normal       | Enter command mode  |
+| `q`                 | Normal       | Quit                |
+| Terminal scrollback | Normal       | Scroll history      |
+| `Enter`             | Edit/Command | Submit              |
+| `Esc`               | Edit/Command | Back to normal mode |
 
 ## Tools
 

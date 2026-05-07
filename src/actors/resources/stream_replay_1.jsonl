@@ -1,131 +1,1376 @@
-{"MessageStart":{"message":{"id":"resp_08bc985e6322279a0069ae31c386408196bc057007014b0d43","model":"gpt-5.4-2026-03-05","role":"Assistant","usage":{"input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0}}}}
-{"ContentBlockStart":{"index":0,"content_block":{"Thinking":{"thinking":""}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":"**Inspect","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":"ing","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" actor","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":".rs","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" purpose","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":"**\n\nI","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" need","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" to","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" gather","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" information","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" based","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" on","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" the","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" repository","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" context","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":".","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" I","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" should","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" focus","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" on","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" the","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" relevant","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" parts","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" of","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" actor","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":".rs","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":",","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" checking","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" the","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" top","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" sections","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" and","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" symbols","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":".","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" It","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" seems","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" necessary","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" to","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" read","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" files","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" in","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" a","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" targeted","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" way","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" to","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" summarize","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" the","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" purpose","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" of","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" actor","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":".rs","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":".","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" I","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":"’ll","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" get","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" to","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" inspecting","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" that","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" soon","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":"!","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" Let's","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" ensure","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" I","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" capture","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" the","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" essential","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" aspects","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" to","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" give","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" a","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" clear","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" overview","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" of","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" its","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":" functionality","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockDelta":{"index":0,"delta":{"ThinkingDelta":{"thinking":".","reasoning_id":"rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"}}}}
-{"ContentBlockStop":{"index":0}}
-{"ContentBlockStop":{"index":0}}
-{"ContentBlockStart":{"index":1,"content_block":{"ToolUse":{"id":{"call_id":"call_Pn3QXXUGJ6MA4uiRfM3CouPX","id":"fc_08bc985e6322279a0069ae31c6d9cc8196a23a2ccbb0cf3861"},"name":"read_file","input":{}}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":"{\"file_path\":\"/Users/kamranorhun/Dev/turbo-code/src/actors/src/actor.rs\",\"range\":{\"end\":260,\"start\":1}}"}}}}
-{"ContentBlockStop":{"index":1}}
-{"ContentBlockStop":{"index":1}}
-{"ContentBlockStart":{"index":2,"content_block":{"ToolUse":{"id":{"call_id":"call_aDi0v3Z2KWYWBIVFAweHWmf7","id":"fc_08bc985e6322279a0069ae31c6d9dc8196adf9be94c1ef0314"},"name":"read_file","input":{}}}}}
-{"ContentBlockDelta":{"index":2,"delta":{"InputJsonDelta":{"partial_json":"{\"file_path\":\"/Users/kamranorhun/Dev/turbo-code/src/actors/src/actor.rs\",\"range\":{\"end\":900,\"start\":260}}"}}}}
-{"ContentBlockStop":{"index":2}}
-{"ContentBlockStop":{"index":2}}
-{"MessageDelta":{"delta":{"stop_reason":"continue"},"usage":{"output_tokens":147}}}
-{"MessageStart":{"message":{"id":"resp_08bc985e6322279a0069ae31c7029881968e9e16bc1a3844b0","model":"gpt-5.4-2026-03-05","role":"Assistant","usage":{"input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0}}}}
-{"ContentBlockStart":{"index":0,"content_block":{"Thinking":{"thinking":""}}}}
-{"MessageStart":{"message":{"id":"resp_08bc985e6322279a0069ae31c78d848196b52a6350c3290893","model":"gpt-5.4-2026-03-05","role":"Assistant","usage":{"input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0}}}}
-{"MessageStart":{"message":{"id":"resp_08bc985e6322279a0069ae31c7c1e48196b9441eb18bf97f08","model":"gpt-5.4-2026-03-05","role":"Assistant","usage":{"input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0}}}}
-{"ContentBlockStop":{"index":0}}
-{"ContentBlockStart":{"index":1,"content_block":{"ToolUse":{"id":{"call_id":"call_0xcbHMYIkgEru1FpTe4Dya0z","id":"fc_08bc985e6322279a0069ae31c8167c8196ae14ab418cb44582"},"name":"read_file","input":{}}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":"{\""}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":"file"}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":"_path"}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":"\":"}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":"\"/"}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":"Users"}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":"/k"}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":"am"}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":"ran"}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":"or"}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":"hun"}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":"/"}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":"Dev"}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":"/t"}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":"urbo"}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":"-code"}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":"/src"}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":"/"}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":"actors"}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":"/src"}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":"/"}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":"actor"}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":".rs"}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":"\",\""}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":"range"}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":"\":{\""}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":"end"}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":"\":"}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":"180"}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":",\""}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":"start"}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":"\":"}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":"1"}}}}
-{"ContentBlockDelta":{"index":1,"delta":{"InputJsonDelta":{"partial_json":"}}"}}}}
-{"ContentBlockStop":{"index":1}}
-{"ContentBlockStop":{"index":1}}
+{
+  "MessageStart": {
+    "message": {
+      "id": "resp_08bc985e6322279a0069ae31c386408196bc057007014b0d43",
+      "model": "gpt-5.4-2026-03-05",
+      "role": "Assistant",
+      "usage": {
+        "input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 0
+      }
+    }
+  }
+}
+{
+  "ContentBlockStart": {
+    "index": 0,
+    "content_block": {
+      "Thinking": {
+        "thinking": ""
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": "**Inspect",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": "ing",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " actor",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": ".rs",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " purpose",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": "**\n\nI",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " need",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " to",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " gather",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " information",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " based",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " on",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " the",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " repository",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " context",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": ".",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " I",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " should",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " focus",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " on",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " the",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " relevant",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " parts",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " of",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " actor",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": ".rs",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": ",",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " checking",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " the",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " top",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " sections",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " and",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " symbols",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": ".",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " It",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " seems",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " necessary",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " to",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " read",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " files",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " in",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " a",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " targeted",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " way",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " to",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " summarize",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " the",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " purpose",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " of",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " actor",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": ".rs",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": ".",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " I",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": "’ll",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " get",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " to",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " inspecting",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " that",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " soon",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": "!",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " Let's",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " ensure",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " I",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " capture",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " the",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " essential",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " aspects",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " to",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " give",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " a",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " clear",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " overview",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " of",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " its",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": " functionality",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 0,
+    "delta": {
+      "ThinkingDelta": {
+        "thinking": ".",
+        "reasoning_id": "rs_08bc985e6322279a0069ae31c40e0481969a70cf0ab54684ca"
+      }
+    }
+  }
+}
+{
+  "ContentBlockStop": {
+    "index": 0
+  }
+}
+{
+  "ContentBlockStop": {
+    "index": 0
+  }
+}
+{
+  "ContentBlockStart": {
+    "index": 1,
+    "content_block": {
+      "ToolUse": {
+        "id": {
+          "call_id": "call_Pn3QXXUGJ6MA4uiRfM3CouPX",
+          "id": "fc_08bc985e6322279a0069ae31c6d9cc8196a23a2ccbb0cf3861"
+        },
+        "name": "read_file",
+        "input": {}
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "{\"file_path\":\"/Users/kamranorhun/Dev/turbo-code/src/actors/src/actor.rs\",\"range\":{\"end\":260,\"start\":1}}"
+      }
+    }
+  }
+}
+{
+  "ContentBlockStop": {
+    "index": 1
+  }
+}
+{
+  "ContentBlockStop": {
+    "index": 1
+  }
+}
+{
+  "ContentBlockStart": {
+    "index": 2,
+    "content_block": {
+      "ToolUse": {
+        "id": {
+          "call_id": "call_aDi0v3Z2KWYWBIVFAweHWmf7",
+          "id": "fc_08bc985e6322279a0069ae31c6d9dc8196adf9be94c1ef0314"
+        },
+        "name": "read_file",
+        "input": {}
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 2,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "{\"file_path\":\"/Users/kamranorhun/Dev/turbo-code/src/actors/src/actor.rs\",\"range\":{\"end\":900,\"start\":260}}"
+      }
+    }
+  }
+}
+{
+  "ContentBlockStop": {
+    "index": 2
+  }
+}
+{
+  "ContentBlockStop": {
+    "index": 2
+  }
+}
+{
+  "MessageDelta": {
+    "delta": {
+      "stop_reason": "continue"
+    },
+    "usage": {
+      "output_tokens": 147
+    }
+  }
+}
+{
+  "MessageStart": {
+    "message": {
+      "id": "resp_08bc985e6322279a0069ae31c7029881968e9e16bc1a3844b0",
+      "model": "gpt-5.4-2026-03-05",
+      "role": "Assistant",
+      "usage": {
+        "input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 0
+      }
+    }
+  }
+}
+{
+  "ContentBlockStart": {
+    "index": 0,
+    "content_block": {
+      "Thinking": {
+        "thinking": ""
+      }
+    }
+  }
+}
+{
+  "MessageStart": {
+    "message": {
+      "id": "resp_08bc985e6322279a0069ae31c78d848196b52a6350c3290893",
+      "model": "gpt-5.4-2026-03-05",
+      "role": "Assistant",
+      "usage": {
+        "input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 0
+      }
+    }
+  }
+}
+{
+  "MessageStart": {
+    "message": {
+      "id": "resp_08bc985e6322279a0069ae31c7c1e48196b9441eb18bf97f08",
+      "model": "gpt-5.4-2026-03-05",
+      "role": "Assistant",
+      "usage": {
+        "input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 0
+      }
+    }
+  }
+}
+{
+  "ContentBlockStop": {
+    "index": 0
+  }
+}
+{
+  "ContentBlockStart": {
+    "index": 1,
+    "content_block": {
+      "ToolUse": {
+        "id": {
+          "call_id": "call_0xcbHMYIkgEru1FpTe4Dya0z",
+          "id": "fc_08bc985e6322279a0069ae31c8167c8196ae14ab418cb44582"
+        },
+        "name": "read_file",
+        "input": {}
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "{\""
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "file"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "_path"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "\":"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "\"/"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "Users"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "/k"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "am"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "ran"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "or"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "hun"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "/"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "Dev"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "/t"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "urbo"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "-code"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "/src"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "/"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "actors"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "/src"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "/"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "actor"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": ".rs"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "\",\""
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "range"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "\":{\""
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "end"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "\":"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "180"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": ",\""
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "start"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "\":"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "1"
+      }
+    }
+  }
+}
+{
+  "ContentBlockDelta": {
+    "index": 1,
+    "delta": {
+      "InputJsonDelta": {
+        "partial_json": "}}"
+      }
+    }
+  }
+}
+{
+  "ContentBlockStop": {
+    "index": 1
+  }
+}
+{
+  "ContentBlockStop": {
+    "index": 1
+  }
+}

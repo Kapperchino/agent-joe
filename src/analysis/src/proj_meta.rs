@@ -2,7 +2,7 @@ use crate::analysis::Range;
 use crate::rust_proj::RustProject;
 use crate::symbol_info::SymbolInfo;
 use crate::utils::RPath;
-use futures::{StreamExt, future};
+use futures::{future, StreamExt};
 use itertools::Itertools;
 use ra_ap_ide::LineIndex;
 use ra_ap_ide_db::SymbolKind;

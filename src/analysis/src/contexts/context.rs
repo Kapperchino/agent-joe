@@ -1,9 +1,6 @@
-use crate::proj_meta::ProjMeta;
-use anyhow::anyhow;
 use async_trait::async_trait;
 use ra_ap_ide::LineIndex;
 use std::path::PathBuf;
-use triomphe::Arc;
 
 #[async_trait]
 pub trait Context: Send + Sync {
