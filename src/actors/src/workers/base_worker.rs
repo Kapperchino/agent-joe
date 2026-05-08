@@ -1,4 +1,4 @@
-use crate::actor::{Dependency, IntoActorErr, Message};
+use crate::actor::{ActorContext, Dependency, IntoActorErr, Message};
 use crate::actor_state::ActorState;
 use crate::background_actors::cache_actor::CacheActor;
 use crate::background_actors::file_actor::FileActor;
@@ -63,14 +63,14 @@ impl Worker for BaseWorker<RustContext> {
         Ok(state)
     }
 
-    fn tools() -> Vec<ErasedToolRef<Self::C, ActorState<Self::C>>> {
+    fn tools() -> Vec<ErasedToolRef<Self::C, ActorContext<Self::C>>> {
         vec![
-            erased_tool::<ReadFile, Self::C, ActorState<Self::C>>(),
-            erased_tool::<InsertAfterLine, Self::C, ActorState<Self::C>>(),
-            erased_tool::<StringReplace, Self::C, ActorState<Self::C>>(),
-            erased_tool::<CargoCheck, Self::C, ActorState<Self::C>>(),
-            erased_tool::<GrepTool, Self::C, ActorState<Self::C>>(),
-            erased_tool::<CargoTest, Self::C, ActorState<Self::C>>(),
+            erased_tool::<ReadFile, Self::C, ActorContext<Self::C>>(),
+            erased_tool::<InsertAfterLine, Self::C, ActorContext<Self::C>>(),
+            erased_tool::<StringReplace, Self::C, ActorContext<Self::C>>(),
+            erased_tool::<CargoCheck, Self::C, ActorContext<Self::C>>(),
+            erased_tool::<GrepTool, Self::C, ActorContext<Self::C>>(),
+            erased_tool::<CargoTest, Self::C, ActorContext<Self::C>>(),
         ]
     }
 }

@@ -1,4 +1,4 @@
-use crate::actor::Dependency;
+use crate::actor::{ActorContext, Dependency};
 use crate::actor::Message;
 use crate::actor_state::ActorState;
 use analysis::contexts::context::Context;
@@ -30,5 +30,5 @@ pub trait Worker: Send + Sync + 'static {
         dependency: Dependency<Self::C>,
     ) -> Result<ActorState<Self::C>, ActorProcessingErr>;
 
-    fn tools() -> Vec<ErasedToolRef<Self::C, ActorState<Self::C>>>;
+    fn tools() -> Vec<ErasedToolRef<Self::C, ActorContext<Self::C>>>;
 }

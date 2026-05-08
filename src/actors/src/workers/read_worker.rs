@@ -1,4 +1,4 @@
-use crate::actor::{Dependency, IntoActorErr, Message};
+use crate::actor::{ActorContext, Dependency, IntoActorErr, Message};
 use crate::actor_state::ActorState;
 use crate::worker::Worker;
 use analysis::contexts::context::Context;
@@ -27,10 +27,10 @@ impl Worker for ReadWorker<RustContext> {
         Ok(state)
     }
 
-    fn tools() -> Vec<ErasedToolRef<Self::C, ActorState<Self::C>>> {
+    fn tools() -> Vec<ErasedToolRef<Self::C, ActorContext<Self::C>>> {
         vec![
-            erased_tool::<ReadFile, Self::C, ActorState<Self::C>>(),
-            erased_tool::<GrepTool, Self::C, ActorState<Self::C>>(),
+            erased_tool::<ReadFile, Self::C, ActorContext<Self::C>>(),
+            erased_tool::<GrepTool, Self::C, ActorContext<Self::C>>(),
         ]
     }
 }
