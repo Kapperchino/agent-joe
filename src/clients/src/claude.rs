@@ -302,7 +302,7 @@ pub struct CacheControl {
     pub(crate) ttl: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ClaudeClient {
     client: Client,
     base_url: String,

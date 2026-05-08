@@ -1,4 +1,3 @@
-use crate::tool_defs::ToolInputSchema;
 use crate::tool_defs::{Range, ToolDefTrait, ToolId, ToolTrait};
 use analysis::contexts::context::{Context, LineIndexCreator};
 use async_trait::async_trait;
@@ -18,10 +17,11 @@ impl ToolTrait for ReadFile {
     type Input = ReadFileInput;
     type Output = ReadFileResult;
 
-    async fn run<C: Context>(
+    async fn run<C: Context, A>(
         input: Self::Input,
         tool_id: ToolId,
         cur_context: &C,
+        _actor_context: &A,
     ) -> anyhow::Result<Self::Output> {
         let res = ReadFile {
             input,

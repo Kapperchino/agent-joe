@@ -8,7 +8,7 @@ use ractor::{ActorProcessingErr, ActorRef};
 use std::marker::PhantomData;
 use tools::grep::GrepTool;
 use tools::read_file::ReadFile;
-use tools::tool_defs::{erased_tool, ErasedToolRef};
+use tools::tool_defs::{ErasedToolRef, erased_tool};
 
 pub struct ReadWorker<C: Context> {
     _ctx: PhantomData<C>,
@@ -27,10 +27,10 @@ impl Worker for ReadWorker<RustContext> {
         Ok(state)
     }
 
-    fn tools() -> Vec<ErasedToolRef<Self::C>> {
+    fn tools() -> Vec<ErasedToolRef<Self::C, ActorState<Self::C>>> {
         vec![
-            erased_tool::<ReadFile, Self::C>(),
-            erased_tool::<GrepTool, Self::C>(),
+            erased_tool::<ReadFile, Self::C, ActorState<Self::C>>(),
+            erased_tool::<GrepTool, Self::C, ActorState<Self::C>>(),
         ]
     }
 }

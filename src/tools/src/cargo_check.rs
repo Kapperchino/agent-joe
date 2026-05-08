@@ -1,4 +1,3 @@
-use crate::tool_defs::ToolInputSchema;
 use crate::tool_defs::{ToolDefTrait, ToolId, ToolTrait};
 use analysis::contexts::context::Context;
 use async_trait::async_trait;
@@ -13,10 +12,11 @@ impl ToolTrait for CargoCheck {
     type Input = CargoCheckInput;
     type Output = CargoCheckToolResult;
 
-    async fn run<C: Context>(
+    async fn run<C: Context, A>(
         input: Self::Input,
         tool_id: ToolId,
         _cur_context: &C,
+        _actor_context: &A,
     ) -> anyhow::Result<Self::Output> {
         let result = CargoCheck {
             input,

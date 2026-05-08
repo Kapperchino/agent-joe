@@ -2,8 +2,8 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::spanned::Spanned;
 use syn::{
-    parse_macro_input, Attribute, Data, DeriveInput, Fields, GenericArgument, LitStr, PathArguments,
-    Type,
+    Attribute, Data, DeriveInput, Fields, GenericArgument, LitStr, PathArguments, Type,
+    parse_macro_input,
 };
 
 #[proc_macro_derive(ToolDef, attributes(tool))]
@@ -32,20 +32,20 @@ fn impl_tool_def(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let (input_field, input_type) = extract_field_type(input, "input")?;
 
     Ok(quote! {
-        impl crate::tool_defs::ToolDefTrait for #struct_name {
+        impl ::tools::tool_defs::ToolDefTrait for #struct_name {
             fn tool_name() -> &'static str { #tool_name }
             fn tool_description() -> &'static str { #tool_description }
 
-            fn field_properties() -> ::std::collections::HashMap<String, crate::tool_defs::ToolProperty> {
-                <#input_type as crate::tool_defs::ToolInputSchema>::properties()
+            fn field_properties() -> ::std::collections::HashMap<String, ::tools::tool_defs::ToolProperty> {
+                <#input_type as ::tools::tool_defs::ToolInputSchema>::properties()
             }
 
             fn required_fields() -> Vec<String> {
-                <#input_type as crate::tool_defs::ToolInputSchema>::required()
+                <#input_type as ::tools::tool_defs::ToolInputSchema>::required()
             }
 
             fn req(&self) -> anyhow::Result<std::collections::HashMap<String,String>> {
-                self.#input_field.req()
+                <#input_type as ::tools::tool_defs::ToolInputSchema>::req(&self.#input_field)
             }
         }
     })
@@ -113,11 +113,11 @@ fn impl_tool_input(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
             if kind == "object" {
                 let inner_type = extract_inner_type(&field.ty);
                 property_insertions.push(quote! {
-                map.insert(#field_name_str.to_string(), crate::tool_defs::ToolProperty::Object {
+                map.insert(#field_name_str.to_string(), ::tools::tool_defs::ToolProperty::Object {
                     name: #field_name_str.to_string(),
                     prop_type: "object".to_string(),
                     description: #desc.to_string(),
-                    properties: <#inner_type as crate::tool_defs::ToolInputSchema>::properties(),
+                    properties: <#inner_type as ::tools::tool_defs::ToolInputSchema>::properties(),
                 });
             });
                 req_insertions.push(quote! {
@@ -125,7 +125,7 @@ fn impl_tool_input(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
             });
             } else {
                 property_insertions.push(quote! {
-                    map.insert(#field_name_str.to_string(), crate::tool_defs::ToolProperty::Value {
+                    map.insert(#field_name_str.to_string(), ::tools::tool_defs::ToolProperty::Value {
                         name: #field_name_str.to_string(),
                         prop_type: #kind.to_string(),
                         description: #desc.to_string(),
@@ -148,8 +148,8 @@ fn impl_tool_input(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
     })?;
 
     Ok(quote! {
-        impl crate::tool_defs::ToolInputSchema for #struct_name {
-            fn properties() -> ::std::collections::HashMap<String, crate::tool_defs::ToolProperty> {
+        impl ::tools::tool_defs::ToolInputSchema for #struct_name {
+            fn properties() -> ::std::collections::HashMap<String, ::tools::tool_defs::ToolProperty> {
                 let mut map = ::std::collections::HashMap::new();
                 #(#property_insertions)*
                 map
@@ -166,7 +166,7 @@ fn impl_tool_input(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
             }
         }
 
-        impl crate::tool_defs::LenientDeserialize for #struct_name {
+        impl ::tools::tool_defs::LenientDeserialize for #struct_name {
             fn deserialize_lenient(s: &str) -> anyhow::Result<Self> {
                 let value: serde_json::Value = serde_json::from_str(s)?;
                 let obj = value.as_object()

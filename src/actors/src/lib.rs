@@ -11,3 +11,4 @@ mod stream_processor;
 mod stream_replay_test;
 mod tool_call;
 pub mod workers;
+pub mod tools;

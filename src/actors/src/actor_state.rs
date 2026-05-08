@@ -1,15 +1,14 @@
-use crate::actor::{Dependency, StreamRes};
+use crate::actor::{ActorContext, Dependency, StreamRes};
 use crate::background_actors::file_actor;
 use crate::event_reporter::EventReporter;
-use crate::stream_processor::{PreprocessedStreamItem, ProcessedItem, StreamAccu, StreamProcessor};
+use crate::stream_processor::{PreprocessedStreamItem, ProcessedItem, StreamProcessor};
 use crate::tool_call::ToolCall;
 use analysis::contexts::context::Context;
 use anyhow::anyhow;
-use clients::llm::{ContentBlock, Delta, LLmClient, Message, Role};
+use clients::llm::{ContentBlock, LLmClient, Message, Role};
 use common_models::tui_models::State;
 use futures::future;
 use ractor::{ActorCell, ActorRef};
-use std::collections::HashMap;
 use std::path::PathBuf;
 use tools::tool_defs::{ErasedToolRef, ToolDefinition, ToolInvocation, ToolResult};
 use tracing::{error, warn};
@@ -19,7 +18,7 @@ pub struct ActorState<C: Context> {
     pub stream_actor: Option<ActorCell>,
     pub history: Vec<Message>,
     pub llm: LLmClient,
-    pub tools: Vec<ErasedToolRef<C>>,
+    pub tools: Vec<ErasedToolRef<C, ActorContext<C>>>,
     pub file_actor: Option<ActorRef<file_actor::Message>>,
     pub stream_processor: StreamProcessor,
     pub reporter: EventReporter,
@@ -51,10 +50,7 @@ impl<C: Context> ActorState<C> {
 
         Ok(Self {
             cur_context: dependency.context,
-            history: vec![Message::new(
-                "This is the initial context in the environment: \n".to_owned()
-                    + cur_context_str.as_str(),
-            )],
+            history: vec![Message::new(cur_context_str)],
             llm: dependency.client,
             tools: dependency.tools,
             stream_actor: None,
@@ -125,7 +121,7 @@ impl<C: Context> ActorState<C> {
         self.tools.iter().map(|tool| tool.definition()).collect()
     }
 
-    fn find_tool(&self, name: &str) -> Option<ErasedToolRef<C>> {
+    fn find_tool(&self, name: &str) -> Option<ErasedToolRef<C, ActorContext<C>>> {
         self.tools.iter().find(|tool| tool.name() == name).cloned()
     }
 
@@ -150,7 +146,12 @@ impl<C: Context> ActorState<C> {
         };
 
         match tool
-            .run_erased(input.clone(), id.clone(), &self.cur_context)
+            .run_erased(
+                input.clone(),
+                id.clone(),
+                &self.cur_context,
+                &ActorContext::Noop,
+            )
             .await
         {
             Ok(output) => {

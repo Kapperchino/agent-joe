@@ -478,7 +478,7 @@ pub enum ReasoningSummary {
     Detailed,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct OpenAIClient {
     client: Client,
     config: OpenAIConfig,

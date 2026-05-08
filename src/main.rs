@@ -91,7 +91,7 @@ async fn main() {
         None,
         WorkerAdapter::new(BaseWorker::new()),
         Dependency {
-            client: client,
+            client,
             tools: BaseWorker::tools(),
             tui_tx: tx,
             debug_mode: cli.debug,

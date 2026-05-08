@@ -29,10 +29,11 @@ pub trait ToolUse {}
 pub trait ToolTrait: ToolDefTrait + Display {
     type Input;
     type Output;
-    async fn run<C: Context>(
+    async fn run<C: Context, A>(
         input: Self::Input,
         tool_id: ToolId,
         cur_context: &C,
+        actor_context: &A,
     ) -> anyhow::Result<Self::Output>;
 
     fn display_input(input: &Self::Input) -> String;
@@ -59,7 +60,7 @@ pub struct ToolDefinition {
 }
 
 #[async_trait]
-pub trait ErasedToolTrait<C: Context>: Send + Sync {
+pub trait ErasedToolTrait<C: Context, A>: Send + Sync {
     fn definition(&self) -> ToolDefinition;
 
     fn name(&self) -> String {
@@ -75,32 +76,36 @@ pub trait ErasedToolTrait<C: Context>: Send + Sync {
         input: Value,
         tool_id: ToolId,
         cur_context: &C,
+        actor_context: &A,
     ) -> anyhow::Result<Value>;
 
     fn output_to_content_erased(&self, input: &Value, output: &Value) -> anyhow::Result<String>;
 }
 
-pub struct ErasedTool<T, C> {
+pub struct ErasedTool<T, C, A> {
     _marker: PhantomData<T>,
     _context: PhantomData<C>,
+    _actor_context: PhantomData<A>,
 }
 
-impl<T, C> ErasedTool<T, C> {
+impl<T, C, A> ErasedTool<T, C, A> {
     pub fn new() -> Self {
         Self {
             _marker: PhantomData,
             _context: PhantomData,
+            _actor_context: PhantomData,
         }
     }
 }
 
 #[async_trait]
-impl<T, C> ErasedToolTrait<C> for ErasedTool<T, C>
+impl<T, C, A> ErasedToolTrait<C, A> for ErasedTool<T, C, A>
 where
     T: ToolTrait + Send + Sync,
     T::Input: Clone + DeserializeOwned + Send,
     T::Output: DeserializeOwned + Serialize + Send,
     C: Send + Sync + Context,
+    A: Send + Sync,
 {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
@@ -126,10 +131,12 @@ where
         input: Value,
         tool_id: ToolId,
         cur_context: &C,
+        actor_context: &A,
     ) -> anyhow::Result<Value> {
         let typed_input: T::Input = serde_json::from_value(input)?;
 
-        let typed_output: T::Output = T::run::<C>(typed_input, tool_id, cur_context).await?;
+        let typed_output: T::Output =
+            T::run::<C, A>(typed_input, tool_id, cur_context, actor_context).await?;
 
         let erased_output = serde_json::to_value(typed_output)?;
 
@@ -143,16 +150,17 @@ where
     }
 }
 
-pub type ErasedToolRef<C> = Arc<dyn ErasedToolTrait<C>>;
+pub type ErasedToolRef<C, A> = Arc<dyn ErasedToolTrait<C, A>>;
 
-pub fn erased_tool<T, C>() -> ErasedToolRef<C>
+pub fn erased_tool<T, C, A>() -> ErasedToolRef<C, A>
 where
     T: ToolTrait + Send + Sync + 'static,
     T::Input: Clone + DeserializeOwned + Send + 'static,
     T::Output: DeserializeOwned + Serialize + Send + 'static,
     C: Send + Sync + Context + 'static,
+    A: Send + Sync + 'static,
 {
-    Arc::new(ErasedTool::<T, C>::new())
+    Arc::new(ErasedTool::<T, C, A>::new())
 }
 
 pub trait LenientDeserialize: Sized {

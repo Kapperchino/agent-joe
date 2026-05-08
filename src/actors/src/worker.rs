@@ -30,5 +30,5 @@ pub trait Worker: Send + Sync + 'static {
         dependency: Dependency<Self::C>,
     ) -> Result<ActorState<Self::C>, ActorProcessingErr>;
 
-    fn tools() -> Vec<ErasedToolRef<Self::C>>;
+    fn tools() -> Vec<ErasedToolRef<Self::C, ActorState<Self::C>>>;
 }

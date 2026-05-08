@@ -15,7 +15,7 @@ use tools::grep::GrepTool;
 use tools::insert_after_line::InsertAfterLine;
 use tools::read_file::ReadFile;
 use tools::string_replace::StringReplace;
-use tools::tool_defs::{erased_tool, ErasedToolRef};
+use tools::tool_defs::{ErasedToolRef, erased_tool};
 
 pub struct BaseWorker<C: Context> {
     _ctx: PhantomData<C>,
@@ -63,14 +63,14 @@ impl Worker for BaseWorker<RustContext> {
         Ok(state)
     }
 
-    fn tools() -> Vec<ErasedToolRef<Self::C>> {
+    fn tools() -> Vec<ErasedToolRef<Self::C, ActorState<Self::C>>> {
         vec![
-            erased_tool::<ReadFile, Self::C>(),
-            erased_tool::<InsertAfterLine, Self::C>(),
-            erased_tool::<StringReplace, Self::C>(),
-            erased_tool::<CargoCheck, Self::C>(),
-            erased_tool::<GrepTool, Self::C>(),
-            erased_tool::<CargoTest, Self::C>(),
+            erased_tool::<ReadFile, Self::C, ActorState<Self::C>>(),
+            erased_tool::<InsertAfterLine, Self::C, ActorState<Self::C>>(),
+            erased_tool::<StringReplace, Self::C, ActorState<Self::C>>(),
+            erased_tool::<CargoCheck, Self::C, ActorState<Self::C>>(),
+            erased_tool::<GrepTool, Self::C, ActorState<Self::C>>(),
+            erased_tool::<CargoTest, Self::C, ActorState<Self::C>>(),
         ]
     }
 }

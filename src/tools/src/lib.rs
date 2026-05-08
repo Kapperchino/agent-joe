@@ -1,6 +1,7 @@
+extern crate self as tools;
+
 pub mod cargo_check;
 pub mod cargo_test;
-pub mod gather_context;
 pub mod grep;
 pub mod insert_after_line;
 pub mod read_file;

@@ -39,35 +39,32 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="b2666cda-85f3-42f3-a5d9-d8e9a094eda4" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/Cargo.toml" beforeDir="false" afterPath="$PROJECT_DIR$/Cargo.toml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/actors/src/tools/mod.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Cargo.lock" beforeDir="false" afterPath="$PROJECT_DIR$/Cargo.lock" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/actors/Cargo.toml" beforeDir="false" afterPath="$PROJECT_DIR$/src/actors/Cargo.toml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/actors/resources/stream_replay_1.jsonl" beforeDir="false" afterPath="$PROJECT_DIR$/src/actors/resources/stream_replay_1.jsonl" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/actors/src/actor.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/actors/src/actor.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/actors/src/background_actors/file_actor.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/actors/src/background_actors/file_actor.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/actors/src/stream_processor.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/actors/src/stream_processor.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/actors/src/tool_call.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/actors/src/tool_call.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/actors/src/actor_state.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/actors/src/actor_state.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/actors/src/lib.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/actors/src/lib.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/actors/src/worker.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/actors/src/worker.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/analysis/src/contexts/context.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/analysis/src/contexts/context.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/analysis/src/proj_meta.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/analysis/src/proj_meta.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/analysis/src/rust_proj.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/analysis/src/rust_proj.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/app/src/init_app.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/app/src/init_app.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/app/src/tui.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/app/src/tui.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/app/src/utils/draw_line.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/app/src/utils/draw_line.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/app/src/widgets/message_box.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/app/src/widgets/message_box.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/actors/src/workers/base_worker.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/actors/src/workers/base_worker.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/actors/src/workers/read_worker.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/actors/src/workers/read_worker.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/clients/src/claude.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/clients/src/claude.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/clients/src/claude_mappings.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/clients/src/claude_mappings.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/clients/src/config.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/clients/src/config.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/clients/src/lib.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/clients/src/lib.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/clients/src/llm.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/clients/src/llm.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/clients/src/openai.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/clients/src/openai.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/clients/src/openai_codex_auth.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/clients/src/openai_codex_auth.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/clients/src/tools/mod.rs" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/main.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/tools/src/cargo_check.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/tools/src/cargo_check.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/tools/src/cargo_test.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/tools/src/cargo_test.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/tools/src/gather_context.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/actors/src/tools/gather_context.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/tools/src/grep.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/tools/src/grep.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/tools/src/insert_after_line.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/tools/src/insert_after_line.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/tools/src/lib.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/tools/src/lib.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/tools/src/read_file.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/tools/src/read_file.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/tools/src/string_replace.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/tools/src/string_replace.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/tools/src/tool_defs.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/tools/src/tool_defs.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/turbo-code-macros/src/lib.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/turbo-code-macros/src/lib.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/utils/src/text_search.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/utils/src/text_search.rs" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -75,6 +72,13 @@
     <option name="LAST_RESOLUTION" value="IGNORE" />
   </component>
   <component name="ExecutionTargetManager" SELECTED_TARGET="RsBuildProfile:dev" />
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="Rust File" />
+      </list>
+    </option>
+  </component>
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
@@ -106,6 +110,7 @@
 }</component>
   <component name="RecentsManager">
     <key name="MoveFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$/src/actors/src/tools" />
       <recent name="$PROJECT_DIR$/src/tools/src" />
     </key>
   </component>

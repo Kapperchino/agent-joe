@@ -26,6 +26,7 @@ dependencies = [
  "tokio",
  "tools",
  "tracing",
+ "turbo-code-macros",
 ]
 
 [[package]]

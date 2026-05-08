@@ -65,12 +65,24 @@ pub enum Message {
     KYS,
 }
 
+
+#[derive(Clone)]
 pub struct Dependency<C: Context> {
     pub client: LLmClient,
-    pub tools: Vec<ErasedToolRef<C>>,
+    pub tools: Vec<ErasedToolRef<C, ActorContext<C>>>,
     pub tui_tx: mpsc::UnboundedSender<ActorToTui>,
     pub debug_mode: bool,
     pub context: C,
+}
+
+pub enum ActorContext<C: Context> {
+    Noop,
+    ActorInfo(ActorInfo<C>),
+}
+
+pub struct ActorInfo<C: Context> {
+    pub dep: Dependency<C>,
+    pub actor_ref: ActorRef<Message>,
 }
 
 impl Message {}

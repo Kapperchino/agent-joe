@@ -16,6 +16,8 @@ pub trait LLmClientTrait {
     ) -> Result<impl Stream<Item = anyhow::Result<StreamEvent>> + Send + 'static, anyhow::Error>;
     async fn send_request(&self, request: ClientRequest) -> anyhow::Result<ClientResponse>;
 }
+
+#[derive(Clone)]
 pub enum LLmClient {
     Claude {
         client: ClaudeClient,
