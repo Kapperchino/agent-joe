@@ -1,3 +1,4 @@
+use crate::actor::ActorContext;
 use analysis::contexts::context::Context;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -6,15 +7,15 @@ use tools::tool_defs::{ToolDefTrait, ToolId, ToolTrait};
 use turbo_code_macros::{ToolDef, ToolInput};
 
 #[async_trait]
-impl ToolTrait for GatherContext {
+impl<C: Context> ToolTrait<C, ActorContext<C>> for GatherContext {
     type Input = GatherContextInput;
     type Output = GatherContextResult;
 
-    async fn run<C: Context, A>(
+    async fn run(
         _input: Self::Input,
         _tool_id: ToolId,
         _cur_context: &C,
-        _actor_context: &A,
+        _actor_context: &ActorContext<C>,
     ) -> anyhow::Result<Self::Output> {
         anyhow::bail!("gather_context tool is not implemented")
     }

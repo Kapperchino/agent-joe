@@ -8,11 +8,11 @@ use utils::cargo;
 use utils::cargo::Cargo;
 
 #[async_trait]
-impl ToolTrait for CargoCheck {
+impl<C: Context, A> ToolTrait<C, A> for CargoCheck {
     type Input = CargoCheckInput;
     type Output = CargoCheckToolResult;
 
-    async fn run<C: Context, A>(
+    async fn run(
         input: Self::Input,
         tool_id: ToolId,
         _cur_context: &C,

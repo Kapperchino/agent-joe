@@ -8,11 +8,11 @@ use turbo_code_macros::{ToolDef, ToolInput};
 use utils::grep::Grep as ProjectGrep;
 
 #[async_trait]
-impl ToolTrait for GrepTool {
+impl<C: Context, A> ToolTrait<C, A> for GrepTool {
     type Input = GrepInput;
     type Output = GrepResult;
 
-    async fn run<C: Context, A>(
+    async fn run(
         input: Self::Input,
         tool_id: ToolId,
         cur_context: &C,

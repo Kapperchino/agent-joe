@@ -7,11 +7,11 @@ use turbo_code_macros::{ToolDef, ToolInput};
 use utils::text_search::TextSearch;
 
 #[async_trait]
-impl ToolTrait for StringReplace {
+impl<C: Context, A> ToolTrait<C, A> for StringReplace {
     type Input = StringReplaceInput;
     type Output = StringReplaceResult;
 
-    async fn run<C: Context, A>(
+    async fn run(
         input: Self::Input,
         tool_id: ToolId,
         _cur_context: &C,

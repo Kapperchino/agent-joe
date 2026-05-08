@@ -26,10 +26,10 @@ pub trait ToolInputSchema {
 pub trait ToolUse {}
 
 #[async_trait]
-pub trait ToolTrait: ToolDefTrait + Display {
+pub trait ToolTrait<C: Context, A>: ToolDefTrait + Display {
     type Input;
     type Output;
-    async fn run<C: Context, A>(
+    async fn run(
         input: Self::Input,
         tool_id: ToolId,
         cur_context: &C,
@@ -101,7 +101,7 @@ impl<T, C, A> ErasedTool<T, C, A> {
 #[async_trait]
 impl<T, C, A> ErasedToolTrait<C, A> for ErasedTool<T, C, A>
 where
-    T: ToolTrait + Send + Sync,
+    T: ToolTrait<C, A> + Send + Sync,
     T::Input: Clone + DeserializeOwned + Send,
     T::Output: DeserializeOwned + Serialize + Send,
     C: Send + Sync + Context,
@@ -136,7 +136,7 @@ where
         let typed_input: T::Input = serde_json::from_value(input)?;
 
         let typed_output: T::Output =
-            T::run::<C, A>(typed_input, tool_id, cur_context, actor_context).await?;
+            T::run(typed_input, tool_id, cur_context, actor_context).await?;
 
         let erased_output = serde_json::to_value(typed_output)?;
 
@@ -154,7 +154,7 @@ pub type ErasedToolRef<C, A> = Arc<dyn ErasedToolTrait<C, A>>;
 
 pub fn erased_tool<T, C, A>() -> ErasedToolRef<C, A>
 where
-    T: ToolTrait + Send + Sync + 'static,
+    T: ToolTrait<C, A> + Send + Sync + 'static,
     T::Input: Clone + DeserializeOwned + Send + 'static,
     T::Output: DeserializeOwned + Serialize + Send + 'static,
     C: Send + Sync + Context + 'static,

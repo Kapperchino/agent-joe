@@ -13,11 +13,11 @@ use tokio_stream::wrappers::LinesStream;
 use turbo_code_macros::{ToolDef, ToolInput};
 
 #[async_trait]
-impl ToolTrait for ReadFile {
+impl<C: Context, A> ToolTrait<C, A> for ReadFile {
     type Input = ReadFileInput;
     type Output = ReadFileResult;
 
-    async fn run<C: Context, A>(
+    async fn run(
         input: Self::Input,
         tool_id: ToolId,
         cur_context: &C,

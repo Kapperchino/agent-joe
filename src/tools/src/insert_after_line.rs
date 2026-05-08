@@ -8,11 +8,11 @@ use tokio::fs;
 use turbo_code_macros::{ToolDef, ToolInput};
 
 #[async_trait]
-impl ToolTrait for InsertAfterLine {
+impl<C: Context, A> ToolTrait<C, A> for InsertAfterLine {
     type Input = InsertAfterLineInput;
     type Output = InsertAfterLineResult;
 
-    async fn run<C: Context, A>(
+    async fn run(
         input: Self::Input,
         tool_id: ToolId,
         _cur_context: &C,
