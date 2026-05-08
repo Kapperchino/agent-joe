@@ -1,22 +1,52 @@
-use crate::actor::ActorContext;
-use analysis::contexts::context::Context;
+use crate::actor::{ActorContext, Dependency};
+use crate::worker::{Worker, WorkerAdapter};
+use crate::workers::read_worker::ReadWorker;
+use analysis::contexts::rust_context::RustContext;
+use anyhow::anyhow;
 use async_trait::async_trait;
+use ractor::Actor;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use tools::tool_defs::{ToolDefTrait, ToolId, ToolTrait};
 use turbo_code_macros::{ToolDef, ToolInput};
 
 #[async_trait]
-impl<C: Context> ToolTrait<C, ActorContext<C>> for GatherContext {
+impl ToolTrait<RustContext, ActorContext<RustContext>> for GatherContext {
     type Input = GatherContextInput;
     type Output = GatherContextResult;
 
     async fn run(
-        _input: Self::Input,
-        _tool_id: ToolId,
-        _cur_context: &C,
-        _actor_context: &ActorContext<C>,
+        input: Self::Input,
+        tool_id: ToolId,
+        cur_context: &RustContext,
+        actor_context: &ActorContext<RustContext>,
     ) -> anyhow::Result<Self::Output> {
+        let info = match actor_context {
+            ActorContext::ActorInfo(info) => Ok(info),
+            _ => Err(anyhow!("wrong actor context")),
+        }?;
+
+        let question = input.context;
+        let mut cur_context = cur_context.clone();
+        let init_prompt = format!("You are read-only agent in a rust code base,\
+     you will be asked a general question by the parent agent, make sure you thoroughly explore the \
+     codebase before you give your final answer\n{question}").to_owned();
+        cur_context.initial_prompt = init_prompt;
+
+        let (joe, actor_handle) = Actor::spawn_linked(
+            None,
+            WorkerAdapter::new(ReadWorker::new()),
+            Dependency {
+                client: info.dep.client.clone(),
+                tools: ReadWorker::tools(),
+                tui_tx: info.dep.tui_tx.clone(),
+                debug_mode: info.dep.debug_mode.clone(),
+                context: cur_context,
+            },
+            info.actor_ref.get_cell(),
+        )
+        .await
+        .expect("Failed to start actor");
         anyhow::bail!("gather_context tool is not implemented")
     }
 

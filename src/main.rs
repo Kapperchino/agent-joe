@@ -85,7 +85,12 @@ async fn main() {
         .await
         .expect("Failed to start supervisor");
 
-    let context = RustContext::new().await.unwrap();
+    let context = RustContext::new("You are a rust coding agent in a rust code base,\
+     every changes you make needs to be idiomatic, and follow the existing code base style. Text wise \
+     keep the responses precise. You are given the entire structure of the codebase, every file and every \
+     symbol.".to_owned())
+        .await
+        .unwrap();
 
     let (joe, actor_handle) = Actor::spawn_linked(
         None,

@@ -6,13 +6,10 @@ use crate::symbol_info::SymbolInfo;
 use crate::utils::RPath;
 use anyhow::anyhow;
 use async_trait::async_trait;
-use futures::StreamExt;
 use itertools::Itertools;
 use ra_ap_ide::LineIndex;
-use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::env;
-use std::fmt::Display;
 use std::path::PathBuf;
 use triomphe::Arc;
 use utils::utils::Utils;
@@ -41,7 +38,8 @@ impl Context for RustContext {
     async fn get_ctx(&self) -> String {
         let dir = self.cur_dir.to_str().unwrap_or("");
         let analytical_ctx = self.get_analytical_context().await.unwrap_or_default();
-        format!("project_root: {dir}\n{analytical_ctx}")
+        let init_prompt = self.initial_prompt.as_str();
+        format!("{init_prompt} \n project_root: {dir}\n{analytical_ctx}")
     }
 
     fn get_root(&self) -> PathBuf {
@@ -66,14 +64,16 @@ impl Context for RustContext {
     }
 }
 
+#[derive(Clone)]
 pub struct RustContext {
     pub cur_dir: PathBuf,
     pub rust_proj: RustProject,
     pub symbol_cache: TypedCache<SymbolInfo, SymbolInfo>,
+    pub initial_prompt: String,
 }
 
 impl RustContext {
-    pub async fn new() -> Result<RustContext, anyhow::Error> {
+    pub async fn new(initial_prompt: String) -> Result<RustContext, anyhow::Error> {
         let current_dir = env::current_dir()?;
         let files = Utils::get_dir_files(&current_dir).await?;
         let proj = RustProject::new(&current_dir)?;
@@ -89,6 +89,7 @@ impl RustContext {
 
         Ok(RustContext {
             cur_dir: current_dir,
+            initial_prompt,
             rust_proj: proj,
             symbol_cache: cache,
         })
@@ -187,19 +188,5 @@ impl RustContext {
         let symbols = SymbolInfo::get_symbols_with_cache_write(rust_proj, cache).await?;
         let res = ProjMeta::get_proj_meta_from_symbols(symbols, rust_proj).await?;
         Ok(res)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_get_analytical_context() {
-        let mut ctx = RustContext::new()
-            .await
-            .expect("Failed to create CurContext");
-        let context = ctx.get_ctx().await;
-        println!("\n=== Analytical Context ===\n{}", context);
     }
 }
