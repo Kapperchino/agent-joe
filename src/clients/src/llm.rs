@@ -6,6 +6,7 @@ use futures::future::Either;
 use futures::Stream;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use tools::tool_defs::{ToolDefinition, ToolId};
 
@@ -300,6 +301,54 @@ pub struct Message {
 pub enum Role {
     User,
     Assistant,
+}
+
+impl Display for Message {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        for block in &self.content {
+            match block {
+                ContentBlock::MessageBlock { text } => {
+                    writeln!(f, "{text}")?;
+                }
+                ContentBlock::ThinkingBlock {
+                    thinking,
+                    signature: _,
+                    reasoning_id,
+                } => {
+                    match reasoning_id {
+                        Some(id) => writeln!(f, "[thinking:{id}]")?,
+                        None => writeln!(f, "[thinking]")?,
+                    }
+                    writeln!(f, "{thinking}")?;
+                }
+                ContentBlock::ToolBlock {
+                    tool_id,
+                    name,
+                    input,
+                } => {
+                    writeln!(f, "[tool:{}:{}]", name, tool_id.id)?;
+                    let mut entries: Vec<_> = input.iter().collect();
+                    entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+                    for (key, value) in entries {
+                        writeln!(f, "{key}: {value}")?;
+                    }
+                }
+                ContentBlock::ToolResult {
+                    tool_id,
+                    content,
+                    is_error,
+                } => {
+                    match is_error {
+                        Some(true) => writeln!(f, "[tool_result:{}:error]", tool_id.id)?,
+                        _ => writeln!(f, "[tool_result:{}]", tool_id.id)?,
+                    }
+                    writeln!(f, "{content}")?;
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl Message {

@@ -1,10 +1,10 @@
-use crate::actor::{ActorContext, Dependency};
+use crate::actor::{ActorContext, Dependency, Message};
 use crate::worker::{Worker, WorkerAdapter};
 use crate::workers::read_worker::ReadWorker;
 use analysis::contexts::rust_context::RustContext;
 use anyhow::anyhow;
 use async_trait::async_trait;
-use ractor::Actor;
+use ractor::{call, Actor};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use tools::tool_defs::{ToolDefTrait, ToolId, ToolTrait};
@@ -45,9 +45,12 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for GatherContext {
             },
             info.actor_ref.get_cell(),
         )
-        .await
-        .expect("Failed to start actor");
-        anyhow::bail!("gather_context tool is not implemented")
+        .await?;
+        let res = call!(joe, |reply| {
+            Message::RegisterCallback(info.actor_ref.get_id(), reply)
+        })?;
+
+        Ok(GatherContextResult { res, id: tool_id })
     }
 
     fn display_input(input: &Self::Input) -> String {

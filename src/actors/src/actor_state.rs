@@ -8,7 +8,8 @@ use anyhow::anyhow;
 use clients::llm::{ContentBlock, LLmClient, Message, Role};
 use common_models::tui_models::State;
 use futures::future;
-use ractor::{ActorCell, ActorRef};
+use ractor::{ActorCell, ActorId, ActorRef, RpcReplyPort};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use tools::tool_defs::{ErasedToolRef, ToolDefinition, ToolInvocation, ToolResult};
 use tracing::{error, warn};
@@ -20,6 +21,7 @@ pub struct ActorState<C: Context> {
     pub llm: LLmClient,
     pub tools: Vec<ErasedToolRef<C, ActorContext<C>>>,
     pub file_actor: Option<ActorRef<file_actor::Message>>,
+    pub pending_ports: HashMap<ActorId, RpcReplyPort<String>>,
     pub stream_processor: StreamProcessor,
     pub reporter: EventReporter,
     pub debug_mode: bool,
@@ -59,6 +61,7 @@ impl<C: Context> ActorState<C> {
             },
             debug_mode: dependency.debug_mode,
             file_actor,
+            pending_ports: HashMap::default(),
             stream_processor: StreamProcessor {
                 batches: vec![],
                 stream_log_path,

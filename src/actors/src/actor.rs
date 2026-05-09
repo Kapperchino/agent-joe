@@ -8,10 +8,10 @@ use commands::command::Command;
 use common_models::tui_models::ActorToTui;
 use common_models::tui_models::State;
 use futures::StreamExt;
-use ractor::Actor;
 use ractor::ActorProcessingErr;
 use ractor::ActorRef;
 use ractor::SupervisionEvent;
+use ractor::{Actor, ActorId, RpcReplyPort};
 use ractor_actors::streams::spawn_stream_pump;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -58,13 +58,14 @@ pub enum Message {
     StartWork(Option<String>),
     Command(Command),
     UseTool(Vec<PreprocessedStreamItem>),
-    Noop(Vec<PreprocessedStreamItem>),
+    Finished(Vec<PreprocessedStreamItem>),
     ProcessStreamItem(StreamItem),
+    RegisterCallback(ActorId, RpcReplyPort<String>),
+    Callback(ActorId, String),
     Interrupt,
     Clear,
     KYS,
 }
-
 
 #[derive(Clone)]
 pub struct Dependency<C: Context> {
@@ -147,9 +148,18 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
 
                 state.stream_actor = Some(actor)
             }
-            Message::Noop(res) => {
+            Message::Finished(res) => {
                 let res = state.stream_items_to_res(res).await;
                 state.save_history(res)?;
+                state.pending_ports.iter().try_for_each(|(id, port)| {
+                    myself.send_message(Message::Callback(
+                        id.clone(),
+                        match state.history.last() {
+                            None => "".to_string(),
+                            Some(msg) => msg.to_string(),
+                        },
+                    ))
+                })?;
             }
             Message::UseTool(vec) => {
                 let tool_lines: Result<Vec<String>, anyhow::Error> = vec
@@ -192,7 +202,7 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
                         }
                         StreamNextStep::Done => {
                             let pre_processed = state.stream_processor.extract_and_pre_process()?;
-                            myself.send_message(Message::Noop(pre_processed))?;
+                            myself.send_message(Message::Finished(pre_processed))?;
                         }
                         StreamNextStep::Accum => {}
                         StreamNextStep::Noop => {}
@@ -247,6 +257,15 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
                 state.stream_actor = None;
                 state.change_state(State::Ready);
             }
+            Message::RegisterCallback(id, port) => {
+                state.pending_ports.insert(id, port);
+            }
+            Message::Callback(id, res) => match state.pending_ports.remove(&id) {
+                Some(port) => {
+                    port.send(res)?;
+                }
+                None => {}
+            },
         }
         Ok(())
     }
