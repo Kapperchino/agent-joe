@@ -3,19 +3,16 @@ use crate::actor_state::ActorState;
 use crate::background_actors::cache_actor::CacheActor;
 use crate::background_actors::file_actor::FileActor;
 use crate::background_actors::{cache_actor, file_actor};
+use crate::tools::gather_context::GatherContext;
 use crate::worker::Worker;
 use analysis::contexts::context::Context;
 use analysis::contexts::rust_context::RustContext;
 use async_trait::async_trait;
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use std::marker::PhantomData;
-use tools::cargo_check::CargoCheck;
-use tools::cargo_test::CargoTest;
-use tools::grep::GrepTool;
 use tools::insert_after_line::InsertAfterLine;
-use tools::read_file::ReadFile;
 use tools::string_replace::StringReplace;
-use tools::tool_defs::{ErasedToolRef, erased_tool};
+use tools::tool_defs::{erased_tool, ErasedToolRef};
 
 pub struct BaseWorker<C: Context> {
     _ctx: PhantomData<C>,
@@ -56,7 +53,7 @@ impl Worker for BaseWorker<RustContext> {
         )
         .await?;
 
-        let state = ActorState::new(dependency, Some(file_actor_ref))
+        let state = ActorState::new(dependency, myself.clone(), Some(file_actor_ref))
             .await
             .actor_err()?;
 
@@ -65,12 +62,13 @@ impl Worker for BaseWorker<RustContext> {
 
     fn tools() -> Vec<ErasedToolRef<Self::C, ActorContext<Self::C>>> {
         vec![
-            erased_tool::<ReadFile, Self::C, ActorContext<Self::C>>(),
             erased_tool::<InsertAfterLine, Self::C, ActorContext<Self::C>>(),
             erased_tool::<StringReplace, Self::C, ActorContext<Self::C>>(),
-            erased_tool::<CargoCheck, Self::C, ActorContext<Self::C>>(),
-            erased_tool::<GrepTool, Self::C, ActorContext<Self::C>>(),
-            erased_tool::<CargoTest, Self::C, ActorContext<Self::C>>(),
+            erased_tool::<GatherContext, Self::C, ActorContext<Self::C>>(),
+            // erased_tool::<CargoCheck, Self::C, ActorContext<Self::C>>(),
+            // erased_tool::<GrepTool, Self::C, ActorContext<Self::C>>(),
+            // erased_tool::<CargoTest, Self::C, ActorContext<Self::C>>(),
+            // erased_tool::<ReadFile, Self::C, ActorContext<Self::C>>(),
         ]
     }
 }

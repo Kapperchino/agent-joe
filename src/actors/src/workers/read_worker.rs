@@ -8,7 +8,7 @@ use ractor::{ActorProcessingErr, ActorRef};
 use std::marker::PhantomData;
 use tools::grep::GrepTool;
 use tools::read_file::ReadFile;
-use tools::tool_defs::{ErasedToolRef, erased_tool};
+use tools::tool_defs::{erased_tool, ErasedToolRef};
 
 pub struct ReadWorker<C: Context> {
     _ctx: PhantomData<C>,
@@ -23,7 +23,9 @@ impl Worker for ReadWorker<RustContext> {
         myself: ActorRef<Message>,
         dependency: Dependency<Self::C>,
     ) -> Result<ActorState<Self::C>, ActorProcessingErr> {
-        let state = ActorState::new(dependency, None).await.actor_err()?;
+        let state = ActorState::new(dependency, myself.clone(), None)
+            .await
+            .actor_err()?;
         Ok(state)
     }
 

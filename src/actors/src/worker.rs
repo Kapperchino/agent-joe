@@ -1,5 +1,5 @@
-use crate::actor::{ActorContext, Dependency};
 use crate::actor::Message;
+use crate::actor::{ActorContext, Dependency};
 use crate::actor_state::ActorState;
 use analysis::contexts::context::Context;
 use async_trait::async_trait;
@@ -22,7 +22,7 @@ impl<W> WorkerAdapter<W> {
 
 #[async_trait]
 pub trait Worker: Send + Sync + 'static {
-    type C: Context + Send + Sync + 'static;
+    type C: Context + Send + Sync + Clone + 'static;
 
     async fn startup_hook(
         &self,

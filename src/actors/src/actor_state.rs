@@ -1,4 +1,5 @@
-use crate::actor::{ActorContext, Dependency, StreamRes};
+use crate::actor;
+use crate::actor::{ActorContext, ActorInfo, Dependency, StreamRes};
 use crate::background_actors::file_actor;
 use crate::event_reporter::EventReporter;
 use crate::stream_processor::{PreprocessedStreamItem, ProcessedItem, StreamProcessor};
@@ -25,12 +26,16 @@ pub struct ActorState<C: Context> {
     pub stream_processor: StreamProcessor,
     pub reporter: EventReporter,
     pub debug_mode: bool,
+    pub actor_ref: ActorRef<actor::Message>,
+    dependency: Dependency<C>,
 }
-impl<C: Context> ActorState<C> {
+impl<C: Context + Clone> ActorState<C> {
     pub async fn new(
         dependency: Dependency<C>,
+        actor_ref: ActorRef<actor::Message>,
         file_actor: Option<ActorRef<file_actor::Message>>,
     ) -> anyhow::Result<Self> {
+        let dep_clone = dependency.clone();
         let cur_context_str = dependency.context.get_ctx().await;
 
         let stream_log_path = if dependency.debug_mode {
@@ -71,6 +76,8 @@ impl<C: Context> ActorState<C> {
                 },
                 cur_state: State::Ready,
             },
+            dependency: dep_clone,
+            actor_ref,
         })
     }
 
@@ -153,7 +160,10 @@ impl<C: Context> ActorState<C> {
                 input.clone(),
                 id.clone(),
                 &self.cur_context,
-                &ActorContext::Noop,
+                &ActorContext::ActorInfo(ActorInfo {
+                    dep: self.dependency.clone(),
+                    actor_ref: self.actor_ref.clone(),
+                }),
             )
             .await
         {

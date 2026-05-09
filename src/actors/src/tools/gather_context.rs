@@ -46,6 +46,7 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for GatherContext {
             info.actor_ref.get_cell(),
         )
         .await?;
+        joe.send_message(Message::StartWork(None))?;
         let res = call!(joe, |reply| {
             Message::RegisterCallback(info.actor_ref.get_id(), reply)
         })?;
