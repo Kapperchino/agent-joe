@@ -15,7 +15,7 @@ use triomphe::Arc;
 use utils::utils::Utils;
 
 pub struct RustContextLineIndexCreator {
-    proj_meta: Arc<ProjMeta>,
+    pub(crate) proj_meta: Arc<ProjMeta>,
 }
 
 impl LineIndexCreator for RustContextLineIndexCreator {

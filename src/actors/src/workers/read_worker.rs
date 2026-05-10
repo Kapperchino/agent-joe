@@ -6,6 +6,7 @@ use analysis::contexts::rust_context::RustContext;
 use async_trait::async_trait;
 use ractor::{ActorProcessingErr, ActorRef};
 use std::marker::PhantomData;
+use analysis::contexts::rust_empty_context::RustEmptyContext;
 use tools::grep::GrepTool;
 use tools::read_file::ReadFile;
 use tools::tool_defs::{erased_tool, ErasedToolRef};
@@ -15,8 +16,8 @@ pub struct ReadWorker<C: Context> {
 }
 
 #[async_trait]
-impl Worker for ReadWorker<RustContext> {
-    type C = RustContext;
+impl Worker for ReadWorker<RustEmptyContext> {
+    type C = RustEmptyContext;
 
     async fn startup_hook(
         &self,

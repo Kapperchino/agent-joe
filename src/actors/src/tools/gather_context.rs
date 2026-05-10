@@ -2,6 +2,7 @@ use crate::actor::{ActorContext, Dependency, Message};
 use crate::worker::{Worker, WorkerAdapter};
 use crate::workers::read_worker::ReadWorker;
 use analysis::contexts::rust_context::RustContext;
+use analysis::contexts::rust_empty_context::RustEmptyContext;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use ractor::{call, Actor};
@@ -33,6 +34,8 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for GatherContext {
      codebase before you give your final answer\n{question}").to_owned();
         cur_context.initial_prompt = init_prompt;
 
+        let empty_context = RustEmptyContext::new(cur_context);
+
         let (joe, actor_handle) = Actor::spawn_linked(
             None,
             WorkerAdapter::new(ReadWorker::new()),
@@ -41,7 +44,7 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for GatherContext {
                 tools: ReadWorker::tools(),
                 tui_tx: info.dep.tui_tx.clone(),
                 debug_mode: info.dep.debug_mode.clone(),
-                context: cur_context,
+                context: empty_context,
             },
             info.actor_ref.get_cell(),
         )
