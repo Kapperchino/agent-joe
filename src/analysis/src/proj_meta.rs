@@ -1,12 +1,11 @@
-use crate::analysis::Range;
+use crate::analysis::{AnalysisSession, Range};
 use crate::rust_proj::RustProject;
 use crate::symbol_info::SymbolInfo;
 use crate::utils::RPath;
-use futures::{future, StreamExt};
+use futures::{StreamExt, future};
 use itertools::Itertools;
 use ra_ap_ide::LineIndex;
 use ra_ap_ide_db::SymbolKind;
-use ra_ap_vfs::VfsPath;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
@@ -327,21 +326,40 @@ impl ProjMeta {
     }
 
     pub async fn get_file_metas(proj: &RustProject) -> anyhow::Result<Vec<FileMeta>> {
-        let hashes = Self::get_file_hashes(proj).await?;
-        let analysis = proj.new_analysis().await;
-        hashes
-            .into_iter()
-            .map(|(pb, hash)| {
-                let path = pb.to_string_lossy().to_string();
-                let file_id = proj
-                    .vfs
-                    .lock()
-                    .unwrap()
-                    .file_id(&VfsPath::new_real_path(path.clone()))
-                    .unwrap()
-                    .0;
+        let file_inputs = {
+            let analysis = proj.new_analysis().await;
+            analysis
+                .get_work_files()
+                .into_iter()
+                .flat_map(|file| {
+                    file.path
+                        .into_abs_path()
+                        .map(|path| (PathBuf::from(path), file.id))
+                })
+                .map(|(path, file_id)| {
+                    let line_index = analysis.get_line_indecies(file_id)?;
+                    Ok((path, line_index, file_id.index()))
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?
+        };
 
-                let line_index = analysis.get_line_indecies(file_id)?;
+        let mut hashes: HashMap<_, _> = Self::get_file_hashes_for_paths(
+            file_inputs
+                .iter()
+                .map(|(path, _, _)| path.clone())
+                .collect(),
+        )
+        .await?
+        .into_iter()
+        .collect();
+
+        file_inputs
+            .into_iter()
+            .map(|(pb, line_index, file_id)| {
+                let path = pb.to_string_lossy().to_string();
+                let hash = hashes
+                    .remove(&pb)
+                    .ok_or_else(|| anyhow::anyhow!("missing file hash for {path}"))?;
                 let rpath = path
                     .strip_prefix(&format!("{}/", proj.root))
                     .unwrap_or(&path)
@@ -350,7 +368,7 @@ impl ProjMeta {
                 Ok(FileMeta {
                     line_index,
                     rpath,
-                    file_id: file_id.index(),
+                    file_id,
                     hash,
                 })
             })
@@ -358,7 +376,17 @@ impl ProjMeta {
     }
 
     pub async fn get_file_hashes(proj: &RustProject) -> anyhow::Result<Vec<(PathBuf, Vec<u8>)>> {
-        let contents = Self::get_files(proj).await?;
+        let paths = {
+            let analysis = proj.new_analysis().await;
+            Self::work_file_paths(&analysis)
+        };
+        Self::get_file_hashes_for_paths(paths).await
+    }
+
+    async fn get_file_hashes_for_paths(
+        paths: Vec<PathBuf>,
+    ) -> anyhow::Result<Vec<(PathBuf, Vec<u8>)>> {
+        let contents = Self::get_files_for_paths(paths).await?;
         let results: Vec<_> = futures::stream::iter(contents)
             .map(|(path, content)| {
                 tokio::spawn(
@@ -373,14 +401,19 @@ impl ProjMeta {
         Ok(res)
     }
 
-    async fn get_files(proj: &RustProject) -> anyhow::Result<Vec<(PathBuf, String)>> {
-        let anal = proj.new_analysis().await;
-        future::join_all(anal.get_work_files().into_iter().flat_map(|file| {
-            file.path.into_abs_path().map(async |path| {
-                Utils::get_file_content(&path.clone().into())
-                    .await
-                    .map(|content| (path.into(), content))
-            })
+    fn work_file_paths(analysis: &AnalysisSession<'_>) -> Vec<PathBuf> {
+        analysis
+            .get_work_files()
+            .into_iter()
+            .flat_map(|file| file.path.into_abs_path().map(PathBuf::from))
+            .collect()
+    }
+
+    async fn get_files_for_paths(paths: Vec<PathBuf>) -> anyhow::Result<Vec<(PathBuf, String)>> {
+        future::join_all(paths.into_iter().map(|path| async move {
+            Utils::get_file_content(&path.clone())
+                .await
+                .map(|content| (path, content))
         }))
         .await
         .into_iter()

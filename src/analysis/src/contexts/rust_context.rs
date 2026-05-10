@@ -11,7 +11,8 @@ use ra_ap_ide::LineIndex;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::path::PathBuf;
-use triomphe::Arc;
+use std::sync::Arc;
+use triomphe;
 use utils::utils::Utils;
 
 pub struct RustContextLineIndexCreator {
@@ -144,7 +145,7 @@ impl RustContext {
         let session = proj.new_analysis().await;
 
         let meta = paths.iter().try_fold(Vec::new(), |mut acc, p| {
-            let nodes = if let Some(f_id) = proj.get_file_id(p.clone()) {
+            let nodes = if let Some(f_id) = session.get_file_id(p) {
                 let file_structs = session.get_file_structure(f_id);
                 let line_ind = session.get_line_indecies(f_id)?;
                 SymbolInfo::from_file_structs(f_id, file_structs, p.clone(), line_ind, &proj.root)

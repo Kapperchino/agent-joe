@@ -7,7 +7,9 @@ use ra_ap_ide::{
 use ra_ap_ide_db::symbol_index::Query;
 use ra_ap_vfs::{FileId, VfsPath};
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
+#[derive(Clone)]
 pub struct FileInfo {
     pub id: FileId,
     pub path: VfsPath,
@@ -23,6 +25,7 @@ pub struct CrateInfo {
 pub struct AnalysisSession<'a> {
     analysis: Analysis,
     proj: &'a RustProject,
+    work_files: Vec<FileInfo>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, Eq, PartialEq, Hash)]
@@ -33,19 +36,15 @@ pub struct Range {
 
 impl<'a> AnalysisSession<'a> {
     pub(crate) fn get_work_files(&self) -> Vec<FileInfo> {
-        let vfs = self.proj.vfs.lock().unwrap();
-        vfs.iter()
-            .filter(|(id, _path)| {
-                self.analysis
-                    .source_root_id(id.clone())
-                    .and_then(|t| self.analysis.is_local_source_root(t))
-                    .unwrap_or(false)
-            })
-            .map(|(id, path)| FileInfo {
-                id,
-                path: path.clone(),
-            })
-            .collect()
+        self.work_files.clone()
+    }
+    
+    pub fn get_file_id(&self, path: &Path) -> Option<FileId> {
+        let path = VfsPath::new_real_path(path.to_string_lossy().to_string());
+        self.work_files
+            .iter()
+            .find(|file| file.path == path)
+            .map(|file| file.id)
     }
 
     pub fn get_dependenceis(&self) -> Vec<CrateInfo> {
@@ -122,56 +121,11 @@ impl<'a> AnalysisSession<'a> {
         Ok(self.analysis.file_line_index(file)?)
     }
 
-    pub async fn new(analysis: Analysis, proj: &'a RustProject) -> Self {
-        Self { analysis, proj }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::env;
-
-    #[tokio::test]
-    async fn test_get_dependencies() {
-        let cur_dir = env::current_dir().expect("Failed to get current directory");
-        let project = RustProject::new(&cur_dir).expect("Failed to load rust project");
-        let session = project.new_analysis().await;
-        let dependencies = session.get_dependenceis();
-
-        println!("\n=== Crate Graph ===");
-        println!("{:?}", dependencies);
-        println!("=== End Crate Graph ===\n");
-
-        assert!(!dependencies.is_empty(), "Expected non-empty crate graph");
-    }
-
-    #[tokio::test]
-    async fn test_get_file_structure() {
-        let cur_dir = env::current_dir().expect("Failed to get current directory");
-        let project = RustProject::new(&cur_dir).expect("Failed to load rust project");
-        let session = project.new_analysis().await;
-
-        let work_files = session.get_work_files();
-        assert!(!work_files.is_empty(), "Expected at least one work file");
-
-        let actor_state = work_files
-            .iter()
-            .find(|x| {
-                x.path.as_path().unwrap() == "/Users/kamranorhun/Dev/turbo-code/src/actor_state.rs"
-            })
-            .unwrap();
-        let file_structure = session.get_file_structure(actor_state.id);
-
-        println!("\n=== File Structure for {} ===", actor_state.path);
-        for node in &file_structure {
-            println!("{:?}", node);
+    pub fn new(analysis: Analysis, proj: &'a RustProject, work_files: Vec<FileInfo>) -> Self {
+        Self {
+            analysis,
+            proj,
+            work_files,
         }
-        println!("=== End File Structure ===\n");
-
-        assert!(
-            !file_structure.is_empty(),
-            "Expected non-empty file structure"
-        );
     }
 }

@@ -45,8 +45,7 @@ impl Worker for BaseWorker<RustContext> {
             FileActor {},
             file_actor::Dependency {
                 main_dir: cur_context.cur_dir.clone(),
-                vfs: cur_context.rust_proj.vfs.clone(),
-                a_host: cur_context.rust_proj.analysis_host.clone(),
+                proj: cur_context.rust_proj.clone(),
                 cache_actor: cache_actor_ref,
             },
             myself.get_cell(),

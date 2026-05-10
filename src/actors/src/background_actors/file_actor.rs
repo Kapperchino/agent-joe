@@ -3,18 +3,12 @@ use crate::background_actors::cache_actor::Message::ApplyChanges;
 use crate::background_actors::file_actor::Message::{
     ApplyVFS, FileCreated, FileModified, FileRemoved,
 };
+use analysis::rust_proj::RustProject;
 use anyhow::anyhow;
-use futures::future::OptionFuture;
-use itertools::cloned;
-use notify_types::event::{CreateKind, Event, EventKind, ModifyKind, RemoveKind, RenameMode};
-use ra_ap_ide::{AnalysisHost, SourceRoot};
-use ra_ap_ide_db::ChangeWithProcMacros;
-use ra_ap_vfs::file_set::FileSet;
-use ra_ap_vfs::{Change, ChangeKind, FileId, Vfs, VfsPath};
+use notify_types::event::{CreateKind, EventKind, ModifyKind, RemoveKind, RenameMode};
+use ra_ap_vfs::{Vfs, VfsPath};
 use ractor::concurrency::Duration;
-use ractor::{
-    call, Actor, ActorCell, ActorProcessingErr, ActorRef, MessagingErr, SupervisionEvent,
-};
+use ractor::{Actor, ActorCell, ActorProcessingErr, ActorRef, call};
 use ractor_actors::filewatcher::{
     FileWatcher, FileWatcherConfig, FileWatcherMessage, FileWatcherSubscriber, SubscriptionResult,
 };
@@ -25,15 +19,13 @@ use tracing::error;
 pub struct FileActor {}
 
 pub struct Dependency {
-    pub(crate) vfs: Arc<Mutex<Vfs>>,
-    pub(crate) a_host: Arc<Mutex<AnalysisHost>>,
+    pub(crate) proj: RustProject,
     pub main_dir: PathBuf,
     pub cache_actor: ActorRef<cache_actor::Message>,
 }
 
 pub struct FileActorState {
-    vfs: Arc<Mutex<Vfs>>,
-    a_host: Arc<Mutex<AnalysisHost>>,
+    proj: RustProject,
     inner_file_actor: ActorCell,
     cache_actor: ActorRef<cache_actor::Message>,
 }
@@ -104,8 +96,7 @@ impl Actor for FileActor {
 
         Ok(FileActorState {
             inner_file_actor: fwactor.get_cell(),
-            vfs: dependency.vfs,
-            a_host: dependency.a_host,
+            proj: dependency.proj,
             cache_actor: dependency.cache_actor,
         })
     }
@@ -119,7 +110,7 @@ impl Actor for FileActor {
         match message {
             FileCreated(created, paths) => {
                 if let Some(path) = ValidPath::option(paths.first().cloned()) {
-                    Self::handle_file_created(state.vfs.clone(), created, path).await?;
+                    Self::handle_file_created(state.proj.vfs.clone(), created, path).await?;
                 }
             }
             FileModified(modified, paths) => {
@@ -129,7 +120,7 @@ impl Actor for FileActor {
                     .collect();
                 if v_paths.len() == paths.len() {
                     Self::handle_file_modified(
-                        state.vfs.clone(),
+                        state.proj.vfs.clone(),
                         modified,
                         v_paths,
                         state.cache_actor.clone(),
@@ -140,7 +131,7 @@ impl Actor for FileActor {
             FileRemoved(_, paths) => {
                 if let Some(v_path) = ValidPath::option(paths.first().cloned()) {
                     Self::handle_file_deletion(
-                        state.vfs.clone(),
+                        state.proj.vfs.clone(),
                         v_path,
                         state.cache_actor.clone(),
                     )
@@ -148,33 +139,8 @@ impl Actor for FileActor {
                 }
             }
             ApplyVFS => {
-                let mut vfs = state.vfs.lock().unwrap();
-                let changes = vfs.take_changes();
-                let mut proj_change = ChangeWithProcMacros::default();
-                let mut roots = Vec::new();
-                drop(vfs);
-
-                if !changes.is_empty() {
-                    changes
-                        .into_iter()
-                        .for_each(|(id, change)| match change.change {
-                            Change::Create(contents, _hash) | Change::Modify(contents, _hash) => {
-                                let mut fs = FileSet::default();
-                                let vfs = state.vfs.lock().unwrap();
-                                fs.insert(id, vfs.file_path(id).clone());
-                                roots.push(SourceRoot::new_local(fs));
-                                let text = String::from_utf8(contents).ok();
-                                proj_change.change_file(id, text.map(Into::into));
-                            }
-                            Change::Delete => {
-                                proj_change.change_file(id, None);
-                            }
-                        });
-
-                    proj_change.set_roots(roots);
-                    state.a_host.lock().unwrap().apply_change(proj_change);
-                    state.cache_actor.send_message(ApplyChanges)?;
-                }
+                state.proj.apply_vfs_changes()?;
+                state.cache_actor.send_message(ApplyChanges)?;
             }
         }
         Ok(())

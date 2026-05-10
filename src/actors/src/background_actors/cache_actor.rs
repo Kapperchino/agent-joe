@@ -61,7 +61,7 @@ impl Actor for CacheActor {
 
                         remove_keys.iter().try_for_each(|(_, v)| db.delete(v))?;
 
-                        let nodes = if let Some(f_id) = state.proj.get_file_id(x.path.clone()) {
+                        let nodes = if let Some(f_id) = session.get_file_id(&x.path) {
                             let file_structs = session.get_file_structure(f_id);
                             let line_ind = session.get_line_indecies(f_id)?;
                             SymbolInfo::from_file_structs(

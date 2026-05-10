@@ -2,7 +2,7 @@ use crate::contexts::context::Context;
 use crate::contexts::rust_context::{RustContext, RustContextLineIndexCreator};
 use async_trait::async_trait;
 use std::path::PathBuf;
-use triomphe::Arc;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct RustEmptyContext {

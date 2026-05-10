@@ -2,7 +2,6 @@ use crate::actor::{ActorContext, Dependency, IntoActorErr, Message};
 use crate::actor_state::ActorState;
 use crate::worker::Worker;
 use analysis::contexts::context::Context;
-use analysis::contexts::rust_context::RustContext;
 use async_trait::async_trait;
 use ractor::{ActorProcessingErr, ActorRef};
 use std::marker::PhantomData;
