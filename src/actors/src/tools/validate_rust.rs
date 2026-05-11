@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use tools::tool_defs::{ToolDefTrait, ToolId, ToolTrait};
 use turbo_code_macros::{ToolDef, ToolInput};
+use crate::workers::validate_worker::ValidateWorker;
 
 #[async_trait]
 impl ToolTrait<RustEmptyContext, ActorContext<RustEmptyContext>> for ValidateRust {
@@ -38,10 +39,10 @@ impl ToolTrait<RustEmptyContext, ActorContext<RustEmptyContext>> for ValidateRus
 
         let (joe, actor_handle) = Actor::spawn_linked(
             None,
-            WorkerAdapter::new(ReadWorker::new()),
+            WorkerAdapter::new(ValidateWorker::new()),
             Dependency {
                 client: info.dep.client.clone(),
-                tools: ReadWorker::tools(),
+                tools: ValidateWorker::tools(),
                 tui_tx: info.dep.tui_tx.clone(),
                 debug_mode: info.dep.debug_mode.clone(),
                 context: cur_context,
@@ -82,7 +83,7 @@ impl ToolTrait<RustEmptyContext, ActorContext<RustEmptyContext>> for ValidateRus
 
 #[derive(Default, Serialize, Deserialize, Debug, Clone, ToolDef)]
 #[tool(
-    name = "gather_context",
+    name = "validate_rust",
     description = "Create an agent to validate a rust workplace"
 )]
 pub struct ValidateRust {

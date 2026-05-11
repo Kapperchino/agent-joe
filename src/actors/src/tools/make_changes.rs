@@ -1,6 +1,5 @@
 use crate::actor::{ActorContext, Dependency, Message};
 use crate::worker::{Worker, WorkerAdapter};
-use crate::workers::read_worker::ReadWorker;
 use crate::workers::write_worker::WriteWorker;
 use analysis::contexts::rust_context::RustContext;
 use analysis::contexts::rust_empty_context::RustEmptyContext;
@@ -40,7 +39,7 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for MakeChanges {
 
         let (joe, actor_handle) = Actor::spawn_linked(
             None,
-            WorkerAdapter::new(ReadWorker::new()),
+            WorkerAdapter::new(WriteWorker::new()),
             Dependency {
                 client: info.dep.client.clone(),
                 tools: WriteWorker::tools(),
