@@ -83,7 +83,7 @@ impl ToolTrait<RustEmptyContext, ActorContext<RustEmptyContext>> for ValidateRus
 #[derive(Default, Serialize, Deserialize, Debug, Clone, ToolDef)]
 #[tool(
     name = "gather_context",
-    description = "Create an agent to gather context"
+    description = "Create an agent to validate a rust workplace"
 )]
 pub struct ValidateRust {
     #[tool(input)]
