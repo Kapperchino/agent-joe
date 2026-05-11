@@ -10,9 +10,8 @@ use analysis::contexts::rust_context::RustContext;
 use async_trait::async_trait;
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use std::marker::PhantomData;
-use tools::insert_after_line::InsertAfterLine;
-use tools::string_replace::StringReplace;
 use tools::tool_defs::{erased_tool, ErasedToolRef};
+use crate::tools::make_changes::MakeChanges;
 
 pub struct BaseWorker<C: Context> {
     _ctx: PhantomData<C>,
@@ -61,13 +60,9 @@ impl Worker for BaseWorker<RustContext> {
 
     fn tools() -> Vec<ErasedToolRef<Self::C, ActorContext<Self::C>>> {
         vec![
-            erased_tool::<InsertAfterLine, Self::C, ActorContext<Self::C>>(),
-            erased_tool::<StringReplace, Self::C, ActorContext<Self::C>>(),
             erased_tool::<GatherContext, Self::C, ActorContext<Self::C>>(),
-            // erased_tool::<CargoCheck, Self::C, ActorContext<Self::C>>(),
-            // erased_tool::<GrepTool, Self::C, ActorContext<Self::C>>(),
-            // erased_tool::<CargoTest, Self::C, ActorContext<Self::C>>(),
-            // erased_tool::<ReadFile, Self::C, ActorContext<Self::C>>(),
+            erased_tool::<MakeChanges, Self::C, ActorContext<Self::C>>(),
+            erased_tool::<GatherContext, Self::C, ActorContext<Self::C>>(),
         ]
     }
 }

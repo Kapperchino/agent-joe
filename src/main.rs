@@ -85,10 +85,9 @@ async fn main() {
         .await
         .expect("Failed to start supervisor");
 
-    let context = RustContext::new("You are a rust coding agent in a rust code base,\
-     every changes you make needs to be idiomatic, and follow the existing code base style. Text wise \
-     keep the responses precise. You are given the entire structure of the codebase, every file and every \
-     symbol.".to_owned())
+    let context = RustContext::new("You are a rust coding orchestrator agent in a rust codebase, \
+    you do not have any direct read or write abilities, but you are able to spawn other agents to do the job for you.\
+    Keep the commands concise and accurate.".to_owned())
         .await
         .unwrap();
 

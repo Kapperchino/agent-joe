@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct RustEmptyContext {
-    inner: RustContext,
+    pub inner: RustContext,
 }
 
 impl RustEmptyContext {
