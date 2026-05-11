@@ -49,6 +49,8 @@ impl OpenAIConfig {
 )]
 #[serde(rename_all = "snake_case")]
 pub enum OpenAIEffort {
+    #[strum(message = "none")]
+    None,
     #[strum(message = "low")]
     Low,
     #[strum(message = "medium")]

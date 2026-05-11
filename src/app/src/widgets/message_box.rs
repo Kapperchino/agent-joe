@@ -392,7 +392,10 @@ impl MessageBoxState {
     }
 
     pub fn advance_throbber(&mut self) {
-        if !matches!(self.actor_state, State::ThinkingStart) {
+        if !matches!(
+            self.actor_state,
+            State::ThinkingStart | State::ToolStart | State::ThinkingStop | State::ToolStop
+        ) {
             self.throbber_state = ThrobberState::default();
             self.throbber_tick = 0;
             return;
