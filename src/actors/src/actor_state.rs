@@ -147,10 +147,16 @@ impl<C: Context + Clone> ActorState<C> {
         let tool = self
             .find_tool(&tool_call.name)
             .ok_or_else(|| anyhow!("unknown tool `{}`", tool_call.name))?;
+        let tool_name = tool_call.name.clone();
         let id = tool_call.id.clone();
         let input = tool_call.input_value()?;
+
+        if self.debug_mode {
+            warn!(tool_name = %tool_name, tool_id = ?id, input = ?input, "tool input");
+        }
+
         let invocation = ToolInvocation {
-            name: tool_call.name.clone(),
+            name: tool_name.clone(),
             input: tool.input_req_erased(&input)?,
             display: tool.display_erased(&input)?,
         };
@@ -169,9 +175,21 @@ impl<C: Context + Clone> ActorState<C> {
         {
             Ok(output) => {
                 let content = tool.output_to_content_erased(&input, &output)?;
+                if self.debug_mode {
+                    warn!(
+                        tool_name = %tool_name,
+                        tool_id = ?id,
+                        output = ?output,
+                        content = %content,
+                        "tool output"
+                    );
+                }
                 Ok(ToolResult::success(id, invocation, content))
             }
             Err(err) => {
+                if self.debug_mode {
+                    warn!(tool_name = %tool_name, tool_id = ?id, error = ?err, "tool error");
+                }
                 warn!("{:?}", err.to_string());
                 Ok(ToolResult::error(id, invocation, err.to_string()))
             }

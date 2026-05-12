@@ -30,8 +30,8 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for GatherContext {
         let question = input.context;
         let mut cur_context = cur_context.clone();
         let init_prompt = format!("You are read-only agent in a rust code base,\
-     you will be asked a general question by the parent agent, make sure you thoroughly explore the \
-     codebase before you give your final answer\n{question}").to_owned();
+     you will be asked a general question by the parent agent, make sure you are very sure of your answer and keep it concise\
+     \n{question}").to_owned();
         cur_context.initial_prompt = init_prompt;
 
         let empty_context = RustEmptyContext::new(cur_context);
@@ -83,7 +83,8 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for GatherContext {
 #[derive(Default, Serialize, Deserialize, Debug, Clone, ToolDef)]
 #[tool(
     name = "gather_context",
-    description = "Create an agent to gather context"
+    description = "Create an agent to gather context, make sure to keep the scope small and parallelize if needed,\
+    give the agent all the context it'll need to speed things up."
 )]
 pub struct GatherContext {
     #[tool(input)]
