@@ -84,7 +84,7 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for GatherContext {
 #[tool(
     name = "gather_context",
     description = "Create an agent to gather context, make sure to keep the scope small and parallelize if needed,\
-    give the agent all the context it'll need to speed things up."
+    give the agent all the context it needs such as file paths, symbols that are relevant and all the context that are related."
 )]
 pub struct GatherContext {
     #[tool(input)]

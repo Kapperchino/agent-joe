@@ -1,6 +1,6 @@
 use crate::actor::{ActorContext, Dependency, Message};
 use crate::worker::{Worker, WorkerAdapter};
-use crate::workers::read_worker::ReadWorker;
+use crate::workers::validate_worker::ValidateWorker;
 use analysis::contexts::rust_empty_context::RustEmptyContext;
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use tools::tool_defs::{ToolDefTrait, ToolId, ToolTrait};
 use turbo_code_macros::{ToolDef, ToolInput};
-use crate::workers::validate_worker::ValidateWorker;
 
 #[async_trait]
 impl ToolTrait<RustEmptyContext, ActorContext<RustEmptyContext>> for ValidateRust {

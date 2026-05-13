@@ -75,6 +75,7 @@ impl<C: Context + Clone> ActorState<C> {
                     tui_tx: dependency.tui_tx,
                 },
                 cur_state: State::Ready,
+                debug: dependency.debug_mode,
             },
             dependency: dep_clone,
             actor_ref,

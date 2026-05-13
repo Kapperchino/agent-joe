@@ -16,6 +16,7 @@ pub struct StreamProcessor {
     pub token_count: TokenCount,
     pub reporter: EventReporter,
     pub cur_state: State,
+    pub debug: bool
 }
 
 pub enum StreamNextStep {
@@ -147,7 +148,7 @@ impl StreamProcessor {
             },
             StreamEvent::ContentBlockDelta { index, delta } => match delta {
                 Delta::TextDelta { text } => self.reporter.send_delta(text.clone()),
-                Delta::ThinkingDelta { thinking, .. } => self.reporter.send_delta(thinking.clone()),
+                Delta::ThinkingDelta { thinking, .. } => {},
                 Delta::InputJsonDelta { .. } => {}
                 Delta::SignatureDelta { .. } => {}
             },
@@ -179,6 +180,10 @@ impl StreamProcessor {
     pub fn clear(&mut self) {
         self.batches.clear();
         self.cur_state = State::Ready
+    }
+
+    pub fn send_thinking(&self) -> bool {
+        self.debug
     }
 
     pub fn change_state(&mut self, new_state: State) {
