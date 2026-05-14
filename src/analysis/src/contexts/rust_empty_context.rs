@@ -1,6 +1,7 @@
 use crate::contexts::context::Context;
 use crate::contexts::rust_context::{RustContext, RustContextLineIndexCreator};
 use async_trait::async_trait;
+use itertools::Itertools;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -20,7 +21,16 @@ impl Context for RustEmptyContext {
     type LineIndexCreator = RustContextLineIndexCreator;
 
     async fn get_ctx(&self) -> String {
-        self.inner.initial_prompt.clone()
+        let files = self
+            .inner
+            .get_proj_meta()
+            .await
+            .map(|t| t.files)
+            .unwrap_or_default()
+            .values()
+            .join("\n");
+        let init_prompt = self.inner.initial_prompt.clone();
+        format!("{init_prompt}\n{files}")
     }
 
     fn get_root(&self) -> PathBuf {
