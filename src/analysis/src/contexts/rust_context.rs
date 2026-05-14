@@ -40,7 +40,8 @@ impl Context for RustContext {
         let dir = self.cur_dir.to_str().unwrap_or("");
         let analytical_ctx = self.get_analytical_context().await.unwrap_or_default();
         let init_prompt = self.initial_prompt.as_str();
-        format!("{init_prompt} \n project_root: {dir}\n{analytical_ctx}")
+        let stacked_prompt = self.stacked_context.join("\n");
+        format!("{init_prompt} \n project_root: {dir}\n{analytical_ctx}\n{stacked_prompt}")
     }
 
     fn get_root(&self) -> PathBuf {
@@ -71,6 +72,7 @@ pub struct RustContext {
     pub rust_proj: RustProject,
     pub symbol_cache: TypedCache<SymbolInfo, SymbolInfo>,
     pub initial_prompt: String,
+    pub stacked_context: Vec<String>,
 }
 
 impl RustContext {
@@ -93,6 +95,7 @@ impl RustContext {
             initial_prompt,
             rust_proj: proj,
             symbol_cache: cache,
+            stacked_context: Vec::new(),
         })
     }
 

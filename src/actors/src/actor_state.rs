@@ -105,6 +105,10 @@ impl<C: Context + Clone> ActorState<C> {
                     Ok(())
                 }
                 StreamRes::Tool(tool_res) => {
+                    let tool = self
+                        .find_tool(&tool_res.invocation.name)
+                        .ok_or_else(|| anyhow!("unknown tool `{}`", tool_res.invocation.name))?;
+                    tool.add_context(&mut self.cur_context, &tool_res.content);
                     self.history.push(Message {
                         role: Role::Assistant,
                         content: vec![ContentBlock::ToolBlock {

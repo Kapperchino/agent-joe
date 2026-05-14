@@ -78,6 +78,10 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for GatherContext {
     fn output_to_content(_input: &Self::Input, output: &Self::Output) -> anyhow::Result<String> {
         Ok(output.res.clone())
     }
+
+    fn add_context(context: &mut RustContext, addition: &str) {
+        context.stacked_context.push(addition.to_owned())
+    }
 }
 
 #[derive(Default, Serialize, Deserialize, Debug, Clone, ToolDef)]

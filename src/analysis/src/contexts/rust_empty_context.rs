@@ -30,7 +30,8 @@ impl Context for RustEmptyContext {
             .values()
             .join("\n");
         let init_prompt = self.inner.initial_prompt.clone();
-        format!("{init_prompt}\n{files}")
+        let stacked_prompt = self.inner.stacked_context.join("\n");
+        format!("{init_prompt}\n{files}\n{stacked_prompt}")
     }
 
     fn get_root(&self) -> PathBuf {

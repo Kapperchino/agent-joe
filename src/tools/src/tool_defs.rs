@@ -49,6 +49,8 @@ pub trait ToolTrait<C: Context, A>: ToolDefTrait + Display {
     fn to_req(&self) -> anyhow::Result<HashMap<String, String>> {
         self.req()
     }
+
+    fn add_context(_context: &mut C, _addition: &str) {}
 }
 
 #[derive(Debug, Clone)]
@@ -80,6 +82,8 @@ pub trait ErasedToolTrait<C: Context, A>: Send + Sync {
     ) -> anyhow::Result<Value>;
 
     fn output_to_content_erased(&self, input: &Value, output: &Value) -> anyhow::Result<String>;
+
+    fn add_context(&self, context: &mut C, addition: &str);
 }
 
 pub struct ErasedTool<T, C, A> {
@@ -147,6 +151,10 @@ where
         let typed_input: T::Input = serde_json::from_value(input.clone())?;
         let typed_output: T::Output = serde_json::from_value(output.clone())?;
         T::output_to_content(&typed_input, &typed_output)
+    }
+
+    fn add_context(&self, context: &mut C, addition: &str) {
+        T::add_context(context, addition)
     }
 }
 
