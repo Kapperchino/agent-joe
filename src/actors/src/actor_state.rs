@@ -20,7 +20,7 @@ pub struct ActorState<C: Context> {
     pub stream_actor: Option<ActorCell>,
     pub history: Vec<Message>,
     pub llm: LLmClient,
-    pub tools: Vec<ErasedToolRef<C, ActorContext<C>>>,
+    pub tools: HashMap<String, ErasedToolRef<C, ActorContext<C>>>,
     pub file_actor: Option<ActorRef<file_actor::Message>>,
     pub pending_ports: HashMap<ActorId, RpcReplyPort<String>>,
     pub stream_processor: StreamProcessor,
@@ -59,7 +59,11 @@ impl<C: Context + Clone> ActorState<C> {
             cur_context: dependency.context,
             history: vec![Message::new(cur_context_str)],
             llm: dependency.client,
-            tools: dependency.tools,
+            tools: dependency
+                .tools
+                .into_iter()
+                .map(|x| (x.name(), x))
+                .collect(),
             stream_actor: None,
             reporter: EventReporter {
                 tui_tx: dependency.tui_tx.clone(),
@@ -105,9 +109,7 @@ impl<C: Context + Clone> ActorState<C> {
                     Ok(())
                 }
                 StreamRes::Tool(tool_res) => {
-                    let tool = self
-                        .find_tool(&tool_res.invocation.name)
-                        .ok_or_else(|| anyhow!("unknown tool `{}`", tool_res.invocation.name))?;
+                    let tool = self.find_tool(&tool_res.invocation.name)?;
                     tool.add_context(&mut self.cur_context, &tool_res.content);
                     self.history.push(Message {
                         role: Role::Assistant,
@@ -133,25 +135,25 @@ impl<C: Context + Clone> ActorState<C> {
     }
 
     pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
-        self.tools.iter().map(|tool| tool.definition()).collect()
+        self.tools.values().map(|tool| tool.definition()).collect()
     }
 
-    fn find_tool(&self, name: &str) -> Option<ErasedToolRef<C, ActorContext<C>>> {
-        self.tools.iter().find(|tool| tool.name() == name).cloned()
+    fn find_tool(&self, name: &str) -> anyhow::Result<ErasedToolRef<C, ActorContext<C>>> {
+        Ok(self
+            .tools
+            .get(name)
+            .ok_or_else(|| anyhow!("unknown tool `{}`", name))
+            .cloned()?)
     }
 
     pub fn tool_display(&self, tool_call: &ToolCall) -> anyhow::Result<String> {
-        let tool = self
-            .find_tool(&tool_call.name)
-            .ok_or_else(|| anyhow!("unknown tool `{}`", tool_call.name))?;
+        let tool = self.find_tool(&tool_call.name)?;
         let input = tool_call.input_value()?;
         tool.display_erased(&input)
     }
 
     async fn tool_use(&self, tool_call: ToolCall) -> anyhow::Result<ToolResult> {
-        let tool = self
-            .find_tool(&tool_call.name)
-            .ok_or_else(|| anyhow!("unknown tool `{}`", tool_call.name))?;
+        let tool = self.find_tool(&tool_call.name)?;
         let tool_name = tool_call.name.clone();
         let id = tool_call.id.clone();
         let input = tool_call.input_value()?;
