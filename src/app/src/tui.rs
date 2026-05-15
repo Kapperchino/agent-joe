@@ -13,7 +13,11 @@ use crate::widgets::model_box::ModelBoxResult;
 use clients::config::ConfigContext;
 use color_eyre::Result;
 use commands::command::Command;
-use crossterm::event::{EventStream, KeyEvent, KeyModifiers};
+use crossterm::{
+    cursor::SetCursorStyle,
+    event::{EventStream, KeyEvent, KeyModifiers},
+    queue,
+};
 use futures::StreamExt;
 use ractor::ActorRef;
 use ratatui::{
@@ -38,6 +42,7 @@ pub struct TUIApp {
     message_box: MessageBoxState,
     do_clear_terminal: bool,
     config_context: ConfigContext,
+    cursor_style: Option<SetCursorStyle>,
 }
 #[derive(Clone, Copy)]
 pub enum InputMode {
@@ -84,6 +89,7 @@ impl TUIApp {
             message_box: MessageBoxState::new(),
             do_clear_terminal: false,
             config_context,
+            cursor_style: None,
         }
     }
 
@@ -166,6 +172,19 @@ impl TUIApp {
         self.message_box.actor_state = state;
     }
 
+    fn handle_hjkl(&mut self, key: KeyEvent) {
+        self.input_box.handle_hjkl_key(key);
+        self.sync_input_mode_from_engine();
+    }
+
+    fn sync_input_mode_from_engine(&mut self) {
+        if self.input_box.is_insert_mode() {
+            self.update_input_mode(InputMode::HomeMenu(HomeMenu::Editing));
+        } else {
+            self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
+        }
+    }
+
     pub async fn run(
         mut self,
         mut terminal: DefaultTerminal,
@@ -185,12 +204,30 @@ impl TUIApp {
 
             self.message_box
                 .flush_scrollback(&mut terminal, self.do_clear_terminal)?;
+            self.update_cursor_style(&mut terminal)?;
             terminal.draw(|frame| self.draw(frame))?;
 
             if self.do_clear_terminal {
                 self.do_clear_terminal = false;
             }
         }
+        Ok(())
+    }
+
+    fn update_cursor_style(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
+        let next_style = match self.input_mode {
+            InputMode::HomeMenu(HomeMenu::Normal) => SetCursorStyle::SteadyBlock,
+            InputMode::HomeMenu(HomeMenu::Editing | HomeMenu::InputCommand) => {
+                SetCursorStyle::BlinkingBar
+            }
+            InputMode::None | InputMode::CommandMenu(_) => SetCursorStyle::DefaultUserShape,
+        };
+
+        if self.cursor_style != Some(next_style) {
+            queue!(terminal.backend_mut(), next_style)?;
+            self.cursor_style = Some(next_style);
+        }
+
         Ok(())
     }
 
@@ -259,8 +296,10 @@ impl TUIApp {
     fn handle_key_event(&mut self, key: &KeyEvent) {
         match self.input_mode {
             InputMode::HomeMenu(HomeMenu::Normal) | InputMode::None => match key.code {
-                KeyCode::Char('i') => {
-                    self.update_input_mode(InputMode::HomeMenu(HomeMenu::Editing));
+                KeyCode::Enter => {
+                    self.submit_message();
+                    self.input_box.force_normal_mode();
+                    self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
                 }
                 KeyCode::Char('/') => {
                     self.update_input_mode(InputMode::HomeMenu(HomeMenu::InputCommand));
@@ -268,19 +307,26 @@ impl TUIApp {
                 KeyCode::Char('q') => self.kill(),
                 KeyCode::Char('c') => {
                     if key.modifiers.contains(KeyModifiers::CONTROL) {
-                        if let State::Ready = self.actor_state {
+                        if !self.input_box.is_empty() {
+                            self.input_box.clear();
+                            self.input_box.force_normal_mode();
+                            self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
+                        } else if let State::Ready = self.actor_state {
                             self.kill()
                         } else {
                             self.interrupt();
                         }
                     }
                 }
-                _ => {}
+                _ => {
+                    self.handle_hjkl(*key);
+                }
             },
             InputMode::HomeMenu(HomeMenu::Editing) => match key.code {
                 KeyCode::Enter => {
                     if key.modifiers.is_empty() {
                         self.submit_message();
+                        self.input_box.force_normal_mode();
                         self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
                     } else if key.modifiers.contains(KeyModifiers::ALT)
                         || key.modifiers.contains(KeyModifiers::SHIFT)
@@ -293,31 +339,34 @@ impl TUIApp {
                         if key.modifiers.contains(KeyModifiers::CONTROL) {
                             self.input_box.enter_char('\n');
                         } else {
-                            self.input_box.enter_char(char)
+                            self.handle_hjkl(*key);
                         }
                     }
                     'c' => {
                         if key.modifiers.contains(KeyModifiers::CONTROL) {
                             self.input_box.clear();
+                            self.input_box.force_normal_mode();
                             self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
                         } else {
-                            self.input_box.enter_char(char)
+                            self.handle_hjkl(*key);
                         }
                     }
-                    _ => self.input_box.enter_char(char),
+                    _ => {
+                        self.handle_hjkl(*key);
+                    }
                 },
 
                 KeyCode::Backspace => {
                     if self.input_box.is_empty() {
+                        self.input_box.force_normal_mode();
                         self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
                     } else {
-                        self.input_box.delete_char()
+                        self.handle_hjkl(*key);
                     }
                 }
-                KeyCode::Left => self.input_box.move_cursor_left(),
-                KeyCode::Right => self.input_box.move_cursor_right(),
-                KeyCode::Esc => self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal)),
-                _ => {}
+                _ => {
+                    self.handle_hjkl(*key);
+                }
             },
             InputMode::HomeMenu(HomeMenu::InputCommand) => match key.code {
                 KeyCode::Enter => {
@@ -330,23 +379,30 @@ impl TUIApp {
                     'c' => {
                         if key.modifiers.contains(KeyModifiers::CONTROL) {
                             self.input_box.clear();
+                            self.input_box.force_normal_mode();
                             self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
                         } else {
-                            self.input_box.enter_char(to_insert)
+                            self.input_box.enter_char(to_insert);
                         }
                     }
-                    _ => self.input_box.enter_char(to_insert),
+                    _ => {
+                        self.input_box.enter_char(to_insert);
+                    }
                 },
                 KeyCode::Backspace => {
                     if self.input_box.is_empty() {
+                        self.input_box.force_normal_mode();
                         self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
                     } else {
-                        self.input_box.delete_char()
+                        self.input_box.delete_char();
                     }
                 }
                 KeyCode::Left => self.input_box.move_cursor_left(),
                 KeyCode::Right => self.input_box.move_cursor_right(),
-                KeyCode::Esc => self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal)),
+                KeyCode::Esc => {
+                    self.input_box.force_normal_mode();
+                    self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
+                }
                 _ => {}
             },
             InputMode::CommandMenu(menu) => match menu {
@@ -364,7 +420,7 @@ impl TUIApp {
                                 match config.set_effort(effort) {
                                     Ok(_) => {}
                                     Err(e) => {
-                                        error!("error during setting model {}", e)
+                                        error!("error during setting model {}", e);
                                     }
                                 };
                                 let mut context_clone = self.config_context.clone();
@@ -374,7 +430,7 @@ impl TUIApp {
                                     );
                                 });
 
-                                self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal))
+                                self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
                             }
                         }
                     }
@@ -455,15 +511,15 @@ impl TUIApp {
         let cursor_pos = self.input_box.get_cursor_pos(&input_area);
 
         match self.input_mode {
-            // Hide the cursor. `Frame` does this by default, so we don't need to do anything here
-            InputMode::HomeMenu(HomeMenu::Normal) | InputMode::None => {}
-
-            InputMode::HomeMenu(HomeMenu::InputCommand) => frame.set_cursor_position(cursor_pos),
-
-            // Make the cursor visible and ask ratatui to put it at the specified coordinates after
-            // rendering
-            #[allow(clippy::cast_possible_truncation)]
-            InputMode::HomeMenu(HomeMenu::Editing) => frame.set_cursor_position(cursor_pos),
+            InputMode::HomeMenu(HomeMenu::Editing | HomeMenu::InputCommand) => {
+                frame.set_cursor_position(cursor_pos)
+            }
+            InputMode::HomeMenu(HomeMenu::Normal) => {
+                if !self.input_box.is_empty() {
+                    frame.set_cursor_position(cursor_pos);
+                }
+            }
+            InputMode::None => {}
             InputMode::CommandMenu(_) => {}
         }
 

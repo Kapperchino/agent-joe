@@ -162,6 +162,9 @@ dependencies = [
  "common-models",
  "crossterm",
  "futures",
+ "hjkl-buffer",
+ "hjkl-engine",
+ "hjkl-vim",
  "markdown",
  "ractor",
  "ratatui",
@@ -1583,6 +1586,43 @@ name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
+name = "hjkl-buffer"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22a56e4162c8cc2d4b040c7be2c21e4b09b0d3c09c731d750c873d88bfd0a3a0"
+dependencies = [
+ "ratatui",
+ "regex",
+ "unicode-width",
+]
+
+[[package]]
+name = "hjkl-engine"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6eb6dd7ccc80c8782e88a8cc2a4eb7775ecc91d46f2d4806eb41b366f27136c7"
+dependencies = [
+ "bitflags 2.10.0",
+ "crossterm",
+ "hjkl-buffer",
+ "ratatui",
+ "regex",
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "hjkl-vim"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42ecd781ed6f829da60b82ee11b459d9e57cff2959502a43a70a9efefd9d16b0"
+dependencies = [
+ "crossterm",
+ "hjkl-buffer",
+ "hjkl-engine",
+]
 
 [[package]]
 name = "home"

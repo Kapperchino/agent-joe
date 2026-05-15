@@ -8,6 +8,7 @@ use app::tui::TUIApp;
 use clap::Parser;
 use clients::config::{Config, ConfigContext};
 use clients::llm::LLmClient;
+use crossterm::cursor::SetCursorStyle;
 use crossterm::event::{
     DisableBracketedPaste, EnableBracketedPaste, KeyboardEnhancementFlags,
     PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
@@ -111,6 +112,12 @@ async fn main() {
     let app = TUIApp::new(joe, config_context.clone(), cli.debug);
     app.run(terminal, rx).await.unwrap();
     actor_handle.await.expect("Actor failed to exit cleanly");
-    execute!(stdout(), PopKeyboardEnhancementFlags, DisableBracketedPaste).ok();
+    execute!(
+        stdout(),
+        SetCursorStyle::DefaultUserShape,
+        PopKeyboardEnhancementFlags,
+        DisableBracketedPaste
+    )
+    .ok();
     ratatui::restore();
 }

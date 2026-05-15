@@ -4,6 +4,8 @@ use crate::widgets::command_box::CommandBox;
 use crate::widgets::model_box::{ModelBox, ModelBoxResult, ModelBoxState};
 use clients::config::Config;
 use commands::command::CommandContext;
+use crossterm::event::KeyEvent;
+use hjkl_engine::{DefaultHost, Editor, InsertDir, Options, VimMode};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::prelude::{Color, Line, Modifier, Span, Style};
@@ -14,8 +16,7 @@ pub struct InputBox {
 }
 
 pub struct InputBoxState {
-    character_index: usize,
-    input: String,
+    editor: Editor<hjkl_buffer::Buffer, DefaultHost>,
     pub input_mode: InputMode,
     command_context: CommandContext,
     model_box_state: ModelBoxState,
@@ -29,10 +30,11 @@ impl StatefulWidget for InputBox {
         Self: Sized,
     {
         let input_wrap_width = InputBoxState::input_wrap_width(area.width);
+        let input = state.get_input();
         let editing_display_lines =
-            InputBoxState::wrap_input_text(&state.input, input_wrap_width, "", "").len();
+            InputBoxState::wrap_input_text(&input, input_wrap_width, "", "").len();
         let command_display_lines = InputBoxState::wrap_input_text(
-            &state.input,
+            &input,
             input_wrap_width,
             InputBoxState::COMMAND_PROMPT,
             InputBoxState::COMMAND_CONTINUATION,
@@ -63,7 +65,7 @@ impl StatefulWidget for InputBox {
                             .block(Block::bordered().title("Command"));
                     command_section.render(command_input_area, buf);
                     CommandBox {
-                        commands: state.command_context.search(&state.input),
+                        commands: state.command_context.search(&input),
                     }
                     .render(command_box_area, buf);
                 }
@@ -120,8 +122,11 @@ impl InputBoxState {
             ),
         };
         InputBoxState {
-            character_index: 0,
-            input: "".to_string(),
+            editor: Editor::new(
+                hjkl_buffer::Buffer::new(),
+                DefaultHost::new(),
+                Options::default(),
+            ),
             input_mode: Default::default(),
             command_context: CommandContext::new(),
             model_box_state,
@@ -129,16 +134,28 @@ impl InputBoxState {
     }
 
     pub fn clear(&mut self) {
-        self.input.clear();
+        self.set_input("");
         self.reset_cursor();
     }
 
     pub fn get_input(&self) -> String {
-        self.input.clone()
+        self.editor.buffer().as_string()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.input.is_empty()
+        self.get_input().is_empty()
+    }
+
+    pub(crate) fn handle_hjkl_key(&mut self, key: KeyEvent) -> bool {
+        hjkl_vim::handle_key(&mut self.editor, key)
+    }
+
+    pub(crate) fn force_normal_mode(&mut self) {
+        self.editor.force_normal();
+    }
+
+    pub(crate) fn is_insert_mode(&self) -> bool {
+        self.editor.vim_mode() == VimMode::Insert
     }
 
     pub fn get_cursor_pos(&self, area: &Rect) -> Position {
@@ -164,10 +181,10 @@ impl InputBoxState {
 
     pub fn get_height(&self, width: u16) -> u16 {
         let input_wrap_width = Self::input_wrap_width(width);
-        let editing_display_lines =
-            Self::wrap_input_text(&self.input, input_wrap_width, "", "").len();
+        let input = self.get_input();
+        let editing_display_lines = Self::wrap_input_text(&input, input_wrap_width, "", "").len();
         let command_display_lines = Self::wrap_input_text(
-            &self.input,
+            &input,
             input_wrap_width,
             Self::COMMAND_PROMPT,
             Self::COMMAND_CONTINUATION,
@@ -192,40 +209,33 @@ impl InputBoxState {
     }
 
     pub(crate) fn move_cursor_left(&mut self) {
-        let cursor_moved_left = self.character_index.saturating_sub(1);
-        self.character_index = self.clamp_cursor(cursor_moved_left);
+        self.editor.insert_arrow(InsertDir::Left);
     }
 
     pub(crate) fn move_cursor_right(&mut self) {
-        let cursor_moved_right = self.character_index.saturating_add(1);
-        self.character_index = self.clamp_cursor(cursor_moved_right);
+        self.editor.insert_arrow(InsertDir::Right);
     }
 
     pub fn enter_char(&mut self, new_char: char) {
-        let index = self.byte_index();
-        self.input.insert(index, new_char);
-        self.move_cursor_right();
+        if new_char == '\n' {
+            self.editor.insert_newline();
+        } else {
+            self.editor.insert_char(new_char);
+        }
     }
 
-    pub(crate) fn paste(&mut self, string: &String) {
-        self.input.push_str(string);
-        let cursor_moved_right = self.character_index.saturating_add(string.chars().count());
-        self.character_index = self.clamp_cursor(cursor_moved_right);
-    }
-
-    fn clamp_cursor(&self, new_cursor_pos: usize) -> usize {
-        new_cursor_pos.clamp(0, self.input.chars().count())
+    pub(crate) fn paste(&mut self, string: &str) {
+        self.editor.insert_str(string);
     }
 
     fn reset_cursor(&mut self) {
-        self.character_index = 0;
+        self.editor.jump_cursor(0, 0);
     }
 
     pub fn auto_comp_command(&mut self) {
-        self.command_context.search(&self.input).first().map(|cmd| {
-            self.input = cmd.clone();
-            self.character_index = self.clamp_cursor(cmd.len());
-        });
+        if let Some(cmd) = self.command_context.search(&self.get_input()).first() {
+            self.set_input(cmd);
+        }
     }
 
     pub fn select_next_model(&mut self) {
@@ -241,33 +251,33 @@ impl InputBoxState {
     }
 
     pub(crate) fn delete_char(&mut self) {
-        let is_not_cursor_leftmost = self.character_index != 0;
-        if is_not_cursor_leftmost {
-            // Method "remove" is not used on the saved text for deleting the selected char.
-            // Reason: Using remove on String works on bytes instead of the chars.
-            // Using remove would require special care because of char boundaries.
-
-            let current_index = self.character_index;
-            let from_left_to_current_index = current_index - 1;
-
-            // Getting all characters before the selected character.
-            let before_char_to_delete = self.input.chars().take(from_left_to_current_index);
-            // Getting all characters after selected character.
-            let after_char_to_delete = self.input.chars().skip(current_index);
-
-            // Put all characters together except the selected one.
-            // By leaving the selected one out, it is forgotten and therefore deleted.
-            self.input = before_char_to_delete.chain(after_char_to_delete).collect();
-            self.move_cursor_left();
-        }
+        self.editor.insert_backspace();
     }
 
-    fn byte_index(&self) -> usize {
-        self.input
-            .char_indices()
-            .map(|(i, _)| i)
-            .nth(self.character_index)
-            .unwrap_or(self.input.len())
+    fn set_input(&mut self, input: &str) {
+        self.editor.set_content(input);
+        let last_row = self.editor.buffer().row_count().saturating_sub(1);
+        let last_col = self
+            .editor
+            .buffer()
+            .line(last_row)
+            .map(str::chars)
+            .map(|chars| chars.count())
+            .unwrap_or_default();
+        self.editor.jump_cursor(last_row, last_col);
+    }
+
+    fn character_index(&self) -> usize {
+        let (row, col) = self.editor.cursor();
+        let previous_chars = self
+            .editor
+            .buffer()
+            .lines()
+            .iter()
+            .take(row)
+            .map(|line| line.chars().count() + 1)
+            .sum::<usize>();
+        previous_chars + col
     }
 
     fn input_wrap_width(total_width: u16) -> usize {
@@ -317,7 +327,8 @@ impl InputBoxState {
         initial_indent: &str,
         subsequent_indent: &str,
     ) -> (u16, u16) {
-        let cursor_prefix: String = self.input.chars().take(self.character_index).collect();
+        let input = self.get_input();
+        let cursor_prefix: String = input.chars().take(self.character_index()).collect();
         let wrapped_prefix = Self::wrap_input_text(
             &cursor_prefix,
             wrap_width,
@@ -339,8 +350,9 @@ impl InputBoxState {
     }
 
     fn command_lines(&self, wrap_width: usize, min_input_lines: usize) -> Vec<Line<'static>> {
+        let input = self.get_input();
         let mut command_input = Self::wrap_input_text(
-            &self.input,
+            &input,
             wrap_width,
             Self::COMMAND_PROMPT,
             Self::COMMAND_CONTINUATION,
@@ -374,7 +386,8 @@ impl InputBoxState {
         lines
     }
     fn input_lines(&self, wrap_width: usize, min_lines: usize) -> Vec<Line<'static>> {
-        let mut lines = Self::wrap_input_text(&self.input, wrap_width, "", "");
+        let input = self.get_input();
+        let mut lines = Self::wrap_input_text(&input, wrap_width, "", "");
         lines.resize_with(min_lines.max(1), String::new);
         lines.into_iter().map(Line::from).collect()
     }

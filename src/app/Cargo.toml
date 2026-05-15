@@ -14,6 +14,9 @@ clients = { path = "../clients" }
 color-eyre = "0.6.5"
 crossterm = { version = "0.29.0", features = ["event-stream"] }
 futures = "0.3.32"
+hjkl-buffer = "0.6"
+hjkl-engine = "0.7"
+hjkl-vim = "0.19"
 ratatui = "0.30.0"
 tokio = "1.50.0"
 anyhow = "1.0.102"
