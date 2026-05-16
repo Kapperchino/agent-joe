@@ -71,7 +71,7 @@ impl<C: Context, A> ToolTrait<C, A> for CargoTest {
 #[derive(Default, Serialize, Deserialize, Debug, Clone, ToolDef)]
 #[tool(
     name = "cargo_test",
-    description = "Run cargo test on the project to find failing tests"
+    description = "Run cargo test on the project to find failing tests, do not enable warning unless explicitly asked to"
 )]
 pub struct CargoTest {
     #[tool(input)]

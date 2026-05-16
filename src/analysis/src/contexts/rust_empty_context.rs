@@ -8,11 +8,15 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct RustEmptyContext {
     pub inner: RustContext,
+    pub stack_context: bool,
 }
 
 impl RustEmptyContext {
-    pub fn new(context: RustContext) -> RustEmptyContext {
-        RustEmptyContext { inner: context }
+    pub fn new(context: RustContext, stack_context: bool) -> RustEmptyContext {
+        RustEmptyContext {
+            inner: context,
+            stack_context,
+        }
     }
 }
 
@@ -30,7 +34,11 @@ impl Context for RustEmptyContext {
             .values()
             .join("\n");
         let init_prompt = self.inner.initial_prompt.clone();
-        let stacked_prompt = self.inner.stacked_context.join("\n");
+        let stacked_prompt = if self.stack_context {
+            self.inner.stacked_context.join("\n")
+        } else {
+            "".to_owned()
+        };
         format!("{init_prompt}\n{files}\n{stacked_prompt}")
     }
 

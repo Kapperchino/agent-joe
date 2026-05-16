@@ -34,7 +34,7 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for GatherContext {
      \n{question}").to_owned();
         cur_context.initial_prompt = init_prompt;
 
-        let empty_context = RustEmptyContext::new(cur_context);
+        let empty_context = RustEmptyContext::new(cur_context, true);
 
         let (joe, actor_handle) = Actor::spawn_linked(
             None,
@@ -79,8 +79,10 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for GatherContext {
         Ok(output.res.clone())
     }
 
-    fn add_context(context: &mut RustContext, addition: &str) {
-        context.stacked_context.push(addition.to_owned())
+    fn add_context(input: &Self::Input, context: &mut RustContext, addition: &str) {
+        context
+            .stacked_context
+            .push(format!("{}\n{addition}", input.context))
     }
 }
 

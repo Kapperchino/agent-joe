@@ -35,6 +35,7 @@ impl ToolTrait<RustEmptyContext, ActorContext<RustEmptyContext>> for ValidateRus
         )
         .to_owned();
         cur_context.inner.initial_prompt = init_prompt;
+        cur_context.stack_context = false;
 
         let (joe, actor_handle) = Actor::spawn_linked(
             None,

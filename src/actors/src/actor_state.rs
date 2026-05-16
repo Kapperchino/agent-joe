@@ -110,13 +110,17 @@ impl<C: Context + Clone> ActorState<C> {
                 }
                 StreamRes::Tool(tool_res) => {
                     let tool = self.find_tool(&tool_res.invocation.name)?;
-                    tool.add_context(&mut self.cur_context, &tool_res.content);
+                    tool.add_context(
+                        &tool_res.invocation.input,
+                        &mut self.cur_context,
+                        &tool_res.content,
+                    )?;
                     self.history.push(Message {
                         role: Role::Assistant,
                         content: vec![ContentBlock::ToolBlock {
                             tool_id: tool_res.id(),
                             name: tool_res.invocation.name.clone(),
-                            input: tool_res.invocation.input.clone(),
+                            input: tool.input_req_erased(&tool_res.invocation.input)?,
                         }],
                     });
                     self.history.push(Message {
@@ -164,7 +168,7 @@ impl<C: Context + Clone> ActorState<C> {
 
         let invocation = ToolInvocation {
             name: tool_name.clone(),
-            input: tool.input_req_erased(&input)?,
+            input: input.clone(),
             display: tool.display_erased(&input)?,
         };
 
