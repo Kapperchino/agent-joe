@@ -67,16 +67,12 @@ async fn main() {
     let config = Config::load_optional().unwrap();
     let (config, mut terminal) = if config.is_none() {
         let continue_term = InitApp::default().run(terminal).await.unwrap();
-        let config = Config::load_optional()
-            .unwrap()
-            .unwrap()
-            .prepare()
-            .await
-            .unwrap();
+        let config = Config::load_optional().unwrap().unwrap();
         (config, continue_term)
     } else {
         (config.unwrap(), terminal)
     };
+    let config = config.prepare().await.unwrap();
     let config_context = ConfigContext::new(config);
 
     let client = LLmClient::new(config_context.clone()).unwrap();

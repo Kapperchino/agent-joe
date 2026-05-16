@@ -113,12 +113,17 @@ impl Config {
         Ok(())
     }
 
-    //TODO: wtf is this shit
     pub async fn prepare(mut self) -> anyhow::Result<Config> {
         if let Config::OpenAI(OpenAIConfig { auth, .. }) = &mut self {
             if let crate::openai_config::OpenAIAuthConfig::Codex(codex) = auth {
-                if refresh_codex_tokens(codex).await? {
-                    self.save().await?;
+                match refresh_codex_tokens(codex).await {
+                    Ok(true) => self.save().await?,
+                    Ok(false) => {}
+                    Err(err) => {
+                        // logout if the codex token is expired
+                        Config::delete().await?;
+                        return Err(err).context("Codex session expired; logged out");
+                    }
                 }
             }
         }
