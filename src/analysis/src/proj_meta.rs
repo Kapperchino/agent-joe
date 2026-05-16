@@ -2,7 +2,7 @@ use crate::analysis::{AnalysisSession, Range};
 use crate::rust_proj::RustProject;
 use crate::symbol_info::SymbolInfo;
 use crate::utils::RPath;
-use futures::{StreamExt, future};
+use futures::{future, StreamExt};
 use itertools::Itertools;
 use ra_ap_ide::LineIndex;
 use ra_ap_ide_db::SymbolKind;
@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
-use utils::utils::Utils;
+use utils::files::Files;
 
 pub struct FileMeta {
     pub line_index: triomphe::Arc<LineIndex>,
@@ -411,7 +411,7 @@ impl ProjMeta {
 
     async fn get_files_for_paths(paths: Vec<PathBuf>) -> anyhow::Result<Vec<(PathBuf, String)>> {
         future::join_all(paths.into_iter().map(|path| async move {
-            Utils::get_file_content(&path.clone())
+            Files::read_file(&path.clone())
                 .await
                 .map(|content| (path, content))
         }))

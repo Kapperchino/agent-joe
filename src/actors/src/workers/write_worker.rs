@@ -6,6 +6,7 @@ use analysis::contexts::context::Context;
 use analysis::contexts::rust_empty_context::RustEmptyContext;
 use async_trait::async_trait;
 use ractor::{ActorProcessingErr, ActorRef};
+use tools::apply_patch::ApplyPatch;
 use std::marker::PhantomData;
 use tools::grep::GrepTool;
 use tools::insert_after_line::InsertAfterLine;

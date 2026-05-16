@@ -13,6 +13,7 @@ use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
 use triomphe;
+use utils::files::Files;
 use utils::utils::Utils;
 
 pub struct RustContextLineIndexCreator {
@@ -78,7 +79,7 @@ pub struct RustContext {
 impl RustContext {
     pub async fn new(initial_prompt: String) -> Result<RustContext, anyhow::Error> {
         let current_dir = env::current_dir()?;
-        let files = Utils::get_dir_files(&current_dir).await?;
+        let files = Files::get_dir_files(&current_dir).await?;
         let proj = RustProject::new(&current_dir)?;
         let store_dir = Utils::get_store_dir()?;
         let mut cache = TypedCache::new(store_dir).await?;

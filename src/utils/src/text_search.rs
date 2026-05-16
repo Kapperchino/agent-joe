@@ -1,3 +1,4 @@
+use crate::files::Files;
 use crate::utils::Utils;
 use grep::regex::RegexMatcherBuilder;
 use grep::searcher::sinks::UTF8;
@@ -30,10 +31,10 @@ impl TextSearch {
         new: &str,
         file_path: &PathBuf,
     ) -> anyhow::Result<()> {
-        let content = Utils::get_file_content(file_path).await?;
+        let content = Files::read_file(file_path).await?;
         let replaced = content.replace(old, new);
         anyhow::ensure!(content != replaced, "Pattern not found in file");
-        Utils::write_to_file(file_path, &replaced).await?;
+        Files::write_to_file(file_path, &replaced).await?;
         Ok(())
     }
 }
@@ -64,7 +65,7 @@ mod tests {
         TextSearch::search_and_replace("hello", "joe!", &path)
             .await
             .unwrap();
-        let file = Utils::get_file_content(&path).await.unwrap();
+        let file = Files::read_file(&path).await.unwrap();
         let results: Vec<_> = file.lines().collect();
         assert_eq!(results.len(), 3);
         assert_eq!(results[0], "joe! world");
@@ -151,7 +152,7 @@ impl Utils {
         TextSearch::search_and_replace(string, &new_str, &path)
             .await
             .unwrap();
-        let file = Utils::get_file_content(&path).await.unwrap();
+        let file = Files::read_file(&path).await.unwrap();
         assert_eq!(file, new_str);
     }
 }

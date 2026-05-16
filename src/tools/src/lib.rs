@@ -8,3 +8,4 @@ pub mod read_file;
 pub mod string_replace;
 pub mod tool_defs;
 pub mod tool_impls;
+mod apply_patch;
