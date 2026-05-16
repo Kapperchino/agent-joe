@@ -4968,10 +4968,12 @@ dependencies = [
  "anyhow",
  "async-trait",
  "futures",
+ "ra_ap_ide",
  "serde",
  "serde_json",
  "tokio",
  "tokio-stream",
+ "triomphe",
  "turbo-code-macros",
  "utils",
 ]
