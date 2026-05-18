@@ -7,10 +7,9 @@ use analysis::contexts::rust_empty_context::RustEmptyContext;
 use async_trait::async_trait;
 use ractor::{ActorProcessingErr, ActorRef};
 use std::marker::PhantomData;
+use tools::apply_patch::ApplyPatch;
 use tools::grep::GrepTool;
-use tools::insert_after_line::InsertAfterLine;
 use tools::read_file::ReadFile;
-use tools::string_replace::StringReplace;
 use tools::tool_defs::{erased_tool, ErasedToolRef};
 
 pub struct WriteWorker<C: Context> {
@@ -36,8 +35,7 @@ impl Worker for WriteWorker<RustEmptyContext> {
         vec![
             erased_tool::<ReadFile, Self::C, ActorContext<Self::C>>(),
             erased_tool::<GrepTool, Self::C, ActorContext<Self::C>>(),
-            erased_tool::<InsertAfterLine, Self::C, ActorContext<Self::C>>(),
-            erased_tool::<StringReplace, Self::C, ActorContext<Self::C>>(),
+            erased_tool::<ApplyPatch, Self::C, ActorContext<Self::C>>(),
             erased_tool::<ValidateRust, Self::C, ActorContext<Self::C>>(),
         ]
     }

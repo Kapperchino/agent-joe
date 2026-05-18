@@ -83,7 +83,44 @@ pub struct ApplyPatchResult {
 
 impl Display for ApplyPatch {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        todo!()
+        let paths: Vec<_> = PatchSet::parse(&self.input.patch, ParseOptions::gitdiff())
+            .filter_map(Result::ok)
+            .map(|patch| match patch.operation() {
+                FileOperation::Delete(path) => format!("delete `{}`", path.as_ref()),
+                FileOperation::Create(path) => format!("create `{}`", path.as_ref()),
+                FileOperation::Modify { original, modified } => {
+                    if original == modified {
+                        format!("modify `{}`", modified.as_ref())
+                    } else {
+                        format!("modify `{}` -> `{}`", original.as_ref(), modified.as_ref())
+                    }
+                }
+                FileOperation::Rename { from, to } => {
+                    format!("rename `{}` -> `{}`", from.as_ref(), to.as_ref())
+                }
+                FileOperation::Copy { from, to } => {
+                    format!("copy `{}` -> `{}`", from.as_ref(), to.as_ref())
+                }
+            })
+            .collect();
+
+        match paths.as_slice() {
+            [] => write!(f, "- apply patch"),
+            [path] => write!(f, "- apply patch: {path}"),
+            paths => {
+                let shown = paths
+                    .iter()
+                    .take(3)
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if paths.len() > 3 {
+                    write!(f, "- apply patch: {shown}, and {} more", paths.len() - 3)
+                } else {
+                    write!(f, "- apply patch: {shown}")
+                }
+            }
+        }
     }
 }
 
