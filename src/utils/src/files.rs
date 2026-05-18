@@ -48,6 +48,25 @@ impl Files {
         Ok(())
     }
 
+    pub async fn rename_file(from: &PathBuf, to: &PathBuf) -> anyhow::Result<()> {
+        Self::create_parent_dirs(to).await?;
+        fs::rename(from, to).await?;
+        Ok(())
+    }
+
+    pub async fn copy_file(from: &PathBuf, to: &PathBuf) -> anyhow::Result<()> {
+        Self::create_parent_dirs(to).await?;
+        fs::copy(from, to).await?;
+        Ok(())
+    }
+
+    async fn create_parent_dirs(path: &PathBuf) -> anyhow::Result<()> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).await?;
+        }
+        Ok(())
+    }
+
     pub async fn get_files_for_paths(
         paths: Vec<PathBuf>,
     ) -> anyhow::Result<Vec<(PathBuf, String)>> {

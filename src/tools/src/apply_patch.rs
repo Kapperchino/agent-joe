@@ -90,20 +90,22 @@ impl Display for ApplyPatch {
 impl ApplyPatch {
     async fn apply_patch(&self) -> anyhow::Result<()> {
         let patch = PatchSet::parse(&self.input.patch, ParseOptions::gitdiff());
-        // patch.into_iter().flatten().map(|x| x.patch());
+        for patch in patch {
+            Self::process_patch(patch?).await?;
+        }
         Ok(())
     }
 
-    async fn process_patch(patch: &FilePatch<'_, str>) -> anyhow::Result<()> {
+    async fn process_patch<'a>(patch: FilePatch<'a, str>) -> anyhow::Result<()> {
         match patch.operation() {
             FileOperation::Delete(del) => {
-                let buf = PathBuf::from_str(del)?;
+                let buf = PathBuf::from_str(&del)?;
                 Files::delete_file(&buf).await?;
             }
             FileOperation::Create(create) => {
                 let buf = PathBuf::from_str(create)?;
                 let data = Self::get_patch(patch)?;
-                let content = diffy::apply("", data)?;
+                let content = diffy::apply("", &data)?;
                 Files::write_to_file(&buf, &content).await?;
             }
             FileOperation::Modify { original, modified } => {
@@ -111,22 +113,30 @@ impl ApplyPatch {
                 let dst = PathBuf::from(modified.as_ref());
                 let base = Files::read_file(&src).await?;
                 let patch = Self::get_patch(patch)?;
-                let patched = diffy::apply(&base, patch)?;
+                let patched = diffy::apply(&base, &patch)?;
                 Files::write_to_file(&dst, &patched).await?;
 
                 if src != dst {
                     Files::delete_file(&src).await?;
                 }
             }
-            FileOperation::Rename { from, to } => {}
-            FileOperation::Copy { from, to } => {}
+            FileOperation::Rename { from, to } => {
+                let src = PathBuf::from(from.as_ref());
+                let dst = PathBuf::from(to.as_ref());
+                Files::rename_file(&src, &dst).await?;
+            }
+            FileOperation::Copy { from, to } => {
+                let src = PathBuf::from(from.as_ref());
+                let dst = PathBuf::from(to.as_ref());
+                Files::copy_file(&src, &dst).await?;
+            }
         }
         Ok(())
     }
 
-    fn get_patch<'a>(patch: &'a FilePatch<'_, str>) -> anyhow::Result<&'a Patch<'a, str>> {
+    fn get_patch(patch: FilePatch<str>) -> anyhow::Result<Patch<str>> {
         match patch.patch() {
-            PatchKind::Text(res) => Ok(res),
+            PatchKind::Text(res) => Ok(res.clone()),
             PatchKind::Binary(_) => Err(anyhow!("Patch can only be Text")),
         }
     }
