@@ -25,7 +25,25 @@ impl<'a> HunkLine<'a> {
 }
 
 pub struct PatchChange<'a> {
-    hunks: Vec<HunkLine<'a>>,
+    hunks: Vec<HunkBatch<'a>>,
+}
+
+struct HunkBatch<'a> {
+    lines: Vec<HunkLine<'a>>,
+}
+
+impl<'a> HunkBatch<'a> {
+    fn new(lines: Vec<HunkLine<'a>>) -> anyhow::Result<HunkBatch> {
+        if lines.is_empty() {
+            Err(anyhow::anyhow!("Update hunks cannot be empty"))
+        } else if lines.iter().all(|line| matches!(line, HunkLine::Add(_))) {
+            Err(anyhow::anyhow!(
+                "Update hunks must include a context or removal line"
+            ))
+        } else {
+            Ok(HunkBatch { lines })
+        }
+    }
 }
 
 pub enum Patch<'a> {
@@ -245,23 +263,22 @@ impl<'a> DiffSet<'a> {
     fn get_patch_changes(
         lines: &mut Peekable<std::str::Lines<'a>>,
     ) -> anyhow::Result<PatchChange<'a>> {
-        let res: Vec<HunkLine> = lines
+        let res: Vec<HunkBatch> = lines
             .peeking_take_while(|line| !line.starts_with("***"))
-            .try_fold(Vec::new(), |mut acc, line: &str| {
-                let hunk_line = HunkLine::new(line)?;
-                acc.push(hunk_line);
-                Ok::<Vec<HunkLine<'_>>, anyhow::Error>(acc)
+            .chunk_by(|x| *x == "@@")
+            .into_iter()
+            .try_fold(Vec::new(), |mut acc, (_, mut group)| {
+                let batch = group.try_fold(Vec::new(), |mut acc1, inner_line| {
+                    let hunk_line = HunkLine::new(inner_line)?;
+                    acc1.push(hunk_line);
+                    Ok::<Vec<HunkLine<'_>>, anyhow::Error>(acc1)
+                })?;
+                let batch = HunkBatch::new(batch)?;
+                acc.push(batch);
+                Ok::<Vec<HunkBatch<'_>>, anyhow::Error>(acc)
             })?;
 
-        if res.is_empty() {
-            Err(anyhow::anyhow!("Update hunks cannot be empty"))
-        } else if res.iter().all(|line| matches!(line, HunkLine::Add(_))) {
-            Err(anyhow::anyhow!(
-                "Update hunks must include a context or removal line"
-            ))
-        } else {
-            Ok(PatchChange { hunks: res })
-        }
+        Ok(PatchChange { hunks: res })
     }
 }
 
@@ -289,35 +306,39 @@ pub fn apply_diff(base: &str, patch: Patch<'_>) -> anyhow::Result<String> {
 }
 
 fn apply_changes(base: &str, changes: PatchChange<'_>) -> anyhow::Result<String> {
-    let source: Vec<&str> = changes
+    changes
         .hunks
-        .iter()
-        .filter_map(|line| match line {
-            HunkLine::Context(text) | HunkLine::Remove(text) => Some(*text),
-            HunkLine::Add(_) => None,
+        .into_iter()
+        .try_fold(String::from(base), |acc, batch| {
+            let source: Vec<&str> = batch
+                .lines
+                .iter()
+                .filter_map(|line| match line {
+                    HunkLine::Context(text) | HunkLine::Remove(text) => Some(*text),
+                    HunkLine::Add(_) => None,
+                })
+                .collect();
+            let lines: Vec<&str> = acc.trim().lines().collect();
+
+            let window_start = lines
+                .windows(source.len())
+                .position(|window| window == source.as_slice())
+                .ok_or_else(|| anyhow::anyhow!("Patch hunk does not match the base content"))?;
+
+            let replacement = batch.lines.iter().filter_map(|line| match line {
+                HunkLine::Context(text) | HunkLine::Add(text) => Some(*text),
+                HunkLine::Remove(_) => None,
+            });
+
+            let mut res = Vec::with_capacity(lines.len() + batch.lines.len());
+            res.extend_from_slice(&lines[..window_start]);
+            res.extend(replacement);
+            res.extend_from_slice(&lines[window_start + source.len()..]);
+
+            let mut res = res.join("\n");
+            res.push('\n');
+            Ok(res)
         })
-        .collect();
-
-    let lines: Vec<&str> = base.trim().lines().collect();
-
-    let window_start = lines
-        .windows(source.len())
-        .position(|window| window == source.as_slice())
-        .ok_or_else(|| anyhow::anyhow!("Patch hunk does not match the base content"))?;
-
-    let replacement = changes.hunks.iter().filter_map(|line| match line {
-        HunkLine::Context(text) | HunkLine::Add(text) => Some(*text),
-        HunkLine::Remove(_) => None,
-    });
-
-    let mut res = Vec::with_capacity(lines.len() + changes.hunks.len());
-    res.extend_from_slice(&lines[..window_start]);
-    res.extend(replacement);
-    res.extend_from_slice(&lines[window_start + source.len()..]);
-
-    let mut res = res.join("\n");
-    res.push('\n');
-    Ok(res)
 }
 
 #[cfg(test)]
@@ -361,8 +382,8 @@ mod tests {
         match &diff.vec[2] {
             Patch::UpdateFile { path, changes } => {
                 assert_eq!(*path, Path::new("changed.txt"));
-                assert_eq!(changes.hunks.len(), 3);
-                match &changes.hunks[..] {
+                assert_eq!(changes.hunks.len(), 1);
+                match &changes.hunks[0].lines[..] {
                     [
                         HunkLine::Context("context"),
                         HunkLine::Remove("old"),
@@ -378,8 +399,8 @@ mod tests {
                 assert_eq!(*from, Path::new("old.txt"));
                 assert_eq!(*to, Path::new("moved.txt"));
                 let changes = changes.as_ref().unwrap();
-                assert_eq!(changes.hunks.len(), 2);
-                match &changes.hunks[..] {
+                assert_eq!(changes.hunks.len(), 1);
+                match &changes.hunks[0].lines[..] {
                     [HunkLine::Remove("before"), HunkLine::Add("after")] => {}
                     _ => panic!("expected parsed move hunk lines"),
                 }
@@ -486,6 +507,46 @@ trailing content";
             )
             .unwrap(),
             "fn main() {\n    let x = 10;\n    println!(\"{x}\");\n    let y = 20;\n}\n"
+        );
+    }
+
+    #[test]
+    fn applies_multiple_hunks_in_single_update() {
+        let input = "\
+*** Begin Patch
+*** Update File: src/main.rs
+@@
+-old first
++new first
+@@
+-old second
++new second
+*** End Patch";
+        let patch = DiffSet::new(input).unwrap().vec.into_iter().next().unwrap();
+
+        assert_eq!(
+            apply_diff("old first\nbetween\nold second\n", patch).unwrap(),
+            "new first\nbetween\nnew second\n"
+        );
+    }
+
+    #[test]
+    fn applies_multiple_hunks_to_repeated_anchors_in_source_order() {
+        let input = "\
+*** Begin Patch
+*** Update File: changed.txt
+@@
++first
+ marker
+@@
++second
+ marker
+*** End Patch";
+        let patch = DiffSet::new(input).unwrap().vec.into_iter().next().unwrap();
+
+        assert_eq!(
+            apply_diff("marker\nmarker\n", patch).unwrap(),
+            "first\nmarker\nsecond\nmarker\n"
         );
     }
 
