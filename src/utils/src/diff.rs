@@ -7,11 +7,27 @@ pub struct DiffSet<'a> {
     vec: Vec<Patch<'a>>,
 }
 
-pub struct PatchChange<'a> {
-    search_line: Option<&'a str>,
-    additions: Option<Vec<&'a str>>,
-    removals: Option<Vec<&'a str>>,
+pub enum HunkLine<'a> {
+    Context(&'a str),
+    Remove(&'a str),
+    Add(&'a str),
 }
+
+impl<'a> HunkLine<'a> {
+    fn new(line: &'a str) -> anyhow::Result<HunkLine<'a>> {
+        match line.chars().next() {
+            Some(' ') => Ok(HunkLine::Context(line.strip_prefix(' ').unwrap())),
+            Some('-') => Ok(HunkLine::Context(line.strip_prefix('-').unwrap())),
+            Some('+') => Ok(HunkLine::Context(line.strip_prefix('+').unwrap())),
+            _ => Err(anyhow::anyhow!("Invalid syntax in hunk")),
+        }
+    }
+}
+
+pub struct PatchChange<'a> {
+    hunks: Vec<HunkLine<'a>>,
+}
+
 pub enum Patch<'a> {
     AddFile {
         diff: Vec<&'a str>,
@@ -220,35 +236,40 @@ impl DiffSet<'_> {
     fn get_patch_changes<'a>(
         lines: &mut Peekable<std::str::Lines<'a>>,
     ) -> anyhow::Result<PatchChange<'a>> {
-        let (neg, pos, search) = lines
+        let res: Vec<HunkLine> = lines
             .peeking_take_while(|line| !line.starts_with("***"))
-            .try_fold(
-                (Vec::new(), Vec::new(), None),
-                |(mut neg, mut pos, search), line| match line.chars().next() {
-                    Some(' ') => Ok((neg, pos, Some(line))),
-                    Some('-') => {
-                        neg.push(line);
-                        Ok((neg, pos, search))
-                    }
-                    Some('+') => {
-                        pos.push(line);
-                        Ok((neg, pos, search))
-                    }
-                    _ => Err(anyhow::anyhow!("Invalid format for diff")),
-                },
-            )?;
-        let neg = vec_to_option(neg);
-        let pos = vec_to_option(pos);
-        Ok(PatchChange {
-            search_line: search,
-            additions: pos,
-            removals: neg,
-        })
+            .try_fold(Vec::new(), |mut acc, line: &str| {
+                let hunk_line = HunkLine::new(line)?;
+                acc.push(hunk_line);
+                Ok::<Vec<HunkLine<'_>>, anyhow::Error>(acc)
+            })?;
+
+        if let Some(HunkLine::Add(add)) = res.first() {
+            Err(anyhow::anyhow!("Cannot only have additions in patch"))
+        } else {
+            Ok(PatchChange { hunks: res })
+        }
     }
 }
 
 fn vec_to_option(vec: Vec<&str>) -> Option<Vec<&str>> {
     if vec.is_empty() { None } else { Some(vec) }
+}
+
+fn apply_diff(base: &str, patch: Patch) -> anyhow::Result<String> {
+    match patch {
+        Patch::AddFile { diff, .. } => {
+            let res = diff
+                .into_iter()
+                .fold(String::from(base), |b, x| b + "\n" + x);
+            Ok(res)
+        }
+        Patch::UpdateFile { changes, .. } => {
+            todo!()
+        }
+        Patch::MoveFile { from, to, changes } => todo!(),
+        Patch::DeleteFile { .. } => Err(anyhow::anyhow!("No diff for delete lil bro")),
+    }
 }
 
 #[cfg(test)]
@@ -292,9 +313,15 @@ mod tests {
         match &diff.vec[2] {
             Patch::UpdateFile { path, changes } => {
                 assert_eq!(*path, Path::new("changed.txt"));
-                assert_eq!(changes.search_line, Some(" context"));
-                assert_eq!(changes.removals, Some(vec!["-old"]));
-                assert_eq!(changes.additions, Some(vec!["+new"]));
+                assert_eq!(changes.hunks.len(), 3);
+                match &changes.hunks[..] {
+                    [
+                        HunkLine::Context("context"),
+                        HunkLine::Context("old"),
+                        HunkLine::Context("new"),
+                    ] => {}
+                    _ => panic!("expected parsed update hunk lines"),
+                }
             }
             _ => panic!("expected update file patch"),
         }
@@ -302,9 +329,11 @@ mod tests {
             Patch::MoveFile { from, to, changes } => {
                 assert_eq!(*from, Path::new("old.txt"));
                 assert_eq!(*to, Path::new("moved.txt"));
-                assert_eq!(changes.search_line, None);
-                assert_eq!(changes.removals, Some(vec!["-before"]));
-                assert_eq!(changes.additions, Some(vec!["+after"]));
+                assert_eq!(changes.hunks.len(), 2);
+                match &changes.hunks[..] {
+                    [HunkLine::Context("before"), HunkLine::Context("after")] => {}
+                    _ => panic!("expected parsed move hunk lines"),
+                }
             }
             _ => panic!("expected move file patch"),
         }
@@ -367,5 +396,25 @@ trailing content";
 *** End Patch";
 
         assert!(DiffSet::new(input).is_err());
+    }
+
+    #[test]
+    fn parses_update_hunk_starting_with_addition_as_context() {
+        let input = "\
+*** Begin Patch
+*** Update File: changed.txt
+@@
++new
+*** End Patch";
+
+        let diff = DiffSet::new(input).unwrap();
+
+        match &diff.vec[0] {
+            Patch::UpdateFile { changes, .. } => match &changes.hunks[..] {
+                [HunkLine::Context("new")] => {}
+                _ => panic!("expected parsed addition hunk line"),
+            },
+            _ => panic!("expected update file patch"),
+        }
     }
 }
