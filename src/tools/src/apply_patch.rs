@@ -1,14 +1,10 @@
 use crate::tool_defs::{ToolDefTrait, ToolId, ToolTrait};
 use analysis::contexts::context::Context;
-use anyhow::anyhow;
 use async_trait::async_trait;
-use diffy::patch_set::{FileOperation, FilePatch, ParseOptions, PatchKind, PatchSet};
-use diffy::Patch;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
-use std::path::PathBuf;
-use std::str::FromStr;
 use turbo_code_macros::{ToolDef, ToolInput};
+use utils::diff::{apply_diff, DiffSet, Patch};
 use utils::files::Files;
 
 #[async_trait]
@@ -61,7 +57,7 @@ impl<C: Context, A> ToolTrait<C, A> for ApplyPatch {
 #[derive(Default, Serialize, Deserialize, Debug, Clone, ToolDef)]
 #[tool(
     name = "apply_patch",
-    description = "apply a git patch, supports multiple files, make sure to have the correct format"
+    description = "apply a *** Begin Patch diff, supports adding, deleting, updating, and moving files"
 )]
 pub struct ApplyPatch {
     #[tool(input)]
@@ -71,7 +67,7 @@ pub struct ApplyPatch {
 
 #[derive(Default, Serialize, Deserialize, Debug, Clone, ToolInput)]
 pub struct ApplyPatchInput {
-    #[tool(description = "The git patch", required)]
+    #[tool(description = "The *** Begin Patch formatted diff", required)]
     pub patch: String,
 }
 
@@ -83,26 +79,22 @@ pub struct ApplyPatchResult {
 
 impl Display for ApplyPatch {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let paths: Vec<_> = PatchSet::parse(&self.input.patch, ParseOptions::gitdiff())
-            .filter_map(Result::ok)
-            .map(|patch| match patch.operation() {
-                FileOperation::Delete(path) => format!("delete `{}`", path.as_ref()),
-                FileOperation::Create(path) => format!("create `{}`", path.as_ref()),
-                FileOperation::Modify { original, modified } => {
-                    if original == modified {
-                        format!("modify `{}`", modified.as_ref())
-                    } else {
-                        format!("modify `{}` -> `{}`", original.as_ref(), modified.as_ref())
-                    }
-                }
-                FileOperation::Rename { from, to } => {
-                    format!("rename `{}` -> `{}`", from.as_ref(), to.as_ref())
-                }
-                FileOperation::Copy { from, to } => {
-                    format!("copy `{}` -> `{}`", from.as_ref(), to.as_ref())
-                }
+        let paths: Vec<_> = DiffSet::new(&self.input.patch)
+            .map(|patches| {
+                patches
+                    .patches()
+                    .iter()
+                    .map(|patch| match patch {
+                        Patch::DeleteFile { path } => format!("delete `{}`", path.display()),
+                        Patch::AddFile { path, .. } => format!("create `{}`", path.display()),
+                        Patch::UpdateFile { path, .. } => format!("modify `{}`", path.display()),
+                        Patch::MoveFile { from, to, .. } => {
+                            format!("move `{}` -> `{}`", from.display(), to.display())
+                        }
+                    })
+                    .collect()
             })
-            .collect();
+            .unwrap_or_default();
 
         match paths.as_slice() {
             [] => write!(f, "- apply patch"),
@@ -126,55 +118,158 @@ impl Display for ApplyPatch {
 
 impl ApplyPatch {
     async fn apply_patch(&self) -> anyhow::Result<()> {
-        let patch = PatchSet::parse(&self.input.patch, ParseOptions::gitdiff());
-        for patch in patch {
-            Self::process_patch(patch?).await?;
+        let patches = DiffSet::new(&self.input.patch)?;
+        for patch in patches.into_patches() {
+            Self::process_patch(patch).await?;
         }
         Ok(())
     }
 
-    async fn process_patch<'a>(patch: FilePatch<'a, str>) -> anyhow::Result<()> {
-        match patch.operation() {
-            FileOperation::Delete(del) => {
-                let buf = PathBuf::from_str(&del)?;
-                Files::delete_file(&buf).await?;
+    async fn process_patch(patch: Patch<'_>) -> anyhow::Result<()> {
+        match patch {
+            Patch::DeleteFile { path } => {
+                Files::delete_file(&path.to_path_buf()).await?;
             }
-            FileOperation::Create(create) => {
-                let buf = PathBuf::from_str(create)?;
-                let data = Self::get_patch(patch)?;
-                let content = diffy::apply("", &data)?;
-                Files::write_to_file(&buf, &content).await?;
+            Patch::AddFile { path, diff } => {
+                let content = apply_diff("", Patch::AddFile { path, diff })?;
+                Files::write_to_file(&path.to_path_buf(), &content).await?;
             }
-            FileOperation::Modify { original, modified } => {
-                let src = PathBuf::from(original.as_ref());
-                let dst = PathBuf::from(modified.as_ref());
+            Patch::UpdateFile { path, changes } => {
+                let path = path.to_path_buf();
+                let base = Files::read_file(&path).await?;
+                let patched = apply_diff(
+                    &base,
+                    Patch::UpdateFile {
+                        path: &path,
+                        changes,
+                    },
+                )?;
+                Files::write_to_file(&path, &patched).await?;
+            }
+            Patch::MoveFile {
+                from,
+                to,
+                changes: None,
+            } => {
+                Files::rename_file(&from.to_path_buf(), &to.to_path_buf()).await?;
+            }
+            Patch::MoveFile {
+                from,
+                to,
+                changes: Some(changes),
+            } => {
+                let src = from.to_path_buf();
+                let dst = to.to_path_buf();
                 let base = Files::read_file(&src).await?;
-                let patch = Self::get_patch(patch)?;
-                let patched = diffy::apply(&base, &patch)?;
+                let patched = apply_diff(
+                    &base,
+                    Patch::MoveFile {
+                        from: &src,
+                        to: &dst,
+                        changes: Some(changes),
+                    },
+                )?;
                 Files::write_to_file(&dst, &patched).await?;
-
                 if src != dst {
                     Files::delete_file(&src).await?;
                 }
             }
-            FileOperation::Rename { from, to } => {
-                let src = PathBuf::from(from.as_ref());
-                let dst = PathBuf::from(to.as_ref());
-                Files::rename_file(&src, &dst).await?;
-            }
-            FileOperation::Copy { from, to } => {
-                let src = PathBuf::from(from.as_ref());
-                let dst = PathBuf::from(to.as_ref());
-                Files::copy_file(&src, &dst).await?;
-            }
         }
         Ok(())
     }
+}
 
-    fn get_patch(patch: FilePatch<str>) -> anyhow::Result<Patch<str>> {
-        match patch.patch() {
-            PatchKind::Text(res) => Ok(res.clone()),
-            PatchKind::Binary(_) => Err(anyhow!("Patch can only be Text")),
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_path(name: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "dumbass-agent-apply-patch-{}-{nonce}-{name}",
+            std::process::id()
+        ))
+    }
+
+    fn tool(patch: String) -> ApplyPatch {
+        ApplyPatch {
+            input: ApplyPatchInput { patch },
+            id: String::new(),
         }
+    }
+
+    #[test]
+    fn displays_custom_patch_operations() {
+        let patch = "\
+*** Begin Patch
+*** Add File: new.txt
++new
+*** Update File: old.txt
+*** Move to: moved.txt
+*** Delete File: gone.txt
+*** End Patch";
+
+        assert_eq!(
+            tool(patch.to_string()).to_string(),
+            "- apply patch: create `new.txt`, move `old.txt` -> `moved.txt`, delete `gone.txt`"
+        );
+    }
+
+    #[tokio::test]
+    async fn applies_custom_patch_file_operations() {
+        let added = temp_path("added.txt");
+        let updated = temp_path("updated.txt");
+        let move_from = temp_path("move-from.txt");
+        let move_dir = temp_path("move-dir");
+        let move_to = move_dir.join("move-to.txt");
+        let deleted = temp_path("deleted.txt");
+
+        tokio::fs::write(&updated, "old\n").await.unwrap();
+        tokio::fs::write(&move_from, "same\n").await.unwrap();
+        tokio::fs::write(&deleted, "delete\n").await.unwrap();
+
+        let patch = format!(
+            "\
+*** Begin Patch
+*** Add File: {}
++created
+*** Update File: {}
+@@
+-old
++changed
+*** Update File: {}
+*** Move to: {}
+*** Delete File: {}
+*** End Patch",
+            added.display(),
+            updated.display(),
+            move_from.display(),
+            move_to.display(),
+            deleted.display(),
+        );
+
+        tool(patch).apply_patch().await.unwrap();
+
+        let added_content = tokio::fs::read_to_string(&added).await.unwrap();
+        let updated_content = tokio::fs::read_to_string(&updated).await.unwrap();
+        let moved_content = tokio::fs::read_to_string(&move_to).await.unwrap();
+        let source_exists = tokio::fs::try_exists(&move_from).await.unwrap();
+        let deleted_exists = tokio::fs::try_exists(&deleted).await.unwrap();
+
+        tokio::fs::remove_file(&added).await.unwrap();
+        tokio::fs::remove_file(&updated).await.unwrap();
+        tokio::fs::remove_file(&move_to).await.unwrap();
+        tokio::fs::remove_dir(&move_dir).await.unwrap();
+
+        assert_eq!(added_content, "created");
+        assert_eq!(updated_content, "changed\n");
+        assert_eq!(moved_content, "same\n");
+        assert!(!source_exists);
+        assert!(!deleted_exists);
     }
 }

@@ -43,7 +43,7 @@ pub enum Patch<'a> {
     MoveFile {
         from: &'a Path,
         to: &'a Path,
-        changes: PatchChange<'a>,
+        changes: Option<PatchChange<'a>>,
     },
 }
 
@@ -104,8 +104,8 @@ impl<'a> PatchPrefix<'a> {
     }
 }
 
-impl DiffSet<'_> {
-    pub fn new<'a>(input: &'a str) -> anyhow::Result<DiffSet<'a>> {
+impl<'a> DiffSet<'a> {
+    pub fn new(input: &'a str) -> anyhow::Result<DiffSet<'a>> {
         let mut lines = input.lines().peekable();
         let header = lines
             .next()
@@ -130,9 +130,15 @@ impl DiffSet<'_> {
         }
     }
 
-    fn next_patch<'a>(
-        lines: &mut Peekable<std::str::Lines<'a>>,
-    ) -> anyhow::Result<Option<Patch<'a>>> {
+    pub fn patches(&self) -> &[Patch<'a>] {
+        &self.vec
+    }
+
+    pub fn into_patches(self) -> Vec<Patch<'a>> {
+        self.vec
+    }
+
+    fn next_patch(lines: &mut Peekable<std::str::Lines<'a>>) -> anyhow::Result<Option<Patch<'a>>> {
         let (op, param) = match lines.peek().and_then(|t| match t {
             &"*** End Patch" => None,
             _ => {
@@ -197,7 +203,7 @@ impl DiffSet<'_> {
                 let hunk = lines
                     .next()
                     .ok_or_else(|| anyhow::anyhow!("Invalid format for diff, no hunk"))?;
-                if hunk == "@@" {
+                if Self::is_hunk_header(hunk) {
                     let changes = Self::get_patch_changes(lines)?;
                     Ok(Patch::UpdateFile {
                         path: prefix.path,
@@ -214,26 +220,29 @@ impl DiffSet<'_> {
                     }
                     None => {}
                 }
-                let hunk = lines
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("Invalid format for diff, no hunk"))?;
-                if hunk == "@@" {
-                    let changes = Self::get_patch_changes(lines)?;
-                    Ok(Patch::MoveFile {
-                        from: prefix.path,
-                        changes,
-                        to: prefix.a_path.unwrap(),
-                    })
-                } else {
-                    Err(anyhow::anyhow!("Invalid format for diff, hunk different"))
-                }
+                let changes = match lines.peek().copied() {
+                    Some(hunk) if Self::is_hunk_header(hunk) => {
+                        lines.next();
+                        Some(Self::get_patch_changes(lines)?)
+                    }
+                    _ => None,
+                };
+                Ok(Patch::MoveFile {
+                    from: prefix.path,
+                    changes,
+                    to: prefix.a_path.unwrap(),
+                })
             }
         }?;
 
         Ok(Some(res))
     }
 
-    fn get_patch_changes<'a>(
+    fn is_hunk_header(line: &str) -> bool {
+        line == "@@" || line.starts_with("@@ ")
+    }
+
+    fn get_patch_changes(
         lines: &mut Peekable<std::str::Lines<'a>>,
     ) -> anyhow::Result<PatchChange<'a>> {
         let res: Vec<HunkLine> = lines
@@ -267,9 +276,12 @@ pub fn apply_diff(base: &str, patch: Patch<'_>) -> anyhow::Result<String> {
                 ))
             }
         }
-        Patch::UpdateFile { changes, .. } | Patch::MoveFile { changes, .. } => {
-            apply_changes(base, changes)
-        }
+        Patch::UpdateFile { changes, .. }
+        | Patch::MoveFile {
+            changes: Some(changes),
+            ..
+        } => apply_changes(base, changes),
+        Patch::MoveFile { changes: None, .. } => Ok(base.to_owned()),
         Patch::DeleteFile { .. } => Err(anyhow::anyhow!(
             "Delete-file patches must be applied as a filesystem operation"
         )),
@@ -291,12 +303,7 @@ fn apply_changes(base: &str, changes: PatchChange<'_>) -> anyhow::Result<String>
     let window_start = lines
         .windows(source.len())
         .position(|window| window == source.as_slice())
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Patch hunk does not m
-         atch the base content"
-            )
-        })?;
+        .ok_or_else(|| anyhow::anyhow!("Patch hunk does not match the base content"))?;
 
     let replacement = changes.hunks.iter().filter_map(|line| match line {
         HunkLine::Context(text) | HunkLine::Add(text) => Some(*text),
@@ -308,7 +315,9 @@ fn apply_changes(base: &str, changes: PatchChange<'_>) -> anyhow::Result<String>
     res.extend(replacement);
     res.extend_from_slice(&lines[window_start + source.len()..]);
 
-    Ok(res.join("\n") + "\n")
+    let mut res = res.join("\n");
+    res.push('\n');
+    Ok(res)
 }
 
 #[cfg(test)]
@@ -368,6 +377,7 @@ mod tests {
             Patch::MoveFile { from, to, changes } => {
                 assert_eq!(*from, Path::new("old.txt"));
                 assert_eq!(*to, Path::new("moved.txt"));
+                let changes = changes.as_ref().unwrap();
                 assert_eq!(changes.hunks.len(), 2);
                 match &changes.hunks[..] {
                     [HunkLine::Remove("before"), HunkLine::Add("after")] => {}
@@ -449,7 +459,7 @@ trailing content";
                 patch
             )
             .unwrap(),
-            "fn main() {\n    let x = 10;\n\n    println!(\"{x}\");\n\n    let y = 20;\n}"
+            "fn main() {\n    let x = 10;\n\n    println!(\"{x}\");\n\n    let y = 20;\n}\n"
         );
     }
 
@@ -475,7 +485,7 @@ trailing content";
                 patch
             )
             .unwrap(),
-            "fn main() {\n    let x = 10;\n    println!(\"{x}\");\n    let y = 20;\n}"
+            "fn main() {\n    let x = 10;\n    println!(\"{x}\");\n    let y = 20;\n}\n"
         );
     }
 
@@ -536,6 +546,34 @@ trailing content";
     }
 
     #[test]
+    fn applies_update_without_trimming_surrounding_blank_lines() {
+        let input = "\
+*** Begin Patch
+*** Update File: changed.txt
+@@
+-old
++new
+*** End Patch";
+        let patch = DiffSet::new(input).unwrap().vec.into_iter().next().unwrap();
+
+        assert_eq!(apply_diff("\nold\n\n", patch).unwrap(), "new\n");
+    }
+
+    #[test]
+    fn applies_update_with_named_hunk_header() {
+        let input = "\
+*** Begin Patch
+*** Update File: changed.txt
+@@ function_name
+-old
++new
+*** End Patch";
+        let patch = DiffSet::new(input).unwrap().vec.into_iter().next().unwrap();
+
+        assert_eq!(apply_diff("old", patch).unwrap(), "new\n");
+    }
+
+    #[test]
     fn applies_insertion_before_context() {
         let input = "\
 *** Begin Patch
@@ -561,7 +599,19 @@ trailing content";
 *** End Patch";
         let patch = DiffSet::new(input).unwrap().vec.into_iter().next().unwrap();
 
-        assert_eq!(apply_diff("before", patch).unwrap(), "after");
+        assert_eq!(apply_diff("before", patch).unwrap(), "after\n");
+    }
+
+    #[test]
+    fn applies_move_file_without_content_changes() {
+        let input = "\
+*** Begin Patch
+*** Update File: old.txt
+*** Move to: moved.txt
+*** End Patch";
+        let patch = DiffSet::new(input).unwrap().vec.into_iter().next().unwrap();
+
+        assert_eq!(apply_diff("same\n", patch).unwrap(), "same\n");
     }
 
     #[test]
