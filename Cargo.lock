@@ -5309,6 +5309,7 @@ dependencies = [
  "futures",
  "grep",
  "ignore",
+ "itertools 0.14.0",
  "serde_json",
  "tokio",
  "tokio-stream",

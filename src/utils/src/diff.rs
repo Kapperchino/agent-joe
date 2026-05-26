@@ -1,3 +1,5 @@
+use itertools::Itertools;
+use std::iter::Peekable;
 use std::path::Path;
 
 pub struct DiffSet<'a> {
@@ -86,7 +88,7 @@ impl<'a> PatchPrefix<'a> {
 
 impl DiffSet<'_> {
     pub fn new<'a>(input: &'a str) -> anyhow::Result<DiffSet<'a>> {
-        let mut lines = input.lines();
+        let mut lines = input.lines().peekable();
         let header = lines
             .next()
             .ok_or_else(|| anyhow::anyhow!("Invalid format for diff"))?;
@@ -96,13 +98,18 @@ impl DiffSet<'_> {
             while let Some(patch) = Self::next_patch(&mut lines)? {
                 vec.push(patch);
             }
+            if lines.next().is_some() {
+                return Err(anyhow::anyhow!("Invalid format for diff"));
+            }
             Ok(DiffSet { vec })
         } else {
             Err(anyhow::anyhow!("Invalid format for diff"))
         }
     }
 
-    fn next_patch<'a>(lines: &mut std::str::Lines<'a>) -> anyhow::Result<Option<Patch<'a>>> {
+    fn next_patch<'a>(
+        lines: &mut Peekable<std::str::Lines<'a>>,
+    ) -> anyhow::Result<Option<Patch<'a>>> {
         let (op, param) = match lines.next().map(|t| {
             let rest = t
                 .strip_prefix("*** ")
@@ -117,19 +124,20 @@ impl DiffSet<'_> {
         }?;
 
         let a_pair = lines
-            .next()
-            .and_then(|t1| {
-                match t1.strip_prefix("*** ") {
-                    // Move to op
-                    Some(rest) => Some(
-                        rest.split_once(":")
-                            .map(|(a, b)| (a, b.trim()))
-                            .ok_or_else(|| anyhow::anyhow!("Invalid format for diff")),
-                    ),
-                    None => None,
-                }
+            .peek()
+            .and_then(|line| match line.strip_prefix("*** ") {
+                // Move to op
+                Some(rest) => Some(
+                    rest.split_once(":")
+                        .map(|(a, b)| (a, b.trim()))
+                        .ok_or_else(|| anyhow::anyhow!("Invalid format for diff")),
+                ),
+                None => None,
             })
-            .transpose()?;
+            .transpose()?
+            .inspect(|_| {
+                lines.next();
+            });
 
         let prefix = PatchPrefix::new(op, param, a_pair)?;
 
@@ -186,22 +194,26 @@ impl DiffSet<'_> {
         Ok(Some(res))
     }
 
-    fn get_patch_changes<'a>(lines: &mut std::str::Lines<'a>) -> anyhow::Result<PatchChange<'a>> {
-        let (neg, pos, search) = lines.take_while(|line| !line.starts_with("***")).try_fold(
-            (Vec::new(), Vec::new(), None),
-            |(mut neg, mut pos, search), line| match line.chars().next().unwrap() {
-                ' ' => Ok((neg, pos, Some(line))),
-                '-' => {
-                    neg.push(line);
-                    Ok((neg, pos, search))
-                }
-                '+' => {
-                    pos.push(line);
-                    Ok((neg, pos, search))
-                }
-                _ => Err(anyhow::anyhow!("Invalid format for diff")),
-            },
-        )?;
+    fn get_patch_changes<'a>(
+        lines: &mut Peekable<std::str::Lines<'a>>,
+    ) -> anyhow::Result<PatchChange<'a>> {
+        let (neg, pos, search) = lines
+            .peeking_take_while(|line| !line.starts_with("***"))
+            .try_fold(
+                (Vec::new(), Vec::new(), None),
+                |(mut neg, mut pos, search), line| match line.chars().next().unwrap() {
+                    ' ' => Ok((neg, pos, Some(line))),
+                    '-' => {
+                        neg.push(line);
+                        Ok((neg, pos, search))
+                    }
+                    '+' => {
+                        pos.push(line);
+                        Ok((neg, pos, search))
+                    }
+                    _ => Err(anyhow::anyhow!("Invalid format for diff")),
+                },
+            )?;
         let neg = vec_to_option(neg);
         let pos = vec_to_option(pos);
         Ok(PatchChange {
@@ -214,4 +226,84 @@ impl DiffSet<'_> {
 
 fn vec_to_option(vec: Vec<&str>) -> Option<Vec<&str>> {
     if vec.is_empty() { None } else { Some(vec) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_each_patch_type() {
+        let input = "\
+*** Begin Patch
+*** Add File: new.txt
++one
++two
+*** Delete File: gone.txt
+*** Update File: changed.txt
+@@
+ context
+-old
++new
+*** Update File: old.txt
+*** Move to: moved.txt
+@@
+-before
++after
+*** End Patch";
+
+        let diff = DiffSet::new(input).unwrap();
+
+        assert_eq!(diff.vec.len(), 4);
+        match &diff.vec[0] {
+            Patch::AddFile { path, diff } => {
+                assert_eq!(*path, Path::new("new.txt"));
+                assert_eq!(*diff, vec!["one", "two"]);
+            }
+            _ => panic!("expected add file patch"),
+        }
+        match &diff.vec[1] {
+            Patch::DeleteFile { path } => assert_eq!(*path, Path::new("gone.txt")),
+            _ => panic!("expected delete file patch"),
+        }
+        match &diff.vec[2] {
+            Patch::UpdateFile { path, changes } => {
+                assert_eq!(*path, Path::new("changed.txt"));
+                assert_eq!(changes.search_line, Some(" context"));
+                assert_eq!(changes.removals, Some(vec!["-old"]));
+                assert_eq!(changes.additions, Some(vec!["+new"]));
+            }
+            _ => panic!("expected update file patch"),
+        }
+        match &diff.vec[3] {
+            Patch::MoveFile { from, to, changes } => {
+                assert_eq!(*from, Path::new("old.txt"));
+                assert_eq!(*to, Path::new("moved.txt"));
+                assert_eq!(changes.search_line, None);
+                assert_eq!(changes.removals, Some(vec!["-before"]));
+                assert_eq!(changes.additions, Some(vec!["+after"]));
+            }
+            _ => panic!("expected move file patch"),
+        }
+    }
+
+    #[test]
+    fn rejects_add_file_with_non_addition_line() {
+        let input = "\
+*** Begin Patch
+*** Add File: new.txt
+not an addition
+*** End Patch";
+
+        assert!(DiffSet::new(input).is_err());
+    }
+
+    #[test]
+    fn rejects_patch_without_end_marker() {
+        let input = "\
+*** Begin Patch
+*** Delete File: gone.txt";
+
+        assert!(DiffSet::new(input).is_err());
+    }
 }
