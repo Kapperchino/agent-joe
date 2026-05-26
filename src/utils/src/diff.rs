@@ -101,7 +101,7 @@ impl DiffSet<'_> {
                 vec.push(patch);
             }
             if let Some(footer) = lines.next() {
-                if footer.trim() == "*** End Patch" {
+                if footer == "*** End Patch" && lines.next().is_none() {
                     Ok(DiffSet { vec })
                 } else {
                     Err(anyhow::anyhow!("Invalid format for diff"))
@@ -139,18 +139,22 @@ impl DiffSet<'_> {
             None => return Ok(None),
         }?;
 
-        let a_pair = lines
-            .peek()
-            .and_then(|line| match line.strip_prefix("*** ") {
-                // Move to op
-                Some(rest) => Some(
-                    rest.split_once(":")
-                        .map(|(a, b)| (a, b.trim()))
-                        .ok_or_else(|| anyhow::anyhow!("Invalid format for diff")),
-                ),
-                None => None,
-            })
-            .transpose()?;
+        let a_pair = if op == "Update File" {
+            lines
+                .peek()
+                .and_then(|line| match line.strip_prefix("*** ") {
+                    // Move to op
+                    Some(rest) => Some(
+                        rest.split_once(":")
+                            .map(|(a, b)| (a, b.trim()))
+                            .ok_or_else(|| anyhow::anyhow!("Invalid format for diff")),
+                    ),
+                    None => None,
+                })
+                .transpose()?
+        } else {
+            None
+        };
 
         let prefix = PatchPrefix::new(op, param, a_pair)?;
 
@@ -220,13 +224,13 @@ impl DiffSet<'_> {
             .peeking_take_while(|line| !line.starts_with("***"))
             .try_fold(
                 (Vec::new(), Vec::new(), None),
-                |(mut neg, mut pos, search), line| match line.chars().next().unwrap() {
-                    ' ' => Ok((neg, pos, Some(line))),
-                    '-' => {
+                |(mut neg, mut pos, search), line| match line.chars().next() {
+                    Some(' ') => Ok((neg, pos, Some(line))),
+                    Some('-') => {
                         neg.push(line);
                         Ok((neg, pos, search))
                     }
-                    '+' => {
+                    Some('+') => {
                         pos.push(line);
                         Ok((neg, pos, search))
                     }
@@ -322,6 +326,45 @@ not an addition
         let input = "\
 *** Begin Patch
 *** Delete File: gone.txt";
+
+        assert!(DiffSet::new(input).is_err());
+    }
+
+    #[test]
+    fn parses_delete_file_as_last_patch() {
+        let input = "\
+*** Begin Patch
+*** Delete File: gone.txt
+*** End Patch";
+
+        let diff = DiffSet::new(input).unwrap();
+
+        assert_eq!(diff.vec.len(), 1);
+        match &diff.vec[0] {
+            Patch::DeleteFile { path } => assert_eq!(*path, Path::new("gone.txt")),
+            _ => panic!("expected delete file patch"),
+        }
+    }
+
+    #[test]
+    fn rejects_content_after_end_marker() {
+        let input = "\
+*** Begin Patch
+*** Delete File: gone.txt
+*** End Patch
+trailing content";
+
+        assert!(DiffSet::new(input).is_err());
+    }
+
+    #[test]
+    fn rejects_blank_line_in_update_hunk() {
+        let input = "\
+*** Begin Patch
+*** Update File: changed.txt
+@@
+
+*** End Patch";
 
         assert!(DiffSet::new(input).is_err());
     }
