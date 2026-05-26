@@ -1,4 +1,5 @@
 use itertools::Itertools;
+use std::cmp::PartialEq;
 use std::iter::Peekable;
 use std::path::Path;
 
@@ -30,6 +31,7 @@ pub enum Patch<'a> {
     },
 }
 
+#[derive(Eq, PartialEq)]
 enum PatchType {
     AddFile,
     DeleteFile,
@@ -98,10 +100,15 @@ impl DiffSet<'_> {
             while let Some(patch) = Self::next_patch(&mut lines)? {
                 vec.push(patch);
             }
-            if lines.next().is_some() {
-                return Err(anyhow::anyhow!("Invalid format for diff"));
+            if let Some(footer) = lines.next() {
+                if footer.trim() == "*** End Patch" {
+                    Ok(DiffSet { vec })
+                } else {
+                    Err(anyhow::anyhow!("Invalid format for diff"))
+                }
+            } else {
+                Err(anyhow::anyhow!("Invalid format for diff"))
             }
-            Ok(DiffSet { vec })
         } else {
             Err(anyhow::anyhow!("Invalid format for diff"))
         }
@@ -110,16 +117,25 @@ impl DiffSet<'_> {
     fn next_patch<'a>(
         lines: &mut Peekable<std::str::Lines<'a>>,
     ) -> anyhow::Result<Option<Patch<'a>>> {
-        let (op, param) = match lines.next().map(|t| {
-            let rest = t
-                .strip_prefix("*** ")
-                .ok_or_else(|| anyhow::anyhow!("Invalid format for diff"))?;
-
-            rest.split_once(":")
-                .map(|(a, b)| (a, b.trim()))
-                .ok_or_else(|| anyhow::anyhow!("Invalid format for diff"))
+        let (op, param) = match lines.peek().and_then(|t| match t {
+            &"*** End Patch" => None,
+            _ => {
+                let res = t
+                    .strip_prefix("*** ")
+                    .ok_or_else(|| anyhow::anyhow!("Invalid format for diff"))
+                    .and_then(|rest| {
+                        rest.split_once(":")
+                            .map(|(a, b)| (a, b.trim()))
+                            .ok_or_else(|| anyhow::anyhow!("Invalid format for diff"))
+                    });
+                Some(res)
+            }
         }) {
-            Some(res) => res,
+            Some(res) => {
+                // advance if it's not end patch
+                lines.next();
+                res
+            }
             None => return Ok(None),
         }?;
 
@@ -134,10 +150,7 @@ impl DiffSet<'_> {
                 ),
                 None => None,
             })
-            .transpose()?
-            .inspect(|_| {
-                lines.next();
-            });
+            .transpose()?;
 
         let prefix = PatchPrefix::new(op, param, a_pair)?;
 
@@ -145,7 +158,7 @@ impl DiffSet<'_> {
             PatchType::AddFile => {
                 let diff: anyhow::Result<Vec<_>> =
                     lines
-                        .take_while(|line| !line.starts_with("***"))
+                        .peeking_take_while(|line| !line.starts_with("***"))
                         .map(|line| {
                             line.strip_prefix("+").ok_or_else(|| anyhow::anyhow!(
                                 "Invalid format for diff, For add file only additions are supported"
@@ -171,10 +184,16 @@ impl DiffSet<'_> {
                         changes,
                     })
                 } else {
-                    Err(anyhow::anyhow!("Invalid format for diff"))
+                    Err(anyhow::anyhow!("Invalid format for diff, hunk different"))
                 }
             }
             PatchType::MoveFile => {
+                match a_pair {
+                    Some(_) => {
+                        lines.next();
+                    }
+                    None => {}
+                }
                 let hunk = lines
                     .next()
                     .ok_or_else(|| anyhow::anyhow!("Invalid format for diff, no hunk"))?;
@@ -186,7 +205,7 @@ impl DiffSet<'_> {
                         to: prefix.a_path.unwrap(),
                     })
                 } else {
-                    Err(anyhow::anyhow!("Invalid format for diff"))
+                    Err(anyhow::anyhow!("Invalid format for diff, hunk different"))
                 }
             }
         }?;
