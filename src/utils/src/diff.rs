@@ -1,5 +1,4 @@
 use itertools::Itertools;
-use std::cmp::PartialEq;
 use std::iter::Peekable;
 use std::path::Path;
 
@@ -17,8 +16,9 @@ impl<'a> HunkLine<'a> {
     fn new(line: &'a str) -> anyhow::Result<HunkLine<'a>> {
         match line.chars().next() {
             Some(' ') => Ok(HunkLine::Context(line.strip_prefix(' ').unwrap())),
-            Some('-') => Ok(HunkLine::Context(line.strip_prefix('-').unwrap())),
-            Some('+') => Ok(HunkLine::Context(line.strip_prefix('+').unwrap())),
+            Some('-') => Ok(HunkLine::Remove(line.strip_prefix('-').unwrap())),
+            Some('+') => Ok(HunkLine::Add(line.strip_prefix('+').unwrap())),
+            None => Ok(HunkLine::Context("")),
             _ => Err(anyhow::anyhow!("Invalid syntax in hunk")),
         }
     }
@@ -244,32 +244,71 @@ impl DiffSet<'_> {
                 Ok::<Vec<HunkLine<'_>>, anyhow::Error>(acc)
             })?;
 
-        if let Some(HunkLine::Add(add)) = res.first() {
-            Err(anyhow::anyhow!("Cannot only have additions in patch"))
+        if res.is_empty() {
+            Err(anyhow::anyhow!("Update hunks cannot be empty"))
+        } else if res.iter().all(|line| matches!(line, HunkLine::Add(_))) {
+            Err(anyhow::anyhow!(
+                "Update hunks must include a context or removal line"
+            ))
         } else {
             Ok(PatchChange { hunks: res })
         }
     }
 }
 
-fn vec_to_option(vec: Vec<&str>) -> Option<Vec<&str>> {
-    if vec.is_empty() { None } else { Some(vec) }
-}
-
-fn apply_diff(base: &str, patch: Patch) -> anyhow::Result<String> {
+pub fn apply_diff(base: &str, patch: Patch<'_>) -> anyhow::Result<String> {
     match patch {
         Patch::AddFile { diff, .. } => {
-            let res = diff
-                .into_iter()
-                .fold(String::from(base), |b, x| b + "\n" + x);
-            Ok(res)
+            if base.is_empty() {
+                Ok(diff.join("\n"))
+            } else {
+                Err(anyhow::anyhow!(
+                    "Cannot apply an add-file patch to existing content"
+                ))
+            }
         }
-        Patch::UpdateFile { changes, .. } => {
-            todo!()
+        Patch::UpdateFile { changes, .. } | Patch::MoveFile { changes, .. } => {
+            apply_changes(base, changes)
         }
-        Patch::MoveFile { from, to, changes } => todo!(),
-        Patch::DeleteFile { .. } => Err(anyhow::anyhow!("No diff for delete lil bro")),
+        Patch::DeleteFile { .. } => Err(anyhow::anyhow!(
+            "Delete-file patches must be applied as a filesystem operation"
+        )),
     }
+}
+
+fn apply_changes(base: &str, changes: PatchChange<'_>) -> anyhow::Result<String> {
+    let source: Vec<&str> = changes
+        .hunks
+        .iter()
+        .filter_map(|line| match line {
+            HunkLine::Context(text) | HunkLine::Remove(text) => Some(*text),
+            HunkLine::Add(_) => None,
+        })
+        .collect();
+
+    let lines: Vec<&str> = base.trim().lines().collect();
+
+    let window_start = lines
+        .windows(source.len())
+        .position(|window| window == source.as_slice())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Patch hunk does not m
+         atch the base content"
+            )
+        })?;
+
+    let replacement = changes.hunks.iter().filter_map(|line| match line {
+        HunkLine::Context(text) | HunkLine::Add(text) => Some(*text),
+        HunkLine::Remove(_) => None,
+    });
+
+    let mut res = Vec::with_capacity(lines.len() + changes.hunks.len());
+    res.extend_from_slice(&lines[..window_start]);
+    res.extend(replacement);
+    res.extend_from_slice(&lines[window_start + source.len()..]);
+
+    Ok(res.join("\n") + "\n")
 }
 
 #[cfg(test)]
@@ -317,8 +356,8 @@ mod tests {
                 match &changes.hunks[..] {
                     [
                         HunkLine::Context("context"),
-                        HunkLine::Context("old"),
-                        HunkLine::Context("new"),
+                        HunkLine::Remove("old"),
+                        HunkLine::Add("new"),
                     ] => {}
                     _ => panic!("expected parsed update hunk lines"),
                 }
@@ -331,7 +370,7 @@ mod tests {
                 assert_eq!(*to, Path::new("moved.txt"));
                 assert_eq!(changes.hunks.len(), 2);
                 match &changes.hunks[..] {
-                    [HunkLine::Context("before"), HunkLine::Context("after")] => {}
+                    [HunkLine::Remove("before"), HunkLine::Add("after")] => {}
                     _ => panic!("expected parsed move hunk lines"),
                 }
             }
@@ -387,19 +426,61 @@ trailing content";
     }
 
     #[test]
-    fn rejects_blank_line_in_update_hunk() {
+    fn applies_update_with_blank_context_lines() {
         let input = "\
 *** Begin Patch
-*** Update File: changed.txt
+*** Update File: src/main.rs
 @@
+ fn main() {
+-    let x = 1;
++    let x = 10;
 
+     println!(\"{x}\");
+
+-    let y = 2;
++    let y = 20;
+ }
 *** End Patch";
+        let patch = DiffSet::new(input).unwrap().vec.into_iter().next().unwrap();
 
-        assert!(DiffSet::new(input).is_err());
+        assert_eq!(
+            apply_diff(
+                "fn main() {\n    let x = 1;\n\n    println!(\"{x}\");\n\n    let y = 2;\n}",
+                patch
+            )
+            .unwrap(),
+            "fn main() {\n    let x = 10;\n\n    println!(\"{x}\");\n\n    let y = 20;\n}"
+        );
     }
 
     #[test]
-    fn parses_update_hunk_starting_with_addition_as_context() {
+    fn applies_multiple_changes_in_single_hunk() {
+        let input = "\
+*** Begin Patch
+*** Update File: src/main.rs
+@@
+ fn main() {
+-    let x = 1;
++    let x = 10;
+     println!(\"{x}\");
+-    let y = 2;
++    let y = 20;
+ }
+*** End Patch";
+        let patch = DiffSet::new(input).unwrap().vec.into_iter().next().unwrap();
+
+        assert_eq!(
+            apply_diff(
+                "fn main() {\n    let x = 1;\n    println!(\"{x}\");\n    let y = 2;\n}",
+                patch
+            )
+            .unwrap(),
+            "fn main() {\n    let x = 10;\n    println!(\"{x}\");\n    let y = 20;\n}"
+        );
+    }
+
+    #[test]
+    fn rejects_update_hunk_without_anchor() {
         let input = "\
 *** Begin Patch
 *** Update File: changed.txt
@@ -407,14 +488,93 @@ trailing content";
 +new
 *** End Patch";
 
-        let diff = DiffSet::new(input).unwrap();
+        assert!(DiffSet::new(input).is_err());
+    }
 
-        match &diff.vec[0] {
-            Patch::UpdateFile { changes, .. } => match &changes.hunks[..] {
-                [HunkLine::Context("new")] => {}
-                _ => panic!("expected parsed addition hunk line"),
-            },
-            _ => panic!("expected update file patch"),
-        }
+    #[test]
+    fn applies_add_file_without_a_leading_newline() {
+        let input = "\
+*** Begin Patch
+*** Add File: new.txt
++one
++two
+*** End Patch";
+        let patch = DiffSet::new(input).unwrap().vec.into_iter().next().unwrap();
+
+        assert_eq!(apply_diff("", patch).unwrap(), "one\ntwo");
+    }
+
+    #[test]
+    fn rejects_add_file_over_existing_content() {
+        let input = "\
+*** Begin Patch
+*** Add File: new.txt
++new
+*** End Patch";
+        let patch = DiffSet::new(input).unwrap().vec.into_iter().next().unwrap();
+
+        assert!(apply_diff("existing", patch).is_err());
+    }
+
+    #[test]
+    fn applies_update_file_and_preserves_trailing_newline() {
+        let input = "\
+*** Begin Patch
+*** Update File: changed.txt
+@@
+ context
+-old
++new
+ tail
+*** End Patch";
+        let patch = DiffSet::new(input).unwrap().vec.into_iter().next().unwrap();
+
+        assert_eq!(
+            apply_diff("start\ncontext\nold\ntail\nend\n", patch).unwrap(),
+            "start\ncontext\nnew\ntail\nend\n"
+        );
+    }
+
+    #[test]
+    fn applies_insertion_before_context() {
+        let input = "\
+*** Begin Patch
+*** Update File: changed.txt
+@@
++new
+ existing
+*** End Patch";
+        let patch = DiffSet::new(input).unwrap().vec.into_iter().next().unwrap();
+
+        assert_eq!(apply_diff("existing\n", patch).unwrap(), "new\nexisting\n");
+    }
+
+    #[test]
+    fn applies_move_file_content_changes() {
+        let input = "\
+*** Begin Patch
+*** Update File: old.txt
+*** Move to: moved.txt
+@@
+-before
++after
+*** End Patch";
+        let patch = DiffSet::new(input).unwrap().vec.into_iter().next().unwrap();
+
+        assert_eq!(apply_diff("before", patch).unwrap(), "after");
+    }
+
+    #[test]
+    fn rejects_update_when_hunk_does_not_match_base() {
+        let input = "\
+*** Begin Patch
+*** Update File: changed.txt
+@@
+-old
++new
+*** End Patch";
+        let patch = DiffSet::new(input).unwrap().vec.into_iter().next().unwrap();
+
+        assert!(apply_diff("other", patch).is_err());
     }
 }
