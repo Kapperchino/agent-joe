@@ -59,8 +59,15 @@ impl<C: Context, A> ToolTrait<C, A> for ReadFile {
 #[derive(Default, Serialize, Deserialize, Debug, Clone, ToolDef)]
 #[tool(
     name = "read_file",
-    description = "Reads a file at file_path or a section of it defined by range or the files in a director if a dir path is provided,\
-     do not read the entire file unless you need to"
+    description = r#"
+Read contents from a specific known text file.
+
+Files, paths, and symbols may already be available in context. Do not use this tool for discovery, directory listing, or symbol search. Use it only to retrieve the actual text of a known file when existing context is insufficient.
+
+Prefer a focused line range when the relevant location is known. Omit `range` only for small files or when full-file context is necessary.
+
+Before editing, read the relevant file region unless that exact region is already present in current context.
+"#
 )]
 pub struct ReadFile {
     #[tool(input)]
