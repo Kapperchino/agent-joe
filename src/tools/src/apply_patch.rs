@@ -57,7 +57,115 @@ impl<C: Context, A> ToolTrait<C, A> for ApplyPatch {
 #[derive(Default, Serialize, Deserialize, Debug, Clone, ToolDef)]
 #[tool(
     name = "apply_patch",
-    description = "apply a *** Begin Patch diff, supports adding, deleting, updating, and moving files"
+    description = r#"Apply a patch to the workspace.
+
+Use this tool to create, update, move, or delete files. The patch must use the apply-patch format shown below. Paths must be relative to the workspace root. Do not use absolute paths.
+
+Patch format:
+
+*** Begin Patch
+*** Add File: path/to/file
++new file content
+*** Update File: path/to/file
+@@
+ context line
+-old line
++new line
+*** Delete File: path/to/file
+*** End Patch
+
+Supported operations:
+
+1. Add a file
+
+*** Begin Patch
+*** Add File: src/new_file.rs
++pub fn hello() {
++    println!("hello");
++}
+*** End Patch
+
+Every content line in an Add File block must start with `+`.
+
+2. Update a file
+
+*** Begin Patch
+*** Update File: src/main.rs
+@@
+ fn main() {
+-    println!("hello");
++    println!("hello, world");
+ }
+*** End Patch
+
+In update hunks:
+- Context lines start with one space.
+- Removed lines start with `-`.
+- Added lines start with `+`.
+- Blank context lines must still start with one space.
+- Blank added lines must be written as `+`.
+- Blank removed lines must be written as `-`.
+
+3. Delete a file
+
+*** Begin Patch
+*** Delete File: src/old_file.rs
+*** End Patch
+
+Delete File blocks have no body.
+
+4. Move or rename a file
+
+*** Begin Patch
+*** Update File: src/old_name.rs
+*** Move to: src/new_name.rs
+@@
+-pub fn old_name() {}
++pub fn new_name() {}
+*** End Patch
+
+Rules:
+- Always start with `*** Begin Patch`.
+- Always end with `*** End Patch`.
+- Use relative paths only.
+- Do not include line numbers.
+- Do not use Markdown fences inside the patch payload.
+- An Update File may contain multiple `@@` hunks.
+- A hunk may contain multiple replacement blocks.
+- Prefer 2–3 context lines around each change so the patch can be located safely.
+- Do not emit a pure insertion hunk without context unless the target location is otherwise unambiguous.
+- Do not include unchanged file content unless it is useful context.
+- Preserve indentation exactly.
+- If a hunk line is unchanged, prefix it with one space.
+- If a hunk line is removed, prefix it with `-`.
+- If a hunk line is added, prefix it with `+`.
+
+Invalid examples:
+
+Absolute path:
+
+*** Update File: /Users/me/project/src/main.rs
+
+Missing prefix inside hunk:
+
+@@
+ fn main() {
+println!("bad");
+ }
+
+The unchanged line must be:
+
+@@
+ fn main() {
+ println!("good");
+ }
+
+Preferred behavior:
+- Make small, focused patches.
+- Group related edits in one patch.
+- Split unrelated changes into separate patches.
+- When editing code, include enough surrounding context to avoid matching the wrong block.
+- Never invent files or paths that do not exist unless using Add File."#
 )]
 pub struct ApplyPatch {
     #[tool(input)]
@@ -169,6 +277,9 @@ impl ApplyPatch {
                         changes: Some(changes),
                     },
                 )?;
+                if let Some(parent) = dst.parent() {
+                    tokio::fs::create_dir_all(parent).await?;
+                }
                 Files::write_to_file(&dst, &patched).await?;
                 if src != dst {
                     Files::delete_file(&src).await?;
