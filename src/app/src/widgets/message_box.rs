@@ -4,13 +4,13 @@ use common_models::tui_models::State;
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
 use crossterm::terminal::{Clear, ClearType};
-use markdown::mdast::Node;
 use markdown::ParseOptions;
+use markdown::mdast::Node;
+use ratatui::DefaultTerminal;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::{Color, Line, Modifier, StatefulWidget, Style};
 use ratatui::widgets::{Paragraph, Widget};
-use ratatui::DefaultTerminal;
 use throbber_widgets_tui::{Throbber, ThrobberState};
 
 pub enum Msg {
@@ -86,15 +86,25 @@ impl MessageBoxState {
     fn wrap_tool_str(&self, string: &str) -> Vec<String> {
         if let Some(content) = string.strip_prefix("- ") {
             let wrap_width = self.msg_area_width.saturating_sub(2).max(1);
-            return textwrap::wrap(
-                content,
-                textwrap::Options::new(wrap_width as usize)
-                    .initial_indent("- ")
-                    .subsequent_indent("  "),
-            )
-            .into_iter()
-            .map(|x| x.to_string())
-            .collect();
+            let wrap_summary = |summary| {
+                textwrap::wrap(
+                    summary,
+                    textwrap::Options::new(wrap_width as usize)
+                        .initial_indent("- ")
+                        .subsequent_indent("  "),
+                )
+                .into_iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>()
+            };
+
+            return match content.split_once('\n') {
+                Some((summary, rest)) => wrap_summary(summary)
+                    .into_iter()
+                    .chain(rest.split('\n').map(str::to_string))
+                    .collect(),
+                None => wrap_summary(content),
+            };
         }
 
         self.wrap_str(string)
@@ -414,5 +424,33 @@ impl StatefulWidget for MessageBox {
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         let messages = Paragraph::new(state.output_lines());
         messages.render(area, buf);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_wrapping_preserves_fenced_diff_blocks() {
+        let mut state = MessageBoxState::new();
+        state.update_width_height(80, 24);
+
+        let lines = state.wrap_tool_str(
+            "- apply patch: modify `src/main.rs`\n\n```diff\ndiff --git a/src/main.rs b/src/main.rs\n-old\n+new\n```",
+        );
+
+        assert_eq!(
+            lines,
+            vec![
+                "- apply patch: modify `src/main.rs`",
+                "",
+                "```diff",
+                "diff --git a/src/main.rs b/src/main.rs",
+                "-old",
+                "+new",
+                "```",
+            ]
+        );
     }
 }

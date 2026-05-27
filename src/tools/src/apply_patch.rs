@@ -2,9 +2,12 @@ use crate::tool_defs::{ToolDefTrait, ToolId, ToolTrait};
 use analysis::contexts::context::Context;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::fmt::{Display, Formatter};
+use similar::TextDiff;
+use std::fmt::{Display, Formatter, Write as _};
+use std::fs;
+use std::path::Path;
 use turbo_code_macros::{ToolDef, ToolInput};
-use utils::diff::{apply_diff, DiffSet, Patch};
+use utils::diff::{DiffSet, Patch, apply_diff};
 use utils::files::Files;
 
 #[async_trait]
@@ -187,24 +190,25 @@ pub struct ApplyPatchResult {
 
 impl Display for ApplyPatch {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let paths: Vec<_> = DiffSet::new(&self.input.patch)
-            .map(|patches| {
-                patches
-                    .patches()
-                    .iter()
-                    .map(|patch| match patch {
-                        Patch::DeleteFile { path } => format!("delete `{}`", path.display()),
-                        Patch::AddFile { path, .. } => format!("create `{}`", path.display()),
-                        Patch::UpdateFile { path, .. } => format!("modify `{}`", path.display()),
-                        Patch::MoveFile { from, to, .. } => {
-                            format!("move `{}` -> `{}`", from.display(), to.display())
-                        }
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let patch_set = match DiffSet::new(&self.input.patch) {
+            Ok(patch_set) => patch_set,
+            Err(_) => return write!(f, "- apply patch"),
+        };
 
-        match paths.as_slice() {
+        let paths: Vec<_> = patch_set
+            .patches()
+            .iter()
+            .map(|patch| match patch {
+                Patch::DeleteFile { path } => format!("delete `{}`", path.display()),
+                Patch::AddFile { path, .. } => format!("create `{}`", path.display()),
+                Patch::UpdateFile { path, .. } => format!("modify `{}`", path.display()),
+                Patch::MoveFile { from, to, .. } => {
+                    format!("move `{}` -> `{}`", from.display(), to.display())
+                }
+            })
+            .collect();
+
+        let summary = match paths.as_slice() {
             [] => write!(f, "- apply patch"),
             [path] => write!(f, "- apply patch: {path}"),
             paths => {
@@ -220,8 +224,123 @@ impl Display for ApplyPatch {
                     write!(f, "- apply patch: {shown}")
                 }
             }
+        };
+        summary?;
+
+        let pretty_diffs = patch_set
+            .into_patches()
+            .into_iter()
+            .filter_map(pretty_patch_diff)
+            .collect::<Vec<_>>();
+
+        if !pretty_diffs.is_empty() {
+            let pretty_diffs = pretty_diffs.join("\n");
+            write!(f, "\n\n```diff\n{pretty_diffs}")?;
+            if !pretty_diffs.ends_with('\n') {
+                writeln!(f)?;
+            }
+            write!(f, "```")?;
+        }
+
+        Ok(())
+    }
+}
+
+fn pretty_patch_diff(patch: Patch<'_>) -> Option<String> {
+    let mut output = String::new();
+    match patch {
+        Patch::AddFile { path, diff } => {
+            let new_content = apply_diff("", Patch::AddFile { path, diff }).ok()?;
+            write_content_diff(&mut output, None, Some(path), "", &new_content).ok()?;
+        }
+        Patch::DeleteFile { path } => {
+            let old_content = fs::read_to_string(path).ok()?;
+            write_content_diff(&mut output, Some(path), None, &old_content, "").ok()?;
+        }
+        Patch::UpdateFile { path, changes } => {
+            let old_content = fs::read_to_string(path).ok()?;
+            let new_content = apply_diff(&old_content, Patch::UpdateFile { path, changes }).ok()?;
+            write_content_diff(
+                &mut output,
+                Some(path),
+                Some(path),
+                &old_content,
+                &new_content,
+            )
+            .ok()?;
+        }
+        Patch::MoveFile {
+            from,
+            to,
+            changes: None,
+        } => {
+            fs::read_to_string(from).ok()?;
+            writeln!(output, "diff --git a/{} b/{}", from.display(), to.display()).ok()?;
+            writeln!(output, "similarity index 100%").ok()?;
+            writeln!(output, "rename from {}", from.display()).ok()?;
+            write!(output, "rename to {}", to.display()).ok()?;
+        }
+        Patch::MoveFile {
+            from,
+            to,
+            changes: Some(changes),
+        } => {
+            let old_content = fs::read_to_string(from).ok()?;
+            let new_content = apply_diff(
+                &old_content,
+                Patch::MoveFile {
+                    from,
+                    to,
+                    changes: Some(changes),
+                },
+            )
+            .ok()?;
+            write_content_diff(
+                &mut output,
+                Some(from),
+                Some(to),
+                &old_content,
+                &new_content,
+            )
+            .ok()?;
         }
     }
+
+    Some(output)
+}
+
+fn write_content_diff(
+    output: &mut impl std::fmt::Write,
+    old_path: Option<&Path>,
+    new_path: Option<&Path>,
+    old_content: &str,
+    new_content: &str,
+) -> std::fmt::Result {
+    let diff_old_path = old_path.or(new_path).expect("diff path should exist");
+    let diff_new_path = new_path.or(old_path).expect("diff path should exist");
+    let old_header = diff_header("a", old_path);
+    let new_header = diff_header("b", new_path);
+
+    writeln!(
+        output,
+        "diff --git a/{} b/{}",
+        diff_old_path.display(),
+        diff_new_path.display()
+    )?;
+
+    let diff = TextDiff::from_lines(old_content, new_content);
+    write!(
+        output,
+        "{}",
+        diff.unified_diff()
+            .header(&old_header, &new_header)
+            .context_radius(3)
+    )
+}
+
+fn diff_header(prefix: &str, path: Option<&Path>) -> String {
+    path.map(|path| format!("{prefix}/{}", path.display()))
+        .unwrap_or_else(|| "/dev/null".to_string())
 }
 
 impl ApplyPatch {
@@ -325,10 +444,42 @@ mod tests {
 *** Delete File: gone.txt
 *** End Patch";
 
-        assert_eq!(
-            tool(patch.to_string()).to_string(),
+        let display = tool(patch.to_string()).to_string();
+
+        assert!(display.starts_with(
             "- apply patch: create `new.txt`, move `old.txt` -> `moved.txt`, delete `gone.txt`"
+        ));
+        assert!(display.contains("\n\n```diff\n"));
+        assert!(display.contains("diff --git a/new.txt b/new.txt"));
+        assert!(display.contains("--- /dev/null\n+++ b/new.txt"));
+        assert!(display.contains("+new"));
+    }
+
+    #[test]
+    fn displays_pretty_update_diff() {
+        let updated = temp_path("display-update.txt");
+        std::fs::write(&updated, "old\nsame\n").unwrap();
+
+        let patch = format!(
+            "\
+*** Begin Patch
+*** Update File: {}
+@@
+-old
++new
+ same
+*** End Patch",
+            updated.display(),
         );
+
+        let display = tool(patch).to_string();
+
+        std::fs::remove_file(&updated).unwrap();
+
+        assert!(display.starts_with("- apply patch: modify `"));
+        assert!(display.contains("\n\n```diff\n"));
+        assert!(display.contains("-old\n+new\n same"));
+        assert!(display.ends_with("```"));
     }
 
     #[tokio::test]

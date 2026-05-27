@@ -1,5 +1,5 @@
-use markdown::mdast::{AlignKind, Node};
 use markdown::ParseOptions;
+use markdown::mdast::{AlignKind, Node};
 use ratatui::prelude::{Color, Line, Modifier, Span, Style};
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{self, ThemeSet};
@@ -138,6 +138,10 @@ impl DrawLine {
             return vec![Line::from("")];
         }
 
+        if lang.as_deref().is_some_and(Self::is_diff_lang) {
+            return Self::render_diff_section(lines);
+        }
+
         let mut result = Vec::new();
 
         let code = lines.join("\n");
@@ -175,6 +179,38 @@ impl DrawLine {
         }
 
         result
+    }
+
+    fn is_diff_lang(lang: &str) -> bool {
+        lang.eq_ignore_ascii_case("diff") || lang.eq_ignore_ascii_case("patch")
+    }
+
+    fn render_diff_section(lines: &[String]) -> Vec<Line<'static>> {
+        lines
+            .iter()
+            .map(|line| Line::from(Span::styled(line.clone(), Self::diff_line_style(line))))
+            .collect()
+    }
+
+    fn diff_line_style(line: &str) -> Style {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('+') {
+            Style::default().fg(Color::Green)
+        } else if trimmed.starts_with('-') {
+            Style::default().fg(Color::Red)
+        } else if trimmed.starts_with("@@") {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else if trimmed.starts_with("diff --git")
+            || trimmed.starts_with("index ")
+            || trimmed.starts_with("rename ")
+            || trimmed.starts_with("similarity ")
+        {
+            Style::default().fg(Color::DarkGray)
+        } else {
+            Style::default()
+        }
     }
 
     fn syntect_to_ratatui_style(style: highlighting::Style) -> Style {
@@ -825,5 +861,32 @@ impl DrawLine {
         let mut options = ParseOptions::default();
         options.constructs.gfm_table = true;
         options
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn renders_diff_fence_with_add_remove_colors() {
+        let draw_line = DrawLine::new();
+        let lines = vec![
+            "```diff".to_string(),
+            "diff --git a/file b/file".to_string(),
+            "@@".to_string(),
+            "-old".to_string(),
+            "+new".to_string(),
+            " context".to_string(),
+            "```".to_string(),
+        ];
+
+        let rendered = draw_line.render_lines(&lines);
+
+        assert_eq!(rendered[0].spans[0].style.fg, Some(Color::DarkGray));
+        assert_eq!(rendered[1].spans[0].style.fg, Some(Color::Cyan));
+        assert_eq!(rendered[2].spans[0].style.fg, Some(Color::Red));
+        assert_eq!(rendered[3].spans[0].style.fg, Some(Color::Green));
+        assert_eq!(rendered[4].spans[0].style.fg, None);
     }
 }
