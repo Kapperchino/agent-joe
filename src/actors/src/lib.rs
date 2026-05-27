@@ -10,5 +10,5 @@ mod stream_processor;
 #[cfg(test)]
 mod stream_replay_test;
 mod tool_call;
-pub mod workers;
 pub mod tools;
+pub mod workers;

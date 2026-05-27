@@ -1,10 +1,14 @@
 use crate::claude_config::{ClaudeAuthConfig, ClaudeConfig, ClaudeEffort};
 use crate::llm;
 use crate::llm::{ClientResponse, LLmClientTrait};
-use anyhow::{anyhow, Error};
+use anyhow::{Error, anyhow};
 use async_stream::try_stream;
 use futures::{Stream, StreamExt};
-use reqwest::{header, Client};
+use reqwest::{Client, header};
+use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
+use reqwest_retry::RetryTransientMiddleware;
+use reqwest_retry::policies::ExponentialBackoff;
+use reqwest_tracing::TracingMiddleware;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -304,7 +308,7 @@ pub struct CacheControl {
 
 #[derive(Debug, Clone)]
 pub struct ClaudeClient {
-    client: Client,
+    client: ClientWithMiddleware,
     base_url: String,
     config: ClaudeConfig,
 }
@@ -344,10 +348,16 @@ impl ClaudeClient {
             header::HeaderValue::from_static("application/json"),
         );
 
-        let client = Client::builder()
+        let retry_policy = ExponentialBackoff::builder().build_with_max_retries(3);
+        let inner_client = Client::builder()
             .connect_timeout(Duration::from_secs(60))
             .default_headers(headers)
             .build()?;
+
+        let client = ClientBuilder::new(inner_client)
+            .with(TracingMiddleware::default())
+            .with(RetryTransientMiddleware::new_with_policy(retry_policy))
+            .build();
 
         Ok(Self {
             client,
@@ -378,7 +388,15 @@ impl ClaudeClient {
     async fn send_request(&self, request: ChatRequest) -> ClaudeResult<ChatResponse> {
         let url = format!("{}/messages", self.base_url);
 
-        let response = self.client.post(&url).json(&request).send().await?;
+        let response = self
+            .client
+            .post(&url)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| ClaudeError::ApiError {
+                message: e.to_string(),
+            })?;
         let chat_response: ChatResponse = response.json().await?;
         Ok(chat_response)
     }
@@ -409,39 +427,28 @@ impl ClaudeClient {
             effort: req.effort,
         };
 
-        match client.post(&url).json(&request).send().await {
-            Ok(res) => match res.status().is_success() {
-                true => {
-                    let stream = try_stream! {
-                        let response = client
-                            .post(&url)
-                            .json(&request)
-                            .send()
-                            .await?;
+        let initial = self.client.post(&url).json(&request).send().await?;
 
-                        let mut stream = response.bytes_stream();
-                        let mut buffer = String::new();
-
-                        while let Some(chunk) = stream.next().await {
-                            let chunk = chunk?;
-                            buffer.push_str(&String::from_utf8_lossy(&chunk));
-
-                            while let Some(stream_event) = extract_sse_event(&mut buffer)?{
-                                yield stream_event;
-                            }
-                        }
-                    };
-                    Ok(stream)
-                }
-                false => {
-                    let status = res.status();
-                    let body = res.text().await.unwrap_or_default();
-                    println!("Error {status}: {body}");
-                    Err(anyhow!("API error {status}: {body}"))
-                }
-            },
-            Err(err) => Err(anyhow!(err)),
+        if !initial.status().is_success() {
+            let status = initial.status();
+            let body = initial.text().await.unwrap_or_default();
+            return Err(anyhow!("API error {status}: {body}"));
         }
+
+        let mut byte_stream = initial.bytes_stream();
+        let mut buffer = String::new();
+
+        let stream = try_stream! {
+            while let Some(chunk) = byte_stream.next().await {
+                let chunk = chunk?;
+                buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+                while let Some(stream_event) = extract_sse_event(&mut buffer)?{
+                    yield stream_event;
+                }
+            }
+        };
+        Ok(stream)
     }
 }
 

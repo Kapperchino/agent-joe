@@ -11,7 +11,7 @@ use analysis::contexts::rust_context::RustContext;
 use async_trait::async_trait;
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use std::marker::PhantomData;
-use tools::tool_defs::{erased_tool, ErasedToolRef};
+use tools::tool_defs::{ErasedToolRef, erased_tool};
 
 pub struct BaseWorker<C: Context> {
     _ctx: PhantomData<C>,

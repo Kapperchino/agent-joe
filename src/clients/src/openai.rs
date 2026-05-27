@@ -1,10 +1,14 @@
 use crate::llm;
 use crate::llm::{ClientResponse, LLmClientTrait};
 use crate::openai_config::{OpenAIAuthConfig, OpenAIConfig, OpenAIEffort};
-use anyhow::{anyhow, Error};
+use anyhow::{Error, anyhow};
 use async_stream::try_stream;
-use futures::{Stream, StreamExt};
-use reqwest::{header, Client};
+use futures::{SinkExt, Stream, StreamExt};
+use reqwest::{Client, header};
+use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
+use reqwest_retry::RetryTransientMiddleware;
+use reqwest_retry::policies::ExponentialBackoff;
+use reqwest_tracing::TracingMiddleware;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::future::ready;
@@ -480,7 +484,7 @@ pub enum ReasoningSummary {
 
 #[derive(Debug, Clone)]
 pub struct OpenAIClient {
-    client: Client,
+    client: ClientWithMiddleware,
     config: OpenAIConfig,
 }
 #[derive(Serialize)]
@@ -577,10 +581,16 @@ impl OpenAIClient {
             }
         };
 
-        let client = Client::builder()
+        let retry_policy = ExponentialBackoff::builder().build_with_max_retries(3);
+        let inner_client = Client::builder()
             .connect_timeout(Duration::from_secs(60))
             .default_headers(headers)
             .build()?;
+
+        let client = ClientBuilder::new(inner_client)
+            .with(TracingMiddleware::default())
+            .with(RetryTransientMiddleware::new_with_policy(retry_policy))
+            .build();
 
         Ok(Self { client, config })
     }
@@ -601,7 +611,15 @@ impl OpenAIClient {
             store: false,
         };
 
-        let response = self.client.post(&url).json(&inner).send().await?;
+        let response = self
+            .client
+            .post(&url)
+            .json(&inner)
+            .send()
+            .await
+            .map_err(|e| OpenAIError::ApiError {
+                message: e.to_string(),
+            })?;
 
         if !response.status().is_success() {
             let status = response.status();

@@ -21,12 +21,12 @@ use crossterm::{
 use futures::StreamExt;
 use ractor::ActorRef;
 use ratatui::{
-    crossterm::event::{Event, KeyCode}, layout::{Constraint, Layout},
+    DefaultTerminal, Frame,
+    crossterm::event::{Event, KeyCode},
+    layout::{Constraint, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Block,
-    DefaultTerminal,
-    Frame,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::error;

@@ -1,5 +1,6 @@
 extern crate self as tools;
 
+pub mod apply_patch;
 pub mod cargo_check;
 pub mod cargo_test;
 pub mod grep;
@@ -8,4 +9,3 @@ pub mod read_file;
 pub mod string_replace;
 pub mod tool_defs;
 pub mod tool_impls;
-pub mod apply_patch;

@@ -38,7 +38,7 @@ impl<'a> AnalysisSession<'a> {
     pub(crate) fn get_work_files(&self) -> Vec<FileInfo> {
         self.work_files.clone()
     }
-    
+
     pub fn get_file_id(&self, path: &Path) -> Option<FileId> {
         let path = VfsPath::new_real_path(path.to_string_lossy().to_string());
         self.work_files

@@ -4,7 +4,7 @@ use crate::workers::validate_worker::ValidateWorker;
 use analysis::contexts::rust_empty_context::RustEmptyContext;
 use anyhow::anyhow;
 use async_trait::async_trait;
-use ractor::{call, Actor};
+use ractor::{Actor, call};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use tools::tool_defs::{ToolDefTrait, ToolId, ToolTrait};

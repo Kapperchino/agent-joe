@@ -2,13 +2,13 @@ use crate::actor::{ActorContext, Dependency, IntoActorErr, Message};
 use crate::actor_state::ActorState;
 use crate::worker::Worker;
 use analysis::contexts::context::Context;
+use analysis::contexts::rust_empty_context::RustEmptyContext;
 use async_trait::async_trait;
 use ractor::{ActorProcessingErr, ActorRef};
 use std::marker::PhantomData;
-use analysis::contexts::rust_empty_context::RustEmptyContext;
 use tools::grep::GrepTool;
 use tools::read_file::ReadFile;
-use tools::tool_defs::{erased_tool, ErasedToolRef};
+use tools::tool_defs::{ErasedToolRef, erased_tool};
 
 pub struct ReadWorker<C: Context> {
     _ctx: PhantomData<C>,

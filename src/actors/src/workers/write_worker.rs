@@ -10,7 +10,7 @@ use std::marker::PhantomData;
 use tools::apply_patch::ApplyPatch;
 use tools::grep::GrepTool;
 use tools::read_file::ReadFile;
-use tools::tool_defs::{erased_tool, ErasedToolRef};
+use tools::tool_defs::{ErasedToolRef, erased_tool};
 
 pub struct WriteWorker<C: Context> {
     _ctx: PhantomData<C>,

@@ -8,7 +8,7 @@ use ractor::{ActorProcessingErr, ActorRef};
 use std::marker::PhantomData;
 use tools::cargo_check::CargoCheck;
 use tools::cargo_test::CargoTest;
-use tools::tool_defs::{erased_tool, ErasedToolRef};
+use tools::tool_defs::{ErasedToolRef, erased_tool};
 
 pub struct ValidateWorker<C: Context> {
     _ctx: PhantomData<C>,
