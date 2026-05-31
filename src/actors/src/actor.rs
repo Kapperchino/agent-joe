@@ -7,6 +7,7 @@ use clients::llm::{ClientRequest, LLmClient, StreamEvent};
 use commands::command::Command;
 use common_models::tui_models::ActorToTui;
 use common_models::tui_models::State;
+use flume::Sender;
 use futures::StreamExt;
 use ractor::ActorProcessingErr;
 use ractor::ActorRef;
@@ -71,7 +72,7 @@ pub enum Message {
 pub struct Dependency<C: Context> {
     pub client: LLmClient,
     pub tools: Vec<ErasedToolRef<C, ActorContext<C>>>,
-    pub tui_tx: mpsc::UnboundedSender<ActorToTui>,
+    pub tui_tx: Sender<ActorToTui>,
     pub debug_mode: bool,
     pub context: C,
 }

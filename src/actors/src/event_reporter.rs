@@ -1,8 +1,9 @@
+use flume::Sender;
 use common_models::tui_models::{ActorToTui, State};
 use tokio::sync::mpsc;
 #[derive(Clone)]
 pub struct EventReporter {
-    pub tui_tx: mpsc::UnboundedSender<ActorToTui>,
+    pub tui_tx: Sender<ActorToTui>,
 }
 
 impl EventReporter {

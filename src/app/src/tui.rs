@@ -18,17 +18,17 @@ use crossterm::{
     event::{EventStream, KeyEvent, KeyModifiers},
     queue,
 };
+use flume::Receiver;
 use futures::StreamExt;
 use ractor::ActorRef;
 use ratatui::{
-    DefaultTerminal, Frame,
-    crossterm::event::{Event, KeyCode},
-    layout::{Constraint, Layout},
+    crossterm::event::{Event, KeyCode}, layout::{Constraint, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Block,
+    DefaultTerminal,
+    Frame,
 };
-use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::error;
 
 pub struct TUIApp {
@@ -188,7 +188,7 @@ impl TUIApp {
     pub async fn run(
         mut self,
         mut terminal: DefaultTerminal,
-        mut actor_rx: UnboundedReceiver<ActorToTui>,
+        mut actor_rx: Receiver<ActorToTui>,
     ) -> Result<()> {
         let mut events = EventStream::new();
 
@@ -199,7 +199,7 @@ impl TUIApp {
             tokio::select! {
                 _ = interval.tick() => self.message_box.advance_throbber(),
                 Some(Ok(event)) = events.next() => self.handle_term_event(&event),
-                Some(actor_msg) = actor_rx.recv() => self.handle_actor_msg(actor_msg),
+                Ok(actor_msg) = actor_rx.recv_async() => self.handle_actor_msg(actor_msg),
             }
 
             self.message_box

@@ -18,7 +18,6 @@ use ractor::Actor;
 use ratatui::{TerminalOptions, Viewport};
 use std::io::stdout;
 use tokio::main;
-use tokio::sync::mpsc;
 use tracing::Level;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::FmtSubscriber;
@@ -76,7 +75,7 @@ async fn main() {
     let config_context = ConfigContext::new(config);
 
     let client = LLmClient::new(config_context.clone()).unwrap();
-    let (tx, rx) = mpsc::unbounded_channel();
+    let (tx, rx) = flume::unbounded();
 
     let (supervisor, _) = Actor::spawn(None, WorkerSupervisor, ())
         .await

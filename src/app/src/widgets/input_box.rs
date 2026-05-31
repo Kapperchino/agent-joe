@@ -5,7 +5,7 @@ use crate::widgets::model_box::{ModelBox, ModelBoxResult, ModelBoxState};
 use clients::config::Config;
 use commands::command::CommandContext;
 use crossterm::event::KeyEvent;
-use hjkl_engine::{DefaultHost, Editor, InsertDir, Options, VimMode};
+use hjkl_engine::{DefaultHost, Editor, InsertDir, Options, Query, VimMode};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::prelude::{Color, Line, Modifier, Span, Style};
@@ -147,7 +147,7 @@ impl InputBoxState {
     }
 
     pub(crate) fn handle_hjkl_key(&mut self, key: KeyEvent) -> bool {
-        hjkl_vim::handle_key(&mut self.editor, key)
+        hjkl_vim_tui::handle_key(&mut self.editor, key)
     }
 
     pub(crate) fn force_normal_mode(&mut self) {
@@ -257,25 +257,17 @@ impl InputBoxState {
     fn set_input(&mut self, input: &str) {
         self.editor.set_content(input);
         let last_row = self.editor.buffer().row_count().saturating_sub(1);
-        let last_col = self
-            .editor
-            .buffer()
-            .line(last_row)
-            .map(str::chars)
-            .map(|chars| chars.count())
-            .unwrap_or_default();
+        let last_col = Query::line(self.editor.buffer(), last_row as u32)
+            .chars()
+            .count();
         self.editor.jump_cursor(last_row, last_col);
     }
 
     fn character_index(&self) -> usize {
         let (row, col) = self.editor.cursor();
-        let previous_chars = self
-            .editor
-            .buffer()
-            .lines()
-            .iter()
-            .take(row)
-            .map(|line| line.chars().count() + 1)
+        let previous_rows = row.min(self.editor.buffer().line_count() as usize);
+        let previous_chars = (0..previous_rows)
+            .map(|line| Query::line(self.editor.buffer(), line as u32).chars().count() + 1)
             .sum::<usize>();
         previous_chars + col
     }
