@@ -14,6 +14,7 @@ use crossterm::event::{
     PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
+use mimalloc::MiMalloc;
 use ractor::Actor;
 use ratatui::{TerminalOptions, Viewport};
 use std::io::stdout;
@@ -30,6 +31,8 @@ struct Cli {
     #[arg(long)]
     debug: bool,
 }
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 #[main]
 async fn main() {
@@ -37,6 +40,7 @@ async fn main() {
     if cli.debug {
         println!("Debug mode enabled");
     }
+
     let file_appender = RollingFileAppender::new(Rotation::HOURLY, "./logs", "err.log");
     let (file_appender, _guard) = tracing_appender::non_blocking(file_appender);
 
