@@ -2,8 +2,10 @@ use crate::llm::{ContentBlock, ContentBlockInfo, Delta};
 use crate::openai::{ClientRequest, InputItem, OutputItem, Role, StreamEvent, StreamOutputItem};
 use crate::{llm, openai};
 use tools::tool_defs;
-use tools::tool_defs::ToolId;
+use tools::tool_defs::{ToolDefinition, ToolId};
 use tracing::error;
+
+const OPENAI_DEFAULT_SEARCH_TOOL_TYPE: &str = "web_search";
 
 impl From<llm::ClientRequest> for ClientRequest {
     fn from(llm_req: llm::ClientRequest) -> Self {
@@ -57,18 +59,28 @@ impl From<llm::Role> for Role {
 
 impl From<tool_defs::ToolDefinition> for openai::Tool {
     fn from(value: tool_defs::ToolDefinition) -> Self {
-        openai::Tool {
-            tool_type: "function".to_string(),
-            name: value.name,
-            description: value.description,
-            parameters: openai::FunctionParameters {
-                param_type: "object".to_string(),
-                properties: value
-                    .properties
-                    .into_iter()
-                    .map(|(k, v)| (k, v.into()))
-                    .collect(),
-                required: value.required,
+        match value {
+            ToolDefinition::Client {
+                name,
+                description,
+                properties,
+                required,
+            } => openai::Tool::Function {
+                tool_type: "function".to_string(),
+                name,
+                description,
+                parameters: openai::FunctionParameters {
+                    param_type: "object".to_string(),
+                    properties: properties.into_iter().map(|(k, v)| (k, v.into())).collect(),
+                    required,
+                },
+            },
+            ToolDefinition::Search { name } => openai::Tool::WebSearch {
+                tool_type: if name.is_empty() {
+                    OPENAI_DEFAULT_SEARCH_TOOL_TYPE.to_string()
+                } else {
+                    name
+                },
             },
         }
     }
@@ -125,7 +137,7 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
             StreamEvent::OutputItemAdded {
                 output_index,
                 item,
-                sequence_number,
+                sequence_number: _,
             } => match item {
                 StreamOutputItem::FunctionCall { id, call_id, name } => {
                     Some(llm::StreamEvent::ContentBlockStart {
@@ -140,37 +152,40 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
                         },
                     })
                 }
-                StreamOutputItem::Message { id, role } => {
-                    Some(llm::StreamEvent::ContentBlockStart {
-                        index: output_index,
-                        content_block: ContentBlockInfo::Text {
-                            text: "".to_string(),
-                        },
-                    })
-                }
-                StreamOutputItem::Reasoning {
-                    summary_text_content,
-                    content,
-                } => Some(llm::StreamEvent::ContentBlockStart {
+                StreamOutputItem::Message { .. } => Some(llm::StreamEvent::ContentBlockStart {
+                    index: output_index,
+                    content_block: ContentBlockInfo::Text {
+                        text: "".to_string(),
+                    },
+                }),
+                StreamOutputItem::Reasoning { .. } => Some(llm::StreamEvent::ContentBlockStart {
                     index: output_index,
                     content_block: ContentBlockInfo::Thinking {
                         thinking: "".to_string(),
                     },
                 }),
+                StreamOutputItem::WebSearchCall { .. } => Some(llm::StreamEvent::Accum),
                 StreamOutputItem::Unknown => None,
             },
             StreamEvent::OutputItemDone {
                 output_index,
                 item,
-                sequence_number,
-            } => Some(llm::StreamEvent::ContentBlockStop {
-                index: output_index,
-                id: item.map(|item| match item {
-                    OutputItem::Message { id, .. } => id,
-                    OutputItem::FunctionCall { id, .. } => id,
-                    OutputItem::Reasoning { id, .. } => id,
+                sequence_number: _,
+            } => match item {
+                Some(OutputItem::Message { id, .. })
+                | Some(OutputItem::FunctionCall { id, .. })
+                | Some(OutputItem::Reasoning { id, .. }) => {
+                    Some(llm::StreamEvent::ContentBlockStop {
+                        index: output_index,
+                        id: Some(id),
+                    })
+                }
+                Some(OutputItem::WebSearchCall { .. }) => Some(llm::StreamEvent::Accum),
+                None => Some(llm::StreamEvent::ContentBlockStop {
+                    index: output_index,
+                    id: None,
                 }),
-            }),
+            },
             StreamEvent::OutputTextDelta {
                 output_index,
                 delta,
@@ -232,13 +247,7 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
             StreamEvent::ReasoningSummaryPartAdded { .. } => Some(llm::StreamEvent::Accum),
             StreamEvent::ReasoningSummaryPartDone { .. } => Some(llm::StreamEvent::Accum),
             StreamEvent::RefusalDelta { .. } => None,
-            StreamEvent::RefusalDone {
-                item_id,
-                output_index,
-                content_index,
-                refusal,
-                sequence_number,
-            } => {
+            StreamEvent::RefusalDone { refusal, .. } => {
                 error!("{refusal}");
                 None
             }

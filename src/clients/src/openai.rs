@@ -3,7 +3,7 @@ use crate::llm::{ClientResponse, LLmClientTrait};
 use crate::openai_config::{OpenAIAuthConfig, OpenAIConfig, OpenAIEffort};
 use anyhow::{Error, anyhow};
 use async_stream::try_stream;
-use futures::{SinkExt, Stream, StreamExt};
+use futures::{Stream, StreamExt};
 use reqwest::{Client, header};
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::RetryTransientMiddleware;
@@ -15,7 +15,7 @@ use std::future::ready;
 use std::str::FromStr;
 use std::time::Duration;
 use thiserror::Error;
-use tracing::{error, info, warn};
+use tracing::info;
 
 #[derive(Error, Debug)]
 pub enum OpenAIError {
@@ -81,12 +81,19 @@ impl InputItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Tool {
-    #[serde(rename = "type")]
-    pub tool_type: String,
-    pub name: String,
-    pub description: String,
-    pub parameters: FunctionParameters,
+#[serde(untagged)]
+pub enum Tool {
+    Function {
+        #[serde(rename = "type")]
+        tool_type: String,
+        name: String,
+        description: String,
+        parameters: FunctionParameters,
+    },
+    WebSearch {
+        #[serde(rename = "type")]
+        tool_type: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -181,6 +188,14 @@ pub enum OutputItem {
         #[serde(default)]
         status: String,
     },
+    #[serde(rename = "web_search_call")]
+    WebSearchCall {
+        id: String,
+        #[serde(default)]
+        status: Option<String>,
+        #[serde(default)]
+        action: Option<WebSearchAction>,
+    },
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -188,6 +203,33 @@ pub enum OutputItem {
 pub enum ContentPart {
     #[serde(rename = "output_text")]
     OutputText { text: String },
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(tag = "type")]
+pub enum WebSearchAction {
+    #[serde(rename = "search")]
+    Search {
+        #[serde(default)]
+        query: Option<String>,
+        #[serde(default)]
+        queries: Vec<String>,
+        #[serde(default)]
+        domains: Vec<String>,
+        #[serde(default)]
+        sources: Vec<WebSearchSource>,
+    },
+    #[serde(rename = "open_page")]
+    OpenPage { url: String },
+    #[serde(rename = "find_in_page", alias = "find")]
+    Find { url: String, pattern: String },
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct WebSearchSource {
+    #[serde(rename = "type")]
+    pub source_type: String,
+    pub url: String,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -239,6 +281,15 @@ pub enum StreamOutputItem {
         summary_text_content: Vec<SummaryTextContent>,
         #[serde(default)]
         content: Vec<ReasoningText>,
+    },
+    #[serde(rename = "web_search_call")]
+    WebSearchCall {
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        status: Option<String>,
+        #[serde(default)]
+        action: Option<WebSearchAction>,
     },
     #[serde(other)]
     Unknown,

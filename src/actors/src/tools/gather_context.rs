@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use ractor::{Actor, call};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
-use tools::tool_defs::{ToolDefTrait, ToolId, ToolTrait};
+use tools::tool_defs::{ToolDefTrait, ToolId, ToolTrait, ToolType};
 use turbo_code_macros::{ToolDef, ToolInput};
 
 #[async_trait]
@@ -83,6 +83,10 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for GatherContext {
         context
             .stacked_context
             .push(format!("{}\n{addition}", input.context))
+    }
+
+    fn tool_type() -> ToolType {
+        ToolType::Client
     }
 }
 

@@ -1,4 +1,4 @@
-use crate::tool_defs::{ToolDefTrait, ToolId, ToolTrait};
+use crate::tool_defs::{ToolDefTrait, ToolId, ToolTrait, ToolType};
 use analysis::contexts::context::Context;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -50,6 +50,10 @@ impl<C: Context, A> ToolTrait<C, A> for StringReplace {
 
     fn output_to_content(_input: &Self::Input, output: &Self::Output) -> anyhow::Result<String> {
         Ok(output.status.clone())
+    }
+
+    fn tool_type() -> ToolType {
+        ToolType::Client
     }
 }
 

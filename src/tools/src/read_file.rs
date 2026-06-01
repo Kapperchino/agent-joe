@@ -1,4 +1,4 @@
-use crate::tool_defs::{Range, ToolDefTrait, ToolId, ToolTrait};
+use crate::tool_defs::{Range, ToolDefTrait, ToolId, ToolTrait, ToolType};
 use analysis::contexts::context::{Context, LineIndexCreator};
 use async_trait::async_trait;
 use futures::{StreamExt, TryStreamExt};
@@ -53,6 +53,10 @@ impl<C: Context, A> ToolTrait<C, A> for ReadFile {
 
     fn output_to_content(_input: &Self::Input, output: &Self::Output) -> anyhow::Result<String> {
         Ok(output.res.clone())
+    }
+
+    fn tool_type() -> ToolType {
+        ToolType::Client
     }
 }
 

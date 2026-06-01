@@ -160,6 +160,19 @@ pub enum ContentBlock {
         #[serde(skip_serializing_if = "Option::is_none")]
         is_error: Option<bool>,
     },
+    #[serde(rename = "server_tool_use")]
+    ServerToolUse {
+        id: String,
+        name: String,
+        #[serde(default)]
+        input: HashMap<String, String>,
+    },
+    #[serde(rename = "web_search_tool_result")]
+    WebSearchToolResult {
+        tool_use_id: String,
+        #[serde(default)]
+        content: serde_json::Value,
+    },
 }
 
 // Streaming types
@@ -223,6 +236,19 @@ pub enum ContentBlockInfo {
     Thinking { thinking: String },
     #[serde(rename = "text")]
     Text { text: String },
+    #[serde(rename = "server_tool_use")]
+    ServerToolUse {
+        id: String,
+        name: String,
+        #[serde(default)]
+        input: HashMap<String, String>,
+    },
+    #[serde(rename = "web_search_tool_result")]
+    WebSearchToolResult {
+        tool_use_id: String,
+        #[serde(default)]
+        content: serde_json::Value,
+    },
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -256,10 +282,19 @@ pub struct ApiErrorDetail {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct Tool {
-    pub name: String,
-    pub description: String,
-    pub input_schema: ToolSchemaDTO,
+#[serde(untagged)]
+pub enum Tool {
+    Client {
+        name: String,
+        description: String,
+        input_schema: ToolSchemaDTO,
+    },
+    Server {
+        #[serde(rename = "type")]
+        tool_type: String,
+        name: String,
+        max_uses: u32,
+    },
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -406,8 +441,6 @@ impl ClaudeClient {
         req: ClientRequest,
     ) -> Result<impl Stream<Item = ClaudeResult<StreamEvent>> + Send + 'static, anyhow::Error> {
         let url = format!("{}/messages", self.base_url);
-        let client = self.client.clone();
-
         let request = ChatRequestStream {
             model: req.model.unwrap_or_else(|| self.config.model.clone()),
             max_tokens: MAX_TOKENS,

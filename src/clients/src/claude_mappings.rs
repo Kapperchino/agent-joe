@@ -5,7 +5,10 @@ use crate::claude::{
 use crate::llm::ClientResponse;
 use crate::{claude, llm};
 use tools::tool_defs;
-use tools::tool_defs::ToolId;
+use tools::tool_defs::{ToolDefinition, ToolId};
+
+const CLAUDE_WEB_SEARCH_TOOL_TYPE: &str = "web_search_20250305";
+const CLAUDE_WEB_SEARCH_MAX_USES: u32 = 5;
 
 impl From<llm::Role> for claude::Role {
     fn from(value: llm::Role) -> Self {
@@ -61,19 +64,30 @@ impl From<llm::Message> for Message {
 
 impl From<&tool_defs::ToolDefinition> for Tool {
     fn from(value: &tool_defs::ToolDefinition) -> Self {
-        Tool {
-            name: value.name.clone(),
-            description: value.description.clone(),
-            input_schema: ToolSchemaDTO {
-                name: value.name.clone(),
-                tool_type: "object".to_string(),
-                properties: value
-                    .properties
-                    .clone()
-                    .into_iter()
-                    .map(|(k, v)| (k, v.into()))
-                    .collect(),
-                required: value.required.clone(),
+        match value {
+            ToolDefinition::Client {
+                name,
+                description,
+                properties,
+                required,
+            } => Tool::Client {
+                name: name.clone(),
+                description: description.clone(),
+                input_schema: ToolSchemaDTO {
+                    name: name.clone(),
+                    tool_type: "object".to_string(),
+                    properties: properties
+                        .clone()
+                        .into_iter()
+                        .map(|(k, v)| (k, v.into()))
+                        .collect(),
+                    required: required.clone(),
+                },
+            },
+            ToolDefinition::Search { name } => Tool::Server {
+                tool_type: CLAUDE_WEB_SEARCH_TOOL_TYPE.to_string(),
+                name: name.clone(),
+                max_uses: CLAUDE_WEB_SEARCH_MAX_USES,
             },
         }
     }
@@ -120,21 +134,27 @@ impl Into<llm::StreamEvent> for StreamEvent {
             StreamEvent::ContentBlockStart {
                 index,
                 content_block,
-            } => llm::StreamEvent::ContentBlockStart {
-                index,
-                content_block: match content_block {
-                    ContentBlockInfo::ToolUse { id, name, input } => {
-                        llm::ContentBlockInfo::ToolUse {
+            } => match content_block {
+                ContentBlockInfo::ToolUse { id, name, input } => {
+                    llm::StreamEvent::ContentBlockStart {
+                        index,
+                        content_block: llm::ContentBlockInfo::ToolUse {
                             id: ToolId { call_id: None, id },
                             name,
                             input,
-                        }
+                        },
                     }
-                    ContentBlockInfo::Thinking { thinking } => {
-                        llm::ContentBlockInfo::Thinking { thinking }
-                    }
-                    ContentBlockInfo::Text { text } => llm::ContentBlockInfo::Text { text },
+                }
+                ContentBlockInfo::Thinking { thinking } => llm::StreamEvent::ContentBlockStart {
+                    index,
+                    content_block: llm::ContentBlockInfo::Thinking { thinking },
                 },
+                ContentBlockInfo::Text { text } => llm::StreamEvent::ContentBlockStart {
+                    index,
+                    content_block: llm::ContentBlockInfo::Text { text },
+                },
+                ContentBlockInfo::ServerToolUse { .. }
+                | ContentBlockInfo::WebSearchToolResult { .. } => llm::StreamEvent::Accum,
             },
             StreamEvent::ContentBlockDelta { index, delta } => {
                 llm::StreamEvent::ContentBlockDelta {
@@ -195,36 +215,35 @@ impl From<Role> for llm::Role {
     }
 }
 
-impl From<ContentBlock> for llm::ContentBlock {
-    fn from(value: ContentBlock) -> Self {
-        match value {
-            ContentBlock::MessageBlock { text } => llm::ContentBlock::MessageBlock { text },
-            ContentBlock::ThinkingBlock {
-                thinking,
-                signature,
-            } => llm::ContentBlock::ThinkingBlock {
-                thinking,
-                signature,
-                reasoning_id: None,
+fn content_block_to_llm(value: ContentBlock) -> Option<llm::ContentBlock> {
+    match value {
+        ContentBlock::MessageBlock { text } => Some(llm::ContentBlock::MessageBlock { text }),
+        ContentBlock::ThinkingBlock {
+            thinking,
+            signature,
+        } => Some(llm::ContentBlock::ThinkingBlock {
+            thinking,
+            signature,
+            reasoning_id: None,
+        }),
+        ContentBlock::ToolBlock { id, name, input } => Some(llm::ContentBlock::ToolBlock {
+            tool_id: ToolId { call_id: None, id },
+            name,
+            input,
+        }),
+        ContentBlock::ToolResult {
+            tool_use_id,
+            content,
+            is_error,
+        } => Some(llm::ContentBlock::ToolResult {
+            tool_id: ToolId {
+                call_id: None,
+                id: tool_use_id,
             },
-            ContentBlock::ToolBlock { id, name, input } => llm::ContentBlock::ToolBlock {
-                tool_id: ToolId { call_id: None, id },
-                name,
-                input,
-            },
-            ContentBlock::ToolResult {
-                tool_use_id,
-                content,
-                is_error,
-            } => llm::ContentBlock::ToolResult {
-                tool_id: ToolId {
-                    call_id: None,
-                    id: tool_use_id,
-                },
-                content,
-                is_error,
-            },
-        }
+            content,
+            is_error,
+        }),
+        ContentBlock::ServerToolUse { .. } | ContentBlock::WebSearchToolResult { .. } => None,
     }
 }
 
@@ -262,10 +281,39 @@ impl From<ChatResponse> for ClientResponse {
             model: value.model,
             res_type: value.res_type,
             role: value.role.into(),
-            content: value.content.into_iter().map(|c| c.into()).collect(),
+            content: value
+                .content
+                .into_iter()
+                .filter_map(content_block_to_llm)
+                .collect(),
             stop_reason: value.stop_reason,
             stop_sequence: value.stop_sequence,
             usage: value.usage,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn maps_search_tool_definition_to_claude_server_tool() {
+        let definition = ToolDefinition::Search {
+            name: "web_search".to_string(),
+        };
+
+        let tool: Tool = (&definition).into();
+        let value = serde_json::to_value(tool).unwrap();
+
+        assert_eq!(
+            value,
+            json!({
+                "type": "web_search_20250305",
+                "name": "web_search",
+                "max_uses": 5
+            })
+        );
     }
 }

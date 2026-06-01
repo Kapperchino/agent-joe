@@ -1,5 +1,5 @@
-use flume::Sender;
 use common_models::tui_models::{ActorToTui, State};
+use flume::Sender;
 use tokio::sync::mpsc;
 #[derive(Clone)]
 pub struct EventReporter {

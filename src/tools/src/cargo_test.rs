@@ -1,4 +1,4 @@
-use crate::tool_defs::{ToolDefTrait, ToolId, ToolTrait};
+use crate::tool_defs::{ToolDefTrait, ToolId, ToolTrait, ToolType};
 use analysis::contexts::context::Context;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -65,6 +65,10 @@ impl<C: Context, A> ToolTrait<C, A> for CargoTest {
         } else {
             Ok(format!("{}\n{}", output.status, test_output))
         }
+    }
+
+    fn tool_type() -> ToolType {
+        ToolType::Client
     }
 }
 

@@ -51,22 +51,35 @@ pub trait ToolTrait<C: Context, A>: ToolDefTrait + Display {
     }
 
     fn add_context(input: &Self::Input, _context: &mut C, _addition: &str) {}
+
+    fn tool_type() -> ToolType;
 }
 
 #[derive(Debug, Clone)]
-pub struct ToolDefinition {
-    pub name: String,
-    pub description: String,
-    pub properties: HashMap<String, ToolProperty>,
-    pub required: Vec<String>,
+pub enum ToolDefinition {
+    Client {
+        name: String,
+        description: String,
+        properties: HashMap<String, ToolProperty>,
+        required: Vec<String>,
+    },
+    Search {
+        name: String,
+    },
 }
-
+pub enum ToolType {
+    Client,
+    Search,
+}
 #[async_trait]
 pub trait ErasedToolTrait<C: Context, A>: Send + Sync {
     fn definition(&self) -> ToolDefinition;
 
     fn name(&self) -> String {
-        self.definition().name
+        match self.definition() {
+            ToolDefinition::Client { name, .. } => name,
+            ToolDefinition::Search { name, .. } => name,
+        }
     }
 
     fn display_erased(&self, input: &Value) -> anyhow::Result<String>;
@@ -112,11 +125,16 @@ where
     A: Send + Sync,
 {
     fn definition(&self) -> ToolDefinition {
-        ToolDefinition {
-            name: T::tool_name().to_string(),
-            description: T::tool_description().to_string(),
-            properties: T::field_properties(),
-            required: T::required_fields(),
+        match T::tool_type() {
+            ToolType::Client => ToolDefinition::Client {
+                name: T::tool_name().to_string(),
+                description: T::tool_description().to_string(),
+                properties: T::field_properties(),
+                required: T::required_fields(),
+            },
+            ToolType::Search => ToolDefinition::Search {
+                name: T::tool_name().to_string(),
+            },
         }
     }
 
