@@ -5,8 +5,8 @@ use analysis::contexts::context::Context;
 use clients::llm;
 use clients::llm::{ClientRequest, LLmClient, StreamEvent};
 use commands::command::Command;
-use common_models::tui_models::ActorToTui;
 use common_models::tui_models::State;
+use common_models::tui_models::{ActorToTui, ActorToTuiPacket};
 use flume::Sender;
 use futures::StreamExt;
 use ractor::ActorProcessingErr;
@@ -176,7 +176,7 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
                 let tool_lines = tool_lines?;
 
                 if !tool_lines.is_empty() {
-                    state.reporter.send(ActorToTui::ToolUse(tool_lines));
+                    state.reporter.send(ActorToTuiPacket::ToolUse(tool_lines));
                 }
 
                 state.change_state(State::ToolStart);
@@ -218,17 +218,19 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
             Message::Command(command) => match command {
                 Command::PrintContext => {
                     let ctx = state.cur_context.get_ctx().await;
-                    let _ = state.reporter.send(ActorToTui::CommandResult(command, ctx));
+                    let _ = state
+                        .reporter
+                        .send(ActorToTuiPacket::CommandResult(command, ctx));
                 }
                 Command::Logout => match clients::config::Config::delete().await {
                     Ok(_) => {
-                        let _ = state.reporter.send(ActorToTui::CommandResult(
+                        let _ = state.reporter.send(ActorToTuiPacket::CommandResult(
                             command,
                             "Logged out. Removed config".to_string(),
                         ));
                     }
                     Err(err) => {
-                        let _ = state.reporter.send(ActorToTui::CommandResult(
+                        let _ = state.reporter.send(ActorToTuiPacket::CommandResult(
                             command,
                             format!("Deletion failed: {err}"),
                         ));
@@ -236,7 +238,7 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
                 },
                 Command::Clear => {
                     myself.send_message(Message::Clear)?;
-                    let _ = state.reporter.send(ActorToTui::CommandResult(
+                    let _ = state.reporter.send(ActorToTuiPacket::CommandResult(
                         command,
                         "History cleared".to_string(),
                     ));
@@ -297,9 +299,4 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
         }
         Ok(())
     }
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-struct ToolInput {
-    map: HashMap<String, String>,
 }

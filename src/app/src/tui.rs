@@ -1,9 +1,9 @@
 #![warn(clippy::pedantic)]
 
 use actors::actor::Message;
-use common_models::tui_models::ActorToTui;
 use common_models::tui_models::State;
 use common_models::tui_models::TokenCount;
+use common_models::tui_models::{ActorToTui, ActorToTuiPacket};
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -232,8 +232,8 @@ impl TUIApp {
     }
 
     fn handle_actor_msg(&mut self, msg: ActorToTui) {
-        match msg {
-            ActorToTui::StateChanged(state) => {
+        match msg.packet {
+            ActorToTuiPacket::StateChanged(state) => {
                 self.update_actor_state(state);
                 match self.actor_state {
                     State::ThinkingStart => self.message_box.start_stream_message(false),
@@ -243,7 +243,7 @@ impl TUIApp {
                     _ => {}
                 }
             }
-            ActorToTui::Data(data) => match self.actor_state {
+            ActorToTuiPacket::Data(data) => match self.actor_state {
                 State::Ready => {}
                 State::StreamStart => {}
                 State::StreamStop => {}
@@ -255,12 +255,12 @@ impl TUIApp {
                 State::ToolStop => {}
                 State::Stopped => {}
             },
-            ActorToTui::ToolUse(lines) => {
+            ActorToTuiPacket::ToolUse(lines) => {
                 lines.into_iter().for_each(|line| {
                     self.message_box.append(Msg::Tool(line));
                 });
             }
-            ActorToTui::CommandResult(command, command_res) => {
+            ActorToTuiPacket::CommandResult(command, command_res) => {
                 self.message_box.append(Msg::Message(command_res));
                 match command {
                     Command::Logout => self.kill(),
@@ -269,7 +269,7 @@ impl TUIApp {
                     Command::ChangeModel(_, _) => {}
                 }
             }
-            ActorToTui::TokensUpdated(token_count) => {
+            ActorToTuiPacket::TokensUpdated(token_count) => {
                 self.token_count = token_count;
             }
         }

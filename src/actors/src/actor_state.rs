@@ -66,6 +66,7 @@ impl<C: Context + Clone> ActorState<C> {
                 .collect(),
             stream_actor: None,
             reporter: EventReporter {
+                actor_id: actor_ref.get_id(),
                 tui_tx: dependency.tui_tx.clone(),
             },
             debug_mode: dependency.debug_mode,
@@ -76,6 +77,7 @@ impl<C: Context + Clone> ActorState<C> {
                 stream_log_path,
                 token_count: Default::default(),
                 reporter: EventReporter {
+                    actor_id: actor_ref.get_id(),
                     tui_tx: dependency.tui_tx,
                 },
                 cur_state: State::Ready,

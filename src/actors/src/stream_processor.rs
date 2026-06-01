@@ -3,7 +3,7 @@ use crate::event_reporter::EventReporter;
 use crate::tool_call::ToolCall;
 use anyhow::anyhow;
 use clients::llm::{ContentBlockInfo, Delta, StopReason, StreamEvent};
-use common_models::tui_models::{ActorToTui, State, TokenCount};
+use common_models::tui_models::{ActorToTui, ActorToTuiPacket, State, TokenCount};
 use std::path::PathBuf;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
@@ -136,7 +136,7 @@ impl StreamProcessor {
                 self.change_state(State::StreamStart);
                 self.token_count.input_tokens += message.usage.input_tokens;
                 self.reporter
-                    .send(ActorToTui::TokensUpdated(self.token_count.clone()));
+                    .send(ActorToTuiPacket::TokensUpdated(self.token_count.clone()));
             }
             StreamEvent::ContentBlockStart {
                 index: _,
@@ -168,7 +168,7 @@ impl StreamProcessor {
                 self.token_count.input_tokens += usage.input_tokens;
                 let _ = self
                     .reporter
-                    .send(ActorToTui::TokensUpdated(self.token_count.clone()));
+                    .send(ActorToTuiPacket::TokensUpdated(self.token_count.clone()));
             }
             StreamEvent::MessageStop => self.change_state(State::StreamStop),
             StreamEvent::Ping => {}

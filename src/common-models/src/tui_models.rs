@@ -1,7 +1,11 @@
 use commands::command::Command;
 
+pub struct ActorToTui {
+    pub actor_id: u64,
+    pub packet: ActorToTuiPacket,
+}
 #[derive(Debug, Clone)]
-pub enum ActorToTui {
+pub enum ActorToTuiPacket {
     StateChanged(State),
     Data(String),
     ToolUse(Vec<String>),
