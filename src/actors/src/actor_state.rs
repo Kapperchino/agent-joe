@@ -14,15 +14,16 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use tools::tool_defs::{ErasedToolRef, ToolDefinition, ToolInvocation, ToolResult};
 use tracing::{error, warn};
+use utils::utils::FnvHashMap;
 
 pub struct ActorState<C: Context> {
     pub cur_context: C,
     pub stream_actor: Option<ActorCell>,
     pub history: Vec<Message>,
     pub llm: LLmClient,
-    pub tools: HashMap<String, ErasedToolRef<C, ActorContext<C>>>,
+    pub tools: FnvHashMap<String, ErasedToolRef<C, ActorContext<C>>>,
     pub file_actor: Option<ActorRef<file_actor::Message>>,
-    pub pending_ports: HashMap<ActorId, RpcReplyPort<String>>,
+    pub pending_ports: FnvHashMap<ActorId, RpcReplyPort<String>>,
     pub stream_processor: StreamProcessor,
     pub reporter: EventReporter,
     pub debug_mode: bool,
@@ -71,7 +72,7 @@ impl<C: Context + Clone> ActorState<C> {
             },
             debug_mode: dependency.debug_mode,
             file_actor,
-            pending_ports: HashMap::default(),
+            pending_ports: FnvHashMap::default(),
             stream_processor: StreamProcessor {
                 batches: vec![],
                 stream_log_path,

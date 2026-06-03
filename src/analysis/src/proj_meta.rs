@@ -12,6 +12,7 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 use utils::files::Files;
+use utils::utils::FnvHashMap;
 
 pub struct FileMeta {
     pub line_index: triomphe::Arc<LineIndex>,
@@ -25,7 +26,7 @@ pub struct ProjMeta {
     pub functions: Vec<FunctionMeta>,
     pub type_alias: Vec<TypeAliasMeta>,
     pub traits: Vec<TraitMeta>,
-    pub files: HashMap<String, FileMeta>,
+    pub files: FnvHashMap<String, FileMeta>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -162,8 +163,8 @@ impl ProjMeta {
         vec: Vec<SymbolInfo>,
         rust_proj: &RustProject,
     ) -> anyhow::Result<ProjMeta> {
-        let joe_2: HashMap<_, _> = vec.iter().map(|s| (s.name.clone(), s.clone())).collect();
-        let joe = vec.into_iter().into_group_map_by(|x2| x2.kind.clone());
+        let joe_2: FnvHashMap<_, _> = vec.iter().map(|s| (s.name.clone(), s.clone())).collect();
+        let joe: HashMap<_,_> = vec.into_iter().into_group_map_by(|x2| x2.kind.clone());
         let structs = Self::get_symbol_map(&joe, &SymbolKind::Struct);
         let enums = Self::get_symbol_map(&joe, &SymbolKind::Enum);
         let variants = Self::get_symbol_map(&joe, &SymbolKind::Variant);
@@ -172,8 +173,8 @@ impl ProjMeta {
         let impls = Self::get_symbol_map(&joe, &SymbolKind::Impl);
         let fields = Self::get_symbol_map(&joe, &SymbolKind::Field);
 
-        let mut traits_metas: HashMap<String, TraitMeta> = Self::into_meta(&traits);
-        let type_alias_metas: HashMap<String, TypeAliasMeta> = Self::into_meta(&type_alias);
+        let mut traits_metas: FnvHashMap<String, TraitMeta> = Self::into_meta(&traits);
+        let type_alias_metas: FnvHashMap<String, TypeAliasMeta> = Self::into_meta(&type_alias);
 
         let (mut stand_alone, mut functions): (Vec<_>, _) = joe
             .get(&SymbolKind::Function)
@@ -194,27 +195,27 @@ impl ProjMeta {
 
         let stand_alone_func: Vec<_> = stand_alone.into_iter().map(|i| i.into()).collect();
 
-        let mut struct_metas: HashMap<String, StructMeta> = Self::into_meta(&structs);
+        let mut struct_metas: FnvHashMap<String, StructMeta> = Self::into_meta(&structs);
 
-        let mut enum_metas: HashMap<String, EnumMeta> = Self::into_meta(&enums);
+        let mut enum_metas: FnvHashMap<String, EnumMeta> = Self::into_meta(&enums);
 
-        let mut evariants_metas: HashMap<String, EVariantMeta> = Self::into_meta(&variants);
+        let mut evariants_metas: FnvHashMap<String, EVariantMeta> = Self::into_meta(&variants);
 
-        let mut impls_metas: HashMap<String, ImplMeta> = Self::into_meta(&impls);
+        let mut impls_metas: FnvHashMap<String, ImplMeta> = Self::into_meta(&impls);
 
-        let e_variants: HashMap<String, Vec<EVariantMeta>> = variants
+        let e_variants: FnvHashMap<String, Vec<EVariantMeta>> = variants
             .into_values()
             .into_group_map_by(|v| v.container_name.clone().unwrap())
             .into_iter()
             .map(|(k, v)| (k, v.into_iter().map(|i| i.into()).collect()))
-            .collect::<HashMap<String, Vec<EVariantMeta>>>();
+            .collect::<FnvHashMap<String, Vec<EVariantMeta>>>();
 
-        let inner_funcs: HashMap<String, Vec<FunctionMeta>> = functions
+        let inner_funcs: FnvHashMap<String, Vec<FunctionMeta>> = functions
             .iter()
             .into_group_map_by(|v| v.container_name.clone().unwrap())
             .into_iter()
             .map(|(k, v)| (k, v.into_iter().map(|i| i.clone().into()).collect()))
-            .collect::<HashMap<String, Vec<FunctionMeta>>>();
+            .collect::<FnvHashMap<String, Vec<FunctionMeta>>>();
 
         inner_funcs.into_iter().for_each(|(k, mut v)| {
             if let Some(s_meta) = struct_metas.get_mut(&k) {
@@ -297,7 +298,7 @@ impl ProjMeta {
         )
     }
 
-    fn into_meta<T: From<SymbolInfo>>(map: &HashMap<String, SymbolInfo>) -> HashMap<String, T> {
+    fn into_meta<T: From<SymbolInfo>>(map: &FnvHashMap<String, SymbolInfo>) -> FnvHashMap<String, T> {
         map.iter()
             .map(|(k, info)| {
                 let info = info.clone();
@@ -311,11 +312,11 @@ impl ProjMeta {
     fn get_symbol_map(
         symbols: &HashMap<SymbolKind, Vec<SymbolInfo>>,
         kind: &SymbolKind,
-    ) -> HashMap<String, SymbolInfo> {
+    ) -> FnvHashMap<String, SymbolInfo> {
         symbols
             .get(kind)
             .map(|t| {
-                let res: HashMap<_, _> = t
+                let res: FnvHashMap<_, _> = t
                     .into_iter()
                     .cloned()
                     .map(|info| (info.name.clone(), info.clone()))
@@ -343,7 +344,7 @@ impl ProjMeta {
                 .collect::<anyhow::Result<Vec<_>>>()?
         };
 
-        let mut hashes: HashMap<_, _> = Self::get_file_hashes_for_paths(
+        let mut hashes: FnvHashMap<_, _> = Self::get_file_hashes_for_paths(
             file_inputs
                 .iter()
                 .map(|(path, _, _)| path.clone())

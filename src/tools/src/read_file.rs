@@ -12,6 +12,7 @@ use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, BufReader};
 use tokio_stream::wrappers::LinesStream;
 use turbo_code_macros::{ToolDef, ToolInput};
+use utils::utils::FnvHashMap;
 
 #[async_trait]
 impl<C: Context, A> ToolTrait<C, A> for ReadFile {
@@ -43,7 +44,7 @@ impl<C: Context, A> ToolTrait<C, A> for ReadFile {
 
     fn req_from_input(
         input: &Self::Input,
-    ) -> anyhow::Result<std::collections::HashMap<String, String>> {
+    ) -> anyhow::Result<FnvHashMap<String, String>> {
         ReadFile {
             input: input.clone(),
             id: String::new(),

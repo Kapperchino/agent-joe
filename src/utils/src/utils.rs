@@ -1,7 +1,9 @@
 use crate::files::Files;
 use anyhow::Context;
+use fnv::FnvBuildHasher;
+use std::collections::HashMap;
 use std::path::PathBuf;
-
+pub type FnvHashMap<K, V> = HashMap<K, V, FnvBuildHasher>;
 pub const CONFIG_DIR_NAME: &str = ".turbo-code";
 pub struct Utils {}
 impl Utils {

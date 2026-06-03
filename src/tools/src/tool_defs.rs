@@ -3,24 +3,24 @@ use async_trait::async_trait;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
 use std::fmt::Display;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use turbo_code_macros::ToolInput;
+use utils::utils::FnvHashMap;
 
 pub trait ToolDefTrait {
     fn tool_name() -> &'static str;
     fn tool_description() -> &'static str;
-    fn field_properties() -> HashMap<String, ToolProperty>;
+    fn field_properties() -> FnvHashMap<String, ToolProperty>;
     fn required_fields() -> Vec<String>;
-    fn req(&self) -> anyhow::Result<HashMap<String, String>>;
+    fn req(&self) -> anyhow::Result<FnvHashMap<String, String>>;
 }
 
 pub trait ToolInputSchema {
-    fn properties() -> HashMap<String, ToolProperty>;
+    fn properties() -> FnvHashMap<String, ToolProperty>;
     fn required() -> Vec<String>;
-    fn req(&self) -> anyhow::Result<HashMap<String, String>>;
+    fn req(&self) -> anyhow::Result<FnvHashMap<String, String>>;
 }
 
 pub trait ToolUse {}
@@ -38,7 +38,7 @@ pub trait ToolTrait<C: Context, A>: ToolDefTrait + Display {
 
     fn display_input(input: &Self::Input) -> String;
 
-    fn req_from_input(input: &Self::Input) -> anyhow::Result<HashMap<String, String>>;
+    fn req_from_input(input: &Self::Input) -> anyhow::Result<FnvHashMap<String, String>>;
 
     fn output_to_content(input: &Self::Input, output: &Self::Output) -> anyhow::Result<String>;
 
@@ -46,7 +46,7 @@ pub trait ToolTrait<C: Context, A>: ToolDefTrait + Display {
         Self::tool_name().to_string()
     }
 
-    fn to_req(&self) -> anyhow::Result<HashMap<String, String>> {
+    fn to_req(&self) -> anyhow::Result<FnvHashMap<String, String>> {
         self.req()
     }
 
@@ -60,7 +60,7 @@ pub enum ToolDefinition {
     Client {
         name: String,
         description: String,
-        properties: HashMap<String, ToolProperty>,
+        properties: FnvHashMap<String, ToolProperty>,
         required: Vec<String>,
     },
     Search {
@@ -84,7 +84,7 @@ pub trait ErasedToolTrait<C: Context, A>: Send + Sync {
 
     fn display_erased(&self, input: &Value) -> anyhow::Result<String>;
 
-    fn input_req_erased(&self, input: &Value) -> anyhow::Result<HashMap<String, String>>;
+    fn input_req_erased(&self, input: &Value) -> anyhow::Result<FnvHashMap<String, String>>;
 
     async fn run_erased(
         &self,
@@ -143,7 +143,7 @@ where
         Ok(T::display_input(&typed_input))
     }
 
-    fn input_req_erased(&self, input: &Value) -> anyhow::Result<HashMap<String, String>> {
+    fn input_req_erased(&self, input: &Value) -> anyhow::Result<FnvHashMap<String, String>> {
         let typed_input: T::Input = serde_json::from_value(input.clone())?;
         T::req_from_input(&typed_input)
     }
@@ -205,7 +205,7 @@ pub enum ToolProperty {
         name: String,
         prop_type: String,
         description: String,
-        properties: HashMap<String, ToolProperty>,
+        properties: FnvHashMap<String, ToolProperty>,
     },
 }
 

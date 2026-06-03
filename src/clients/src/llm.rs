@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use tools::tool_defs::{ToolDefinition, ToolId};
+use utils::utils::FnvHashMap;
 
 pub trait LLmClientTrait {
     async fn chat_stream(
@@ -282,7 +283,7 @@ pub enum ContentBlock {
     ToolBlock {
         tool_id: ToolId,
         name: String,
-        input: HashMap<String, String>,
+        input: FnvHashMap<String, String>,
     },
     ToolResult {
         tool_id: ToolId,

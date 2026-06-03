@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 tools = { path = "../tools" }
+utils = { path = "../utils" }
 turbo-code-macros = { path = "../turbo-code-macros" }
 analysis = { path = "../analysis" }
 clients = { path = "../clients" }

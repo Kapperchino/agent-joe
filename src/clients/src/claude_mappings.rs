@@ -38,7 +38,7 @@ impl From<llm::ContentBlock> for ContentBlock {
             } => ContentBlock::ToolBlock {
                 id: tool_id.id,
                 name,
-                input,
+                input: input.into_iter().collect(),
             },
             llm::ContentBlock::ToolResult {
                 tool_id,
@@ -229,7 +229,7 @@ fn content_block_to_llm(value: ContentBlock) -> Option<llm::ContentBlock> {
         ContentBlock::ToolBlock { id, name, input } => Some(llm::ContentBlock::ToolBlock {
             tool_id: ToolId { call_id: None, id },
             name,
-            input,
+            input: input.into_iter().collect(),
         }),
         ContentBlock::ToolResult {
             tool_use_id,

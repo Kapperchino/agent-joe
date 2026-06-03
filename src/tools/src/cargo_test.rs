@@ -6,6 +6,7 @@ use std::fmt::{Display, Formatter};
 use turbo_code_macros::{ToolDef, ToolInput};
 use utils::cargo;
 use utils::cargo::Cargo;
+use utils::utils::FnvHashMap;
 
 #[async_trait]
 impl<C: Context, A> ToolTrait<C, A> for CargoTest {
@@ -48,7 +49,7 @@ impl<C: Context, A> ToolTrait<C, A> for CargoTest {
 
     fn req_from_input(
         input: &Self::Input,
-    ) -> anyhow::Result<std::collections::HashMap<String, String>> {
+    ) -> anyhow::Result<FnvHashMap<String, String>> {
         CargoTest {
             input: input.clone(),
             id: String::new(),

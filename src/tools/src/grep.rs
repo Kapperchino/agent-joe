@@ -6,6 +6,7 @@ use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 use turbo_code_macros::{ToolDef, ToolInput};
 use utils::grep::Grep as ProjectGrep;
+use utils::utils::FnvHashMap;
 
 #[async_trait]
 impl<C: Context, A> ToolTrait<C, A> for GrepTool {
@@ -38,7 +39,7 @@ impl<C: Context, A> ToolTrait<C, A> for GrepTool {
 
     fn req_from_input(
         input: &Self::Input,
-    ) -> anyhow::Result<std::collections::HashMap<String, String>> {
+    ) -> anyhow::Result<FnvHashMap<String, String>> {
         GrepTool {
             input: input.clone(),
             id: String::new(),

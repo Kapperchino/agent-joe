@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use triomphe;
 use utils::files::Files;
-use utils::utils::Utils;
+use utils::utils::{FnvHashMap, Utils};
 
 pub struct RustContextLineIndexCreator {
     pub(crate) proj_meta: Arc<ProjMeta>,
@@ -83,7 +83,7 @@ impl RustContext {
         let proj = RustProject::new(&current_dir)?;
         let store_dir = Utils::get_store_dir()?;
         let mut cache = TypedCache::new(store_dir).await?;
-        let hashes: HashMap<_, _> = ProjMeta::get_file_hashes(&proj)
+        let hashes: FnvHashMap<_, _> = ProjMeta::get_file_hashes(&proj)
             .await?
             .into_iter()
             .collect();
@@ -106,7 +106,7 @@ impl RustContext {
     }
 
     pub async fn validate_and_update_cache(
-        hashes: HashMap<PathBuf, Vec<u8>>,
+        hashes: FnvHashMap<PathBuf, Vec<u8>>,
         proj_meta: &ProjMeta,
         cache: &mut TypedCache<SymbolInfo, SymbolInfo>,
         proj: &RustProject,

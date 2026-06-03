@@ -16,6 +16,7 @@ use std::str::FromStr;
 use std::time::Duration;
 use thiserror::Error;
 use tracing::info;
+use utils::utils::FnvHashMap;
 
 #[derive(Error, Debug)]
 pub enum OpenAIError {
@@ -100,7 +101,7 @@ pub enum Tool {
 pub struct FunctionParameters {
     #[serde(rename = "type")]
     pub param_type: String,
-    pub properties: HashMap<String, ToolProperty>,
+    pub properties: FnvHashMap<String, ToolProperty>,
     pub required: Vec<String>,
 }
 
@@ -120,7 +121,7 @@ pub enum ToolProperty {
         #[serde(rename = "type")]
         prop_type: String,
         description: String,
-        properties: HashMap<String, ToolProperty>,
+        properties: FnvHashMap<String, ToolProperty>,
     },
 }
 

@@ -36,7 +36,7 @@ fn impl_tool_def(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
             fn tool_name() -> &'static str { #tool_name }
             fn tool_description() -> &'static str { #tool_description }
 
-            fn field_properties() -> ::std::collections::HashMap<String, ::tools::tool_defs::ToolProperty> {
+            fn field_properties() -> ::utils::utils::FnvHashMap<String, ::tools::tool_defs::ToolProperty> {
                 <#input_type as ::tools::tool_defs::ToolInputSchema>::properties()
             }
 
@@ -44,7 +44,7 @@ fn impl_tool_def(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                 <#input_type as ::tools::tool_defs::ToolInputSchema>::required()
             }
 
-            fn req(&self) -> anyhow::Result<std::collections::HashMap<String,String>> {
+            fn req(&self) -> anyhow::Result<::utils::utils::FnvHashMap<String,String>> {
                 <#input_type as ::tools::tool_defs::ToolInputSchema>::req(&self.#input_field)
             }
         }
@@ -149,8 +149,8 @@ fn impl_tool_input(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
 
     Ok(quote! {
         impl ::tools::tool_defs::ToolInputSchema for #struct_name {
-            fn properties() -> ::std::collections::HashMap<String, ::tools::tool_defs::ToolProperty> {
-                let mut map = ::std::collections::HashMap::new();
+            fn properties() -> ::utils::utils::FnvHashMap<String, ::tools::tool_defs::ToolProperty> {
+                let mut map = ::utils::utils::FnvHashMap::default();
                 #(#property_insertions)*
                 map
             }
@@ -159,8 +159,8 @@ fn impl_tool_input(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
                 vec![#(#required_names.to_string()),*]
             }
 
-            fn req(&self) -> anyhow::Result<std::collections::HashMap<String,String>> {
-                let mut map = ::std::collections::HashMap::new();
+            fn req(&self) -> anyhow::Result<::utils::utils::FnvHashMap<String,String>> {
+                let mut map = ::utils::utils::FnvHashMap::default();
                 #(#req_insertions)*
                 Ok(map)
             }

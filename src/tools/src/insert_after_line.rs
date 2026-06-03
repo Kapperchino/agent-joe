@@ -6,6 +6,7 @@ use std::cmp::min;
 use std::fmt::{Display, Formatter};
 use tokio::fs;
 use turbo_code_macros::{ToolDef, ToolInput};
+use utils::utils::FnvHashMap;
 
 #[async_trait]
 impl<C: Context, A> ToolTrait<C, A> for InsertAfterLine {
@@ -41,7 +42,7 @@ impl<C: Context, A> ToolTrait<C, A> for InsertAfterLine {
 
     fn req_from_input(
         input: &Self::Input,
-    ) -> anyhow::Result<std::collections::HashMap<String, String>> {
+    ) -> anyhow::Result<FnvHashMap<String, String>> {
         InsertAfterLine {
             input: input.clone(),
             id: String::new(),

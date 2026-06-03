@@ -26,6 +26,7 @@ dependencies = [
  "tools",
  "tracing",
  "turbo-code-macros",
+ "utils",
 ]
 
 [[package]]
@@ -5651,6 +5652,7 @@ dependencies = [
  "blake3",
  "cargo_metadata",
  "dirs",
+ "fnv",
  "futures",
  "grep",
  "itertools 0.14.0",

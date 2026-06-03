@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use tools::tool_defs::{ToolDefTrait, ToolId, ToolTrait, ToolType};
 use turbo_code_macros::{ToolDef, ToolInput};
+use utils::utils::FnvHashMap;
 
 #[async_trait]
 impl ToolTrait<RustContext, ActorContext<RustContext>> for GatherContext {
@@ -67,7 +68,7 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for GatherContext {
 
     fn req_from_input(
         input: &Self::Input,
-    ) -> anyhow::Result<std::collections::HashMap<String, String>> {
+    ) -> anyhow::Result<FnvHashMap<String, String>> {
         GatherContext {
             input: input.clone(),
             id: String::new(),

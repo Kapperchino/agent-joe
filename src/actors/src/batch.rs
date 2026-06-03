@@ -3,11 +3,11 @@ use crate::tool_call::ToolCall;
 use anyhow::anyhow;
 use clients::llm::{ContentBlockInfo, Delta};
 use itertools::Itertools;
-use std::collections::HashMap;
 use tracing::error;
+use utils::utils::FnvHashMap;
 
 pub struct Batch {
-    blocks: HashMap<usize, ContentBlock>,
+    blocks: FnvHashMap<usize, ContentBlock>,
 }
 
 impl Batch {
