@@ -42,9 +42,7 @@ impl<C: Context, A> ToolTrait<C, A> for ReadFile {
         .to_string()
     }
 
-    fn req_from_input(
-        input: &Self::Input,
-    ) -> anyhow::Result<FnvHashMap<String, String>> {
+    fn req_from_input(input: &Self::Input) -> anyhow::Result<FnvHashMap<String, String>> {
         ReadFile {
             input: input.clone(),
             id: String::new(),
@@ -235,6 +233,10 @@ mod tests {
 
         async fn line_index_creator(&self) -> anyhow::Result<Box<Self::LineIndexCreator>> {
             Ok(Box::new(TestLineIndexCreator))
+        }
+
+        fn gen_id(&self) -> u64 {
+            0
         }
     }
 

@@ -1,11 +1,12 @@
 use crate::actor::{ActorContext, Dependency, Message};
 use crate::worker::{Worker, WorkerAdapter};
 use crate::workers::write_worker::WriteWorker;
+use analysis::contexts::context::Context;
 use analysis::contexts::rust_context::RustContext;
 use analysis::contexts::rust_empty_context::RustEmptyContext;
 use anyhow::anyhow;
 use async_trait::async_trait;
-use ractor::{Actor, call};
+use ractor::{call, Actor};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use tools::tool_defs::{ToolDefTrait, ToolId, ToolTrait, ToolType};
@@ -29,14 +30,14 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for MakeChanges {
         }?;
 
         let question = input.context;
-        let mut cur_context = cur_context.clone();
+        let mut new_context = cur_context.clone();
         let init_prompt = format!("You are a write enabled agent in a rust codebase given a prompt to modify the codebase\
         follow the instructions, and write the code in idiomatic rust and follow the coding style of the surrounding code. After \
         the changes are made and validated, respond with the changes made to the orchestrator.
          \n{question}").to_owned();
-        cur_context.initial_prompt = init_prompt;
+        new_context.initial_prompt = init_prompt;
 
-        let empty_context = RustEmptyContext::new(cur_context, true);
+        let empty_context = RustEmptyContext::new(new_context, true, cur_context.gen_id());
 
         let (joe, actor_handle) = Actor::spawn_linked(
             None,
@@ -67,9 +68,7 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for MakeChanges {
         .to_string()
     }
 
-    fn req_from_input(
-        input: &Self::Input,
-    ) -> anyhow::Result<FnvHashMap<String, String>> {
+    fn req_from_input(input: &Self::Input) -> anyhow::Result<FnvHashMap<String, String>> {
         MakeChanges {
             input: input.clone(),
             id: String::new(),

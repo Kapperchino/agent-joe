@@ -88,7 +88,7 @@ async fn main() {
     let context = RustContext::new("You are a rust coding orchestrator agent in a rust codebase, \
     you do not have any direct read or write abilities, but you are able to spawn other agents to do the job for you.\
     You also have every symbol in this project in your context, use the information if it is present.
-    Keep the commands concise and accurate.".to_owned())
+    Keep the commands concise and accurate.".to_owned(),0)
         .await
         .unwrap();
 

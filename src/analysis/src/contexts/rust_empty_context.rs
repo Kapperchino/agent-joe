@@ -3,19 +3,22 @@ use crate::contexts::rust_context::{RustContext, RustContextLineIndexCreator};
 use async_trait::async_trait;
 use itertools::Itertools;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct RustEmptyContext {
     pub inner: RustContext,
     pub stack_context: bool,
+    pub id_gen: Arc<AtomicU64>,
 }
 
 impl RustEmptyContext {
-    pub fn new(context: RustContext, stack_context: bool) -> RustEmptyContext {
+    pub fn new(context: RustContext, stack_context: bool, id: u64) -> RustEmptyContext {
         RustEmptyContext {
             inner: context,
             stack_context,
+            id_gen: Arc::new(AtomicU64::new(id)),
         }
     }
 }
@@ -62,5 +65,9 @@ impl Context for RustEmptyContext {
         Ok(Box::new(RustContextLineIndexCreator {
             proj_meta: Arc::new(proj),
         }))
+    }
+
+    fn gen_id(&self) -> u64 {
+        self.id_gen.fetch_add(1, Ordering::AcqRel) + 1
     }
 }

@@ -8,9 +8,10 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use itertools::Itertools;
 use ra_ap_ide::LineIndex;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::env;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use triomphe;
 use utils::files::Files;
@@ -65,6 +66,10 @@ impl Context for RustContext {
             proj_meta: Arc::new(proj),
         }))
     }
+
+    fn gen_id(&self) -> u64 {
+        self.id_gen.fetch_add(1, Ordering::AcqRel) + 1
+    }
 }
 
 #[derive(Clone)]
@@ -74,10 +79,11 @@ pub struct RustContext {
     pub symbol_cache: TypedCache<SymbolInfo, SymbolInfo>,
     pub initial_prompt: String,
     pub stacked_context: Vec<String>,
+    pub id_gen: Arc<AtomicU64>,
 }
 
 impl RustContext {
-    pub async fn new(initial_prompt: String) -> Result<RustContext, anyhow::Error> {
+    pub async fn new(initial_prompt: String, id: u64) -> Result<RustContext, anyhow::Error> {
         let current_dir = env::current_dir()?;
         let files = Files::get_dir_files(&current_dir).await?;
         let proj = RustProject::new(&current_dir)?;
@@ -97,6 +103,7 @@ impl RustContext {
             rust_proj: proj,
             symbol_cache: cache,
             stacked_context: Vec::new(),
+            id_gen: Arc::new(AtomicU64::new(id)),
         })
     }
 
