@@ -70,6 +70,9 @@ impl Context for RustContext {
     fn gen_id(&self) -> u64 {
         self.id_gen.fetch_add(1, Ordering::AcqRel) + 1
     }
+    fn get_id(&self) -> u64 {
+        self.id_gen.load(Ordering::Acquire)
+    }
 }
 
 #[derive(Clone)]

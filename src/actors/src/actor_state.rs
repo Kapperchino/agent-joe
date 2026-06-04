@@ -56,8 +56,16 @@ impl<C: Context + Clone> ActorState<C> {
             None
         };
 
+        let context = dependency.context;
+        let actor_id = context.get_id();
+
+        let reporter = EventReporter {
+            actor_id,
+            tui_tx: dependency.tui_tx.clone(),
+        };
+
         Ok(Self {
-            cur_context: dependency.context,
+            cur_context: context,
             history: vec![Message::new(cur_context_str)],
             llm: dependency.client,
             tools: dependency
@@ -66,10 +74,7 @@ impl<C: Context + Clone> ActorState<C> {
                 .map(|x| (x.name(), x))
                 .collect(),
             stream_actor: None,
-            reporter: EventReporter {
-                actor_id: actor_ref.get_id(),
-                tui_tx: dependency.tui_tx.clone(),
-            },
+            reporter: reporter.clone(),
             debug_mode: dependency.debug_mode,
             file_actor,
             pending_ports: FnvHashMap::default(),
@@ -77,10 +82,7 @@ impl<C: Context + Clone> ActorState<C> {
                 batches: vec![],
                 stream_log_path,
                 token_count: Default::default(),
-                reporter: EventReporter {
-                    actor_id: actor_ref.get_id(),
-                    tui_tx: dependency.tui_tx,
-                },
+                reporter,
                 cur_state: State::Ready,
                 debug: dependency.debug_mode,
             },

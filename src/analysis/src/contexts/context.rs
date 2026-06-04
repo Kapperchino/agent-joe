@@ -10,6 +10,7 @@ pub trait Context: Send + Sync {
     async fn get_files(&self) -> anyhow::Result<Vec<PathBuf>>;
     async fn line_index_creator(&self) -> anyhow::Result<Box<Self::LineIndexCreator>>;
     fn gen_id(&self) -> u64;
+    fn get_id(&self) -> u64;
 }
 
 pub trait LineIndexCreator: Send + Sync {

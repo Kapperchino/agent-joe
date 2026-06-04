@@ -238,6 +238,9 @@ mod tests {
         fn gen_id(&self) -> u64 {
             0
         }
+        fn get_id(&self) -> u64 {
+            0
+        }
     }
 
     fn write_temp_file(text: &str) -> PathBuf {
