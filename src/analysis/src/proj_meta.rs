@@ -164,7 +164,7 @@ impl ProjMeta {
         rust_proj: &RustProject,
     ) -> anyhow::Result<ProjMeta> {
         let joe_2: FnvHashMap<_, _> = vec.iter().map(|s| (s.name.clone(), s.clone())).collect();
-        let joe: HashMap<_,_> = vec.into_iter().into_group_map_by(|x2| x2.kind.clone());
+        let joe: HashMap<_, _> = vec.into_iter().into_group_map_by(|x2| x2.kind.clone());
         let structs = Self::get_symbol_map(&joe, &SymbolKind::Struct);
         let enums = Self::get_symbol_map(&joe, &SymbolKind::Enum);
         let variants = Self::get_symbol_map(&joe, &SymbolKind::Variant);
@@ -298,7 +298,9 @@ impl ProjMeta {
         )
     }
 
-    fn into_meta<T: From<SymbolInfo>>(map: &FnvHashMap<String, SymbolInfo>) -> FnvHashMap<String, T> {
+    fn into_meta<T: From<SymbolInfo>>(
+        map: &FnvHashMap<String, SymbolInfo>,
+    ) -> FnvHashMap<String, T> {
         map.iter()
             .map(|(k, info)| {
                 let info = info.clone();

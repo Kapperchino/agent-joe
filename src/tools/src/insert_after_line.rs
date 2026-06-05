@@ -40,9 +40,7 @@ impl<C: Context, A> ToolTrait<C, A> for InsertAfterLine {
         .to_string()
     }
 
-    fn req_from_input(
-        input: &Self::Input,
-    ) -> anyhow::Result<FnvHashMap<String, String>> {
+    fn req_from_input(input: &Self::Input) -> anyhow::Result<FnvHashMap<String, String>> {
         InsertAfterLine {
             input: input.clone(),
             id: String::new(),

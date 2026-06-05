@@ -37,9 +37,7 @@ impl<C: Context, A> ToolTrait<C, A> for GrepTool {
         .to_string()
     }
 
-    fn req_from_input(
-        input: &Self::Input,
-    ) -> anyhow::Result<FnvHashMap<String, String>> {
+    fn req_from_input(input: &Self::Input) -> anyhow::Result<FnvHashMap<String, String>> {
         GrepTool {
             input: input.clone(),
             id: String::new(),

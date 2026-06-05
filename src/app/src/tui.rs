@@ -8,7 +8,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use crate::widgets::input_box::{InputBox, InputBoxState};
-use crate::widgets::message_box::{MessageBox, MessageBoxState, Msg};
+use crate::widgets::message_box::message_box::{MessageBox, MessageBoxState, Msg};
 use crate::widgets::model_box::ModelBoxResult;
 use clients::config::ConfigContext;
 use color_eyre::Result;
@@ -22,12 +22,12 @@ use flume::Receiver;
 use futures::StreamExt;
 use ractor::ActorRef;
 use ratatui::{
-    crossterm::event::{Event, KeyCode}, layout::{Constraint, Layout},
+    DefaultTerminal, Frame,
+    crossterm::event::{Event, KeyCode},
+    layout::{Constraint, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Block,
-    DefaultTerminal,
-    Frame,
 };
 use tracing::error;
 

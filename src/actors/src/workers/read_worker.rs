@@ -8,7 +8,7 @@ use ractor::{ActorProcessingErr, ActorRef};
 use std::marker::PhantomData;
 use tools::grep::GrepTool;
 use tools::read_file::ReadFile;
-use tools::tool_defs::{erased_tool, ErasedToolRef};
+use tools::tool_defs::{ErasedToolRef, erased_tool};
 use tools::web_search::WebSearch;
 
 pub struct ReadWorker<C: Context> {

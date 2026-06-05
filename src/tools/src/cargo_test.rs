@@ -47,9 +47,7 @@ impl<C: Context, A> ToolTrait<C, A> for CargoTest {
         .to_string()
     }
 
-    fn req_from_input(
-        input: &Self::Input,
-    ) -> anyhow::Result<FnvHashMap<String, String>> {
+    fn req_from_input(input: &Self::Input) -> anyhow::Result<FnvHashMap<String, String>> {
         CargoTest {
             input: input.clone(),
             id: String::new(),

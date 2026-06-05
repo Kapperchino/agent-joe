@@ -267,7 +267,12 @@ impl InputBoxState {
         let (row, col) = self.editor.cursor();
         let previous_rows = row.min(self.editor.buffer().line_count() as usize);
         let previous_chars = (0..previous_rows)
-            .map(|line| Query::line(self.editor.buffer(), line as u32).chars().count() + 1)
+            .map(|line| {
+                Query::line(self.editor.buffer(), line as u32)
+                    .chars()
+                    .count()
+                    + 1
+            })
             .sum::<usize>();
         previous_chars + col
     }

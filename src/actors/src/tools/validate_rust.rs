@@ -67,9 +67,7 @@ impl ToolTrait<RustEmptyContext, ActorContext<RustEmptyContext>> for ValidateRus
         .to_string()
     }
 
-    fn req_from_input(
-        input: &Self::Input,
-    ) -> anyhow::Result<FnvHashMap<String, String>> {
+    fn req_from_input(input: &Self::Input) -> anyhow::Result<FnvHashMap<String, String>> {
         ValidateRust {
             input: input.clone(),
             id: String::new(),

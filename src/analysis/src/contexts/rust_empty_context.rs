@@ -3,8 +3,8 @@ use crate::contexts::rust_context::{RustContext, RustContextLineIndexCreator};
 use async_trait::async_trait;
 use itertools::Itertools;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Clone)]
 pub struct RustEmptyContext {
