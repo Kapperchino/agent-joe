@@ -4,13 +4,13 @@ use ratatui::prelude::{Color, Line, Modifier, Span, Style};
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{self, ThemeSet};
 use syntect::parsing::SyntaxSet;
-use syntect::util::LinesWithEndings;
 use textwrap::core::display_width;
 
 const TABLE_CONTINUATION_MARKER: &str = "<!--__table_continue__-->";
 const TABLE_BLOCK_CONTINUATION_MARKER: &str = "<!--__table_block_continue__-->";
 const TABLE_WIDTH_MARKER_PREFIX: &str = "<!--__table_widths__:";
 const HTML_COMMENT_SUFFIX: &str = "-->";
+const CODE_THEME: &str = "base16-eighties.dark";
 
 pub struct DrawLine {
     syntax_set: SyntaxSet,
@@ -25,16 +25,282 @@ pub struct RenderState {
 }
 
 enum Section {
-    Code {
+    Code(CodeSection),
+    Markdown(String),
+}
+
+struct CodeSection {
+    lang: Option<String>,
+    lines: Vec<String>,
+    trim_leading_blank_lines: bool,
+    trim_trailing_blank_lines: bool,
+}
+
+struct ListMarker<'a> {
+    indent: usize,
+    content_indent: usize,
+    content: &'a str,
+}
+
+impl Default for DrawLine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CodeSection {
+    fn new(
         lang: Option<String>,
         lines: Vec<String>,
-    },
-    Markdown(String),
+        trim_leading_blank_lines: bool,
+        trim_trailing_blank_lines: bool,
+    ) -> Self {
+        Self {
+            lang,
+            lines,
+            trim_leading_blank_lines,
+            trim_trailing_blank_lines,
+        }
+    }
+
+    fn trimmed_lines(&self) -> &[String] {
+        let mut start = 0;
+        let mut end = self.lines.len();
+
+        if self.trim_leading_blank_lines {
+            while start < end && self.lines[start].trim().is_empty() {
+                start += 1;
+            }
+        }
+
+        if self.trim_trailing_blank_lines {
+            while end > start && self.lines[end - 1].trim().is_empty() {
+                end -= 1;
+            }
+        }
+
+        &self.lines[start..end]
+    }
+}
+
+struct SectionSplitter {
+    state: RenderState,
+    sections: Vec<Section>,
+    markdown_lines: Vec<String>,
+    code_lines: Vec<String>,
+    code_started_in_current_batch: bool,
+}
+
+impl SectionSplitter {
+    fn split(lines: &[String], state: RenderState) -> (Vec<Section>, RenderState) {
+        let mut splitter = Self {
+            state,
+            sections: Vec::new(),
+            markdown_lines: Vec::new(),
+            code_lines: Vec::new(),
+            code_started_in_current_batch: false,
+        };
+
+        for line in lines {
+            splitter.push_line(line);
+        }
+
+        splitter.finish()
+    }
+
+    fn push_line(&mut self, line: &str) {
+        if self.state.in_code {
+            self.push_code_line(line);
+        } else {
+            self.push_markdown_line(line);
+        }
+    }
+
+    fn push_code_line(&mut self, line: &str) {
+        if CodeFence::is_closing(line, self.state.fence_len) {
+            self.flush_code(true, true);
+            self.close_code();
+            return;
+        }
+
+        if self.should_recover_markdown(line) {
+            self.flush_code(true, false);
+            self.close_code();
+            self.push_markdown_line(line);
+            return;
+        }
+
+        self.code_lines.push(line.to_string());
+    }
+
+    fn push_markdown_line(&mut self, line: &str) {
+        let Some(fence) = CodeFence::opening(line) else {
+            self.markdown_lines.push(line.to_string());
+            return;
+        };
+
+        self.flush_markdown();
+        self.open_code(fence);
+    }
+
+    fn finish(mut self) -> (Vec<Section>, RenderState) {
+        if self.state.in_code {
+            self.flush_code(false, false);
+        } else {
+            self.flush_markdown();
+        }
+
+        (self.sections, self.state)
+    }
+
+    fn flush_markdown(&mut self) {
+        if self.markdown_lines.is_empty() {
+            return;
+        }
+
+        self.sections
+            .push(Section::Markdown(self.markdown_lines.join("\n")));
+        self.markdown_lines.clear();
+    }
+
+    fn flush_code(&mut self, close_fence: bool, trim_trailing_blank_lines: bool) {
+        if self.code_lines.is_empty() && !self.code_started_in_current_batch {
+            if close_fence {
+                self.state.code_lang.take();
+            }
+            return;
+        }
+
+        let lang = if close_fence {
+            self.state.code_lang.take()
+        } else {
+            self.state.code_lang.clone()
+        };
+
+        self.sections.push(Section::Code(CodeSection::new(
+            lang,
+            std::mem::take(&mut self.code_lines),
+            self.code_started_in_current_batch,
+            trim_trailing_blank_lines,
+        )));
+    }
+
+    fn open_code(&mut self, fence: CodeFence) {
+        self.state.in_code = true;
+        self.state.fence_len = fence.len;
+        self.state.code_lang = fence.lang;
+        self.code_started_in_current_batch = true;
+    }
+
+    fn close_code(&mut self) {
+        self.state.in_code = false;
+        self.state.fence_len = 0;
+        self.code_started_in_current_batch = false;
+    }
+
+    fn should_recover_markdown(&self, line: &str) -> bool {
+        if self
+            .state
+            .code_lang
+            .as_deref()
+            .is_some_and(DrawLine::is_diff_lang)
+        {
+            return false;
+        }
+
+        self.code_lines
+            .last()
+            .is_some_and(|line| line.trim().is_empty())
+            && self.looks_like_markdown_after_code(line)
+    }
+
+    fn looks_like_markdown_after_code(&self, line: &str) -> bool {
+        let Some(marker) = DrawLine::markdown_list_marker(line) else {
+            return false;
+        };
+
+        let content = marker.content.trim_start();
+        self.code_content_is_elided()
+            || content.starts_with("**")
+            || content.starts_with("__")
+            || content.starts_with('`')
+            || content.starts_with('[')
+            || content.contains("**")
+            || content.contains("__")
+    }
+
+    fn code_content_is_elided(&self) -> bool {
+        let mut saw_content = false;
+
+        for line in &self.code_lines {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            saw_content = true;
+            if !matches!(trimmed, "..." | "…") {
+                return false;
+            }
+        }
+
+        saw_content
+    }
+}
+
+struct CodeFence {
+    len: usize,
+    lang: Option<String>,
+}
+
+impl CodeFence {
+    fn opening(line: &str) -> Option<Self> {
+        let trimmed = line.trim_start();
+        let len = Self::leading_backticks(trimmed);
+        if len < 3 {
+            return None;
+        }
+
+        let info = trimmed[len..].trim();
+        if info.contains('`') {
+            return None;
+        }
+
+        Some(Self {
+            len,
+            lang: Self::language(info),
+        })
+    }
+
+    fn is_closing(line: &str, opening_len: usize) -> bool {
+        let trimmed = line.trim();
+        let len = Self::leading_backticks(trimmed);
+        len >= opening_len && trimmed.len() == len
+    }
+
+    fn leading_backticks(line: &str) -> usize {
+        line.chars().take_while(|&ch| ch == '`').count()
+    }
+
+    fn language(info: &str) -> Option<String> {
+        let token = info.split_whitespace().next()?;
+        let token = token
+            .trim_matches(|ch| matches!(ch, '{' | '}' | '.'))
+            .strip_prefix("language-")
+            .unwrap_or_else(|| token.trim_matches(|ch| matches!(ch, '{' | '}' | '.')));
+        let token = token
+            .split(|ch| matches!(ch, ',' | ':' | ';'))
+            .next()
+            .unwrap_or(token)
+            .trim_matches(|ch| matches!(ch, '{' | '}' | '.'));
+
+        (!token.is_empty()).then(|| token.to_string())
+    }
 }
 
 impl DrawLine {
     pub fn new() -> Self {
-        DrawLine {
+        Self {
             syntax_set: SyntaxSet::load_defaults_newlines(),
             theme_set: ThemeSet::load_defaults(),
         }
@@ -55,7 +321,7 @@ impl DrawLine {
         sections
             .into_iter()
             .flat_map(|section| match section {
-                Section::Code { lang, lines } => self.render_code_section(&lang, &lines),
+                Section::Code(section) => self.render_code_section(&section),
                 Section::Markdown(text) => Self::render_markdown_section(&text),
             })
             .collect()
@@ -68,117 +334,33 @@ impl DrawLine {
     /// is a line consisting of *only* backticks (≥3). This matches CommonMark
     /// semantics and avoids the old toggle-on-any-backtick bug where
     /// `` ```rust `` inside a `` ```md `` block would wrongly close it.
-    fn split_sections(lines: &[String], mut state: RenderState) -> (Vec<Section>, RenderState) {
-        let mut sections = Vec::new();
-        let mut code_lines: Vec<String> = Vec::new();
-        let mut markdown_lines: Vec<String> = Vec::new();
-
-        let flush_markdown = |sections: &mut Vec<Section>, markdown_lines: &mut Vec<String>| {
-            if markdown_lines.is_empty() {
-                return;
-            }
-
-            sections.push(Section::Markdown(markdown_lines.join("\n")));
-            markdown_lines.clear();
-        };
-
-        for line in lines {
-            if state.in_code {
-                let trimmed = line.trim();
-                let backtick_count = trimmed.chars().take_while(|&c| c == '`').count();
-                if backtick_count >= state.fence_len && trimmed.len() == backtick_count {
-                    // Closing fence: only backticks, at least as many as the opening
-                    sections.push(Section::Code {
-                        lang: state.code_lang.take(),
-                        lines: std::mem::take(&mut code_lines),
-                    });
-                    state.in_code = false;
-                    state.fence_len = 0;
-                } else {
-                    code_lines.push(line.clone());
-                }
-            } else {
-                let trimmed = line.trim_start();
-                let backtick_count = trimmed.chars().take_while(|&c| c == '`').count();
-                if backtick_count >= 3 {
-                    let rest = trimmed[backtick_count..].trim();
-                    // Opening fence: backticks followed by optional info string
-                    // (info string must not contain backticks per CommonMark)
-                    if !rest.contains('`') {
-                        flush_markdown(&mut sections, &mut markdown_lines);
-                        state.in_code = true;
-                        state.fence_len = backtick_count;
-                        state.code_lang = if rest.is_empty() {
-                            None
-                        } else {
-                            Some(rest.to_string())
-                        };
-                        continue;
-                    }
-                }
-                markdown_lines.push(line.clone());
-            }
-        }
-
-        // Unclosed code block — still render it as code
-        if state.in_code {
-            sections.push(Section::Code {
-                lang: state.code_lang.clone(),
-                lines: code_lines,
-            });
-        } else {
-            flush_markdown(&mut sections, &mut markdown_lines);
-        }
-
-        (sections, state)
+    fn split_sections(lines: &[String], state: RenderState) -> (Vec<Section>, RenderState) {
+        SectionSplitter::split(lines, state)
     }
 
-    fn render_code_section(&self, lang: &Option<String>, lines: &[String]) -> Vec<Line<'static>> {
+    fn render_code_section(&self, section: &CodeSection) -> Vec<Line<'static>> {
+        let lines = section.trimmed_lines();
         if lines.is_empty() {
             return vec![Line::from("")];
         }
 
-        if lang.as_deref().is_some_and(Self::is_diff_lang) {
+        if section.lang.as_deref().is_some_and(Self::is_diff_lang) {
             return Self::render_diff_section(lines);
         }
 
-        let mut result = Vec::new();
-
-        let code = lines.join("\n");
         let ps = &self.syntax_set;
-        let theme = &self.theme_set.themes["base16-eighties.dark"];
-
-        let syntax = lang
+        let theme = &self.theme_set.themes[CODE_THEME];
+        let syntax = section
+            .lang
             .as_deref()
             .and_then(|l| ps.find_syntax_by_token(l))
             .unwrap_or_else(|| ps.find_syntax_plain_text());
 
         let mut h = HighlightLines::new(syntax, theme);
-        for line in LinesWithEndings::from(&code) {
-            let ranges = h.highlight_line(line, ps).unwrap_or_default();
-            let spans: Vec<Span<'static>> = ranges
-                .into_iter()
-                .map(|(style, text)| {
-                    Span::styled(
-                        text.trim_end_matches('\n').to_string(),
-                        Self::syntect_to_ratatui_style(style),
-                    )
-                })
-                .collect();
-            if spans.is_empty() {
-                result.push(Line::from(""));
-            } else {
-                result.push(Line::from(spans));
-            }
-        }
-        // Handle trailing empty lines that LinesWithEndings skips
-        if code.ends_with('\n') || lines.last().is_some_and(|l| l.is_empty()) {
-            if !lines.is_empty() && lines.last().is_some_and(|l| l.is_empty()) {
-                result.push(Line::from(""));
-            }
-        }
-
-        result
+        lines
+            .iter()
+            .map(|line| self.render_highlighted_code_line(line, &mut h))
+            .collect()
     }
 
     fn is_diff_lang(lang: &str) -> bool {
@@ -190,6 +372,30 @@ impl DrawLine {
             .iter()
             .map(|line| Line::from(Span::styled(line.clone(), Self::diff_line_style(line))))
             .collect()
+    }
+
+    fn render_highlighted_code_line(
+        &self,
+        line: &str,
+        highlighter: &mut HighlightLines<'_>,
+    ) -> Line<'static> {
+        match highlighter.highlight_line(line, &self.syntax_set) {
+            Ok(ranges) => {
+                let spans = ranges
+                    .into_iter()
+                    .map(|(style, text)| {
+                        Span::styled(text.to_string(), Self::syntect_to_ratatui_style(style))
+                    })
+                    .collect::<Vec<_>>();
+
+                if spans.is_empty() {
+                    Line::from("")
+                } else {
+                    Line::from(spans)
+                }
+            }
+            Err(_) => Line::from(line.to_string()),
+        }
     }
 
     fn diff_line_style(line: &str) -> Style {
@@ -258,10 +464,52 @@ impl DrawLine {
     }
 
     fn normalize_markdown(text: &str) -> String {
-        text.split('\n')
-            .map(Self::normalize_markdown_line)
-            .collect::<Vec<_>>()
-            .join("\n")
+        let mut normalized = Vec::new();
+        let mut previous_line: Option<String> = None;
+        let mut loose_nested_content_indent: Option<usize> = None;
+
+        for mut line in text.split('\n').map(Self::normalize_markdown_line) {
+            if let (Some(content_indent), Some(marker)) = (
+                loose_nested_content_indent,
+                Self::markdown_list_marker(&line),
+            ) {
+                if marker.indent > 0 && marker.indent < content_indent {
+                    let extra_indent = " ".repeat(content_indent - marker.indent);
+                    line = format!("{extra_indent}{line}");
+                }
+            }
+
+            if Self::is_list_marker_line(&line)
+                && previous_line
+                    .as_deref()
+                    .is_some_and(Self::list_should_interrupt_after)
+            {
+                normalized.push(String::new());
+            }
+
+            loose_nested_content_indent =
+                Self::next_loose_nested_content_indent(&line, loose_nested_content_indent);
+            previous_line = Some(line.clone());
+            normalized.push(line);
+        }
+
+        normalized.join("\n")
+    }
+
+    fn next_loose_nested_content_indent(line: &str, current: Option<usize>) -> Option<usize> {
+        let Some(marker) = Self::markdown_list_marker(line) else {
+            return if line.trim().is_empty() {
+                current
+            } else {
+                None
+            };
+        };
+
+        if marker.content.trim_end().ends_with(':') {
+            return Some(marker.content_indent);
+        }
+
+        if marker.indent == 0 { None } else { current }
     }
 
     fn normalize_markdown_line(line: &str) -> String {
@@ -294,6 +542,75 @@ impl DrawLine {
             &rest[..hash_count],
             after_hashes
         )
+    }
+
+    fn list_should_interrupt_after(line: &str) -> bool {
+        let trimmed = line.trim();
+        !trimmed.is_empty() && !Self::is_list_marker_line(line)
+    }
+
+    fn is_list_marker_line(line: &str) -> bool {
+        Self::markdown_list_content_indent(line).is_some()
+    }
+
+    pub(crate) fn markdown_list_content_indent(line: &str) -> Option<String> {
+        Self::markdown_list_marker(line).map(|marker| " ".repeat(marker.content_indent))
+    }
+
+    pub(crate) fn markdown_list_initial_indent(line: &str) -> Option<String> {
+        Self::markdown_list_marker(line).map(|marker| " ".repeat(marker.indent))
+    }
+
+    fn markdown_list_marker(line: &str) -> Option<ListMarker<'_>> {
+        let indent_len = line.bytes().take_while(|b| *b == b' ').count();
+        if indent_len > 3 {
+            return None;
+        }
+
+        let rest = &line[indent_len..];
+        let rest_bytes = rest.as_bytes();
+        match rest_bytes.first().copied() {
+            Some(b'-' | b'*' | b'+') => {
+                let marker_len = 1 + Self::following_space_len(&rest_bytes[1..])?;
+                Some(ListMarker {
+                    indent: indent_len,
+                    content_indent: indent_len + marker_len,
+                    content: &rest[marker_len..],
+                })
+            }
+            Some(b'0'..=b'9') => {
+                let digit_len = rest_bytes
+                    .iter()
+                    .take_while(|byte| byte.is_ascii_digit())
+                    .count();
+                if digit_len == 0 || digit_len > 9 {
+                    return None;
+                }
+
+                match rest_bytes.get(digit_len).copied() {
+                    Some(b'.' | b')') => {
+                        let marker_len = digit_len
+                            + 1
+                            + Self::following_space_len(&rest_bytes[digit_len + 1..])?;
+                        Some(ListMarker {
+                            indent: indent_len,
+                            content_indent: indent_len + marker_len,
+                            content: &rest[marker_len..],
+                        })
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn following_space_len(bytes: &[u8]) -> Option<usize> {
+        let len = bytes
+            .iter()
+            .take_while(|byte| byte.is_ascii_whitespace())
+            .count();
+        (len > 0).then_some(len)
     }
 
     fn is_table_block(node: &Node) -> bool {
@@ -350,7 +667,7 @@ impl DrawLine {
             // Fallback for indented code blocks that the AST parser finds
             // (fenced blocks are already handled by split_sections)
             Node::Code(code) => {
-                let code_style = Style::default().fg(Color::Yellow);
+                let code_style = Style::default();
 
                 let mut lines = Vec::new();
                 for line in code.value.lines() {
@@ -406,6 +723,11 @@ impl DrawLine {
                             let mut spans = Vec::new();
                             if j == 0 {
                                 spans.push(Span::styled(bullet.clone(), bullet_style));
+                            } else if let Some(nested_spans) =
+                                Self::render_loose_nested_list_line(&line, &indent, bullet_style)
+                            {
+                                lines.push(Line::from(nested_spans));
+                                continue;
                             } else {
                                 spans.push(Span::raw(indent.clone()));
                             }
@@ -462,6 +784,55 @@ impl DrawLine {
                 }
             }
         }
+    }
+
+    fn render_loose_nested_list_line(
+        line: &Line<'static>,
+        parent_indent: &str,
+        bullet_style: Style,
+    ) -> Option<Vec<Span<'static>>> {
+        let plain_text = Self::line_plain_text(&line);
+        let marker = Self::markdown_list_marker(&plain_text)?;
+        if marker.content.trim().is_empty() {
+            return None;
+        }
+
+        let mut spans = vec![
+            Span::raw(parent_indent.to_string()),
+            Span::styled("• ", bullet_style),
+        ];
+        spans.extend(Self::strip_span_prefix(
+            line.spans.clone(),
+            marker.content_indent,
+        ));
+        Some(spans)
+    }
+
+    fn line_plain_text(line: &Line<'static>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    }
+
+    fn strip_span_prefix(spans: Vec<Span<'static>>, mut prefix_len: usize) -> Vec<Span<'static>> {
+        let mut stripped = Vec::new();
+
+        for span in spans {
+            let content = span.content.into_owned();
+            if prefix_len >= content.len() {
+                prefix_len -= content.len();
+                continue;
+            }
+
+            let content = content[prefix_len..].to_string();
+            prefix_len = 0;
+            if !content.is_empty() {
+                stripped.push(Span::styled(content, span.style));
+            }
+        }
+
+        stripped
     }
 
     fn render_inline_children(children: &[Node], base_style: Style) -> Vec<Span<'static>> {
@@ -867,6 +1238,14 @@ impl DrawLine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::draw_table::DrawTable;
+
+    fn line_text(line: &Line<'static>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    }
 
     #[test]
     fn renders_diff_fence_with_add_remove_colors() {
@@ -888,5 +1267,259 @@ mod tests {
         assert_eq!(rendered[2].spans[0].style.fg, Some(Color::Red));
         assert_eq!(rendered[3].spans[0].style.fg, Some(Color::Green));
         assert_eq!(rendered[4].spans[0].style.fg, None);
+    }
+
+    #[test]
+    fn extracts_language_from_fence_info_string() {
+        assert_eq!(
+            CodeFence::language("rust src/lib.rs").as_deref(),
+            Some("rust")
+        );
+        assert_eq!(CodeFence::language("rust,ignore").as_deref(), Some("rust"));
+        assert_eq!(CodeFence::language("{.rust}").as_deref(), Some("rust"));
+        assert_eq!(
+            CodeFence::language("language-rust").as_deref(),
+            Some("rust")
+        );
+    }
+
+    #[test]
+    fn renders_diff_fence_with_extra_info_string() {
+        let draw_line = DrawLine::new();
+        let lines = vec![
+            "```diff changes.patch".to_string(),
+            "-old".to_string(),
+            "+new".to_string(),
+            "```".to_string(),
+        ];
+
+        let rendered = draw_line.render_lines(&lines);
+
+        assert_eq!(rendered[0].spans[0].style.fg, Some(Color::Red));
+        assert_eq!(rendered[1].spans[0].style.fg, Some(Color::Green));
+    }
+
+    #[test]
+    fn indented_markdown_code_does_not_force_yellow_text() {
+        let draw_line = DrawLine::new();
+        let lines = vec!["    parser fallback".to_string()];
+
+        let rendered = draw_line.render_lines(&lines);
+
+        assert_eq!(rendered[0].spans[0].style.fg, None);
+    }
+
+    #[test]
+    fn trims_padding_between_heading_and_fenced_code_content() {
+        let draw_line = DrawLine::new();
+        let lines = vec![
+            "### take_scrollback_overflow".to_string(),
+            "```rust".to_string(),
+            String::new(),
+            String::new(),
+            "pub(super) fn take_scrollback_overflow(".to_string(),
+            "```".to_string(),
+        ];
+
+        let rendered = draw_line.render_lines(&lines);
+        let text = rendered.iter().map(line_text).collect::<Vec<_>>();
+
+        assert_eq!(
+            text,
+            vec![
+                "take_scrollback_overflow".to_string(),
+                "pub(super) fn take_scrollback_overflow(".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn preserves_blank_lines_inside_fenced_code_content() {
+        let draw_line = DrawLine::new();
+        let lines = vec![
+            "```rust".to_string(),
+            "fn one() {}".to_string(),
+            String::new(),
+            "fn two() {}".to_string(),
+            "```".to_string(),
+        ];
+
+        let rendered = draw_line.render_lines(&lines);
+        let text = rendered.iter().map(line_text).collect::<Vec<_>>();
+
+        assert_eq!(
+            text,
+            vec![
+                "fn one() {}".to_string(),
+                String::new(),
+                "fn two() {}".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn keeps_code_fence_state_across_render_batches() {
+        let draw_line = DrawLine::new();
+        let mut state = RenderState::default();
+
+        let first = draw_line
+            .render_lines_with_state(&["```diff".to_string(), "-old".to_string()], &mut state);
+        let second = draw_line.render_lines_with_state(
+            &["+new".to_string(), "```".to_string(), "after".to_string()],
+            &mut state,
+        );
+
+        assert_eq!(first[0].spans[0].style.fg, Some(Color::Red));
+        assert_eq!(second[0].spans[0].style.fg, Some(Color::Green));
+        assert_eq!(line_text(&second[1]), "after");
+        assert!(!state.in_code);
+    }
+
+    #[test]
+    fn preserves_blank_code_prefix_when_fence_started_in_previous_batch() {
+        let draw_line = DrawLine::new();
+        let mut state = RenderState::default();
+
+        draw_line.render_lines_with_state(&["```rust".to_string()], &mut state);
+        let rendered = draw_line.render_lines_with_state(
+            &[String::new(), "fn main() {}".to_string(), "```".to_string()],
+            &mut state,
+        );
+        let text = rendered.iter().map(line_text).collect::<Vec<_>>();
+
+        assert_eq!(text, vec![String::new(), "fn main() {}".to_string()]);
+        assert!(!state.in_code);
+    }
+
+    #[test]
+    fn language_fence_inside_code_content_does_not_close_block() {
+        let draw_line = DrawLine::new();
+        let lines = vec![
+            "```md".to_string(),
+            "```rust".to_string(),
+            "fn main() {}".to_string(),
+            "```".to_string(),
+        ];
+
+        let rendered = draw_line.render_lines(&lines);
+        let text = rendered.iter().map(line_text).collect::<Vec<_>>();
+
+        assert_eq!(
+            text,
+            vec!["```rust".to_string(), "fn main() {}".to_string()]
+        );
+    }
+
+    #[test]
+    fn recovers_markdown_list_after_elided_unclosed_code_fence() {
+        let draw_line = DrawLine::new();
+        let mut state = RenderState::default();
+        let lines = vec![
+            "```rust".to_string(),
+            "    ...".to_string(),
+            String::new(),
+            String::new(),
+            "- **Render diffs specially**".to_string(),
+            "  - Detects diff-like languages.".to_string(),
+        ];
+
+        let rendered = draw_line.render_lines_with_state(&lines, &mut state);
+        let text = rendered.iter().map(line_text).collect::<Vec<_>>();
+
+        assert_eq!(
+            text,
+            vec![
+                "    ...".to_string(),
+                String::new(),
+                String::new(),
+                "• Render diffs specially".to_string(),
+                "  • Detects diff-like languages.".to_string(),
+            ]
+        );
+        assert!(!state.in_code);
+    }
+
+    #[test]
+    fn diff_fences_do_not_recover_on_removed_markdown_like_lines() {
+        let draw_line = DrawLine::new();
+        let mut state = RenderState::default();
+        let lines = vec![
+            "```diff".to_string(),
+            " context".to_string(),
+            String::new(),
+            "- **removed heading**".to_string(),
+        ];
+
+        let rendered = draw_line.render_lines_with_state(&lines, &mut state);
+        let text = rendered.iter().map(line_text).collect::<Vec<_>>();
+
+        assert_eq!(
+            text,
+            vec![
+                " context".to_string(),
+                String::new(),
+                "- **removed heading**".to_string(),
+            ]
+        );
+        assert_eq!(rendered[2].spans[0].style.fg, Some(Color::Red));
+        assert!(state.in_code);
+    }
+
+    #[test]
+    fn renders_wrapped_markdown_lists_without_raw_markers_or_flush_left_continuations() {
+        let draw_line = DrawLine::new();
+        let wrapped = DrawTable::wrap_markdown_tables(
+            "splits it into:\n- prefix: committed to history\n- suffix: remains active\n- Uses table_flow::split_stream_to_fit, preserving table context when splitting markdown tables.",
+            68,
+        );
+
+        let rendered = draw_line.render_lines(&wrapped);
+        let text = rendered.iter().map(line_text).collect::<Vec<_>>();
+
+        assert_eq!(text[0], "splits it into:");
+        assert_eq!(text[1], "• prefix: committed to history");
+        assert_eq!(text[2], "• suffix: remains active");
+        assert!(text.iter().all(|line| !line.starts_with("- ")));
+        assert!(
+            text.iter()
+                .any(|line| line.starts_with("  when splitting markdown tables."))
+        );
+    }
+
+    #[test]
+    fn renders_loose_nested_list_continuations_as_nested_bullets() {
+        let draw_line = DrawLine::new();
+        let lines = vec![
+            "- DrawLine".to_string(),
+            "- Holds:".to_string(),
+            " - `SyntaxSet` from `syntect` for syntax lookup.".to_string(),
+            " - `ThemeSet` from `syntect` for code highlighting.".to_string(),
+            "- Created with `DrawLine::new()`.".to_string(),
+        ];
+
+        let rendered = draw_line.render_lines(&lines);
+        let text = rendered.iter().map(line_text).collect::<Vec<_>>();
+
+        assert_eq!(
+            text,
+            vec![
+                "• DrawLine".to_string(),
+                "• Holds:".to_string(),
+                "  • SyntaxSet from syntect for syntax lookup.".to_string(),
+                "  • ThemeSet from syntect for code highlighting.".to_string(),
+                "• Created with DrawLine::new().".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn wrapping_preserves_nested_list_initial_indent() {
+        let wrapped = DrawTable::wrap_markdown_tables(
+            "  - `SyntaxSet` from `syntect` for syntax lookup and another long phrase",
+            36,
+        );
+
+        assert!(wrapped[0].starts_with("  - "));
+        assert!(wrapped[1].starts_with("    "));
     }
 }

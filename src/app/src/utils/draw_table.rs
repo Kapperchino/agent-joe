@@ -1,3 +1,4 @@
+use crate::utils::draw_line::DrawLine;
 use textwrap::core::display_width;
 
 pub struct DrawTable {}
@@ -250,12 +251,35 @@ impl DrawTable {
         stripped
     }
 
-    fn wrap_plain_line(line: &str, wrap_width: usize) -> Vec<String> {
+    fn wrap_plain_line(
+        line: &str,
+        wrap_width: usize,
+        preserve_markdown_list_indent: bool,
+    ) -> Vec<String> {
         if display_width(line) <= wrap_width {
             return vec![line.to_string()];
         }
 
-        textwrap::wrap(line, textwrap::Options::new(wrap_width))
+        let mut options = textwrap::Options::new(wrap_width);
+        let initial_indent = preserve_markdown_list_indent
+            .then(|| DrawLine::markdown_list_initial_indent(line))
+            .flatten();
+        let list_indent = preserve_markdown_list_indent
+            .then(|| DrawLine::markdown_list_content_indent(line))
+            .flatten();
+        if let Some(indent) = initial_indent.as_deref() {
+            options = options.initial_indent(indent);
+        }
+        if let Some(indent) = list_indent.as_deref() {
+            options = options.subsequent_indent(indent);
+        }
+
+        let line = initial_indent
+            .as_ref()
+            .map(|indent| &line[indent.len()..])
+            .unwrap_or(line);
+
+        textwrap::wrap(line, options)
             .into_iter()
             .map(|segment| segment.into_owned())
             .collect()
@@ -293,7 +317,7 @@ impl DrawTable {
                 }
             }
 
-            wrapped.extend(Self::wrap_plain_line(line, wrap_width));
+            wrapped.extend(Self::wrap_plain_line(line, wrap_width, !in_code));
             index += 1;
         }
 
