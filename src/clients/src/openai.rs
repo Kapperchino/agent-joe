@@ -1,13 +1,13 @@
 use crate::llm;
 use crate::llm::{ClientResponse, LLmClientTrait};
 use crate::openai_config::{OpenAIAuthConfig, OpenAIConfig, OpenAIEffort};
-use anyhow::{Error, anyhow};
+use anyhow::{anyhow, Error};
 use async_stream::try_stream;
 use futures::{Stream, StreamExt};
-use reqwest::{Client, header};
+use reqwest::{header, Client};
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
-use reqwest_retry::RetryTransientMiddleware;
 use reqwest_retry::policies::ExponentialBackoff;
+use reqwest_retry::RetryTransientMiddleware;
 use reqwest_tracing::TracingMiddleware;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -294,8 +294,6 @@ pub enum StreamOutputItem {
         #[serde(default)]
         action: Option<WebSearchAction>,
     },
-    #[serde(other)]
-    Unknown,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -517,9 +515,6 @@ pub enum StreamEvent {
         #[serde(default)]
         sequence_number: u64,
     },
-
-    #[serde(other)]
-    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize)]
