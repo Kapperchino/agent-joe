@@ -751,7 +751,7 @@ impl OpenAIClient {
             }
         }
 
-        if data_line.is_empty() {
+        if data_line.is_empty() || data_line == "[DONE]" {
             return Ok(None);
         }
 
