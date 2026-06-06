@@ -173,7 +173,7 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
                         }
                     })
                     .collect();
-                let tool_lines = tool_lines?;
+                let tool_lines = tool_lines.unwrap_or(vec!["Invalid input".to_owned()]);
 
                 if !tool_lines.is_empty() {
                     state.reporter.send(ActorToTuiPacket::ToolUse(tool_lines));

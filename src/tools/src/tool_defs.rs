@@ -119,7 +119,7 @@ impl<T, C, A> ErasedTool<T, C, A> {
 impl<T, C, A> ErasedToolTrait<C, A> for ErasedTool<T, C, A>
 where
     T: ToolTrait<C, A> + Send + Sync,
-    T::Input: Clone + DeserializeOwned + Send,
+    T::Input: Clone + DeserializeOwned + Send + LenientDeserialize,
     T::Output: DeserializeOwned + Serialize + Send,
     C: Send + Sync + Context,
     A: Send + Sync,
@@ -139,12 +139,12 @@ where
     }
 
     fn display_erased(&self, input: &Value) -> anyhow::Result<String> {
-        let typed_input: T::Input = serde_json::from_value(input.clone())?;
+        let typed_input: T::Input = T::Input::deserialize_lenient(input.clone())?;
         Ok(T::display_input(&typed_input))
     }
 
     fn input_req_erased(&self, input: &Value) -> anyhow::Result<FnvHashMap<String, String>> {
-        let typed_input: T::Input = serde_json::from_value(input.clone())?;
+        let typed_input: T::Input = T::Input::deserialize_lenient(input.clone())?;
         T::req_from_input(&typed_input)
     }
 
@@ -155,7 +155,7 @@ where
         cur_context: &C,
         actor_context: &A,
     ) -> anyhow::Result<Value> {
-        let typed_input: T::Input = serde_json::from_value(input)?;
+        let typed_input: T::Input = T::Input::deserialize_lenient(input)?;
 
         let typed_output: T::Output =
             T::run(typed_input, tool_id, cur_context, actor_context).await?;
@@ -166,13 +166,13 @@ where
     }
 
     fn output_to_content_erased(&self, input: &Value, output: &Value) -> anyhow::Result<String> {
-        let typed_input: T::Input = serde_json::from_value(input.clone())?;
+        let typed_input: T::Input = T::Input::deserialize_lenient(input.clone())?;
         let typed_output: T::Output = serde_json::from_value(output.clone())?;
         T::output_to_content(&typed_input, &typed_output)
     }
 
     fn add_context(&self, input: &Value, context: &mut C, addition: &str) -> anyhow::Result<()> {
-        let typed_input: T::Input = serde_json::from_value(input.clone())?;
+        let typed_input: T::Input = T::Input::deserialize_lenient(input.clone())?;
         Ok(T::add_context(&typed_input, context, addition))
     }
 }
@@ -182,7 +182,7 @@ pub type ErasedToolRef<C, A> = Arc<dyn ErasedToolTrait<C, A>>;
 pub fn erased_tool<T, C, A>() -> ErasedToolRef<C, A>
 where
     T: ToolTrait<C, A> + Send + Sync + 'static,
-    T::Input: Clone + DeserializeOwned + Send + 'static,
+    T::Input: Clone + DeserializeOwned + Send + LenientDeserialize + 'static,
     T::Output: DeserializeOwned + Serialize + Send + 'static,
     C: Send + Sync + Context + 'static,
     A: Send + Sync + 'static,
@@ -191,7 +191,7 @@ where
 }
 
 pub trait LenientDeserialize: Sized {
-    fn deserialize_lenient(s: &str) -> anyhow::Result<Self>;
+    fn deserialize_lenient(s: Value) -> anyhow::Result<Self>;
 }
 
 #[derive(Debug, Clone)]

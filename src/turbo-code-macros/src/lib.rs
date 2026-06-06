@@ -167,8 +167,7 @@ fn impl_tool_input(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
         }
 
         impl ::tools::tool_defs::LenientDeserialize for #struct_name {
-            fn deserialize_lenient(s: &str) -> anyhow::Result<Self> {
-                let value: serde_json::Value = serde_json::from_str(s)?;
+            fn deserialize_lenient(value: serde_json::Value) -> anyhow::Result<Self> {
                 let obj = value.as_object()
                     .ok_or_else(|| anyhow::anyhow!("expected JSON object"))?;
                 Ok(Self {
