@@ -165,6 +165,7 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
                     },
                 }),
                 StreamOutputItem::WebSearchCall { .. } => Some(llm::StreamEvent::Accum),
+                StreamOutputItem::Unknown => None,
             },
             StreamEvent::OutputItemDone {
                 output_index,
@@ -250,6 +251,7 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
                 error!("{refusal}");
                 None
             }
+            StreamEvent::Unknown => None,
         }
     }
 }
