@@ -1,25 +1,35 @@
 use crate::tool_defs::{ToolId, ToolInvocation, ToolResult};
+use serde_json::Value;
 
 impl ToolResult {
     pub fn success(id: ToolId, invocation: ToolInvocation, content: String) -> ToolResult {
-        ToolResult {
+        ToolResult::Success {
             id,
             invocation,
             content,
-            is_error: false,
         }
     }
 
-    pub fn error(id: ToolId, invocation: ToolInvocation, message: String) -> ToolResult {
-        ToolResult {
+    pub fn error(id: ToolId, name: String, input: Value, message: String) -> ToolResult {
+        ToolResult::Failure {
             id,
-            invocation,
-            content: message,
-            is_error: true,
+            msg: message,
+            name,
+            input,
+        }
+    }
+
+    pub fn name(&self) -> String {
+        match &self {
+            ToolResult::Success { invocation, .. } => invocation.name.clone(),
+            ToolResult::Failure { name, .. } => name.clone(),
         }
     }
 
     pub fn id(&self) -> ToolId {
-        self.id.clone()
+        match self {
+            ToolResult::Success { id, .. } => id.clone(),
+            ToolResult::Failure { id, .. } => id.clone(),
+        }
     }
 }

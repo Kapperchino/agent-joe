@@ -10,6 +10,7 @@ use clients::llm::{ContentBlock, LLmClient, Message, Role};
 use common_models::tui_models::State;
 use futures::future;
 use ractor::{ActorCell, ActorId, ActorRef, RpcReplyPort};
+use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tools::tool_defs::{ErasedToolRef, ToolDefinition, ToolInvocation, ToolResult};
@@ -114,23 +115,44 @@ impl<C: Context + Clone> ActorState<C> {
                     Ok(())
                 }
                 StreamRes::Tool(tool_res) => {
-                    let tool = self.find_tool(&tool_res.invocation.name)?;
-                    tool.add_context(
-                        &tool_res.invocation.input,
-                        &mut self.cur_context,
-                        &tool_res.content,
-                    )?;
-                    self.history.push(Message {
-                        role: Role::Assistant,
-                        content: vec![ContentBlock::ToolBlock {
-                            tool_id: tool_res.id(),
-                            name: tool_res.invocation.name.clone(),
-                            input: tool.input_req_erased(&tool_res.invocation.input)?,
-                        }],
-                    });
+                    let tool = self.find_tool(&tool_res.name())?;
+                    match &tool_res {
+                        ToolResult::Success {
+                            id,
+                            invocation,
+                            content,
+                        } => {
+                            tool.add_context(&invocation.input, &mut self.cur_context, &content)?;
+                            self.history.push(Message {
+                                role: Role::Assistant,
+                                content: vec![ContentBlock::ToolBlock {
+                                    tool_id: id.clone(),
+                                    name: invocation.name.clone(),
+                                    input: tool.input_req_erased(&invocation.input)?,
+                                }],
+                            });
+                        }
+                        ToolResult::Failure {
+                            id,
+                            msg,
+                            name,
+                            input,
+                        } => {
+                            let input_map = serde_json::from_value(input.clone())?;
+                            self.history.push(Message {
+                                role: Role::Assistant,
+                                content: vec![ContentBlock::ToolBlock {
+                                    tool_id: id.clone(),
+                                    name: name.clone(),
+                                    input: input_map,
+                                }],
+                            });
+                        }
+                    }
+
                     self.history.push(Message {
                         role: Role::User,
-                        content: vec![Self::tool_res_to_json(tool_res)],
+                        content: vec![Self::tool_res_to_json(&tool_res)],
                     });
                     Ok(())
                 }
@@ -207,7 +229,12 @@ impl<C: Context + Clone> ActorState<C> {
                     warn!(tool_name = %tool_name, tool_id = ?id, error = ?err, "tool error");
                 }
                 warn!("{:?}", err.to_string());
-                Ok(ToolResult::error(id, invocation, err.to_string()))
+                Ok(ToolResult::error(
+                    id,
+                    tool_name,
+                    input.clone(),
+                    err.to_string(),
+                ))
             }
         }
     }
@@ -221,7 +248,19 @@ impl<C: Context + Clone> ActorState<C> {
             .map(async |item| match item.processed {
                 ProcessedItem::String(str) => Ok(StreamRes::String(str.clone())),
                 ProcessedItem::Tool(tool) => {
-                    let tool_res = self.tool_use(tool).await?;
+                    let tool_res = match self.tool_use(tool.clone()).await {
+                        Ok(res) => { res }
+                        Err(err) =>
+                            {
+                                if self.debug_mode {
+                                    let tool_name = tool.name.as_str();
+                                    let id = &tool.id;
+                                    warn!(tool_name = %tool_name, tool_id = ?id, error = ?err, "tool error");
+                                }
+                                warn!("{:?}", err.to_string());
+                                ToolResult::error(tool.id.clone(), tool.name.clone(),tool.input_value()? ,err.to_string())
+                            }
+                    };
                     Ok(StreamRes::Tool(tool_res))
                 }
                 ProcessedItem::Thinking {
@@ -267,11 +306,17 @@ impl<C: Context + Clone> ActorState<C> {
         self.stream_processor.change_state(new_state)
     }
 
-    pub fn tool_res_to_json(res: ToolResult) -> ContentBlock {
+    pub fn tool_res_to_json(res: &ToolResult) -> ContentBlock {
         ContentBlock::ToolResult {
-            tool_id: res.id,
-            content: res.content,
-            is_error: Some(res.is_error),
+            tool_id: res.id(),
+            content: match &res {
+                ToolResult::Success { content, .. } => content.clone(),
+                ToolResult::Failure { msg, .. } => msg.clone(),
+            },
+            is_error: match &res {
+                ToolResult::Success { .. } => None,
+                ToolResult::Failure { .. } => Some(true),
+            },
         }
     }
 }

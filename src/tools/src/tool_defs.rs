@@ -231,9 +231,16 @@ pub struct ToolInvocation {
 }
 
 #[derive(Debug)]
-pub struct ToolResult {
-    pub id: ToolId,
-    pub invocation: ToolInvocation,
-    pub content: String,
-    pub is_error: bool,
+pub enum ToolResult {
+    Success {
+        id: ToolId,
+        invocation: ToolInvocation,
+        content: String,
+    },
+    Failure {
+        id: ToolId,
+        msg: String,
+        name: String,
+        input: Value,
+    },
 }

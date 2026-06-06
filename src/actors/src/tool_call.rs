@@ -10,10 +10,6 @@ pub struct ToolCall {
 
 impl ToolCall {
     pub fn input_value(&self) -> anyhow::Result<Value> {
-        if self.json.trim().is_empty() {
-            Ok(Value::Object(Default::default()))
-        } else {
-            Ok(serde_json::from_str(&self.json)?)
-        }
+        Ok(serde_json::from_str(&self.json)?)
     }
 }
