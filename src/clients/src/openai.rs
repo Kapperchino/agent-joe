@@ -18,6 +18,8 @@ use thiserror::Error;
 use tracing::info;
 use utils::utils::FnvHashMap;
 
+const HTTP_MAX_RETRIES: u32 = 5;
+
 #[derive(Error, Debug)]
 pub enum OpenAIError {
     #[error("HTTP request failed: {0}")]
@@ -305,7 +307,7 @@ pub struct ReasoningText {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-#[serde(tag = "e_type")]
+#[serde(tag = "type")]
 pub enum StreamEvent {
     #[serde(rename = "response.queued")]
     ResponseQueued {
@@ -633,7 +635,7 @@ impl OpenAIClient {
             }
         };
 
-        let retry_policy = ExponentialBackoff::builder().build_with_max_retries(3);
+        let retry_policy = ExponentialBackoff::builder().build_with_max_retries(HTTP_MAX_RETRIES);
         let inner_client = Client::builder()
             .connect_timeout(Duration::from_secs(60))
             .default_headers(headers)
@@ -739,27 +741,20 @@ impl OpenAIClient {
         let event_text = buffer[..delimiter_pos].to_string();
         buffer.drain(..=delimiter_pos + 1);
 
-        let mut event_type = String::new();
         let mut data_line = String::new();
 
         for line in event_text.lines() {
             let line = line.trim();
-            if let Some(evt) = line.strip_prefix("event: ") {
-                event_type = evt.to_string();
-            } else if let Some(data) = line.strip_prefix("data: ") {
+            if let Some(data) = line.strip_prefix("data: ") {
                 data_line.push_str(data);
             }
         }
 
-        if event_type.is_empty() || data_line.is_empty() {
+        if data_line.is_empty() {
             return Ok(None);
         }
 
-        let mut json: serde_json::Value = serde_json::from_str(&data_line)?;
-        json.as_object_mut()
-            .map(|obj| obj.insert("e_type".to_string(), serde_json::Value::String(event_type)));
-
-        match serde_json::from_value::<StreamEvent>(json) {
+        match serde_json::from_str::<StreamEvent>(&data_line) {
             Ok(event) => Ok(Some(event)),
             Err(e) => Err(OpenAIError::Serialization(e)),
         }
