@@ -19,6 +19,13 @@ pub struct ReadWorker<C: Context> {
 impl Worker for ReadWorker<RustEmptyContext> {
     type C = RustEmptyContext;
 
+    fn init_prompt(added: Option<&str>) -> String {
+        let question = added.unwrap_or_default();
+        format!("You are read-only agent in a rust code base,\
+     you will be asked a general question by the parent agent, make sure you are very sure of your answer and keep it concise\
+     \n{question}").to_owned()
+    }
+
     async fn startup_hook(
         &self,
         myself: ActorRef<Message>,

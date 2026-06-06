@@ -29,12 +29,8 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for GatherContext {
             _ => Err(anyhow!("wrong actor context")),
         }?;
 
-        let question = input.context;
         let mut new_context = cur_context.clone();
-        let init_prompt = format!("You are read-only agent in a rust code base,\
-     you will be asked a general question by the parent agent, make sure you are very sure of your answer and keep it concise\
-     \n{question}").to_owned();
-        new_context.initial_prompt = init_prompt;
+        new_context.initial_prompt = ReadWorker::init_prompt(Some(&input.context));
 
         let empty_context = RustEmptyContext::new(new_context, true, cur_context.gen_id());
 

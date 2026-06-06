@@ -29,13 +29,8 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for MakeChanges {
             _ => Err(anyhow!("wrong actor context")),
         }?;
 
-        let question = input.context;
         let mut new_context = cur_context.clone();
-        let init_prompt = format!("You are a write enabled agent in a rust codebase given a prompt to modify the codebase\
-        follow the instructions, and write the code in idiomatic rust and follow the coding style of the surrounding code. After \
-        the changes are made and validated, respond with the changes made to the orchestrator.
-         \n{question}").to_owned();
-        new_context.initial_prompt = init_prompt;
+        new_context.initial_prompt = WriteWorker::init_prompt(Some(&input.context));
 
         let empty_context = RustEmptyContext::new(new_context, true, cur_context.gen_id());
 

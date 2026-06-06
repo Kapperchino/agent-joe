@@ -5505,6 +5505,7 @@ dependencies = [
  "clap",
  "clients",
  "color-eyre",
+ "common-models",
  "crossterm",
  "dirs",
  "flume",

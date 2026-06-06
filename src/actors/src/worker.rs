@@ -24,6 +24,8 @@ impl<W> WorkerAdapter<W> {
 pub trait Worker: Send + Sync + 'static {
     type C: Context + Send + Sync + Clone + 'static;
 
+    fn init_prompt(added: Option<&str>) -> String;
+
     async fn startup_hook(
         &self,
         myself: ActorRef<Message>,

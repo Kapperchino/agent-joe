@@ -20,6 +20,14 @@ pub struct WriteWorker<C: Context> {
 impl Worker for WriteWorker<RustEmptyContext> {
     type C = RustEmptyContext;
 
+    fn init_prompt(added: Option<&str>) -> String {
+        let question = added.unwrap_or_default();
+        format!("You are a write enabled agent in a rust codebase given a prompt to modify the codebase\
+        follow the instructions, and write the code in idiomatic rust and follow the coding style of the surrounding code. After \
+        the changes are made and validated, respond with the changes made to the orchestrator.
+         \n{question}").to_owned()
+    }
+
     async fn startup_hook(
         &self,
         myself: ActorRef<Message>,

@@ -27,15 +27,8 @@ impl ToolTrait<RustEmptyContext, ActorContext<RustEmptyContext>> for ValidateRus
             _ => Err(anyhow!("wrong actor context")),
         }?;
 
-        let question = input.context;
         let mut cur_context = cur_context.clone();
-        let init_prompt = format!(
-            "You are a validation agent whole sole responsibility is to \
-        validate if the codebase is good to go, respond with the result of the validation.\
-        \n{question}"
-        )
-        .to_owned();
-        cur_context.inner.initial_prompt = init_prompt;
+        cur_context.inner.initial_prompt = ValidateWorker::init_prompt(Some(&input.context));
         cur_context.stack_context = false;
 
         let (joe, actor_handle) = Actor::spawn_linked(

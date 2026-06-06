@@ -18,6 +18,16 @@ pub struct ValidateWorker<C: Context> {
 impl Worker for ValidateWorker<RustEmptyContext> {
     type C = RustEmptyContext;
 
+    fn init_prompt(added: Option<&str>) -> String {
+        let question = added.unwrap_or_default();
+        format!(
+            "You are a validation agent whole sole responsibility is to \
+        validate if the codebase is good to go, respond with the result of the validation.\
+        \n{question}"
+        )
+        .to_owned()
+    }
+
     async fn startup_hook(
         &self,
         myself: ActorRef<Message>,

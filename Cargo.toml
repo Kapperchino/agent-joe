@@ -14,6 +14,7 @@ actors = { path = "src/actors" }
 app = { path = "src/app" }
 analysis = { path = "src/analysis" }
 clients = { path = "src/clients" }
+common-models = { path = "src/common-models" }
 tokio = { version = "1.0", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["fs", "io-util"] }
 ractor = "0.15"

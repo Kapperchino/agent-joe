@@ -1,24 +1,28 @@
-use actors::actor::Dependency;
+use actors::actor::{Dependency, Message};
 use actors::supervisor::WorkerSupervisor;
 use actors::worker::{Worker, WorkerAdapter};
 use actors::workers::base_worker::BaseWorker;
+use actors::workers::simple_worker::SimpleWorker;
 use analysis::contexts::rust_context::RustContext;
 use app::init_app::InitApp;
 use app::tui::TUIApp;
 use clap::Parser;
 use clients::config::{Config, ConfigContext};
 use clients::llm::LLmClient;
+use common_models::tui_models::ActorToTui;
 use crossterm::cursor::SetCursorStyle;
 use crossterm::event::{
     DisableBracketedPaste, EnableBracketedPaste, KeyboardEnhancementFlags,
     PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
+use flume::Sender;
 use mimalloc::MiMalloc;
-use ractor::Actor;
+use ractor::{Actor, ActorRef};
 use ratatui::{TerminalOptions, Viewport};
 use std::io::stdout;
 use tokio::main;
+use tokio::task::JoinHandle;
 use tracing::Level;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::FmtSubscriber;
@@ -30,6 +34,8 @@ const INLINE_VIEWPORT_HEIGHT: u16 = 12;
 struct Cli {
     #[arg(long)]
     debug: bool,
+    #[arg(long)]
+    simple: bool,
 }
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -78,34 +84,9 @@ async fn main() {
     let config = config.prepare().await.unwrap();
     let config_context = ConfigContext::new(config);
 
-    let client = LLmClient::new(config_context.clone()).unwrap();
     let (tx, rx) = flume::unbounded();
 
-    let (supervisor, _) = Actor::spawn(None, WorkerSupervisor, ())
-        .await
-        .expect("Failed to start supervisor");
-
-    let context = RustContext::new("You are a rust coding orchestrator agent in a rust codebase, \
-    you do not have any direct read or write abilities, but you are able to spawn other agents to do the job for you.\
-    You also have every symbol in this project in your context, use the information if it is present.
-    Keep the commands concise and accurate.".to_owned(),0)
-        .await
-        .unwrap();
-
-    let (joe, actor_handle) = Actor::spawn_linked(
-        None,
-        WorkerAdapter::new(BaseWorker::new()),
-        Dependency {
-            client,
-            tools: BaseWorker::tools(),
-            tui_tx: tx,
-            debug_mode: cli.debug,
-            context,
-        },
-        supervisor.get_cell(),
-    )
-    .await
-    .expect("Failed to start actor");
+    let (joe, actor_handle) = get_actor(&cli, tx, config_context.clone()).await;
 
     terminal.clear().ok();
     let app = TUIApp::new(joe, config_context.clone(), cli.debug);
@@ -119,4 +100,59 @@ async fn main() {
     )
     .ok();
     ratatui::restore();
+}
+
+async fn get_actor(
+    cli: &Cli,
+    chan: Sender<ActorToTui>,
+    config_context: ConfigContext,
+) -> (ActorRef<Message>, JoinHandle<()>) {
+    let client = LLmClient::new(config_context.clone()).unwrap();
+
+    let (supervisor, _) = Actor::spawn(None, WorkerSupervisor, ())
+        .await
+        .expect("Failed to start supervisor");
+
+    match cli.simple {
+        true => {
+            let context = RustContext::new(SimpleWorker::init_prompt(None), 0)
+                .await
+                .unwrap();
+
+            Actor::spawn_linked(
+                None,
+                WorkerAdapter::new(SimpleWorker::new()),
+                Dependency {
+                    client,
+                    tools: SimpleWorker::tools(),
+                    tui_tx: chan,
+                    debug_mode: cli.debug,
+                    context,
+                },
+                supervisor.get_cell(),
+            )
+            .await
+            .expect("Failed to start actor")
+        }
+        false => {
+            let context = RustContext::new(BaseWorker::init_prompt(None), 0)
+                .await
+                .unwrap();
+
+            Actor::spawn_linked(
+                None,
+                WorkerAdapter::new(BaseWorker::new()),
+                Dependency {
+                    client,
+                    tools: BaseWorker::tools(),
+                    tui_tx: chan,
+                    debug_mode: cli.debug,
+                    context,
+                },
+                supervisor.get_cell(),
+            )
+            .await
+            .expect("Failed to start actor")
+        }
+    }
 }
