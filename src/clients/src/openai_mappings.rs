@@ -165,7 +165,6 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
                     },
                 }),
                 StreamOutputItem::WebSearchCall { .. } => Some(llm::StreamEvent::Accum),
-                StreamOutputItem::Unknown => None,
             },
             StreamEvent::OutputItemDone {
                 output_index,
@@ -209,6 +208,21 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
             //         index: output_index,
             //     })
             // }
+            StreamEvent::ReasoningTextDelta {
+                item_id,
+                output_index,
+                delta,
+                ..
+            } => Some(llm::StreamEvent::ContentBlockDelta {
+                index: output_index,
+                delta: Delta::ThinkingDelta {
+                    thinking: delta.to_string(),
+                    reasoning_id: Some(item_id),
+                },
+            }),
+            StreamEvent::ReasoningTextDone { output_index, .. } => {
+                Some(llm::StreamEvent::Accum)
+            }
             StreamEvent::ReasoningSummaryTextDelta {
                 item_id,
                 output_index,
@@ -251,7 +265,6 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
                 error!("{refusal}");
                 None
             }
-            StreamEvent::Unknown => None,
         }
     }
 }

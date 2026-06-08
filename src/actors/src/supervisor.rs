@@ -37,7 +37,9 @@ impl Actor for WorkerSupervisor {
                 error!("Worker {:?} failed: {:?}", who.get_id(), reason);
             }
             SupervisionEvent::ActorTerminated(who, _, reason) => {
-                error!("Worker {:?} terminated: {:?}", who.get_id(), reason);
+                reason.inspect(|reason| {
+                    error!("Worker {:?} terminated: {:?}", who.get_id(), reason);
+                });
             }
             _ => {}
         }
