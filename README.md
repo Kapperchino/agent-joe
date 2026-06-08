@@ -1,41 +1,48 @@
-# turbo-code
+# Agent Joe
 
-A TUI-based coding assistant powered by Claude. It uses rust-analyzer for project context and provides tools for
-reading, editing, and checking your Rust code.
+An open source TUI-based coding tool that only works with rust
+and does not have access to the shell.
 
-## Requirements
+## Why
 
-- Rust (2024 edition)
-- A Claude API key
+I just hate the fact that cli tools with connections to llm providers can execute any arbitrary command on my terminal.
 
-## Setup
+With the rust only requirement, I can also reduce the number of possible actions to just rust specific ones, lowering the total tool count.
 
-```sh
-export CLAUDE_API=<your-claude-api-key>
-```
+And this is a fun project to work on.
+
+## State
+Works pretty well currently, still doesn't do as good of a job as codex,
+I think the main reason being the prompts not being as good and not having a plan mode.
+
+## Flags
+The tui supports some flags
+
+| Flag       | Description                                                     |
+|------------|-----------------------------------------------------------------|
+| --debug    | Adds significantly more logging and prints out thinking tokens. |
+| --simple   | Multi-agent mode will be disabled, will work just like codex    |
+
+## Supported llm providers
+
+| Provider   | Support                                                |
+|------------|--------------------------------------------------------|
+| OpenAI     | Fully supported                                        |
+| Codex      | Fully supported                                        |
+| Claude     | Should work, haven't tested it in a minute due to cost |
+| OpenRouter | Should work, seeing some issues with deepseek v4       |
+| Local      | Response api fully supported                           |
 
 ## Build & Run
 
 ```sh
-cargo run
+cargo run --relase
 ```
 
 ## Keybindings
 
-| Key                 | Mode         | Action              |
-|---------------------|--------------|---------------------|
-| `i`                 | Normal       | Enter edit mode     |
-| `/`                 | Normal       | Enter command mode  |
-| `q`                 | Normal       | Quit                |
-| Terminal scrollback | Normal       | Scroll history      |
-| `Enter`             | Edit/Command | Submit              |
-| `Esc`               | Edit/Command | Back to normal mode |
+The TUI is similar to claude code and codex with one major difference. Vim bindings are foced upon you.
 
 ## Tools
 
-The assistant has access to:
-
-- **ReadFile** - read files from your project
-- **StringReplace** - edit files via search-and-replace
-- **InsertAfterLine** - insert text after a specific line
-- **CargoCheck** - run `cargo check`
+TBD
