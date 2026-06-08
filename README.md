@@ -30,7 +30,7 @@ The tui supports some flags
 | OpenAI     | Fully supported                                        |
 | Codex      | Fully supported                                        |
 | Claude     | Should work, haven't tested it in a minute due to cost |
-| OpenRouter | Should work, seeing some issues with deepseek v4       |
+| OpenRouter | Does not support web_search but everything should work |
 | Local      | Response api fully supported                           |
 
 ## Build & Run
