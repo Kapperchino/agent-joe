@@ -359,6 +359,33 @@ pub enum StreamEvent {
         #[serde(default)]
         sequence_number: u64,
     },
+    #[serde(rename = "response.web_search_call.in_progress")]
+    WebSearchCallInProgress {
+        #[serde(default)]
+        item_id: String,
+        #[serde(default)]
+        output_index: usize,
+        #[serde(default)]
+        sequence_number: u64,
+    },
+    #[serde(rename = "response.web_search_call.searching")]
+    WebSearchCallSearching {
+        #[serde(default)]
+        item_id: String,
+        #[serde(default)]
+        output_index: usize,
+        #[serde(default)]
+        sequence_number: u64,
+    },
+    #[serde(rename = "response.web_search_call.completed")]
+    WebSearchCallCompleted {
+        #[serde(default)]
+        item_id: String,
+        #[serde(default)]
+        output_index: usize,
+        #[serde(default)]
+        sequence_number: u64,
+    },
     #[serde(rename = "response.content_part.added")]
     ContentPartAdded {
         #[serde(default)]

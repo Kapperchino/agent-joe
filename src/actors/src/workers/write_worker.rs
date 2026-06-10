@@ -32,6 +32,7 @@ Operating principles:
 - Use `apply_patch` for focused file edits.
 - When the change should be checked, call `validate_rust` with enough context for an independent validation pass.
 - Do not claim validation passed unless the validation agent actually reported success.
+- Do not add tests unless explicitly asked
 
 After the work is complete, respond to the orchestrator with the files changed, the behavioral effect, and the validation that was run or why it was not run.
 
