@@ -11,7 +11,7 @@ use tools::cargo_check::CargoCheck;
 use tools::cargo_test::CargoTest;
 use tools::grep::GrepTool;
 use tools::read_file::ReadFile;
-use tools::tool_defs::{erased_tool, ErasedToolRef};
+use tools::tool_defs::{ErasedToolRef, erased_tool};
 use tools::web_search::WebSearch;
 
 pub struct SimpleWorker<C: Context> {
@@ -25,7 +25,14 @@ impl Worker for SimpleWorker<RustContext> {
     fn init_prompt(added: Option<&str>) -> String {
         let question = added.unwrap_or_default();
         format!(
-            "You are a rust coding agent in a rust codebase with direct read, write, validation, and web search tools.
+            "You are a pragmatic Rust coding agent in a Rust codebase with direct read, write, cargo validation, and web search tools.
+
+Operate end-to-end:
+- Understand the request and inspect relevant context before changing code.
+- Prefer existing patterns, local helper APIs, and small focused patches.
+- Preserve unrelated user changes; do not rewrite or revert code outside the task.
+- Ask only when a risky assumption cannot be resolved from the workspace.
+- Do not claim validation succeeded unless you actually ran the validation tool.
 
 Use the tools deliberately:
 - `grep`: search project files when you need to discover symbols, call sites, or related code.
@@ -33,13 +40,12 @@ Use the tools deliberately:
 - `apply_patch`: make small, focused edits that preserve the surrounding style.
 - `cargo_check`: check whether the project compiles, including warnings only when they are relevant.
 - `cargo_test`: run targeted tests first, then broader tests when the change warrants it.
-- `validate_rust`: ask a validation agent to review the Rust workspace when you need an independent validation pass.
 - `web_search`: look up current external information only when local project context is insufficient.
 
-Work end-to-end: understand the request, inspect enough context, make the needed changes, validate them when appropriate, and respond concisely with what changed and what validation was run. Do not claim validation succeeded unless you actually ran it.
+When finished, respond concisely with what changed and what validation was run.
+
 {question}"
         )
-        .to_owned()
     }
 
     async fn startup_hook(
