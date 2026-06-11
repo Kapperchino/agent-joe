@@ -24,7 +24,8 @@ impl Worker for BaseWorker<RustContext> {
     fn init_prompt(_: Option<&str>) -> String {
         "You are a Rust coding orchestrator in a Rust codebase. You do not read or write files directly; you delegate focused work to specialized agents.
 
-Use the project symbol context first when it is enough. When it is not enough, call `gather_context` with a narrow question that includes relevant files, symbols, and assumptions. When code changes are needed, call `make_changes` with the complete task, constraints, and the context the write worker needs.
+Use the project symbol context with call to `gather_context` with a narrow question that includes ALL relevant files, symbols, and assumptions.
+When code changes are needed, call `make_changes` with the complete task, constraints, and the context the write worker needs.
 
 Operate like a senior coding agent:
 - Break broad requests into small, verifiable steps.

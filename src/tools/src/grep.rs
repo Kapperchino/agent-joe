@@ -57,7 +57,7 @@ impl<C: Context, A> ToolTrait<C, A> for GrepTool {
 #[derive(Default, Serialize, Deserialize, Debug, Clone, ToolDef)]
 #[tool(
     name = "grep",
-    description = "Search the current project files with a regex and return matching lines with surrounding context"
+    description = "Search the current project files with a regex and return matching lines with surrounding context, prefer parallel tool calls"
 )]
 pub struct GrepTool {
     #[tool(input)]
