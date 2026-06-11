@@ -253,6 +253,7 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
             }),
             StreamEvent::ResponseQueued { .. } => Some(llm::StreamEvent::Accum),
             StreamEvent::ResponseInProgress { .. } => Some(llm::StreamEvent::Accum),
+            StreamEvent::KeepAlive { .. } => Some(llm::StreamEvent::Accum),
             StreamEvent::WebSearchCallInProgress { .. } => Some(llm::StreamEvent::Accum),
             StreamEvent::WebSearchCallSearching { .. } => Some(llm::StreamEvent::Accum),
             StreamEvent::WebSearchCallCompleted { .. } => Some(llm::StreamEvent::Accum),

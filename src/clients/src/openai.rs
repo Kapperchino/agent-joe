@@ -338,6 +338,11 @@ pub enum StreamEvent {
         #[serde(default)]
         sequence_number: u64,
     },
+    #[serde(rename = "response.keepalive")]
+    KeepAlive {
+        #[serde(default)]
+        sequence_number: u64,
+    },
     #[serde(rename = "response.failed")]
     ResponseFailed {
         response: ResponseEnvelope,
