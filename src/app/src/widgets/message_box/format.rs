@@ -1,3 +1,4 @@
+use crate::utils::draw_line::DrawLine;
 use crate::utils::draw_table::DrawTable;
 use crate::widgets::message_box::message_box::Msg;
 
@@ -39,15 +40,16 @@ impl MessageFormatter {
             Some((summary, rest)) => self
                 .format_tool_summary(summary)
                 .into_iter()
-                .chain(rest.split('\n').map(str::to_string))
+                .chain(rest.split('\n').map(DrawLine::expand_tabs))
                 .collect(),
             None => self.format_tool_summary(content),
         }
     }
 
     fn format_tool_summary(self, summary: &str) -> Vec<String> {
+        let summary = DrawLine::expand_tabs(summary);
         textwrap::wrap(
-            summary,
+            &summary,
             textwrap::Options::new(self.wrap_width)
                 .initial_indent(TOOL_SUMMARY_PREFIX)
                 .subsequent_indent(TOOL_SUMMARY_CONTINUATION_INDENT),

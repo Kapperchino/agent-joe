@@ -11,6 +11,7 @@ const TABLE_BLOCK_CONTINUATION_MARKER: &str = "<!--__table_block_continue__-->";
 const TABLE_WIDTH_MARKER_PREFIX: &str = "<!--__table_widths__:";
 const HTML_COMMENT_SUFFIX: &str = "-->";
 const CODE_THEME: &str = "base16-eighties.dark";
+const TAB_STOP_WIDTH: usize = 4;
 
 pub struct DrawLine {
     syntax_set: SyntaxSet,
@@ -20,6 +21,7 @@ pub struct DrawLine {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RenderState {
     in_code: bool,
+    fence_marker: Option<char>,
     fence_len: usize,
     code_lang: Option<String>,
 }
@@ -117,7 +119,11 @@ impl SectionSplitter {
     }
 
     fn push_code_line(&mut self, line: &str) {
-        if CodeFence::is_closing(line, self.state.fence_len) {
+        if self
+            .state
+            .fence_marker
+            .is_some_and(|marker| CodeFence::is_closing(line, marker, self.state.fence_len))
+        {
             self.flush_code(true, true);
             self.close_code();
             return;
@@ -187,6 +193,7 @@ impl SectionSplitter {
 
     fn open_code(&mut self, fence: CodeFence) {
         self.state.in_code = true;
+        self.state.fence_marker = Some(fence.marker);
         self.state.fence_len = fence.len;
         self.state.code_lang = fence.lang;
         self.code_started_in_current_batch = true;
@@ -194,6 +201,7 @@ impl SectionSplitter {
 
     fn close_code(&mut self) {
         self.state.in_code = false;
+        self.state.fence_marker = None;
         self.state.fence_len = 0;
         self.code_started_in_current_batch = false;
     }
@@ -249,6 +257,7 @@ impl SectionSplitter {
 }
 
 struct CodeFence {
+    marker: char,
     len: usize,
     lang: Option<String>,
 }
@@ -256,30 +265,36 @@ struct CodeFence {
 impl CodeFence {
     fn opening(line: &str) -> Option<Self> {
         let trimmed = line.trim_start();
-        let len = Self::leading_backticks(trimmed);
+        let marker = trimmed.chars().next()?;
+        if !matches!(marker, '`' | '~') {
+            return None;
+        }
+
+        let len = Self::leading_markers(trimmed, marker);
         if len < 3 {
             return None;
         }
 
         let info = trimmed[len..].trim();
-        if info.contains('`') {
+        if marker == '`' && info.contains('`') {
             return None;
         }
 
         Some(Self {
+            marker,
             len,
             lang: Self::language(info),
         })
     }
 
-    fn is_closing(line: &str, opening_len: usize) -> bool {
+    fn is_closing(line: &str, marker: char, opening_len: usize) -> bool {
         let trimmed = line.trim();
-        let len = Self::leading_backticks(trimmed);
+        let len = Self::leading_markers(trimmed, marker);
         len >= opening_len && trimmed.len() == len
     }
 
-    fn leading_backticks(line: &str) -> usize {
-        line.chars().take_while(|&ch| ch == '`').count()
+    fn leading_markers(line: &str, marker: char) -> usize {
+        line.chars().take_while(|&ch| ch == marker).count()
     }
 
     fn language(info: &str) -> Option<String> {
@@ -330,10 +345,10 @@ impl DrawLine {
     /// Split raw message lines into code blocks and markdown text.
     ///
     /// Code fences are detected line-by-line: an opening fence is any line
-    /// starting with ``` (optionally followed by a language). A closing fence
-    /// is a line consisting of *only* backticks (≥3). This matches CommonMark
-    /// semantics and avoids the old toggle-on-any-backtick bug where
-    /// `` ```rust `` inside a `` ```md `` block would wrongly close it.
+    /// starting with at least three backticks or tildes (optionally followed by
+    /// a language). A closing fence uses the same marker and consists only of
+    /// at least as many markers as the opening fence. This avoids toggling on
+    /// marker-like content inside a code block.
     fn split_sections(lines: &[String], state: RenderState) -> (Vec<Section>, RenderState) {
         SectionSplitter::split(lines, state)
     }
@@ -370,7 +385,11 @@ impl DrawLine {
     fn render_diff_section(lines: &[String]) -> Vec<Line<'static>> {
         lines
             .iter()
-            .map(|line| Line::from(Span::styled(line.clone(), Self::diff_line_style(line))))
+            .map(|line| {
+                let line = Self::expand_tabs(line);
+                let style = Self::diff_line_style(&line);
+                Line::from(Span::styled(line, style))
+            })
             .collect()
     }
 
@@ -379,7 +398,8 @@ impl DrawLine {
         line: &str,
         highlighter: &mut HighlightLines<'_>,
     ) -> Line<'static> {
-        match highlighter.highlight_line(line, &self.syntax_set) {
+        let line = Self::expand_tabs(line);
+        match highlighter.highlight_line(&line, &self.syntax_set) {
             Ok(ranges) => {
                 let spans = ranges
                     .into_iter()
@@ -452,15 +472,136 @@ impl DrawLine {
         if text.trim().is_empty() {
             return text
                 .split('\n')
-                .map(|l| Line::from(l.to_string()))
+                .map(|line| Line::from(Self::expand_tabs(line)))
                 .collect();
         }
         let normalized = Self::normalize_markdown(text);
         let tree = match markdown::to_mdast(&normalized, &Self::markdown_parse_options()) {
             Ok(tree) => tree,
-            Err(_) => return text.lines().map(|l| Line::from(l.to_string())).collect(),
+            Err(_) => {
+                return text
+                    .lines()
+                    .map(|line| Line::from(Self::expand_tabs(line)))
+                    .collect();
+            }
         };
-        Self::render_block(&tree)
+        match &tree {
+            Node::Root(root) => Self::render_root(root, &normalized),
+            _ => Self::render_block(&tree),
+        }
+    }
+
+    fn render_root(root: &markdown::mdast::Root, source: &str) -> Vec<Line<'static>> {
+        let source_lines = source.split('\n').collect::<Vec<_>>();
+        let mut lines = Vec::new();
+
+        for (index, child) in root.children.iter().enumerate() {
+            if Self::is_table_block(child)
+                && index > 0
+                && !Self::is_table_block(&root.children[index - 1])
+            {
+                lines.push(Line::from(""));
+            }
+
+            let rendered = match child {
+                Node::List(list) => Self::render_list(list, Some(&source_lines)),
+                _ => Self::restore_root_indentation(
+                    child,
+                    Self::render_block(child),
+                    &source_lines,
+                ),
+            };
+            lines.extend(rendered);
+
+            if Self::is_table_block(child)
+                && index + 1 < root.children.len()
+                && !Self::is_table_block(&root.children[index + 1])
+            {
+                lines.push(Line::from(""));
+            }
+        }
+
+        lines
+    }
+
+    fn restore_root_indentation(
+        node: &Node,
+        mut rendered: Vec<Line<'static>>,
+        source_lines: &[&str],
+    ) -> Vec<Line<'static>> {
+        let Some(position) = node.position() else {
+            return rendered;
+        };
+        let start = position.start.line.saturating_sub(1);
+        let Some(first_source_line) = source_lines.get(start) else {
+            return rendered;
+        };
+
+        if matches!(node, Node::Paragraph(_)) {
+            let end = if position.end.column == 1 {
+                position.end.line.saturating_sub(1)
+            } else {
+                position.end.line
+            };
+            let source_block = source_lines.get(start..end).unwrap_or_default();
+            if source_block.len() == rendered.len() {
+                for (line, source_line) in rendered.iter_mut().zip(source_block) {
+                    Self::prepend_indent(line, Self::leading_space_count(source_line));
+                }
+                return rendered;
+            }
+        }
+
+        let indent = if matches!(node, Node::Code(_)) {
+            Self::leading_space_count(first_source_line).min(TAB_STOP_WIDTH)
+        } else {
+            Self::leading_space_count(first_source_line)
+        };
+        for line in &mut rendered {
+            Self::prepend_indent(line, indent);
+        }
+        rendered
+    }
+
+    fn prepend_indent(line: &mut Line<'static>, indent: usize) {
+        if indent == 0 || Self::line_plain_text(line).is_empty() {
+            return;
+        }
+        line.spans.insert(0, Span::raw(" ".repeat(indent)));
+    }
+
+    fn leading_space_count(line: &str) -> usize {
+        line.bytes().take_while(|byte| *byte == b' ').count()
+    }
+
+    pub(crate) fn expand_tabs(text: &str) -> String {
+        if !text.contains('\t') {
+            return text.to_string();
+        }
+
+        let mut expanded = String::with_capacity(text.len());
+        let mut column = 0;
+
+        for ch in text.chars() {
+            match ch {
+                '\t' => {
+                    let spaces = TAB_STOP_WIDTH - (column % TAB_STOP_WIDTH);
+                    expanded.push_str(&" ".repeat(spaces));
+                    column += spaces;
+                }
+                '\n' | '\r' => {
+                    expanded.push(ch);
+                    column = 0;
+                }
+                _ => {
+                    let mut buffer = [0; 4];
+                    column += display_width(ch.encode_utf8(&mut buffer));
+                    expanded.push(ch);
+                }
+            }
+        }
+
+        expanded
     }
 
     fn normalize_markdown(text: &str) -> String {
@@ -513,27 +654,28 @@ impl DrawLine {
     }
 
     fn normalize_markdown_line(line: &str) -> String {
+        let line = Self::expand_tabs(line);
         let indent_len = line.bytes().take_while(|b| *b == b' ').count();
         if indent_len > 3 {
-            return line.to_string();
+            return line;
         }
 
         let rest = &line[indent_len..];
         let hash_count = rest.bytes().take_while(|b| *b == b'#').count();
         if !(1..=6).contains(&hash_count) {
-            return line.to_string();
+            return line;
         }
 
         let after_hashes = &rest[hash_count..];
         if after_hashes.is_empty() || after_hashes.starts_with([' ', '\t']) {
-            return line.to_string();
+            return line;
         }
         if !after_hashes
             .chars()
             .next()
             .is_some_and(|ch| ch.is_ascii_digit())
         {
-            return line.to_string();
+            return line;
         }
 
         format!(
@@ -563,10 +705,6 @@ impl DrawLine {
 
     fn markdown_list_marker(line: &str) -> Option<ListMarker<'_>> {
         let indent_len = line.bytes().take_while(|b| *b == b' ').count();
-        if indent_len > 3 {
-            return None;
-        }
-
         let rest = &line[indent_len..];
         let rest_bytes = rest.as_bytes();
         match rest_bytes.first().copied() {
@@ -703,44 +841,7 @@ impl DrawLine {
             }
 
             Node::List(list) => {
-                let mut lines = Vec::new();
-                for (i, child) in list.children.iter().enumerate() {
-                    if let Node::ListItem(item) = child {
-                        let bullet = if list.ordered {
-                            let start = list.start.unwrap_or(1);
-                            format!("{}. ", start + i as u32)
-                        } else {
-                            "• ".to_string()
-                        };
-                        let bullet_style = Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD);
-                        let indent = " ".repeat(bullet.chars().count());
-
-                        let item_lines: Vec<Line> =
-                            item.children.iter().flat_map(Self::render_block).collect();
-                        for (j, line) in item_lines.into_iter().enumerate() {
-                            let mut spans = Vec::new();
-                            if j == 0 {
-                                spans.push(Span::styled(bullet.clone(), bullet_style));
-                            } else if let Some(nested_spans) =
-                                Self::render_loose_nested_list_line(&line, &indent, bullet_style)
-                            {
-                                lines.push(Line::from(nested_spans));
-                                continue;
-                            } else {
-                                spans.push(Span::raw(indent.clone()));
-                            }
-                            spans.extend(
-                                line.spans
-                                    .into_iter()
-                                    .map(|s| Span::styled(s.content.into_owned(), s.style)),
-                            );
-                            lines.push(Line::from(spans));
-                        }
-                    }
-                }
-                lines
+                Self::render_list(list, None)
             }
 
             Node::ThematicBreak(_) => {
@@ -784,6 +885,62 @@ impl DrawLine {
                 }
             }
         }
+    }
+
+    fn render_list(
+        list: &markdown::mdast::List,
+        source_lines: Option<&[&str]>,
+    ) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
+        for (i, child) in list.children.iter().enumerate() {
+            let Node::ListItem(item) = child else {
+                continue;
+            };
+            let bullet = if list.ordered {
+                let start = list.start.unwrap_or(1);
+                format!("{}. ", start + i as u32)
+            } else {
+                "• ".to_string()
+            };
+            let bullet_style = Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD);
+            let indent = " ".repeat(bullet.chars().count());
+            let source_indent = source_lines
+                .and_then(|lines| item.position.as_ref().and_then(|position| {
+                    lines
+                        .get(position.start.line.saturating_sub(1))
+                        .map(|line| Self::leading_space_count(line))
+                }))
+                .unwrap_or_default();
+
+            let item_lines: Vec<Line> =
+                item.children.iter().flat_map(Self::render_block).collect();
+            for (j, line) in item_lines.into_iter().enumerate() {
+                let mut spans = Vec::new();
+                if source_indent > 0 {
+                    spans.push(Span::raw(" ".repeat(source_indent)));
+                }
+                if j == 0 {
+                    spans.push(Span::styled(bullet.clone(), bullet_style));
+                } else if let Some(nested_spans) =
+                    Self::render_loose_nested_list_line(&line, &indent, bullet_style)
+                {
+                    spans.extend(nested_spans);
+                    lines.push(Line::from(spans));
+                    continue;
+                } else {
+                    spans.push(Span::raw(indent.clone()));
+                }
+                spans.extend(
+                    line.spans
+                        .into_iter()
+                        .map(|s| Span::styled(s.content.into_owned(), s.style)),
+                );
+                lines.push(Line::from(spans));
+            }
+        }
+        lines
     }
 
     fn render_loose_nested_list_line(
@@ -953,9 +1110,21 @@ impl DrawLine {
             Node::Text(t) => t.value.clone(),
             Node::InlineCode(c) => c.value.clone(),
             Node::Code(c) => c.value.clone(),
+            Node::Link(link) => format!(
+                "{} ({})",
+                link.children
+                    .iter()
+                    .map(Self::collect_text)
+                    .collect::<String>(),
+                link.url
+            ),
+            Node::Image(image) => format!("[image: {}]", image.alt),
+            Node::InlineMath(math) => math.value.clone(),
+            Node::Break(_) => "\n".to_string(),
             Node::Html(html) if html.value == TABLE_CONTINUATION_MARKER => String::new(),
             Node::Html(html) if html.value == TABLE_BLOCK_CONTINUATION_MARKER => String::new(),
             Node::Html(html) if Self::is_table_width_marker_value(&html.value) => String::new(),
+            Node::Html(html) => html.value.clone(),
             other => other
                 .children()
                 .map(|children| {
@@ -1167,7 +1336,11 @@ impl DrawLine {
     }
 
     fn node_display_width(node: &Node) -> usize {
-        display_width(&Self::collect_text(node))
+        Self::collect_text(node)
+            .split('\n')
+            .map(display_width)
+            .max()
+            .unwrap_or_default()
     }
 
     fn table_row_width_hint(row: &markdown::mdast::TableRow) -> Option<Vec<usize>> {
@@ -1307,6 +1480,29 @@ mod tests {
         let rendered = draw_line.render_lines(&lines);
 
         assert_eq!(rendered[0].spans[0].style.fg, None);
+        assert_eq!(line_text(&rendered[0]), "    parser fallback");
+    }
+
+    #[test]
+    fn preserves_root_indentation_when_rendering_partial_markdown() {
+        let draw_line = DrawLine::new();
+        let lines = vec![
+            "  wrapped list continuation".to_string(),
+            "   - orphaned nested item".to_string(),
+            "- next root item".to_string(),
+        ];
+
+        let rendered = draw_line.render_lines(&lines);
+        let text = rendered.iter().map(line_text).collect::<Vec<_>>();
+
+        assert_eq!(
+            text,
+            vec![
+                "  wrapped list continuation".to_string(),
+                "   • orphaned nested item".to_string(),
+                "• next root item".to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -1407,6 +1603,30 @@ mod tests {
         assert_eq!(
             text,
             vec!["```rust".to_string(), "fn main() {}".to_string()]
+        );
+    }
+
+    #[test]
+    fn renders_tilde_fences_and_requires_matching_closing_marker() {
+        let draw_line = DrawLine::new();
+        let lines = vec![
+            "~~~rust".to_string(),
+            "fn main() {}".to_string(),
+            "```".to_string(),
+            "~~~".to_string(),
+            "after".to_string(),
+        ];
+
+        let rendered = draw_line.render_lines(&lines);
+        let text = rendered.iter().map(line_text).collect::<Vec<_>>();
+
+        assert_eq!(
+            text,
+            vec![
+                "fn main() {}".to_string(),
+                "```".to_string(),
+                "after".to_string(),
+            ]
         );
     }
 
@@ -1521,5 +1741,65 @@ mod tests {
 
         assert!(wrapped[0].starts_with("  - "));
         assert!(wrapped[1].starts_with("    "));
+    }
+
+    #[test]
+    fn wraps_long_table_headers_to_the_viewport_width() {
+        let draw_line = DrawLine::new();
+        let wrapped = DrawTable::wrap_markdown_tables(
+            "| This table header is much too long |\n| --- |\n| value |",
+            12,
+        );
+        let rendered = draw_line.render_lines(&wrapped);
+        let text = rendered.iter().map(line_text).collect::<Vec<_>>();
+        let separator_index = text
+            .iter()
+            .position(|line| !line.is_empty() && line.chars().all(|ch| ch == '─'))
+            .expect("table separator should be rendered");
+
+        assert!(separator_index > 1, "header should wrap: {text:?}");
+        assert!(
+            text.iter().all(|line| display_width(line) <= 12),
+            "rendered table overflowed: {text:?}"
+        );
+    }
+
+    #[test]
+    fn expands_tabs_at_four_column_stops() {
+        assert_eq!(DrawLine::expand_tabs("\talpha"), "    alpha");
+        assert_eq!(DrawLine::expand_tabs("ab\talpha"), "ab  alpha");
+        assert_eq!(DrawLine::expand_tabs("abc\talpha"), "abc alpha");
+    }
+
+    #[test]
+    fn tab_indented_nested_lists_wrap_and_render_consistently() {
+        let draw_line = DrawLine::new();
+        let wrapped = DrawTable::wrap_markdown_tables(
+            "- parent\n\t- child content that wraps onto another line",
+            30,
+        );
+
+        assert!(wrapped.iter().all(|line| !line.contains('\t')));
+        assert!(wrapped[1].starts_with("    - "));
+        assert!(wrapped[2].starts_with("      "));
+
+        let rendered = draw_line.render_lines(&wrapped);
+        let text = rendered.iter().map(line_text).collect::<Vec<_>>();
+        assert_eq!(text[0], "• parent");
+        assert!(text[1].starts_with("  • child content"));
+        assert!(text[2].starts_with("    "));
+    }
+
+    #[test]
+    fn expands_tabs_in_fenced_code_without_wrapping_code_lines() {
+        let draw_line = DrawLine::new();
+        let wrapped = DrawTable::wrap_markdown_tables(
+            "```rust\n\tlet value = 1;\nvalue\t+= 1;\n```",
+            12,
+        );
+        let rendered = draw_line.render_lines(&wrapped);
+        let text = rendered.iter().map(line_text).collect::<Vec<_>>();
+
+        assert_eq!(text, vec!["    let value = 1;", "value   += 1;"]);
     }
 }

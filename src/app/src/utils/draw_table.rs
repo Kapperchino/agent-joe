@@ -15,6 +15,13 @@ enum TableAlignment {
     Center,
     None,
 }
+
+#[derive(Clone, Copy)]
+struct CodeFence {
+    marker: char,
+    len: usize,
+}
+
 impl DrawTable {
     pub(crate) fn mark_table_header_as_continuation(
         line: &str,
@@ -67,8 +74,10 @@ impl DrawTable {
     ) -> Option<Vec<usize>> {
         let alignments = Self::parse_table_alignments(*lines.get(start + 1)?)?;
         let column_count = alignments.len();
-        let header =
-            Self::normalize_table_cells(Self::parse_table_row(*lines.get(start)?)?, column_count);
+        let header = Self::parse_table_row(*lines.get(start)?)?;
+        if header.len() != column_count {
+            return None;
+        }
 
         if let Some(widths) = Self::table_width_hint_from_cells(&header) {
             return Some(Self::normalize_table_width_hint(
@@ -96,7 +105,10 @@ impl DrawTable {
 
         let alignments = Self::parse_table_alignments(lines[1])?;
         let column_count = alignments.len();
-        let header = Self::normalize_table_cells(Self::parse_table_row(lines[0])?, column_count);
+        let header = Self::parse_table_row(lines[0])?;
+        if header.len() != column_count {
+            return None;
+        }
         let width_hint = Self::table_width_hint_from_cells(&header)
             .map(|widths| Self::normalize_table_width_hint(widths, column_count, wrap_width));
 
@@ -286,16 +298,24 @@ impl DrawTable {
     }
 
     pub(crate) fn wrap_markdown_tables(text: &str, wrap_width: usize) -> Vec<String> {
-        let lines: Vec<&str> = text.split('\n').collect();
+        let wrap_width = wrap_width.max(1);
+        let expanded_lines = text
+            .split('\n')
+            .map(DrawLine::expand_tabs)
+            .collect::<Vec<_>>();
+        let lines = expanded_lines
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
         let mut wrapped = Vec::new();
         let mut index = 0;
-        let mut in_code = false;
-        let mut fence_len = 0;
+        let mut code_fence = None;
 
         while index < lines.len() {
             let line = lines[index];
+            let was_in_code = code_fence.is_some();
 
-            if !in_code {
+            if code_fence.is_none() {
                 if let Some((consumed, table_lines)) =
                     Self::wrap_table_block(&lines[index..], wrap_width)
                 {
@@ -305,48 +325,60 @@ impl DrawTable {
                 }
             }
 
-            if Self::is_code_fence(line, in_code.then_some(fence_len)) {
-                let trimmed = line.trim();
-                let backtick_count = trimmed.chars().take_while(|&c| c == '`').count();
-                if in_code {
-                    in_code = false;
-                    fence_len = 0;
-                } else {
-                    in_code = true;
-                    fence_len = backtick_count;
+            if let Some(fence) = code_fence {
+                if Self::is_closing_code_fence(line, fence) {
+                    code_fence = None;
                 }
+            } else {
+                code_fence = Self::opening_code_fence(line);
             }
 
-            wrapped.extend(Self::wrap_plain_line(line, wrap_width, !in_code));
+            if was_in_code || code_fence.is_some() {
+                wrapped.push(line.to_string());
+            } else {
+                wrapped.extend(Self::wrap_plain_line(line, wrap_width, true));
+            }
             index += 1;
         }
 
         wrapped
     }
 
-    fn is_code_fence(line: &str, closing_fence_len: Option<usize>) -> bool {
+    fn opening_code_fence(line: &str) -> Option<CodeFence> {
         let trimmed = line.trim_start();
-        let backtick_count = trimmed.chars().take_while(|&ch| ch == '`').count();
-        if backtick_count < 3 {
-            return false;
+        let marker = trimmed.chars().next()?;
+        if !matches!(marker, '`' | '~') {
+            return None;
         }
 
-        match closing_fence_len {
-            Some(fence_len) => {
-                let fully_trimmed = line.trim();
-                backtick_count >= fence_len && fully_trimmed.len() == backtick_count
-            }
-            None => {
-                let rest = trimmed[backtick_count..].trim();
-                !rest.contains('`')
-            }
+        let len = trimmed.chars().take_while(|&ch| ch == marker).count();
+        if len < 3 {
+            return None;
         }
+
+        let info = trimmed[len..].trim();
+        if marker == '`' && info.contains('`') {
+            return None;
+        }
+
+        Some(CodeFence { marker, len })
+    }
+
+    fn is_closing_code_fence(line: &str, fence: CodeFence) -> bool {
+        let trimmed = line.trim();
+        let len = trimmed
+            .chars()
+            .take_while(|&ch| ch == fence.marker)
+            .count();
+        len >= fence.len && trimmed.len() == len
     }
 
     pub(crate) fn table_block_end(lines: &[&str], start: usize) -> Option<usize> {
         let alignments = Self::parse_table_alignments(*lines.get(start + 1)?)?;
         let column_count = alignments.len();
-        Self::normalize_table_cells(Self::parse_table_row(*lines.get(start)?)?, column_count);
+        if Self::parse_table_row(*lines.get(start)?)?.len() != column_count {
+            return None;
+        }
 
         let mut end = start + 2;
         while end < lines.len() {
@@ -455,11 +487,13 @@ impl DrawTable {
             return None;
         }
 
-        let content = trimmed
-            .strip_prefix('|')
-            .unwrap_or(trimmed)
-            .strip_suffix('|')
-            .unwrap_or(trimmed);
+        let mut content = trimmed;
+        if let Some(stripped) = content.strip_prefix('|') {
+            content = stripped;
+        }
+        if let Some(stripped) = content.strip_suffix('|') {
+            content = stripped;
+        }
 
         let mut cells = Vec::new();
         let mut current = String::new();
@@ -501,24 +535,40 @@ impl DrawTable {
                 Self::normalize_table_width_hint(widths.to_vec(), header.len(), wrap_width)
             })
             .unwrap_or_else(|| Self::table_column_widths(header, body_rows, wrap_width));
+        let is_block_continuation = header
+            .first()
+            .is_some_and(|cell| cell.contains(TABLE_BLOCK_CONTINUATION_MARKER));
+        let wrapped_header = Self::wrap_table_row(header, &widths);
+        let header_height = wrapped_header.iter().map(Vec::len).max().unwrap_or(1);
+        let mut first_header_line = Self::table_row_line(&wrapped_header, 0);
+        if let Some(first_cell) = first_header_line.first_mut() {
+            first_cell.insert_str(0, &Self::format_table_width_marker(&widths));
+            if is_block_continuation {
+                first_cell.insert_str(0, TABLE_BLOCK_CONTINUATION_MARKER);
+            }
+        }
+
         let mut lines = vec![
-            Self::format_table_row(header),
+            Self::format_table_row(&first_header_line),
             Self::format_table_delimiter(alignments, &widths),
         ];
 
+        if !is_block_continuation {
+            for line_index in 1..header_height {
+                let mut continuation_cells = Self::table_row_line(&wrapped_header, line_index);
+                if let Some(first_cell) = continuation_cells.first_mut() {
+                    first_cell.insert_str(0, TABLE_CONTINUATION_MARKER);
+                }
+                lines.push(Self::format_table_row(&continuation_cells));
+            }
+        }
+
         for row in body_rows {
-            let wrapped_cells: Vec<Vec<String>> = row
-                .iter()
-                .zip(widths.iter().copied())
-                .map(|(cell, width)| Self::wrap_table_cell(cell, width))
-                .collect();
+            let wrapped_cells = Self::wrap_table_row(row, &widths);
 
             let row_height = wrapped_cells.iter().map(Vec::len).max().unwrap_or(1);
             for line_index in 0..row_height {
-                let mut continuation_cells = wrapped_cells
-                    .iter()
-                    .map(|cell_lines| cell_lines.get(line_index).cloned().unwrap_or_default())
-                    .collect::<Vec<_>>();
+                let mut continuation_cells = Self::table_row_line(&wrapped_cells, line_index);
                 if line_index > 0 {
                     if let Some(first_cell) = continuation_cells.first_mut() {
                         first_cell.insert_str(0, TABLE_CONTINUATION_MARKER);
@@ -531,6 +581,21 @@ impl DrawTable {
         lines
     }
 
+    fn wrap_table_row(cells: &[String], widths: &[usize]) -> Vec<Vec<String>> {
+        cells
+            .iter()
+            .zip(widths.iter().copied())
+            .map(|(cell, width)| Self::wrap_table_cell(&Self::strip_table_markers(cell), width))
+            .collect()
+    }
+
+    fn table_row_line(wrapped_cells: &[Vec<String>], line_index: usize) -> Vec<String> {
+        wrapped_cells
+            .iter()
+            .map(|cell_lines| cell_lines.get(line_index).cloned().unwrap_or_default())
+            .collect()
+    }
+
     fn wrap_table_cell(cell: &str, width: usize) -> Vec<String> {
         if cell.is_empty() {
             return vec![String::new()];
@@ -540,5 +605,46 @@ impl DrawTable {
             .into_iter()
             .map(|segment| segment.into_owned())
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_rows_without_leading_or_trailing_pipes() {
+        assert_eq!(
+            DrawTable::parse_table_row("left | right"),
+            Some(vec!["left".to_string(), "right".to_string()])
+        );
+    }
+
+    #[test]
+    fn does_not_treat_mismatched_header_and_delimiter_as_a_table() {
+        let markdown = "left | right\n--- | --- | ---\none | two";
+
+        assert_eq!(
+            DrawTable::wrap_markdown_tables(markdown, 80),
+            markdown.lines().map(str::to_string).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn does_not_wrap_table_like_content_inside_tilde_fences() {
+        let markdown = "~~~text\nvery long | table-like content\n--- | ---\n~~~";
+
+        assert_eq!(
+            DrawTable::wrap_markdown_tables(markdown, 10),
+            markdown.lines().map(str::to_string).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn clamps_zero_wrap_width() {
+        let wrapped = DrawTable::wrap_markdown_tables("abc", 0);
+
+        assert!(!wrapped.is_empty());
+        assert!(wrapped.iter().all(|line| display_width(line) <= 1));
     }
 }
