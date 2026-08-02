@@ -11,17 +11,17 @@ analysis = { path = "../analysis" }
 clients = { path = "../clients" }
 common-models = { path = "../common-models" }
 commands = { path = "../commands" }
-ractor_actors = "0.4.9"
-ractor = "0.15"
+ractor_actors = "0.7.0"
+ractor = "0.16.2"
 thiserror = "2.0.18"
 tracing = "0.1.44"
 futures = "0.3.31"
 anyhow = "1.0.102"
 tokio = "1.47.1"
 notify-types = "2.0.0"
-itertools = "0.14.0"
+itertools = "0.15.0"
 flume = "0.12.0"
-ra_ap_vfs = "0.0.311"
+ra_ap_vfs = "0.0.344"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0"
 async-trait = "0.1.89"

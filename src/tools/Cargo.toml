@@ -18,5 +18,5 @@ tokio-stream = { version = "0.1", features = ["fs", "io-util"] }
 async-trait = "0.1.89"
 
 [dev-dependencies]
-ra_ap_ide = "0.0.311"
+ra_ap_ide = "0.0.344"
 triomphe = "0.1.15"

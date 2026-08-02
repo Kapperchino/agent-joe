@@ -14,5 +14,5 @@ futures = "0.3"
 blake3 = "1.8.3"
 uuid = { version = "1.0", features = ["v4", "serde"] }
 dirs = "6.0.0"
-itertools = "0.14.0"
+itertools = "0.15.0"
 fnv = "1.0.7"

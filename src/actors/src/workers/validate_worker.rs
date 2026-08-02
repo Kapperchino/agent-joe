@@ -8,11 +8,13 @@ use ractor::{ActorProcessingErr, ActorRef};
 use std::marker::PhantomData;
 use tools::cargo_check::CargoCheck;
 use tools::cargo_test::CargoTest;
-use tools::tool_defs::{ErasedToolRef, erased_tool};
+use tools::tool_defs::{erased_tool, ErasedToolRef};
 
 pub struct ValidateWorker<C: Context> {
     _ctx: PhantomData<C>,
 }
+
+const PROMPT: &str = include_str!("resources/validate_worker.md");
 
 #[async_trait]
 impl Worker for ValidateWorker<RustEmptyContext> {
@@ -20,18 +22,7 @@ impl Worker for ValidateWorker<RustEmptyContext> {
 
     fn init_prompt(added: Option<&str>) -> String {
         let question = added.unwrap_or_default();
-        format!(
-            "You are a Rust validation agent. Your only responsibility is to determine whether the workspace is good to go for the supplied context.
-
-Use validation tools, not speculation:
-- Start with `cargo_check` for compilation errors; include warnings when they are relevant to the request or failure.
-- Run `cargo_test` when tests are requested, affected behavior has test coverage, or compilation alone is not enough.
-- Prefer targeted tests by package or test name when the context identifies them; otherwise run the broader test command that best fits the risk.
-
-Do not edit files. Report the exact validation commands/tools used, whether they passed or failed, and the most relevant errors or failing tests. If you cannot validate something with the available tools, say so directly.
-
-{question}"
-        )
+        format!("{PROMPT}\n\n{question}")
     }
 
     async fn startup_hook(

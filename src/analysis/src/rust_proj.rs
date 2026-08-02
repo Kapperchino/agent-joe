@@ -46,6 +46,8 @@ impl RustProject {
             load_out_dirs_from_check: false,
             with_proc_macro_server: ProcMacroServerChoice::Sysroot,
             prefill_caches: false,
+            num_worker_threads: 1,
+            proc_macro_processes: 1,
         };
 
         let (db, vfs, _proc_macro_client) =

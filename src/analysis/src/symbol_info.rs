@@ -18,6 +18,7 @@ enum SymbolKindDef {
     BuiltinAttr,
     Const,
     ConstParam,
+    CrateRoot,
     Derive,
     DeriveHelper,
     Enum,
@@ -86,7 +87,7 @@ impl SymbolInfo {
             name: n.name.to_string(),
             kind: n.kind.unwrap(),
             container_name: n.container_name.map(|s| s.to_string()),
-            docs: n.docs.map(|d| d.as_str().to_string()),
+            docs: None,
             description: n.description,
         })
     }

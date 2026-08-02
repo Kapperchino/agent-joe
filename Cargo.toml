@@ -17,7 +17,7 @@ clients = { path = "src/clients" }
 common-models = { path = "src/common-models" }
 tokio = { version = "1.0", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["fs", "io-util"] }
-ractor = "0.15"
+ractor = "0.16.2"
 mimalloc = "0.1.52"
 color-eyre = "0.6.5"
 ratatui = "0.30.0-beta.0"

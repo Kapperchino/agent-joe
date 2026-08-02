@@ -6,12 +6,12 @@ edition = "2024"
 [dependencies]
 utils = { path = "../utils" }
 anyhow = "1.0.99"
-ra_ap_ide = "0.0.311"
-ra_ap_load-cargo = "0.0.311"
-ra_ap_project_model = "0.0.311"
-ra_ap_ide_db = "0.0.311"
-ra_ap_vfs = "0.0.311"
-itertools = "0.14.0"
+ra_ap_ide = "0.0.344"
+ra_ap_load-cargo = "0.0.344"
+ra_ap_project_model = "0.0.344"
+ra_ap_ide_db = "0.0.344"
+ra_ap_vfs = "0.0.344"
+itertools = "0.15.0"
 dashmap = "6.1.0"
 tracing = "0.1.44"
 serde = { version = "1.0", features = ["derive"] }

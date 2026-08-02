@@ -1,7 +1,6 @@
 use nucleo::pattern::{CaseMatching, Normalization};
 use nucleo::{Config, Nucleo};
 use std::sync::Arc;
-use strum::VariantNames;
 use strum_macros::{EnumMessage, EnumString, VariantNames};
 
 pub struct CommandContext {
@@ -55,6 +54,7 @@ impl CommandContext {
 
 impl Command {
     pub fn print_all() -> Vec<String> {
+        use strum::VariantNames;
         Command::VARIANTS
             .into_iter()
             .map(|x: &&str| x.to_string())

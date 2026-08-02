@@ -22,7 +22,7 @@ ratatui = "0.30.0"
 tokio = "1.50.0"
 anyhow = "1.0.102"
 textwrap = "0.16.2"
-ractor = "0.15.10"
+ractor = "0.16.2"
 flume = { version = "0.12.0", default-features = false, features = ["select","async"] }
 throbber-widgets-tui = "0.11"
 url = "2"
