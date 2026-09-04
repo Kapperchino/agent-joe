@@ -10,11 +10,9 @@ use clients::llm::{ContentBlock, LLmClient, Message, Role};
 use common_models::tui_models::State;
 use futures::future;
 use ractor::{ActorCell, ActorId, ActorRef, RpcReplyPort};
-use serde_json::{Map, Value};
-use std::collections::HashMap;
 use std::path::PathBuf;
 use tools::tool_defs::{ErasedToolRef, ToolDefinition, ToolInvocation, ToolResult};
-use tracing::{error, warn};
+use tracing::warn;
 use utils::utils::FnvHashMap;
 
 pub struct ActorState<C: Context> {
@@ -38,7 +36,7 @@ impl<C: Context + Clone> ActorState<C> {
         file_actor: Option<ActorRef<file_actor::Message>>,
     ) -> anyhow::Result<Self> {
         let dep_clone = dependency.clone();
-        let cur_context_str = dependency.context.get_ctx().await;
+        let history = Self::initial_history(&dependency.context).await;
 
         let stream_log_path = if dependency.debug_mode {
             let path = PathBuf::from(format!(
@@ -67,7 +65,7 @@ impl<C: Context + Clone> ActorState<C> {
 
         Ok(Self {
             cur_context: context,
-            history: vec![Message::new(cur_context_str)],
+            history,
             llm: dependency.client,
             tools: dependency
                 .tools
@@ -92,76 +90,74 @@ impl<C: Context + Clone> ActorState<C> {
         })
     }
 
-    pub fn save_history(&mut self, vec: Vec<anyhow::Result<StreamRes>>) -> anyhow::Result<()> {
-        vec.into_iter().try_for_each(|res| match res {
-            Ok(stream_res) => match stream_res {
-                StreamRes::String(str) => {
-                    self.history.push(Message::new_assistant(str));
-                    Ok(())
-                }
-                StreamRes::Thinking {
-                    thinking,
-                    signature,
-                    reasoning_id,
-                } => {
-                    self.history.push(Message {
-                        role: Role::Assistant,
-                        content: vec![ContentBlock::ThinkingBlock {
-                            thinking,
-                            signature,
-                            reasoning_id,
-                        }],
-                    });
-                    Ok(())
-                }
-                StreamRes::Tool(tool_res) => {
-                    let tool = self.find_tool(&tool_res.name())?;
-                    match &tool_res {
+    async fn initial_history(context: &C) -> Vec<Message> {
+        let mut history = vec![Message::new(context.get_ctx().await)];
+        if let Some(task) = context.initial_task() {
+            history.push(Message::new(task.to_owned()));
+        }
+        history
+    }
+
+    pub fn build_request(&self) -> clients::llm::ClientRequest {
+        clients::llm::ClientRequest::new(self.history.clone())
+            .with_system(self.cur_context.instructions().to_owned())
+            .with_tools(self.tool_definitions())
+            .with_thinking()
+    }
+
+    pub async fn clear_history(&mut self) {
+        self.cur_context.clear_task_context();
+        self.history = Self::initial_history(&self.cur_context).await;
+    }
+
+    pub fn save_history(&mut self, results: Vec<anyhow::Result<StreamRes>>) -> anyhow::Result<()> {
+        let results = results.into_iter().collect::<anyhow::Result<Vec<_>>>()?;
+        let mut assistant = Vec::new();
+        let mut outputs = Vec::new();
+        for result in results {
+            match result {
+                StreamRes::Content(content) => assistant.push(content),
+                StreamRes::Tool(result) => {
+                    let (id, name, input) = match &result {
                         ToolResult::Success {
                             id,
                             invocation,
                             content,
                         } => {
-                            tool.add_context(&invocation.input, &mut self.cur_context, &content)?;
-                            self.history.push(Message {
-                                role: Role::Assistant,
-                                content: vec![ContentBlock::ToolBlock {
-                                    tool_id: id.clone(),
-                                    name: invocation.name.clone(),
-                                    input: tool.input_req_erased(&invocation.input)?,
-                                }],
-                            });
+                            self.find_tool(&invocation.name)?.add_context(
+                                &invocation.input,
+                                &mut self.cur_context,
+                                content,
+                            )?;
+                            (id, &invocation.name, &invocation.input)
                         }
                         ToolResult::Failure {
-                            id,
-                            msg,
-                            name,
-                            input,
-                        } => {
-                            let input_map = serde_json::from_value(input.clone())?;
-                            self.history.push(Message {
-                                role: Role::Assistant,
-                                content: vec![ContentBlock::ToolBlock {
-                                    tool_id: id.clone(),
-                                    name: name.clone(),
-                                    input: input_map,
-                                }],
-                            });
-                        }
-                    }
-
-                    self.history.push(Message {
-                        role: Role::User,
-                        content: vec![Self::tool_res_to_json(&tool_res)],
+                            id, name, input, ..
+                        } => (id, name, input),
+                    };
+                    assistant.push(ContentBlock::ToolBlock {
+                        tool_id: id.clone(),
+                        name: name.clone(),
+                        input: input.clone(),
                     });
-                    Ok(())
+                    outputs.push(Self::tool_res_to_json(&result));
                 }
-            },
-            Err(err) => {
-                error!("{:?}", err);
-                Err(err)
             }
-        })?;
+        }
+        // Keep the provider's entire assistant response in order, then return
+        // every tool result together (also required by Claude's message format).
+        if !assistant.is_empty() {
+            self.history.push(Message {
+                role: Role::Assistant,
+                content: assistant,
+            });
+        }
+        if !outputs.is_empty() {
+            self.history.push(Message {
+                role: Role::User,
+                content: outputs,
+            });
+        }
         Ok(())
     }
 
@@ -241,65 +237,37 @@ impl<C: Context + Clone> ActorState<C> {
 
     pub async fn process_tools(
         &self,
-        vec: Vec<PreprocessedStreamItem>,
+        items: Vec<PreprocessedStreamItem>,
     ) -> Vec<anyhow::Result<StreamRes>> {
-        let futures: Vec<_> = vec
-            .into_iter()
-            .map(async |item| match item.processed {
-                ProcessedItem::String(str) => Ok(StreamRes::String(str.clone())),
-                ProcessedItem::Tool(tool) => {
-                    let tool_res = match self.tool_use(tool.clone()).await {
-                        Ok(res) => { res }
-                        Err(err) =>
-                            {
-                                if self.debug_mode {
-                                    let tool_name = tool.name.as_str();
-                                    let id = &tool.id;
-                                    warn!(tool_name = %tool_name, tool_id = ?id, error = ?err, "tool error");
-                                }
-                                warn!("{:?}", err.to_string());
-                                ToolResult::error(tool.id.clone(), tool.name.clone(),tool.input_value()? ,err.to_string())
-                            }
-                    };
-                    Ok(StreamRes::Tool(tool_res))
-                }
-                ProcessedItem::Thinking {
-                    thinking,
-                    signature,
-                    reasoning_id,
-                } => Ok(StreamRes::Thinking {
-                    thinking: thinking.clone(),
-                    signature: signature.clone(),
-                    reasoning_id: reasoning_id.clone(),
-                }),
-            })
-            .collect();
-
-        future::join_all(futures).await
+        future::join_all(items.into_iter().map(async |item| match item.processed {
+            ProcessedItem::Content(content) => Ok(StreamRes::Content(content)),
+            ProcessedItem::Tool(tool) => {
+                let result = match self.tool_use(tool.clone()).await {
+                    Ok(result) => result,
+                    Err(err) => ToolResult::error(
+                        tool.id,
+                        tool.name,
+                        serde_json::from_str(&tool.json)?,
+                        err.to_string(),
+                    ),
+                };
+                Ok(StreamRes::Tool(result))
+            }
+        }))
+        .await
     }
 
     pub async fn stream_items_to_res(
         &self,
-        vec: Vec<PreprocessedStreamItem>,
+        items: Vec<PreprocessedStreamItem>,
     ) -> Vec<anyhow::Result<StreamRes>> {
-        let futures: Vec<_> = vec
+        items
             .into_iter()
-            .map(async |item| match item.processed {
-                ProcessedItem::String(str) => Ok(StreamRes::String(str.clone())),
-                ProcessedItem::Thinking {
-                    thinking,
-                    signature,
-                    reasoning_id,
-                } => Ok(StreamRes::Thinking {
-                    thinking: thinking.clone(),
-                    signature: signature.clone(),
-                    reasoning_id: reasoning_id.clone(),
-                }),
-                _ => Err(anyhow!("Tool cannot exist for this")),
+            .map(|item| match item.processed {
+                ProcessedItem::Content(content) => Ok(StreamRes::Content(content)),
+                ProcessedItem::Tool(_) => Err(anyhow!("Unexpected tool in a completed response")),
             })
-            .collect();
-
-        future::join_all(futures).await
+            .collect()
     }
 
     pub fn change_state(&mut self, new_state: State) {

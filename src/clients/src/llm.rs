@@ -5,11 +5,10 @@ use crate::{ClaudeEffort, OpenAIEffort};
 use futures::Stream;
 use futures::future::Either;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use serde_json::Value;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use tools::tool_defs::{ToolDefinition, ToolId};
-use utils::utils::FnvHashMap;
 
 pub trait LLmClientTrait {
     async fn chat_stream(
@@ -119,6 +118,10 @@ pub enum StreamEvent {
         // openai specific
         id: Option<String>,
     },
+    ContentBlockComplete {
+        index: usize,
+        content: ContentBlock,
+    },
     MessageDelta {
         delta: MessageDeltaContent,
         usage: UsageDelta,
@@ -183,6 +186,11 @@ pub struct ClientRequest {
 }
 
 impl ClientRequest {
+    pub fn with_system(mut self, instructions: String) -> Self {
+        self.system = Some(instructions);
+        self
+    }
+
     pub fn new(messages: Vec<Message>) -> ClientRequest {
         ClientRequest {
             messages,
@@ -260,7 +268,7 @@ pub enum ContentBlockInfo {
     ToolUse {
         id: ToolId,
         name: String,
-        input: HashMap<String, String>,
+        input: Value,
     },
     Thinking {
         thinking: String,
@@ -270,20 +278,23 @@ pub enum ContentBlockInfo {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ContentBlock {
     MessageBlock {
         text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        phase: Option<String>,
     },
     ThinkingBlock {
         thinking: String,
         signature: String,
         reasoning_id: Option<String>,
     },
+    OpenAIReasoning(crate::openai::ReasoningItem),
     ToolBlock {
         tool_id: ToolId,
         name: String,
-        input: FnvHashMap<String, String>,
+        input: Value,
     },
     ToolResult {
         tool_id: ToolId,
@@ -308,7 +319,7 @@ impl Display for Message {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         for block in &self.content {
             match block {
-                ContentBlock::MessageBlock { text } => {
+                ContentBlock::MessageBlock { text, .. } => {
                     writeln!(f, "{text}")?;
                 }
                 ContentBlock::ThinkingBlock {
@@ -328,10 +339,12 @@ impl Display for Message {
                     input,
                 } => {
                     writeln!(f, "[tool:{}:{}]", name, tool_id.id)?;
-                    let mut entries: Vec<_> = input.iter().collect();
-                    entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-                    for (key, value) in entries {
-                        writeln!(f, "{key}: {value}")?;
+                    writeln!(f, "{input}")?;
+                }
+                ContentBlock::OpenAIReasoning(item) => {
+                    writeln!(f, "[thinking:{}]", item.id)?;
+                    for part in &item.summary {
+                        writeln!(f, "{}", part.text)?;
                     }
                 }
                 ContentBlock::ToolResult {
@@ -353,17 +366,34 @@ impl Display for Message {
 }
 
 impl Message {
+    pub fn text(&self) -> String {
+        self.content
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::MessageBlock { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     pub fn new(message: String) -> Self {
         Message {
             role: Role::User,
-            content: vec![(ContentBlock::MessageBlock { text: message })],
+            content: vec![ContentBlock::MessageBlock {
+                text: message,
+                phase: None,
+            }],
         }
     }
 
     pub fn new_assistant(message: String) -> Self {
         Message {
             role: Role::Assistant,
-            content: vec![(ContentBlock::MessageBlock { text: message })],
+            content: vec![ContentBlock::MessageBlock {
+                text: message,
+                phase: None,
+            }],
         }
     }
 }

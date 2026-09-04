@@ -286,6 +286,7 @@ impl InitApp {
         }
 
         let config = Config::OpenAI(OpenAIConfig {
+            request_encrypted_reasoning: None,
             auth: OpenAIAuthConfig::APIKey(OpenAIKeyConfig {
                 api_key: api_key.to_string(),
                 url: None,
@@ -312,6 +313,7 @@ impl InitApp {
 
         let api_key = self.api_key.trim();
         let config = Config::OpenAI(OpenAIConfig {
+            request_encrypted_reasoning: None,
             auth: OpenAIAuthConfig::Local(LocalOpenAIConfig {
                 api_key: (!api_key.is_empty()).then(|| api_key.to_string()),
                 url: url.to_string(),
@@ -343,6 +345,7 @@ impl InitApp {
         }
 
         let config = Config::OpenAI(OpenAIConfig {
+            request_encrypted_reasoning: None,
             auth: OpenAIAuthConfig::OpenRouter(OpenRouterConfig {
                 api_key: api_key.to_string(),
                 url: Some(url.to_string()),
@@ -435,6 +438,7 @@ impl InitApp {
         }
 
         Ok(Config::OpenAI(OpenAIConfig {
+            request_encrypted_reasoning: None,
             auth: OpenAIAuthConfig::Codex(auth),
             model: model.to_string(),
             effort: OpenAIEffort::Medium,

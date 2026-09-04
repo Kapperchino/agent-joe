@@ -151,7 +151,7 @@ pub enum ContentBlock {
     ToolBlock {
         id: String,
         name: String,
-        input: HashMap<String, String>,
+        input: serde_json::Value,
     },
     #[serde(rename = "tool_result")]
     ToolResult {
@@ -165,7 +165,7 @@ pub enum ContentBlock {
         id: String,
         name: String,
         #[serde(default)]
-        input: HashMap<String, String>,
+        input: serde_json::Value,
     },
     #[serde(rename = "web_search_tool_result")]
     WebSearchToolResult {
@@ -230,7 +230,7 @@ pub enum ContentBlockInfo {
     ToolUse {
         id: String,
         name: String,
-        input: HashMap<String, String>,
+        input: serde_json::Value,
     },
     #[serde(rename = "thinking")]
     Thinking { thinking: String },
@@ -241,7 +241,7 @@ pub enum ContentBlockInfo {
         id: String,
         name: String,
         #[serde(default)]
-        input: HashMap<String, String>,
+        input: serde_json::Value,
     },
     #[serde(rename = "web_search_tool_result")]
     WebSearchToolResult {
@@ -523,7 +523,7 @@ impl LLmClientTrait for ClaudeClient {
         &self,
         req: llm::ClientRequest,
     ) -> Result<impl Stream<Item = anyhow::Result<llm::StreamEvent>> + Send + 'static, Error> {
-        let mut claude_req: ClientRequest = req.into();
+        let mut claude_req: ClientRequest = req.try_into()?;
         claude_req.effort = Some(self.config.effort.clone());
         let stream = self.chat_stream_claude(claude_req).await?;
         Ok(stream.map(|res| match res {
@@ -533,7 +533,7 @@ impl LLmClientTrait for ClaudeClient {
     }
 
     async fn send_request(&self, request: llm::ClientRequest) -> anyhow::Result<ClientResponse> {
-        let claude_req: ClientRequest = request.into();
+        let claude_req: ClientRequest = request.try_into()?;
         match self.chat(claude_req).await {
             Ok(res) => Ok(res.into()),
             Err(e) => Err(anyhow!(e)),

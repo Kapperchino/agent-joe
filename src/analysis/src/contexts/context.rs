@@ -6,6 +6,13 @@ use std::path::PathBuf;
 pub trait Context: Send + Sync {
     type LineIndexCreator: LineIndexCreator;
     async fn get_ctx(&self) -> String;
+    fn instructions(&self) -> &str {
+        ""
+    }
+    fn initial_task(&self) -> Option<&str> {
+        None
+    }
+    fn clear_task_context(&mut self) {}
     fn get_root(&self) -> PathBuf;
     async fn get_files(&self) -> anyhow::Result<Vec<PathBuf>>;
     async fn line_index_creator(&self) -> anyhow::Result<Box<Self::LineIndexCreator>>;

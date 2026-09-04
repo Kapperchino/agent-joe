@@ -3,11 +3,10 @@ use crate::event_reporter::EventReporter;
 use crate::tool_call::ToolCall;
 use anyhow::anyhow;
 use clients::llm::{ContentBlockInfo, Delta, StopReason, StreamEvent};
-use common_models::tui_models::{ActorToTui, ActorToTuiPacket, State, TokenCount};
+use common_models::tui_models::{ActorToTuiPacket, State, TokenCount};
 use std::path::PathBuf;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
-use tools::tool_defs::ToolId;
 use tracing::error;
 
 pub struct StreamProcessor {
@@ -28,21 +27,6 @@ pub enum StreamNextStep {
     NewStream,
 }
 
-#[derive(Debug, Clone)]
-pub enum StreamAccu {
-    String(String),
-    Json(String),
-    Thinking {
-        thinking: String,
-        signature: String,
-        reasoning_id: Option<String>,
-    },
-    Tool {
-        id: ToolId,
-        name: String,
-    },
-}
-
 #[derive(Debug)]
 pub struct PreprocessedStreamItem {
     pub index: usize,
@@ -50,12 +34,7 @@ pub struct PreprocessedStreamItem {
 }
 #[derive(Debug, Clone)]
 pub enum ProcessedItem {
-    String(String),
-    Thinking {
-        thinking: String,
-        signature: String,
-        reasoning_id: Option<String>,
-    },
+    Content(clients::llm::ContentBlock),
     Tool(ToolCall),
 }
 
@@ -92,7 +71,8 @@ impl StreamProcessor {
             StreamEvent::ContentBlockDelta { index, delta } => {
                 self.batches
                     .last_mut()
-                    .map(|batch| batch.accum(&index, delta));
+                    .ok_or_else(|| anyhow!("Delta without a response"))?
+                    .accum(&index, delta)?;
                 Ok(StreamNextStep::Accum)
             }
             StreamEvent::ContentBlockStart {
@@ -107,14 +87,19 @@ impl StreamProcessor {
             StreamEvent::ContentBlockStop { index, id } => {
                 self.batches
                     .last_mut()
-                    .map(|batch| batch.apply_reduce(&index, id));
+                    .ok_or_else(|| anyhow!("Content stop without a response"))?
+                    .apply_reduce(&index, id)?;
+                Ok(StreamNextStep::Accum)
+            }
+            StreamEvent::ContentBlockComplete { index, content } => {
+                self.batches
+                    .last_mut()
+                    .ok_or_else(|| anyhow!("Completed item without a response"))?
+                    .complete_item(index, content);
                 Ok(StreamNextStep::Accum)
             }
             StreamEvent::MessageStop {} => Ok(StreamNextStep::Noop),
-            StreamEvent::Error { error } => {
-                error!("{:?}", error);
-                Ok(StreamNextStep::Noop)
-            }
+            StreamEvent::Error { error } => Err(anyhow!("{}: {}", error.error_type, error.message)),
             StreamEvent::MessageDelta { delta, usage } => {
                 if let Some(batch) = self.batches.last()
                     && let Some(reason) = delta.stop_reason
@@ -169,6 +154,13 @@ impl StreamProcessor {
                 let _ = self
                     .reporter
                     .send(ActorToTuiPacket::TokensUpdated(self.token_count.clone()));
+            }
+            StreamEvent::ContentBlockComplete { content, .. } => {
+                self.change_state(match content {
+                    clients::llm::ContentBlock::OpenAIReasoning(_) => State::ThinkingStop,
+                    clients::llm::ContentBlock::ToolBlock { .. } => State::ToolStop,
+                    _ => State::MessageStop,
+                });
             }
             StreamEvent::MessageStop => self.change_state(State::StreamStop),
             StreamEvent::Ping => {}

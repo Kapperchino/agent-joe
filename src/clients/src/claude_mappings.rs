@@ -19,10 +19,15 @@ impl From<llm::Role> for claude::Role {
     }
 }
 
-impl From<llm::ContentBlock> for ContentBlock {
-    fn from(value: llm::ContentBlock) -> Self {
-        match value {
-            llm::ContentBlock::MessageBlock { text } => ContentBlock::MessageBlock { text },
+impl TryFrom<llm::ContentBlock> for ContentBlock {
+    type Error = anyhow::Error;
+
+    fn try_from(value: llm::ContentBlock) -> anyhow::Result<Self> {
+        Ok(match value {
+            llm::ContentBlock::MessageBlock { text, .. } => ContentBlock::MessageBlock { text },
+            llm::ContentBlock::OpenAIReasoning(_) => anyhow::bail!(
+                "This history contains OpenAI reasoning state; start a new conversation before using Claude"
+            ),
             llm::ContentBlock::ThinkingBlock {
                 thinking,
                 signature,
@@ -38,7 +43,7 @@ impl From<llm::ContentBlock> for ContentBlock {
             } => ContentBlock::ToolBlock {
                 id: tool_id.id,
                 name,
-                input: input.into_iter().collect(),
+                input,
             },
             llm::ContentBlock::ToolResult {
                 tool_id,
@@ -49,16 +54,22 @@ impl From<llm::ContentBlock> for ContentBlock {
                 content,
                 is_error,
             },
-        }
+        })
     }
 }
 
-impl From<llm::Message> for Message {
-    fn from(value: llm::Message) -> Self {
-        Message {
+impl TryFrom<llm::Message> for Message {
+    type Error = anyhow::Error;
+
+    fn try_from(value: llm::Message) -> anyhow::Result<Self> {
+        Ok(Message {
             role: value.role.into(),
-            content: value.content.into_iter().map(|c| c.into()).collect(),
-        }
+            content: value
+                .content
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<anyhow::Result<_>>()?,
+        })
     }
 }
 
@@ -93,12 +104,18 @@ impl From<&tool_defs::ToolDefinition> for Tool {
     }
 }
 
-impl From<llm::ClientRequest> for ClientRequest {
-    fn from(value: llm::ClientRequest) -> Self {
+impl TryFrom<llm::ClientRequest> for ClientRequest {
+    type Error = anyhow::Error;
+
+    fn try_from(value: llm::ClientRequest) -> anyhow::Result<Self> {
         let tools: Vec<Tool> = value.tools.iter().map(|t| t.into()).collect();
 
-        ClientRequest {
-            messages: value.messages.into_iter().map(|m| m.into()).collect(),
+        Ok(ClientRequest {
+            messages: value
+                .messages
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<anyhow::Result<_>>()?,
             thinking: value.thinking,
             system: value.system,
             model: value.model,
@@ -108,7 +125,7 @@ impl From<llm::ClientRequest> for ClientRequest {
                 ttl: "5m".to_string(),
             },
             effort: None,
-        }
+        })
     }
 }
 
@@ -217,7 +234,9 @@ impl From<Role> for llm::Role {
 
 fn content_block_to_llm(value: ContentBlock) -> Option<llm::ContentBlock> {
     match value {
-        ContentBlock::MessageBlock { text } => Some(llm::ContentBlock::MessageBlock { text }),
+        ContentBlock::MessageBlock { text } => {
+            Some(llm::ContentBlock::MessageBlock { text, phase: None })
+        }
         ContentBlock::ThinkingBlock {
             thinking,
             signature,
@@ -229,7 +248,7 @@ fn content_block_to_llm(value: ContentBlock) -> Option<llm::ContentBlock> {
         ContentBlock::ToolBlock { id, name, input } => Some(llm::ContentBlock::ToolBlock {
             tool_id: ToolId { call_id: None, id },
             name,
-            input: input.into_iter().collect(),
+            input,
         }),
         ContentBlock::ToolResult {
             tool_use_id,

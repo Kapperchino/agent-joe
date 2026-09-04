@@ -3,7 +3,7 @@ use crate::stream_processor::{PreprocessedStreamItem, ProcessedItem, StreamNextS
 use crate::worker::{Worker, WorkerAdapter};
 use analysis::contexts::context::Context;
 use clients::llm;
-use clients::llm::{ClientRequest, LLmClient, StreamEvent};
+use clients::llm::{LLmClient, StreamEvent};
 use commands::command::Command;
 use common_models::tui_models::State;
 use common_models::tui_models::{ActorToTui, ActorToTuiPacket};
@@ -14,10 +14,7 @@ use ractor::ActorRef;
 use ractor::SupervisionEvent;
 use ractor::{Actor, ActorId, RpcReplyPort};
 use ractor_actors::streams::spawn_stream_pump;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use thiserror::Error;
-use tokio::sync::mpsc;
 use tools::tool_defs::{ErasedToolRef, ToolResult};
 use tracing::error;
 
@@ -91,12 +88,7 @@ impl Message {}
 
 #[derive(Debug)]
 pub enum StreamRes {
-    String(String),
-    Thinking {
-        thinking: String,
-        signature: String,
-        reasoning_id: Option<String>,
-    },
+    Content(llm::ContentBlock),
     Tool(ToolResult),
 }
 
@@ -125,9 +117,7 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
                 prompt.map(|p| {
                     state.history.push(llm::Message::new(p));
                 });
-                let req = ClientRequest::new(state.history.clone())
-                    .with_tools(state.tool_definitions())
-                    .with_thinking();
+                let req = state.build_request();
 
                 let stream = state.llm.chat_stream(req).await?;
 
@@ -157,7 +147,7 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
                         id.clone(),
                         match state.history.last() {
                             None => "".to_string(),
-                            Some(msg) => msg.to_string(),
+                            Some(msg) => msg.text(),
                         },
                     ))
                 })?;
@@ -254,7 +244,7 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
                 state.change_state(State::Ready);
             }
             Message::Clear => {
-                state.history.clear();
+                state.clear_history().await;
                 state.stream_processor.clear();
                 state.stream_actor.as_ref().map(|cell| cell.stop(None));
                 state.stream_actor = None;

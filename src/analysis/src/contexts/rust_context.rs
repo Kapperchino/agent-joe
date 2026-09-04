@@ -41,9 +41,21 @@ impl Context for RustContext {
     async fn get_ctx(&self) -> String {
         let dir = self.cur_dir.to_str().unwrap_or("");
         let analytical_ctx = self.get_analytical_context().await.unwrap_or_default();
-        let init_prompt = self.initial_prompt.as_str();
         let stacked_prompt = self.stacked_context.join("\n");
-        format!("{init_prompt} \n project_root: {dir}\n{analytical_ctx}\n{stacked_prompt}")
+        format!("project_root: {dir}\n{analytical_ctx}\n{stacked_prompt}")
+    }
+
+    fn instructions(&self) -> &str {
+        &self.initial_prompt
+    }
+
+    fn initial_task(&self) -> Option<&str> {
+        self.task_prompt.as_deref()
+    }
+
+    fn clear_task_context(&mut self) {
+        self.task_prompt = None;
+        self.stacked_context.clear();
     }
 
     fn get_root(&self) -> PathBuf {
@@ -81,6 +93,7 @@ pub struct RustContext {
     pub rust_proj: RustProject,
     pub symbol_cache: TypedCache<SymbolInfo, SymbolInfo>,
     pub initial_prompt: String,
+    pub task_prompt: Option<String>,
     pub stacked_context: Vec<String>,
     pub id_gen: Arc<AtomicU64>,
 }
@@ -103,6 +116,7 @@ impl RustContext {
         Ok(RustContext {
             cur_dir: current_dir,
             initial_prompt,
+            task_prompt: None,
             rust_proj: proj,
             symbol_cache: cache,
             stacked_context: Vec::new(),

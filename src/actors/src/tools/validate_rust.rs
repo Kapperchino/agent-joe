@@ -28,7 +28,8 @@ impl ToolTrait<RustEmptyContext, ActorContext<RustEmptyContext>> for ValidateRus
         }?;
 
         let mut cur_context = cur_context.clone();
-        cur_context.inner.initial_prompt = ValidateWorker::init_prompt(Some(&input.context));
+        cur_context.inner.initial_prompt = ValidateWorker::init_prompt(None);
+        cur_context.inner.task_prompt = Some(input.context.clone());
         cur_context.stack_context = false;
 
         let (joe, actor_handle) = Actor::spawn_linked(

@@ -11,9 +11,23 @@ pub struct OpenAIConfig {
     pub auth: OpenAIAuthConfig,
     pub model: String,
     pub effort: OpenAIEffort,
+    /// Override for compatible servers; only the public OpenAI route opts in by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_encrypted_reasoning: Option<bool>,
 }
 
 impl OpenAIConfig {
+    pub fn reasoning_include(&self) -> Vec<String> {
+        if self
+            .request_encrypted_reasoning
+            .unwrap_or_else(|| self.get_url().trim_end_matches('/') == CHATGPT_BASE_URL)
+        {
+            vec!["reasoning.encrypted_content".to_owned()]
+        } else {
+            vec![]
+        }
+    }
+
     pub fn get_url(&self) -> String {
         match &self.auth {
             OpenAIAuthConfig::APIKey(conf) => {

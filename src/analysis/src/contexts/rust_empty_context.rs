@@ -36,13 +36,27 @@ impl Context for RustEmptyContext {
             .unwrap_or_default()
             .values()
             .join("\n");
-        let init_prompt = self.inner.initial_prompt.clone();
         let stacked_prompt = if self.stack_context {
             self.inner.stacked_context.join("\n")
         } else {
             "".to_owned()
         };
-        format!("{init_prompt}\n{files}\n{stacked_prompt}")
+        format!(
+            "project_root: {}\n{files}\n{stacked_prompt}",
+            self.inner.cur_dir.display()
+        )
+    }
+
+    fn instructions(&self) -> &str {
+        self.inner.instructions()
+    }
+
+    fn initial_task(&self) -> Option<&str> {
+        self.inner.initial_task()
+    }
+
+    fn clear_task_context(&mut self) {
+        self.inner.clear_task_context();
     }
 
     fn get_root(&self) -> PathBuf {

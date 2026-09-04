@@ -30,7 +30,8 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for MakeChanges {
         }?;
 
         let mut new_context = cur_context.clone();
-        new_context.initial_prompt = WriteWorker::init_prompt(Some(&input.context));
+        new_context.initial_prompt = WriteWorker::init_prompt(None);
+        new_context.task_prompt = Some(input.context.clone());
 
         let empty_context = RustEmptyContext::new(new_context, true, cur_context.gen_id());
 

@@ -1,16 +1,15 @@
 use crate::llm;
 use crate::llm::{ClientResponse, LLmClientTrait};
 use crate::openai_config::{OpenAIAuthConfig, OpenAIConfig, OpenAIEffort};
-use anyhow::{anyhow, Error};
+use anyhow::{Error, anyhow};
 use async_stream::try_stream;
 use futures::{Stream, StreamExt};
-use reqwest::{header, Client};
+use reqwest::{Client, header};
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
-use reqwest_retry::policies::ExponentialBackoff;
 use reqwest_retry::RetryTransientMiddleware;
+use reqwest_retry::policies::ExponentialBackoff;
 use reqwest_tracing::TracingMiddleware;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::future::ready;
 use std::str::FromStr;
 use std::time::Duration;
@@ -45,7 +44,12 @@ pub enum Role {
 #[serde(tag = "type")]
 pub enum InputItem {
     #[serde(rename = "message")]
-    Message { role: Role, content: String },
+    Message {
+        role: Role,
+        content: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        phase: Option<String>,
+    },
     #[serde(rename = "function_call")]
     FunctionCall {
         id: String,
@@ -56,11 +60,7 @@ pub enum InputItem {
     #[serde(rename = "function_call_output")]
     FunctionCallOutput { call_id: String, output: String },
     #[serde(rename = "reasoning")]
-    Reasoning {
-        id: String,
-        #[serde(default)]
-        summary: Vec<SummaryTextContent>,
-    },
+    Reasoning(ReasoningItem),
 }
 
 impl InputItem {
@@ -68,6 +68,7 @@ impl InputItem {
         InputItem::Message {
             role: Role::User,
             content,
+            phase: None,
         }
     }
 
@@ -75,6 +76,7 @@ impl InputItem {
         InputItem::Message {
             role: Role::Assistant,
             content,
+            phase: None,
         }
     }
 
@@ -144,6 +146,26 @@ struct ResponseRequest {
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub stream: bool,
     pub store: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub include: Vec<String>,
+}
+
+impl ResponseRequest {
+    fn new(config: &OpenAIConfig, req: ClientRequest, stream: bool) -> Self {
+        Self {
+            model: req.model.unwrap_or_else(|| config.model.clone()),
+            input: req.input,
+            instructions: req.instructions.unwrap_or_default(),
+            temperature: None,
+            max_output_tokens: None,
+            tools: req.tools,
+            reasoning: Some(config.get_reasoning()),
+            parallel_tool_calls: true,
+            stream,
+            store: false,
+            include: config.reasoning_include(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -164,6 +186,18 @@ pub struct SummaryTextContent {
     pub prop_type: String,
 }
 
+/// Provider continuation state, kept intact independently of display summaries.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ReasoningItem {
+    pub id: String,
+    #[serde(default)]
+    pub summary: Vec<SummaryTextContent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encrypted_content: Option<String>,
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 #[serde(tag = "type")]
 pub enum OutputItem {
@@ -171,6 +205,8 @@ pub enum OutputItem {
     Message {
         id: String,
         content: Vec<ContentPart>,
+        #[serde(default)]
+        phase: Option<String>,
     },
     #[serde(rename = "function_call")]
     FunctionCall {
@@ -180,17 +216,7 @@ pub enum OutputItem {
         arguments: String,
     },
     #[serde(rename = "reasoning")]
-    Reasoning {
-        id: String,
-        #[serde(default)]
-        summary: Vec<SummaryTextContent>,
-        #[serde(default)]
-        content: Vec<SummaryTextContent>,
-        #[serde(default)]
-        encrypted_content: String,
-        #[serde(default)]
-        status: String,
-    },
+    Reasoning(ReasoningItem),
     #[serde(rename = "web_search_call")]
     WebSearchCall {
         id: String,
@@ -257,6 +283,10 @@ pub struct ResponseEnvelope {
     pub usage: Option<Usage>,
     #[serde(default)]
     pub output: Vec<OutputItem>,
+    #[serde(default)]
+    pub error: Option<serde_json::Value>,
+    #[serde(default)]
+    pub incomplete_details: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -704,18 +734,7 @@ impl OpenAIClient {
     pub async fn chat(&self, req: ClientRequest) -> OpenAIResult<Response> {
         let url = format!("{}/responses", self.config.get_url());
 
-        let inner = ResponseRequest {
-            model: req.model.unwrap_or_else(|| self.config.model.clone()),
-            input: req.input,
-            instructions: req.instructions.unwrap_or_default(),
-            temperature: None,
-            max_output_tokens: None,
-            tools: req.tools,
-            reasoning: Some(self.config.get_reasoning()),
-            parallel_tool_calls: true,
-            stream: false,
-            store: false,
-        };
+        let inner = ResponseRequest::new(&self.config, req, false);
 
         let response = self
             .client
@@ -745,18 +764,7 @@ impl OpenAIClient {
     ) -> Result<impl Stream<Item = OpenAIResult<StreamEvent>> + Send + 'static, anyhow::Error> {
         let url = format!("{}/responses", self.config.get_url());
 
-        let request = ResponseRequest {
-            model: req.model.unwrap_or_else(|| self.config.model.clone()),
-            input: req.input,
-            instructions: req.instructions.unwrap_or_default(),
-            temperature: None,
-            max_output_tokens: None,
-            tools: req.tools,
-            reasoning: Some(self.config.get_reasoning()),
-            parallel_tool_calls: true,
-            stream: true,
-            store: false,
-        };
+        let request = ResponseRequest::new(&self.config, req, true);
 
         let initial = self.client.post(&url).json(&request).send().await?;
 
@@ -818,7 +826,7 @@ impl LLmClientTrait for OpenAIClient {
         &self,
         req: llm::ClientRequest,
     ) -> Result<impl Stream<Item = anyhow::Result<llm::StreamEvent>> + Send + 'static, Error> {
-        match self.chat_stream_openai(req.into()).await {
+        match self.chat_stream_openai(req.try_into()?).await {
             Ok(stream) => Ok(stream
                 .map(|x| match x {
                     Ok(event) => {
@@ -837,5 +845,100 @@ impl LLmClientTrait for OpenAIClient {
         request: crate::llm::ClientRequest,
     ) -> anyhow::Result<ClientResponse> {
         todo!()
+    }
+}
+
+#[cfg(test)]
+mod request_tests {
+    use super::*;
+    use crate::{LocalOpenAIConfig, OpenAICodexConfig, OpenAIKeyConfig, OpenRouterConfig};
+    use serde_json::json;
+
+    fn config(auth: OpenAIAuthConfig) -> OpenAIConfig {
+        OpenAIConfig {
+            auth,
+            model: "fixture".into(),
+            effort: OpenAIEffort::Low,
+            request_encrypted_reasoning: None,
+        }
+    }
+
+    fn wire_request(config: &OpenAIConfig, stream: bool) -> serde_json::Value {
+        serde_json::to_value(ResponseRequest::new(
+            config,
+            ClientRequest::new(vec![InputItem::user("task".into())])
+                .with_instructions("operating instructions".into()),
+            stream,
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn public_openai_requests_encrypted_state_in_streaming_and_nonstreaming_requests() {
+        let config = config(OpenAIAuthConfig::APIKey(OpenAIKeyConfig {
+            api_key: "fixture".into(),
+            url: None,
+        }));
+        for stream in [false, true] {
+            let request = wire_request(&config, stream);
+            assert_eq!(request["include"], json!(["reasoning.encrypted_content"]));
+            assert_eq!(request["store"], false);
+            assert_eq!(request["instructions"], "operating instructions");
+            assert_eq!(
+                request["input"],
+                json!([{"type":"message","role":"user","content":"task"}])
+            );
+        }
+    }
+
+    #[test]
+    fn compatible_routes_can_opt_in_without_receiving_unknown_fields_by_default() {
+        let routes = [
+            OpenAIAuthConfig::APIKey(OpenAIKeyConfig {
+                api_key: "fixture".into(),
+                url: Some("https://compatible.invalid/v1".into()),
+            }),
+            OpenAIAuthConfig::Local(LocalOpenAIConfig {
+                api_key: None,
+                url: "http://localhost:1234/v1".into(),
+            }),
+            OpenAIAuthConfig::OpenRouter(OpenRouterConfig {
+                api_key: "fixture".into(),
+                url: None,
+            }),
+            OpenAIAuthConfig::Codex(OpenAICodexConfig {
+                id_token: "fixture".into(),
+                access_token: "fixture".into(),
+                refresh_token: "fixture".into(),
+                account_id: "fixture".into(),
+                last_refresh: Duration::ZERO,
+                expires_at_ms: 0,
+            }),
+        ];
+        for route in routes {
+            let mut config = config(route);
+            assert!(wire_request(&config, true).get("include").is_none());
+            config.request_encrypted_reasoning = Some(true);
+            assert_eq!(
+                wire_request(&config, true)["include"],
+                json!(["reasoning.encrypted_content"])
+            );
+            config.request_encrypted_reasoning = Some(false);
+            assert!(wire_request(&config, true).get("include").is_none());
+        }
+    }
+
+    #[test]
+    fn old_provider_config_remains_readable() {
+        let config: OpenAIConfig = serde_json::from_value(json!({
+            "auth":{"APIKey":{"api_key":"fixture","url":null}},
+            "model":"fixture","effort":"low"
+        }))
+        .unwrap();
+        assert_eq!(config.request_encrypted_reasoning, None);
+        assert_eq!(
+            config.reasoning_include(),
+            vec!["reasoning.encrypted_content"]
+        );
     }
 }
