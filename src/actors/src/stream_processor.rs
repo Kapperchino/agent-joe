@@ -1,4 +1,4 @@
-use crate::batch::{Batch, ContentBlock};
+use crate::batch::{Batch, ContentBlock, ContentKind};
 use crate::event_reporter::EventReporter;
 use crate::tool_call::ToolCall;
 use anyhow::anyhow;
@@ -23,7 +23,6 @@ pub enum StreamNextStep {
     Done,
     ToolUse,
     Noop,
-    // token ran out, need to restart the connection
     NewStream,
 }
 
@@ -81,7 +80,7 @@ impl StreamProcessor {
             } => {
                 self.batches
                     .last_mut()
-                    .map(|batch| batch.put(index, ContentBlock::new(index, content_block)));
+                    .map(|batch| batch.put(index, ContentBlock::new(content_block)));
                 Ok(StreamNextStep::Accum)
             }
             StreamEvent::ContentBlockStop { index, id } => {
@@ -140,12 +139,11 @@ impl StreamProcessor {
             StreamEvent::ContentBlockStop { index, .. } => {
                 self.batches
                     .last()
-                    .and_then(|t| t.get_delta_type(index))
+                    .and_then(|t| t.content_kind(index))
                     .inspect(|t| match t {
-                        Delta::TextDelta { .. } => self.change_state(State::MessageStop),
-                        Delta::ThinkingDelta { .. } => self.change_state(State::ThinkingStop),
-                        Delta::InputJsonDelta { .. } => self.change_state(State::ToolStop),
-                        Delta::SignatureDelta { .. } => {}
+                        ContentKind::Text => self.change_state(State::MessageStop),
+                        ContentKind::Thinking => self.change_state(State::ThinkingStop),
+                        ContentKind::Tool => self.change_state(State::ToolStop),
                     });
             }
             StreamEvent::MessageDelta { usage, .. } => {

@@ -14,6 +14,7 @@ use std::future::ready;
 use std::str::FromStr;
 use std::time::Duration;
 use thiserror::Error;
+use tools::tool_defs::NonEmptyString;
 use tracing::info;
 use utils::utils::FnvHashMap;
 
@@ -48,17 +49,20 @@ pub enum InputItem {
         role: Role,
         content: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        phase: Option<String>,
+        phase: Option<llm::MessagePhase>,
     },
     #[serde(rename = "function_call")]
     FunctionCall {
-        id: String,
-        call_id: String,
-        name: String,
+        id: NonEmptyString,
+        call_id: NonEmptyString,
+        name: NonEmptyString,
         arguments: String,
     },
     #[serde(rename = "function_call_output")]
-    FunctionCallOutput { call_id: String, output: String },
+    FunctionCallOutput {
+        call_id: NonEmptyString,
+        output: String,
+    },
     #[serde(rename = "reasoning")]
     Reasoning(ReasoningItem),
 }
@@ -80,7 +84,7 @@ impl InputItem {
         }
     }
 
-    pub fn function_call_output(call_id: String, output: String) -> Self {
+    pub fn function_call_output(call_id: NonEmptyString, output: String) -> Self {
         InputItem::FunctionCallOutput { call_id, output }
     }
 }
@@ -129,6 +133,12 @@ pub enum ToolProperty {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ResponseInclude {
+    #[serde(rename = "reasoning.encrypted_content")]
+    EncryptedReasoning,
+}
+
 #[derive(Debug, Serialize)]
 struct ResponseRequest {
     pub model: String,
@@ -147,7 +157,7 @@ struct ResponseRequest {
     pub stream: bool,
     pub store: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub include: Vec<String>,
+    pub include: Vec<ResponseInclude>,
 }
 
 impl ResponseRequest {
@@ -186,7 +196,6 @@ pub struct SummaryTextContent {
     pub prop_type: String,
 }
 
-/// Provider continuation state, kept intact independently of display summaries.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ReasoningItem {
     pub id: String,
@@ -206,13 +215,13 @@ pub enum OutputItem {
         id: String,
         content: Vec<ContentPart>,
         #[serde(default)]
-        phase: Option<String>,
+        phase: Option<llm::MessagePhase>,
     },
     #[serde(rename = "function_call")]
     FunctionCall {
-        id: String,
-        call_id: String,
-        name: String,
+        id: NonEmptyString,
+        call_id: NonEmptyString,
+        name: NonEmptyString,
         arguments: String,
     },
     #[serde(rename = "reasoning")]
@@ -272,6 +281,17 @@ pub struct Usage {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+pub struct ResponseError {
+    pub code: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct IncompleteDetails {
+    pub reason: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
 pub struct ResponseEnvelope {
     #[serde(default)]
     pub id: String,
@@ -284,9 +304,9 @@ pub struct ResponseEnvelope {
     #[serde(default)]
     pub output: Vec<OutputItem>,
     #[serde(default)]
-    pub error: Option<serde_json::Value>,
+    pub error: Option<ResponseError>,
     #[serde(default)]
-    pub incomplete_details: Option<serde_json::Value>,
+    pub incomplete_details: Option<IncompleteDetails>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -295,11 +315,9 @@ pub enum StreamOutputItem {
     #[serde(rename = "function_call")]
     FunctionCall {
         #[serde(default)]
-        id: Option<String>,
-        #[serde(default)]
-        call_id: String,
-        #[serde(default)]
-        name: String,
+        id: Option<NonEmptyString>,
+        call_id: NonEmptyString,
+        name: NonEmptyString,
     },
     #[serde(rename = "message")]
     Message {
@@ -620,7 +638,7 @@ pub enum ReasoningSummary {
 #[derive(Debug, Clone)]
 pub struct OpenAIClient {
     client: ClientWithMiddleware,
-    config: OpenAIConfig,
+    pub config: OpenAIConfig,
 }
 #[derive(Serialize)]
 pub struct ClientRequest {
@@ -746,16 +764,15 @@ impl OpenAIClient {
                 message: e.to_string(),
             })?;
 
-        if !response.status().is_success() {
+        if response.status().is_success() {
+            Ok(response.json().await?)
+        } else {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(OpenAIError::ApiError {
+            Err(OpenAIError::ApiError {
                 message: format!("{status}: {body}"),
-            });
+            })
         }
-
-        let resp: Response = response.json().await?;
-        Ok(resp)
     }
 
     pub async fn chat_stream_openai(
@@ -768,55 +785,48 @@ impl OpenAIClient {
 
         let initial = self.client.post(&url).json(&request).send().await?;
 
-        if !initial.status().is_success() {
+        if initial.status().is_success() {
+            let mut byte_stream = initial.bytes_stream();
+            let mut buffer = String::new();
+
+            let stream = try_stream! {
+                while let Some(chunk) = byte_stream.next().await {
+                    let chunk = chunk?;
+                    buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+                    while let Some(event) = Self::extract_sse_event(&mut buffer)? {
+                        info!("{:?}", event);
+                        yield event;
+                    }
+                }
+            };
+
+            Ok(stream)
+        } else {
             let status = initial.status();
             let body = initial.text().await.unwrap_or_default();
-            return Err(anyhow!("API error {status}: {body}"));
+            Err(anyhow!("API error {status}: {body}"))
         }
-
-        let mut byte_stream = initial.bytes_stream();
-        let mut buffer = String::new();
-
-        let stream = try_stream! {
-            while let Some(chunk) = byte_stream.next().await {
-                let chunk = chunk?;
-                buffer.push_str(&String::from_utf8_lossy(&chunk));
-
-                while let Some(event) = Self::extract_sse_event(&mut buffer)? {
-                    info!("{:?}", event);
-                    yield event;
-                }
-            }
-        };
-
-        Ok(stream)
     }
 
     fn extract_sse_event(buffer: &mut String) -> OpenAIResult<Option<StreamEvent>> {
-        let delimiter_pos = match buffer.find("\n\n") {
-            Some(pos) => pos,
-            None => return Ok(None),
-        };
-
-        let event_text = buffer[..delimiter_pos].to_string();
-        buffer.drain(..=delimiter_pos + 1);
-
-        let mut data_line = String::new();
-
-        for line in event_text.lines() {
-            let line = line.trim();
-            if let Some(data) = line.strip_prefix("data: ") {
-                data_line.push_str(data);
+        match buffer.find("\n\n") {
+            Some(delimiter_pos) => {
+                let event_text = buffer[..delimiter_pos].to_string();
+                buffer.drain(..=delimiter_pos + 1);
+                let data = event_text
+                    .lines()
+                    .filter_map(|line| line.trim().strip_prefix("data: "))
+                    .collect::<String>();
+                if data.is_empty() || data == "[DONE]" {
+                    Ok(None)
+                } else {
+                    serde_json::from_str(&data)
+                        .map(Some)
+                        .map_err(OpenAIError::Serialization)
+                }
             }
-        }
-
-        if data_line.is_empty() || data_line == "[DONE]" {
-            return Ok(None);
-        }
-
-        match serde_json::from_str::<StreamEvent>(&data_line) {
-            Ok(event) => Ok(Some(event)),
-            Err(e) => Err(OpenAIError::Serialization(e)),
+            None => Ok(None),
         }
     }
 }
@@ -938,7 +948,7 @@ mod request_tests {
         assert_eq!(config.request_encrypted_reasoning, None);
         assert_eq!(
             config.reasoning_include(),
-            vec!["reasoning.encrypted_content"]
+            vec![ResponseInclude::EncryptedReasoning]
         );
     }
 }

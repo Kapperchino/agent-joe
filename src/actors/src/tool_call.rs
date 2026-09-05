@@ -1,15 +1,15 @@
-use serde_json::Value;
-use tools::tool_defs::ToolId;
+use serde_json::{Map, Value};
+use tools::tool_defs::{NonEmptyString, ToolId};
 
 #[derive(Debug, Clone)]
 pub struct ToolCall {
     pub id: ToolId,
-    pub name: String,
-    pub json: String,
+    pub name: NonEmptyString,
+    pub input: Map<String, Value>,
 }
 
 impl ToolCall {
-    pub fn input_value(&self) -> anyhow::Result<Value> {
-        Ok(serde_json::from_str(&self.json)?)
+    pub fn input_value(&self) -> Value {
+        Value::Object(self.input.clone())
     }
 }

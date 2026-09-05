@@ -26,6 +26,7 @@ pub struct ModelBoxState {
     pub effort: String,
     pub efforts: Vec<String>,
     pub list_state: SelectListState,
+    effort_selection: EffortsSelection,
     page_state: ModelBoxPageState,
 }
 
@@ -45,7 +46,8 @@ impl ModelBoxState {
         effort: String,
     ) -> ModelBoxState {
         let models = models.get_models();
-        let efforts = efforts.get_efforts();
+        let effort_selection = efforts;
+        let efforts = effort_selection.get_efforts(&model_name);
         let list_state = SelectListState::new(models.clone(), &model_name);
         ModelBoxState {
             model: model_name,
@@ -53,6 +55,7 @@ impl ModelBoxState {
             effort,
             efforts,
             list_state,
+            effort_selection,
             page_state: ModelBoxPageState::SelectModel,
         }
     }
@@ -74,6 +77,16 @@ impl ModelBoxState {
         match &self.page_state {
             ModelBoxPageState::SelectModel => {
                 self.model = self.list_state.selected_item().unwrap_or("").to_string();
+                self.efforts = self.effort_selection.get_efforts(&self.model);
+                if !self.efforts.contains(&self.effort) {
+                    self.effort = self
+                        .efforts
+                        .iter()
+                        .find(|effort| effort.as_str() == "Medium")
+                        .or_else(|| self.efforts.first())
+                        .cloned()
+                        .unwrap_or_default();
+                }
                 self.list_state
                     .set_items_selected(self.efforts.clone(), &self.effort);
                 self.update_state(ModelBoxPageState::SelectEffort);

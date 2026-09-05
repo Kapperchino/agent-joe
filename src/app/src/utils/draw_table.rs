@@ -1,4 +1,4 @@
-use crate::utils::draw_line::DrawLine;
+use crate::utils::draw_line::{CodeFence, DrawLine};
 use textwrap::core::display_width;
 
 pub struct DrawTable {}
@@ -16,10 +16,17 @@ enum TableAlignment {
     None,
 }
 
-#[derive(Clone, Copy)]
-struct CodeFence {
-    marker: char,
-    len: usize,
+struct TableHeader {
+    cells: Vec<String>,
+    alignments: Vec<TableAlignment>,
+}
+
+impl TableHeader {
+    fn parse(lines: &[&str]) -> Option<Self> {
+        let alignments = DrawTable::parse_table_alignments(lines.get(1)?)?;
+        let cells = DrawTable::parse_table_row(lines.first()?)?;
+        (cells.len() == alignments.len()).then_some(Self { cells, alignments })
+    }
 }
 
 impl DrawTable {
@@ -27,43 +34,42 @@ impl DrawTable {
         line: &str,
         width_hint: Option<&[usize]>,
     ) -> String {
-        let Some(mut cells) = Self::parse_table_row(line) else {
-            return line.to_string();
-        };
-
-        if let Some(first_cell) = cells.first_mut() {
-            if !first_cell.starts_with(TABLE_BLOCK_CONTINUATION_MARKER) {
-                first_cell.insert_str(0, TABLE_BLOCK_CONTINUATION_MARKER);
-            }
-            if Self::table_width_hint_from_cell(first_cell).is_none() {
-                if let Some(widths) = width_hint {
-                    first_cell.insert_str(
-                        TABLE_BLOCK_CONTINUATION_MARKER.len(),
-                        &Self::format_table_width_marker(widths),
-                    );
+        match Self::parse_table_row(line) {
+            Some(mut cells) => {
+                if let Some(first_cell) = cells.first_mut() {
+                    if !first_cell.starts_with(TABLE_BLOCK_CONTINUATION_MARKER) {
+                        first_cell.insert_str(0, TABLE_BLOCK_CONTINUATION_MARKER);
+                    }
+                    if Self::table_width_hint_from_cell(first_cell).is_none()
+                        && let Some(widths) = width_hint
+                    {
+                        first_cell.insert_str(
+                            TABLE_BLOCK_CONTINUATION_MARKER.len(),
+                            &Self::format_table_width_marker(widths),
+                        );
+                    }
                 }
+                Self::format_table_row(&cells)
             }
+            None => line.to_string(),
         }
-
-        Self::format_table_row(&cells)
     }
 
     pub fn table_block_spanning_split(lines: &[&str], split_line: usize) -> Option<(usize, usize)> {
         let mut start = 0;
-        while start + 1 < lines.len() {
-            let Some(end) = DrawTable::table_block_end(lines, start) else {
-                start += 1;
-                continue;
-            };
-
-            if start < split_line && split_line < end {
-                return Some((start, end));
+        let mut spanning_block = None;
+        while start + 1 < lines.len() && spanning_block.is_none() {
+            match Self::table_block_end(lines, start) {
+                Some(end) => {
+                    if start < split_line && split_line < end {
+                        spanning_block = Some((start, end));
+                    }
+                    start = end.max(start + 1);
+                }
+                None => start += 1,
             }
-
-            start = end.max(start + 1);
         }
-
-        None
+        spanning_block
     }
 
     pub(crate) fn table_width_hint(
@@ -72,64 +78,45 @@ impl DrawTable {
         end: usize,
         wrap_width: usize,
     ) -> Option<Vec<usize>> {
-        let alignments = Self::parse_table_alignments(*lines.get(start + 1)?)?;
-        let column_count = alignments.len();
-        let header = Self::parse_table_row(*lines.get(start)?)?;
-        if header.len() != column_count {
-            return None;
-        }
-
-        if let Some(widths) = Self::table_width_hint_from_cells(&header) {
-            return Some(Self::normalize_table_width_hint(
+        let header = TableHeader::parse(lines.get(start..end)?)?;
+        let column_count = header.cells.len();
+        match Self::table_width_hint_from_cells(&header.cells) {
+            Some(widths) => Some(Self::normalize_table_width_hint(
                 widths,
                 column_count,
                 wrap_width,
-            ));
+            )),
+            None => {
+                let body_rows = lines[start + 2..end]
+                    .iter()
+                    .map(|line| {
+                        Self::parse_table_row(line)
+                            .map(|row| Self::normalize_table_cells(row, column_count))
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                Some(Self::table_column_widths(
+                    &header.cells,
+                    &body_rows,
+                    wrap_width,
+                ))
+            }
         }
-
-        let body_rows = lines[start + 2..end]
-            .iter()
-            .map(|line| Self::parse_table_row(line))
-            .collect::<Option<Vec<_>>>()?
-            .into_iter()
-            .map(|row| Self::normalize_table_cells(row, column_count))
-            .collect::<Vec<_>>();
-
-        Some(Self::table_column_widths(&header, &body_rows, wrap_width))
     }
 
     fn wrap_table_block(lines: &[&str], wrap_width: usize) -> Option<(usize, Vec<String>)> {
-        if lines.len() < 2 {
-            return None;
-        }
-
-        let alignments = Self::parse_table_alignments(lines[1])?;
-        let column_count = alignments.len();
-        let header = Self::parse_table_row(lines[0])?;
-        if header.len() != column_count {
-            return None;
-        }
-        let width_hint = Self::table_width_hint_from_cells(&header)
+        let header = TableHeader::parse(lines)?;
+        let column_count = header.cells.len();
+        let width_hint = Self::table_width_hint_from_cells(&header.cells)
             .map(|widths| Self::normalize_table_width_hint(widths, column_count, wrap_width));
-
-        let mut body_rows = Vec::new();
-        let mut consumed = 2;
-        while consumed < lines.len() {
-            let line = lines[consumed];
-            if line.trim().is_empty() {
-                break;
-            }
-
-            let Some(row) = Self::parse_table_row(line) else {
-                break;
-            };
-            body_rows.push(Self::normalize_table_cells(row, column_count));
-            consumed += 1;
-        }
-
+        let body_rows = lines[2..]
+            .iter()
+            .map_while(|line| Self::parse_table_row(line))
+            .map(|row| Self::normalize_table_cells(row, column_count))
+            .collect::<Vec<_>>();
+        let consumed = body_rows.len() + 2;
         let block = Self::wrap_table_rows(
-            &header,
-            &alignments,
+            &header.cells,
+            &header.alignments,
             &body_rows,
             wrap_width,
             width_hint.as_deref(),
@@ -269,32 +256,32 @@ impl DrawTable {
         preserve_markdown_list_indent: bool,
     ) -> Vec<String> {
         if display_width(line) <= wrap_width {
-            return vec![line.to_string()];
-        }
+            vec![line.to_string()]
+        } else {
+            let mut options = textwrap::Options::new(wrap_width);
+            let initial_indent = preserve_markdown_list_indent
+                .then(|| DrawLine::markdown_list_initial_indent(line))
+                .flatten();
+            let list_indent = preserve_markdown_list_indent
+                .then(|| DrawLine::markdown_list_content_indent(line))
+                .flatten();
+            if let Some(indent) = initial_indent.as_deref() {
+                options = options.initial_indent(indent);
+            }
+            if let Some(indent) = list_indent.as_deref() {
+                options = options.subsequent_indent(indent);
+            }
 
-        let mut options = textwrap::Options::new(wrap_width);
-        let initial_indent = preserve_markdown_list_indent
-            .then(|| DrawLine::markdown_list_initial_indent(line))
-            .flatten();
-        let list_indent = preserve_markdown_list_indent
-            .then(|| DrawLine::markdown_list_content_indent(line))
-            .flatten();
-        if let Some(indent) = initial_indent.as_deref() {
-            options = options.initial_indent(indent);
-        }
-        if let Some(indent) = list_indent.as_deref() {
-            options = options.subsequent_indent(indent);
-        }
+            let line = initial_indent
+                .as_ref()
+                .map(|indent| &line[indent.len()..])
+                .unwrap_or(line);
 
-        let line = initial_indent
-            .as_ref()
-            .map(|indent| &line[indent.len()..])
-            .unwrap_or(line);
-
-        textwrap::wrap(line, options)
-            .into_iter()
-            .map(|segment| segment.into_owned())
-            .collect()
+            textwrap::wrap(line, options)
+                .into_iter()
+                .map(|segment| segment.into_owned())
+                .collect()
+        }
     }
 
     pub(crate) fn wrap_markdown_tables(text: &str, wrap_width: usize) -> Vec<String> {
@@ -309,92 +296,48 @@ impl DrawTable {
             .collect::<Vec<_>>();
         let mut wrapped = Vec::new();
         let mut index = 0;
-        let mut code_fence = None;
-
+        let mut code_fence: Option<CodeFence> = None;
         while index < lines.len() {
             let line = lines[index];
             let was_in_code = code_fence.is_some();
-
-            if code_fence.is_none() {
-                if let Some((consumed, table_lines)) =
-                    Self::wrap_table_block(&lines[index..], wrap_width)
-                {
+            let table = code_fence
+                .is_none()
+                .then(|| Self::wrap_table_block(&lines[index..], wrap_width))
+                .flatten();
+            match table {
+                Some((consumed, table_lines)) => {
                     wrapped.extend(table_lines);
                     index += consumed;
-                    continue;
+                }
+                None => {
+                    match &code_fence {
+                        Some(fence) if fence.is_closing(line) => code_fence = None,
+                        None => code_fence = CodeFence::opening(line),
+                        Some(_) => {}
+                    }
+                    if was_in_code || code_fence.is_some() {
+                        wrapped.push(line.to_string());
+                    } else {
+                        wrapped.extend(Self::wrap_plain_line(line, wrap_width, true));
+                    }
+                    index += 1;
                 }
             }
-
-            if let Some(fence) = code_fence {
-                if Self::is_closing_code_fence(line, fence) {
-                    code_fence = None;
-                }
-            } else {
-                code_fence = Self::opening_code_fence(line);
-            }
-
-            if was_in_code || code_fence.is_some() {
-                wrapped.push(line.to_string());
-            } else {
-                wrapped.extend(Self::wrap_plain_line(line, wrap_width, true));
-            }
-            index += 1;
         }
-
         wrapped
     }
 
-    fn opening_code_fence(line: &str) -> Option<CodeFence> {
-        let trimmed = line.trim_start();
-        let marker = trimmed.chars().next()?;
-        if !matches!(marker, '`' | '~') {
-            return None;
-        }
-
-        let len = trimmed.chars().take_while(|&ch| ch == marker).count();
-        if len < 3 {
-            return None;
-        }
-
-        let info = trimmed[len..].trim();
-        if marker == '`' && info.contains('`') {
-            return None;
-        }
-
-        Some(CodeFence { marker, len })
-    }
-
-    fn is_closing_code_fence(line: &str, fence: CodeFence) -> bool {
-        let trimmed = line.trim();
-        let len = trimmed
-            .chars()
-            .take_while(|&ch| ch == fence.marker)
-            .count();
-        len >= fence.len && trimmed.len() == len
-    }
-
     pub(crate) fn table_block_end(lines: &[&str], start: usize) -> Option<usize> {
-        let alignments = Self::parse_table_alignments(*lines.get(start + 1)?)?;
-        let column_count = alignments.len();
-        if Self::parse_table_row(*lines.get(start)?)?.len() != column_count {
-            return None;
-        }
-
-        let mut end = start + 2;
-        while end < lines.len() {
-            let line = lines[end];
-            if line.trim().is_empty() {
-                break;
-            }
-
-            let Some(row) = Self::parse_table_row(line) else {
-                break;
-            };
-            Self::normalize_table_cells(row, column_count);
-            end += 1;
-        }
-
-        Some(end)
+        let block = lines.get(start..)?;
+        TableHeader::parse(block)?;
+        Some(
+            start
+                + 2
+                + block[2..]
+                    .iter()
+                    .map_while(|line| Self::parse_table_row(line))
+                    .count(),
+        )
     }
 
     fn table_width_hint_from_cell(cell: &str) -> Option<Vec<usize>> {
@@ -438,16 +381,14 @@ impl DrawTable {
                 let without_left = trimmed.strip_prefix(':').unwrap_or(trimmed);
                 let core = without_left.strip_suffix(':').unwrap_or(without_left);
 
-                if core.len() < 3 || !core.chars().all(|ch| ch == '-') {
-                    return None;
-                }
-
-                Some(match (left, right) {
-                    (true, true) => TableAlignment::Center,
-                    (true, false) => TableAlignment::Left,
-                    (false, true) => TableAlignment::Right,
-                    (false, false) => TableAlignment::None,
-                })
+                (core.len() >= 3 && core.chars().all(|ch| ch == '-')).then_some(
+                    match (left, right) {
+                        (true, true) => TableAlignment::Center,
+                        (true, false) => TableAlignment::Left,
+                        (false, true) => TableAlignment::Right,
+                        (false, false) => TableAlignment::None,
+                    },
+                )
             })
             .collect::<Option<Vec<_>>>()?;
 
@@ -461,19 +402,18 @@ impl DrawTable {
         line: &str,
         width_hint: Option<&[usize]>,
     ) -> String {
-        let Some(mut cells) = Self::parse_table_row(line) else {
-            return line.to_string();
-        };
-
-        if let Some(first_cell) = cells.first_mut() {
-            if Self::table_width_hint_from_cell(first_cell).is_none() {
-                if let Some(widths) = width_hint {
+        match Self::parse_table_row(line) {
+            Some(mut cells) => {
+                if let Some(first_cell) = cells.first_mut()
+                    && Self::table_width_hint_from_cell(first_cell).is_none()
+                    && let Some(widths) = width_hint
+                {
                     first_cell.insert_str(0, &Self::format_table_width_marker(widths));
                 }
+                Self::format_table_row(&cells)
             }
+            None => line.to_string(),
         }
-
-        Self::format_table_row(&cells)
     }
 
     fn table_width_hint_from_cells(cells: &[String]) -> Option<Vec<usize>> {
@@ -483,44 +423,32 @@ impl DrawTable {
     }
     fn parse_table_row(line: &str) -> Option<Vec<String>> {
         let trimmed = line.trim();
-        if trimmed.is_empty() || !trimmed.contains('|') {
-            return None;
-        }
-
-        let mut content = trimmed;
-        if let Some(stripped) = content.strip_prefix('|') {
-            content = stripped;
-        }
-        if let Some(stripped) = content.strip_suffix('|') {
-            content = stripped;
-        }
-
-        let mut cells = Vec::new();
-        let mut current = String::new();
-        let mut escape = false;
-
-        for ch in content.chars() {
-            if escape {
-                current.push(ch);
-                escape = false;
-                continue;
-            }
-
-            match ch {
-                '\\' => {
-                    current.push(ch);
-                    escape = true;
+        trimmed.contains('|').then(|| {
+            let content = trimmed.strip_prefix('|').unwrap_or(trimmed);
+            let content = content.strip_suffix('|').unwrap_or(content);
+            let mut cells = Vec::new();
+            let mut current = String::new();
+            let mut escape = false;
+            for ch in content.chars() {
+                match (escape, ch) {
+                    (true, _) => {
+                        current.push(ch);
+                        escape = false;
+                    }
+                    (false, '\\') => {
+                        current.push(ch);
+                        escape = true;
+                    }
+                    (false, '|') => {
+                        cells.push(current.trim().to_string());
+                        current.clear();
+                    }
+                    (false, _) => current.push(ch),
                 }
-                '|' => {
-                    cells.push(current.trim().to_string());
-                    current.clear();
-                }
-                _ => current.push(ch),
             }
-        }
-
-        cells.push(current.trim().to_string());
-        Some(cells)
+            cells.push(current.trim().to_string());
+            cells
+        })
     }
 
     fn wrap_table_rows(
@@ -598,13 +526,13 @@ impl DrawTable {
 
     fn wrap_table_cell(cell: &str, width: usize) -> Vec<String> {
         if cell.is_empty() {
-            return vec![String::new()];
+            vec![String::new()]
+        } else {
+            textwrap::wrap(cell, textwrap::Options::new(width.max(1)))
+                .into_iter()
+                .map(|segment| segment.into_owned())
+                .collect()
         }
-
-        textwrap::wrap(cell, textwrap::Options::new(width.max(1)))
-            .into_iter()
-            .map(|segment| segment.into_owned())
-            .collect()
     }
 }
 

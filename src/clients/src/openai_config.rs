@@ -1,4 +1,4 @@
-use crate::openai::{ReasoningConfig, ReasoningSummary};
+use crate::openai::{ReasoningConfig, ReasoningSummary, ResponseInclude};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use strum_macros::{AsRefStr, EnumMessage, EnumString, VariantNames};
@@ -11,18 +11,17 @@ pub struct OpenAIConfig {
     pub auth: OpenAIAuthConfig,
     pub model: String,
     pub effort: OpenAIEffort,
-    /// Override for compatible servers; only the public OpenAI route opts in by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_encrypted_reasoning: Option<bool>,
 }
 
 impl OpenAIConfig {
-    pub fn reasoning_include(&self) -> Vec<String> {
+    pub fn reasoning_include(&self) -> Vec<ResponseInclude> {
         if self
             .request_encrypted_reasoning
             .unwrap_or_else(|| self.get_url().trim_end_matches('/') == CHATGPT_BASE_URL)
         {
-            vec!["reasoning.encrypted_content".to_owned()]
+            vec![ResponseInclude::EncryptedReasoning]
         } else {
             vec![]
         }
@@ -73,6 +72,25 @@ pub enum OpenAIEffort {
     High,
     #[strum(message = "xhigh")]
     Xhigh,
+    #[strum(message = "max")]
+    Max,
+}
+
+impl OpenAIEffort {
+    pub fn supported_for_model(model: &str) -> &'static [Self] {
+        match model {
+            "gpt-6-astra" => &[Self::Low, Self::Medium, Self::High, Self::Xhigh, Self::Max],
+            "gpt-5.6" | "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna" => &[
+                Self::None,
+                Self::Low,
+                Self::Medium,
+                Self::High,
+                Self::Xhigh,
+                Self::Max,
+            ],
+            _ => &[Self::None, Self::Low, Self::Medium, Self::High, Self::Xhigh],
+        }
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]

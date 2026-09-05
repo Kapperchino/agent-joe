@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 use thiserror::Error;
+use tools::tool_defs::NonEmptyString;
 
 pub const MAX_TOKENS: u32 = 64000;
 #[derive(Error, Debug)]
@@ -149,13 +150,13 @@ pub enum ContentBlock {
     ThinkingBlock { thinking: String, signature: String },
     #[serde(rename = "tool_use")]
     ToolBlock {
-        id: String,
-        name: String,
-        input: serde_json::Value,
+        id: NonEmptyString,
+        name: NonEmptyString,
+        input: serde_json::Map<String, serde_json::Value>,
     },
     #[serde(rename = "tool_result")]
     ToolResult {
-        tool_use_id: String,
+        tool_use_id: NonEmptyString,
         content: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         is_error: Option<bool>,
@@ -175,7 +176,6 @@ pub enum ContentBlock {
     },
 }
 
-// Streaming types
 #[derive(Debug, Deserialize, Clone)]
 #[serde(tag = "type")]
 pub enum StreamEvent {
@@ -228,9 +228,9 @@ pub struct StreamMessage {
 pub enum ContentBlockInfo {
     #[serde(rename = "tool_use")]
     ToolUse {
-        id: String,
-        name: String,
-        input: serde_json::Value,
+        id: NonEmptyString,
+        name: NonEmptyString,
+        input: serde_json::Map<String, serde_json::Value>,
     },
     #[serde(rename = "thinking")]
     Thinking { thinking: String },
@@ -345,7 +345,7 @@ pub struct CacheControl {
 pub struct ClaudeClient {
     client: ClientWithMiddleware,
     base_url: String,
-    config: ClaudeConfig,
+    pub(crate) config: ClaudeConfig,
 }
 
 pub struct ClientRequest {
@@ -353,7 +353,6 @@ pub struct ClientRequest {
     pub thinking: bool,
     pub system: Option<String>,
     pub model: Option<String>,
-    // this shit needs to be turned ON
     pub(crate) cache_control: CacheControl,
     pub tools: Vec<Tool>,
     pub effort: Option<ClaudeEffort>,
@@ -463,58 +462,47 @@ impl ClaudeClient {
 
         let initial = self.client.post(&url).json(&request).send().await?;
 
-        if !initial.status().is_success() {
+        if initial.status().is_success() {
+            let mut byte_stream = initial.bytes_stream();
+            let mut buffer = String::new();
+
+            let stream = try_stream! {
+                while let Some(chunk) = byte_stream.next().await {
+                    let chunk = chunk?;
+                    buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+                    while let Some(stream_event) = extract_sse_event(&mut buffer)?{
+                        yield stream_event;
+                    }
+                }
+            };
+            Ok(stream)
+        } else {
             let status = initial.status();
             let body = initial.text().await.unwrap_or_default();
-            return Err(anyhow!("API error {status}: {body}"));
+            Err(anyhow!("API error {status}: {body}"))
         }
-
-        let mut byte_stream = initial.bytes_stream();
-        let mut buffer = String::new();
-
-        let stream = try_stream! {
-            while let Some(chunk) = byte_stream.next().await {
-                let chunk = chunk?;
-                buffer.push_str(&String::from_utf8_lossy(&chunk));
-
-                while let Some(stream_event) = extract_sse_event(&mut buffer)?{
-                    yield stream_event;
-                }
-            }
-        };
-        Ok(stream)
     }
 }
 
 fn extract_sse_event(buffer: &mut String) -> ClaudeResult<Option<StreamEvent>> {
-    let delimiter_pos = match buffer.find("\n\n") {
-        Some(pos) => pos,
-        None => return Ok(None),
-    };
-
-    let event_text = buffer[..delimiter_pos].to_string();
-    buffer.drain(..=delimiter_pos + 1);
-
-    let data_line = event_text.lines().fold(String::new(), |mut acc, line| {
-        let line = line.trim();
-        if let Some(data) = line.strip_prefix("data: ") {
-            acc.push_str(data);
+    match buffer.find("\n\n") {
+        Some(delimiter_pos) => {
+            let event_text = buffer[..delimiter_pos].to_string();
+            buffer.drain(..=delimiter_pos + 1);
+            let data = event_text
+                .lines()
+                .filter_map(|line| line.trim().strip_prefix("data: "))
+                .collect::<String>();
+            if data.is_empty() || data == "[DONE]" {
+                Ok(None)
+            } else {
+                serde_json::from_str(&data)
+                    .map(Some)
+                    .map_err(ClaudeError::Serialization)
+            }
         }
-        acc
-    });
-
-    let data = match data_line.is_empty() {
-        true => return Ok(None),
-        false => data_line,
-    };
-
-    if data == "[DONE]" {
-        return Ok(None);
-    }
-
-    match serde_json::from_str::<StreamEvent>(data.as_str()) {
-        Ok(event) => Ok(Some(event)),
-        Err(e) => Err(ClaudeError::Serialization(e)),
+        None => Ok(None),
     }
 }
 

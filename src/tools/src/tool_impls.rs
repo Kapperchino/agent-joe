@@ -1,4 +1,4 @@
-use crate::tool_defs::{ToolId, ToolInvocation, ToolResult};
+use crate::tool_defs::{NonEmptyString, ToolId, ToolInvocation, ToolResult};
 use serde_json::Value;
 
 impl ToolResult {
@@ -10,7 +10,12 @@ impl ToolResult {
         }
     }
 
-    pub fn error(id: ToolId, name: String, input: Value, message: String) -> ToolResult {
+    pub fn error(
+        id: ToolId,
+        name: NonEmptyString,
+        input: serde_json::Map<String, Value>,
+        message: String,
+    ) -> ToolResult {
         ToolResult::Failure {
             id,
             msg: message,
@@ -21,8 +26,8 @@ impl ToolResult {
 
     pub fn name(&self) -> String {
         match &self {
-            ToolResult::Success { invocation, .. } => invocation.name.clone(),
-            ToolResult::Failure { name, .. } => name.clone(),
+            ToolResult::Success { invocation, .. } => invocation.name.to_string(),
+            ToolResult::Failure { name, .. } => name.to_string(),
         }
     }
 

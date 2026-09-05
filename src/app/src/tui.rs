@@ -415,20 +415,14 @@ impl TUIApp {
                         match page_res {
                             ModelBoxResult::SelectModel => {}
                             ModelBoxResult::SelectEffort(model, effort) => {
-                                let mut config = self.config_context.get_config();
-                                config.set_model(model);
-                                match config.set_effort(effort) {
-                                    Ok(_) => {}
-                                    Err(e) => {
-                                        error!("error during setting model {}", e);
-                                    }
-                                };
-                                let mut context_clone = self.config_context.clone();
-                                let _ = tokio::spawn(async move {
-                                    let _ = context_clone.update_config(config).await.inspect_err(
-                                        |x| error!("Error accured saving config {}", x),
-                                    );
-                                });
+                                if let Err(err) = self.actor_ref.send_message(Message::Command(
+                                    Command::ChangeModel(model, effort),
+                                )) {
+                                    error!("Error changing model: {}", err);
+                                    self.message_box.append(Msg::Message(format!(
+                                        "Could not change model: {err}"
+                                    )));
+                                }
 
                                 self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
                             }

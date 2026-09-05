@@ -217,16 +217,50 @@ pub struct Range {
     pub end: u32,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct NonEmptyString(String);
+
+impl TryFrom<String> for NonEmptyString {
+    type Error = anyhow::Error;
+
+    fn try_from(value: String) -> anyhow::Result<Self> {
+        if value.is_empty() {
+            Err(anyhow::anyhow!("Expected a nonempty string"))
+        } else {
+            Ok(Self(value))
+        }
+    }
+}
+
+impl From<NonEmptyString> for String {
+    fn from(value: NonEmptyString) -> Self {
+        value.0
+    }
+}
+
+impl AsRef<str> for NonEmptyString {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Display for NonEmptyString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ToolId {
-    pub call_id: Option<String>,
-    pub id: String,
+    pub call_id: Option<NonEmptyString>,
+    pub id: NonEmptyString,
 }
 
 #[derive(Debug)]
 pub struct ToolInvocation {
-    pub name: String,
-    pub input: Value,
+    pub name: NonEmptyString,
+    pub input: serde_json::Map<String, Value>,
     pub display: String,
 }
 
@@ -240,7 +274,7 @@ pub enum ToolResult {
     Failure {
         id: ToolId,
         msg: String,
-        name: String,
-        input: Value,
+        name: NonEmptyString,
+        input: serde_json::Map<String, Value>,
     },
 }

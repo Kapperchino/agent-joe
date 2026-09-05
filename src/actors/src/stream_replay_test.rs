@@ -45,7 +45,9 @@ impl Context for TestContext {
         Ok(vec![])
     }
     async fn line_index_creator(&self) -> anyhow::Result<Box<Self::LineIndexCreator>> {
-        anyhow::bail!("The fixture does not use semantic indexing")
+        Err(anyhow::anyhow!(
+            "The fixture does not use semantic indexing"
+        ))
     }
     fn gen_id(&self) -> u64 {
         1
@@ -88,7 +90,9 @@ impl ErasedToolTrait<TestContext, ActorContext<TestContext>> for EchoTool {
         Ok("echo".into())
     }
     fn input_req_erased(&self, _: &Value) -> anyhow::Result<FnvHashMap<String, String>> {
-        anyhow::bail!("History must not rebuild input through the lossy string-map path")
+        Err(anyhow::anyhow!(
+            "History must not rebuild input through the lossy string-map path"
+        ))
     }
     async fn run_erased(
         &self,
@@ -98,8 +102,11 @@ impl ErasedToolTrait<TestContext, ActorContext<TestContext>> for EchoTool {
         _: &ActorContext<TestContext>,
     ) -> anyhow::Result<Value> {
         self.0.fetch_add(1, Ordering::SeqCst);
-        anyhow::ensure!(input["fail"] != true, "synthetic tool failure");
-        Ok(input)
+        if input["fail"] == true {
+            Err(anyhow::anyhow!("synthetic tool failure"))
+        } else {
+            Ok(input)
+        }
     }
     fn output_to_content_erased(&self, _: &Value, output: &Value) -> anyhow::Result<String> {
         Ok(output.to_string())
@@ -161,7 +168,6 @@ async fn consume(
     state: &mut ActorState<TestContext>,
     event: llm::StreamEvent,
 ) -> anyhow::Result<()> {
-    // Exercise the same log format as the runtime, in addition to provider mapping.
     let event = serde_json::from_value(serde_json::to_value(event)?)?;
     match state.stream_processor.process_stream_event(event).await? {
         StreamNextStep::ToolUse => {
@@ -196,7 +202,7 @@ async fn replay_preserves_reasoning_phase_arguments_and_results_across_turns() {
             .unwrap();
     }
     assert_eq!(h.calls.load(Ordering::SeqCst), 2);
-    assert_eq!(h.state.history.len(), 4); // workspace, task, assistant, tool results
+    assert_eq!(h.state.history.len(), 4);
     assert_eq!(h.state.history[2].content.len(), 4);
     assert_eq!(h.state.history[3].content.len(), 2);
     let request = openai::ClientRequest::try_from(h.state.build_request()).unwrap();
@@ -376,20 +382,23 @@ async fn incomplete_tool_prevents_dispatch_of_the_entire_batch() {
 #[tokio::test]
 async fn non_object_tool_arguments_are_rejected_before_dispatch() {
     let mut h = harness().await;
-    for event in [
-        json!({"type":"response.created","response":{"id":"resp_1"}}),
-        json!({"type":"response.output_item.done","output_index":0,"item":{
-            "type":"function_call","id":"fc_1","call_id":"call_1","name":"echo","arguments":"[1,2]"
-        }}),
-    ] {
-        openai_event(&mut h.state, event).await.unwrap();
-    }
-    let result = openai_event(
+    openai_event(
         &mut h.state,
-        json!({"type":"response.completed","response":{"status":"completed"}}),
+        json!({"type":"response.created","response":{"id":"resp_1"}}),
     )
-    .await;
-    assert!(result.unwrap_err().to_string().contains("JSON object"));
+    .await
+    .unwrap();
+    let result = openai_event(&mut h.state, json!({
+        "type":"response.output_item.done","output_index":0,"item":{
+            "type":"function_call","id":"fc_1","call_id":"call_1","name":"echo","arguments":"[1,2]"
+        }
+    })).await;
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("invalid_tool_arguments")
+    );
     assert_eq!(h.calls.load(Ordering::SeqCst), 0);
 }
 
@@ -453,4 +462,60 @@ async fn malformed_completed_arguments_return_an_error_without_dispatch() {
             .contains("invalid_tool_arguments")
     );
     assert_eq!(h.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn invalid_tool_identity_is_rejected_at_the_provider_boundary() {
+    for field in ["id", "call_id", "name"] {
+        for value in [json!(""), Value::Null] {
+            let mut h = harness().await;
+            openai_event(
+                &mut h.state,
+                json!({"type":"response.created","response":{"id":"resp_1"}}),
+            )
+            .await
+            .unwrap();
+            let mut call = json!({"type":"function_call","id":"fc_1","call_id":"call_1","name":"echo","arguments":"{}"});
+            call[field] = value;
+            assert!(
+                openai_event(
+                    &mut h.state,
+                    json!({"type":"response.output_item.done","output_index":0,"item":call})
+                )
+                .await
+                .is_err()
+            );
+            assert_eq!(h.calls.load(Ordering::SeqCst), 0);
+            assert_eq!(h.state.history.len(), 2);
+        }
+    }
+    for field in ["id", "name"] {
+        let mut block = json!({"type":"tool_use","id":"tool_1","name":"echo","input":{}});
+        block[field] = json!("");
+        assert!(
+            serde_json::from_value::<claude::StreamEvent>(
+                json!({"type":"content_block_start","index":0,"content_block":block})
+            )
+            .is_err()
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_streamed_tool_can_receive_its_id_at_completion() {
+    let mut h = harness().await;
+    for event in [
+        json!({"type":"response.created","response":{"id":"resp_1"}}),
+        json!({"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","call_id":"call_1","name":"echo"}}),
+        json!({"type":"response.function_call_arguments.delta","output_index":0,"delta":"{}"}),
+        json!({"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"echo","arguments":"{}"}}),
+        json!({"type":"response.completed","response":{"status":"completed"}}),
+    ] {
+        openai_event(&mut h.state, event).await.unwrap();
+    }
+    assert_eq!(h.calls.load(Ordering::SeqCst), 1);
+    let request = openai::ClientRequest::try_from(h.state.build_request()).unwrap();
+    let input = serde_json::to_value(request.input).unwrap();
+    assert_eq!(input[2]["id"], "fc_1");
+    assert_eq!(input[2]["call_id"], "call_1");
 }

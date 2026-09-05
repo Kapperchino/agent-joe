@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
-use tools::tool_defs::{ToolDefinition, ToolId};
+use tools::tool_defs::{NonEmptyString, ToolDefinition, ToolId};
 
 pub trait LLmClientTrait {
     async fn chat_stream(
@@ -46,10 +46,11 @@ impl LLmClient {
     }
 
     pub async fn chat_stream(
-        &self,
+        &mut self,
         req: ClientRequest,
     ) -> Result<impl Stream<Item = anyhow::Result<StreamEvent>> + Send + 'static, anyhow::Error>
     {
+        self.refresh_config()?;
         match self {
             LLmClient::Claude { client, .. } => Ok(Either::Left(client.chat_stream(req).await?)),
             LLmClient::OpenApi { client, .. } => Ok(Either::Right(client.chat_stream(req).await?)),
@@ -82,8 +83,32 @@ impl LLmClient {
 
     fn get_config(&self) -> Config {
         match self {
-            LLmClient::Claude { config, .. } => self.get_config(),
-            LLmClient::OpenApi { config, .. } => self.get_config(),
+            LLmClient::Claude { config, .. } | LLmClient::OpenApi { config, .. } => {
+                config.get_config()
+            }
+        }
+    }
+
+    fn refresh_config(&mut self) -> anyhow::Result<()> {
+        let current = self.get_config();
+        match (self, current) {
+            (LLmClient::Claude { client, .. }, Config::Claude(config)) => {
+                if client.config.auth != config.auth {
+                    *client = ClaudeClient::new(config)?;
+                } else {
+                    client.config = config;
+                }
+                Ok(())
+            }
+            (LLmClient::OpenApi { client, .. }, Config::OpenAI(config)) => {
+                if client.config.auth != config.auth {
+                    *client = OpenAIClient::new(config)?;
+                } else {
+                    client.config = config;
+                }
+                Ok(())
+            }
+            _ => Err(anyhow::anyhow!("Changing providers requires a new session")),
         }
     }
     async fn save_config(&mut self, config: Config) -> anyhow::Result<()> {
@@ -99,7 +124,6 @@ impl LLmClient {
     }
 }
 
-// map from other clients to this
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum StreamEvent {
     MessageStart {
@@ -115,8 +139,7 @@ pub enum StreamEvent {
     },
     ContentBlockStop {
         index: usize,
-        // openai specific
-        id: Option<String>,
+        id: Option<NonEmptyString>,
     },
     ContentBlockComplete {
         index: usize,
@@ -264,11 +287,28 @@ pub enum Delta {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingToolId {
+    pub id: Option<NonEmptyString>,
+    pub call_id: Option<NonEmptyString>,
+}
+
+impl PendingToolId {
+    pub fn complete(&self, id: Option<NonEmptyString>) -> anyhow::Result<ToolId> {
+        Ok(ToolId {
+            id: id
+                .or_else(|| self.id.clone())
+                .ok_or_else(|| anyhow::anyhow!("Completed tool call is missing its ID"))?,
+            call_id: self.call_id.clone(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ContentBlockInfo {
     ToolUse {
-        id: ToolId,
-        name: String,
-        input: Value,
+        id: PendingToolId,
+        name: NonEmptyString,
+        input: serde_json::Map<String, Value>,
     },
     Thinking {
         thinking: String,
@@ -278,12 +318,19 @@ pub enum ContentBlockInfo {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MessagePhase {
+    Commentary,
+    FinalAnswer,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ContentBlock {
     MessageBlock {
         text: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        phase: Option<String>,
+        phase: Option<MessagePhase>,
     },
     ThinkingBlock {
         thinking: String,
@@ -293,8 +340,8 @@ pub enum ContentBlock {
     OpenAIReasoning(crate::openai::ReasoningItem),
     ToolBlock {
         tool_id: ToolId,
-        name: String,
-        input: Value,
+        name: NonEmptyString,
+        input: serde_json::Map<String, Value>,
     },
     ToolResult {
         tool_id: ToolId,
@@ -339,7 +386,7 @@ impl Display for Message {
                     input,
                 } => {
                     writeln!(f, "[tool:{}:{}]", name, tool_id.id)?;
-                    writeln!(f, "{input}")?;
+                    writeln!(f, "{}", Value::Object(input.clone()))?;
                 }
                 ContentBlock::OpenAIReasoning(item) => {
                     writeln!(f, "[thinking:{}]", item.id)?;

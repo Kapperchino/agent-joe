@@ -32,17 +32,16 @@ impl MessageFormatter {
     }
 
     fn format_tool_message(self, message: &str) -> Vec<String> {
-        let Some(content) = message.strip_prefix(TOOL_SUMMARY_PREFIX) else {
-            return self.format_message(message);
-        };
-
-        match content.split_once('\n') {
-            Some((summary, rest)) => self
-                .format_tool_summary(summary)
-                .into_iter()
-                .chain(rest.split('\n').map(DrawLine::expand_tabs))
-                .collect(),
-            None => self.format_tool_summary(content),
+        match message.strip_prefix(TOOL_SUMMARY_PREFIX) {
+            Some(content) => match content.split_once('\n') {
+                Some((summary, rest)) => self
+                    .format_tool_summary(summary)
+                    .into_iter()
+                    .chain(rest.split('\n').map(DrawLine::expand_tabs))
+                    .collect(),
+                None => self.format_tool_summary(content),
+            },
+            None => self.format_message(message),
         }
     }
 

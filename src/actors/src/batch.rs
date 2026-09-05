@@ -1,8 +1,10 @@
 use crate::stream_processor::{PreprocessedStreamItem, ProcessedItem};
 use crate::tool_call::ToolCall;
-use anyhow::{anyhow, bail, ensure};
+use anyhow::anyhow;
+use clients::llm::PendingToolId;
 use clients::llm::{ContentBlock as MessageContent, ContentBlockInfo, Delta};
 use std::collections::BTreeMap;
+use tools::tool_defs::NonEmptyString;
 
 #[derive(Default)]
 pub struct Batch {
@@ -17,7 +19,7 @@ impl Batch {
     pub fn has_tool(&self) -> bool {
         self.blocks
             .values()
-            .any(|block| matches!(block.content, MessageContent::ToolBlock { .. }))
+            .any(|block| matches!(block.kind(), ContentKind::Tool))
     }
 
     pub fn put(&mut self, index: usize, block: ContentBlock) {
@@ -25,51 +27,30 @@ impl Batch {
     }
 
     pub fn complete_item(&mut self, index: usize, content: MessageContent) {
-        // output_item.done is authoritative, including opaque reasoning and phase.
-        self.blocks.insert(
-            index,
-            ContentBlock {
-                content,
-                partial_json: String::new(),
-                complete: true,
-            },
-        );
+        self.blocks.insert(index, ContentBlock::Complete(content));
     }
 
     pub fn extract_and_pre_process(&mut self) -> anyhow::Result<Vec<PreprocessedStreamItem>> {
-        // Validate the entire response before dispatching any side effects.
         let result = self
             .blocks
             .iter()
-            .map(|(&index, block)| {
-                ensure!(block.complete, "Content block {index} is incomplete");
-                let processed = match &block.content {
-                    MessageContent::ToolBlock {
-                        tool_id,
-                        name,
-                        input,
-                    } => {
-                        ensure!(
-                            !name.is_empty() && !tool_id.id.is_empty(),
-                            "Tool name and ID must be present"
-                        );
-                        ensure!(
-                            tool_id.call_id.as_ref().is_none_or(|id| !id.is_empty()),
-                            "Tool call_id must not be empty"
-                        );
-                        ensure!(
-                            input.is_object(),
-                            "Tool {name} arguments must be a JSON object"
-                        );
-                        ProcessedItem::Tool(ToolCall {
+            .map(|(&index, block)| match block {
+                ContentBlock::Pending(_) => Err(anyhow!("Content block {index} is incomplete")),
+                ContentBlock::Complete(content) => {
+                    let processed = match content {
+                        MessageContent::ToolBlock {
+                            tool_id,
+                            name,
+                            input,
+                        } => ProcessedItem::Tool(ToolCall {
                             id: tool_id.clone(),
                             name: name.clone(),
-                            json: serde_json::to_string(input)?,
-                        })
-                    }
-                    content => ProcessedItem::Content(content.clone()),
-                };
-                Ok(PreprocessedStreamItem { index, processed })
+                            input: input.clone(),
+                        }),
+                        content => ProcessedItem::Content(content.clone()),
+                    };
+                    Ok(PreprocessedStreamItem { index, processed })
+                }
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
         self.blocks.clear();
@@ -77,109 +58,260 @@ impl Batch {
     }
 
     pub fn accum(&mut self, index: &usize, delta: Delta) -> anyhow::Result<()> {
-        self.blocks
-            .get_mut(index)
-            .ok_or_else(|| anyhow!("Missing content block {index}"))?
-            .accum(delta)
-    }
-
-    pub fn apply_reduce(&mut self, index: &usize, id: Option<String>) -> anyhow::Result<()> {
         let block = self
             .blocks
             .get_mut(index)
             .ok_or_else(|| anyhow!("Missing content block {index}"))?;
-        if let MessageContent::ToolBlock { tool_id, input, .. } = &mut block.content {
-            if !block.partial_json.is_empty() {
-                *input = serde_json::from_str(&block.partial_json)?;
-            }
-            if let Some(id) = id {
-                tool_id.id = id;
-            }
-        }
-        block.complete = true;
+        *block = block.accum(delta)?;
         Ok(())
     }
 
-    pub fn get_delta_type(&self, index: &usize) -> Option<Delta> {
-        self.blocks.get(index).map(|block| match &block.content {
-            MessageContent::ToolBlock { .. } => Delta::InputJsonDelta {
-                partial_json: String::new(),
-            },
-            MessageContent::ThinkingBlock { .. } | MessageContent::OpenAIReasoning(_) => {
-                Delta::ThinkingDelta {
-                    thinking: String::new(),
-                    reasoning_id: None,
-                }
-            }
-            _ => Delta::TextDelta {
-                text: String::new(),
-            },
-        })
+    pub fn apply_reduce(
+        &mut self,
+        index: &usize,
+        id: Option<NonEmptyString>,
+    ) -> anyhow::Result<()> {
+        let block = self
+            .blocks
+            .get_mut(index)
+            .ok_or_else(|| anyhow!("Missing content block {index}"))?;
+        if let ContentBlock::Pending(content) = block {
+            *block = ContentBlock::Complete(content.complete(id)?);
+        }
+        Ok(())
+    }
+
+    pub fn content_kind(&self, index: &usize) -> Option<ContentKind> {
+        self.blocks.get(index).map(ContentBlock::kind)
     }
 }
 
-pub struct ContentBlock {
-    content: MessageContent,
-    partial_json: String,
-    complete: bool,
+pub enum ContentKind {
+    Text,
+    Thinking,
+    Tool,
+}
+
+pub enum ContentBlock {
+    Pending(PendingContent),
+    Complete(MessageContent),
+}
+
+pub enum PendingContent {
+    Text(String),
+    Thinking {
+        thinking: String,
+        signature: String,
+        reasoning_id: Option<String>,
+    },
+    Tool {
+        id: PendingToolId,
+        name: NonEmptyString,
+        input: serde_json::Map<String, serde_json::Value>,
+        partial_json: String,
+    },
 }
 
 impl ContentBlock {
-    pub fn new(_index: usize, info: ContentBlockInfo) -> Self {
-        let content = match info {
-            ContentBlockInfo::ToolUse { id, name, input } => MessageContent::ToolBlock {
-                tool_id: id,
+    pub fn new(info: ContentBlockInfo) -> Self {
+        Self::Pending(match info {
+            ContentBlockInfo::ToolUse { id, name, input } => PendingContent::Tool {
+                id,
                 name,
                 input,
+                partial_json: String::new(),
             },
-            ContentBlockInfo::Thinking { thinking } => MessageContent::ThinkingBlock {
+            ContentBlockInfo::Thinking { thinking } => PendingContent::Thinking {
                 thinking,
                 signature: String::new(),
                 reasoning_id: None,
             },
-            ContentBlockInfo::Text { text } => MessageContent::MessageBlock { text, phase: None },
-        };
-        Self {
-            content,
-            partial_json: String::new(),
-            complete: false,
+            ContentBlockInfo::Text { text } => PendingContent::Text(text),
+        })
+    }
+
+    fn kind(&self) -> ContentKind {
+        match self {
+            Self::Pending(PendingContent::Tool { .. })
+            | Self::Complete(MessageContent::ToolBlock { .. }) => ContentKind::Tool,
+            Self::Pending(PendingContent::Thinking { .. })
+            | Self::Complete(
+                MessageContent::ThinkingBlock { .. } | MessageContent::OpenAIReasoning(_),
+            ) => ContentKind::Thinking,
+            Self::Pending(PendingContent::Text(_))
+            | Self::Complete(
+                MessageContent::MessageBlock { .. } | MessageContent::ToolResult { .. },
+            ) => ContentKind::Text,
         }
     }
 
-    fn accum(&mut self, delta: Delta) -> anyhow::Result<()> {
-        ensure!(
-            !self.complete,
-            "Received a delta after content block completion"
-        );
-        match (&mut self.content, delta) {
-            (MessageContent::MessageBlock { text, .. }, Delta::TextDelta { text: delta }) => {
-                text.push_str(&delta)
-            }
-            (MessageContent::ToolBlock { .. }, Delta::InputJsonDelta { partial_json }) => {
-                self.partial_json.push_str(&partial_json)
+    fn accum(&self, delta: Delta) -> anyhow::Result<Self> {
+        match self {
+            Self::Complete(_) => Err(anyhow!("Received a delta after content block completion")),
+            Self::Pending(content) => content.accum(delta).map(Self::Pending),
+        }
+    }
+}
+
+impl PendingContent {
+    fn accum(&self, delta: Delta) -> anyhow::Result<Self> {
+        match (self, delta) {
+            (Self::Text(text), Delta::TextDelta { text: delta }) => {
+                Ok(Self::Text(format!("{text}{delta}")))
             }
             (
-                MessageContent::ThinkingBlock {
+                Self::Tool {
+                    id,
+                    name,
+                    input,
+                    partial_json,
+                },
+                Delta::InputJsonDelta {
+                    partial_json: delta,
+                },
+            ) => Ok(Self::Tool {
+                id: id.clone(),
+                name: name.clone(),
+                input: input.clone(),
+                partial_json: format!("{partial_json}{delta}"),
+            }),
+            (
+                Self::Thinking {
                     thinking,
+                    signature,
                     reasoning_id,
-                    ..
                 },
                 Delta::ThinkingDelta {
                     thinking: delta,
                     reasoning_id: id,
                 },
-            ) => {
-                thinking.push_str(&delta);
-                if id.is_some() {
-                    *reasoning_id = id;
-                }
-            }
+            ) => Ok(Self::Thinking {
+                thinking: format!("{thinking}{delta}"),
+                signature: signature.clone(),
+                reasoning_id: id.or_else(|| reasoning_id.clone()),
+            }),
             (
-                MessageContent::ThinkingBlock { signature, .. },
+                Self::Thinking {
+                    thinking,
+                    signature,
+                    reasoning_id,
+                },
                 Delta::SignatureDelta { signature: delta },
-            ) => signature.push_str(&delta),
-            _ => bail!("Delta does not match its content block"),
+            ) => Ok(Self::Thinking {
+                thinking: thinking.clone(),
+                signature: format!("{signature}{delta}"),
+                reasoning_id: reasoning_id.clone(),
+            }),
+            _ => Err(anyhow!("Delta does not match its content block")),
         }
-        Ok(())
+    }
+
+    fn complete(&self, completed_id: Option<NonEmptyString>) -> anyhow::Result<MessageContent> {
+        match self {
+            Self::Text(text) => Ok(MessageContent::MessageBlock {
+                text: text.clone(),
+                phase: None,
+            }),
+            Self::Thinking {
+                thinking,
+                signature,
+                reasoning_id,
+            } => Ok(MessageContent::ThinkingBlock {
+                thinking: thinking.clone(),
+                signature: signature.clone(),
+                reasoning_id: reasoning_id.clone(),
+            }),
+            Self::Tool {
+                id,
+                name,
+                input,
+                partial_json,
+            } => {
+                let input = if partial_json.is_empty() {
+                    input.clone()
+                } else {
+                    serde_json::from_str(partial_json)?
+                };
+                let tool_id = id.complete(completed_id)?;
+                Ok(MessageContent::ToolBlock {
+                    tool_id,
+                    name: name.clone(),
+                    input,
+                })
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejected_delta_preserves_pending_content_for_subsequent_updates() {
+        let mut batch = Batch::new();
+        batch.put(
+            0,
+            ContentBlock::new(ContentBlockInfo::Text {
+                text: "First".into(),
+            }),
+        );
+
+        assert!(
+            batch
+                .accum(
+                    &0,
+                    Delta::InputJsonDelta {
+                        partial_json: "{}".into(),
+                    },
+                )
+                .is_err()
+        );
+        batch
+            .accum(
+                &0,
+                Delta::TextDelta {
+                    text: " second".into(),
+                },
+            )
+            .unwrap();
+        batch.apply_reduce(&0, None).unwrap();
+
+        let items = batch.extract_and_pre_process().unwrap();
+        assert!(matches!(
+            &items[0].processed,
+            ProcessedItem::Content(MessageContent::MessageBlock { text, .. })
+                if text == "First second"
+        ));
+    }
+
+    #[test]
+    fn rejected_delta_preserves_completed_content() {
+        let mut batch = Batch::new();
+        batch.complete_item(
+            0,
+            MessageContent::MessageBlock {
+                text: "Final".into(),
+                phase: None,
+            },
+        );
+
+        assert!(
+            batch
+                .accum(
+                    &0,
+                    Delta::TextDelta {
+                        text: " discarded".into(),
+                    },
+                )
+                .is_err()
+        );
+
+        let items = batch.extract_and_pre_process().unwrap();
+        assert!(matches!(
+            &items[0].processed,
+            ProcessedItem::Content(MessageContent::MessageBlock { text, .. })
+                if text == "Final"
+        ));
     }
 }

@@ -19,33 +19,27 @@ impl TryFrom<llm::ClientRequest> for ClientRequest {
                     let role = x.role.clone();
                     x.content.into_iter().map(move |c| (c, role.clone()))
                 })
-                .map(|(content, role)| Ok(match content {
-                    ContentBlock::MessageBlock { text, phase } => InputItem::Message {
+                .map(|(content, role)| match content {
+                    ContentBlock::MessageBlock { text, phase } => Ok(InputItem::Message {
                         role: role.into(),
                         content: text,
                         phase,
-                    },
-                    ContentBlock::ThinkingBlock { .. } => anyhow::bail!(
+                    }),
+                    ContentBlock::ThinkingBlock { .. } => Err(anyhow::anyhow!(
                         "This history contains thinking state incompatible with OpenAI; start a new conversation"
-                    ),
-                    ContentBlock::OpenAIReasoning(item) => InputItem::Reasoning(item),
-                    ContentBlock::ToolBlock {
-                        tool_id,
-                        name,
-                        input,
-                    } => InputItem::FunctionCall {
+                    )),
+                    ContentBlock::OpenAIReasoning(item) => Ok(InputItem::Reasoning(item)),
+                    ContentBlock::ToolBlock { tool_id, name, input } => Ok(InputItem::FunctionCall {
                         id: tool_id.id,
                         call_id: tool_id.call_id.ok_or_else(|| anyhow::anyhow!("OpenAI tool call is missing its call_id"))?,
                         name,
                         arguments: serde_json::to_string(&input)?,
-                    },
-                    ContentBlock::ToolResult {
-                        tool_id, content, ..
-                    } => InputItem::FunctionCallOutput {
+                    }),
+                    ContentBlock::ToolResult { tool_id, content, .. } => Ok(InputItem::FunctionCallOutput {
                         call_id: tool_id.call_id.ok_or_else(|| anyhow::anyhow!("OpenAI tool result is missing its call_id"))?,
                         output: content,
-                    },
-                }))
+                    }),
+                })
                 .collect::<anyhow::Result<Vec<_>>>()?,
             instructions: llm_req.system,
             model: llm_req.model,
@@ -140,7 +134,10 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
                     error_type: "incomplete_response".into(),
                     message: format!(
                         "OpenAI response incomplete: {}",
-                        response.incomplete_details.unwrap_or_default()
+                        response
+                            .incomplete_details
+                            .map(|details| details.reason)
+                            .unwrap_or_default()
                     ),
                 },
             }),
@@ -152,7 +149,10 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
                     error_type: "failed_response".into(),
                     message: format!(
                         "OpenAI response failed: {}",
-                        response.error.unwrap_or_default()
+                        response
+                            .error
+                            .map(|error| error.message)
+                            .unwrap_or_default()
                     ),
                 },
             }),
@@ -165,12 +165,12 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
                     Some(llm::StreamEvent::ContentBlockStart {
                         index: output_index,
                         content_block: ContentBlockInfo::ToolUse {
-                            id: ToolId {
+                            id: llm::PendingToolId {
                                 call_id: Some(call_id),
-                                id: id.unwrap_or_default(),
+                                id,
                             },
                             name,
-                            input: serde_json::json!({}),
+                            input: Default::default(),
                         },
                     })
                 }
@@ -259,11 +259,6 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
                     partial_json: delta,
                 },
             }),
-            // StreamEvent::FunctionCallArgumentsDone { output_index, .. } => {
-            //     Some(llm::StreamEvent::ContentBlockStop {
-            //         index: output_index,
-            //     })
-            // }
             StreamEvent::ReasoningTextDelta {
                 item_id,
                 output_index,
@@ -276,7 +271,7 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
                     reasoning_id: Some(item_id),
                 },
             }),
-            StreamEvent::ReasoningTextDone { output_index, .. } => Some(llm::StreamEvent::Accum),
+            StreamEvent::ReasoningTextDone { .. } => Some(llm::StreamEvent::Accum),
             StreamEvent::ReasoningSummaryTextDelta {
                 item_id,
                 output_index,

@@ -20,10 +20,7 @@ pub struct DrawLine {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RenderState {
-    in_code: bool,
-    fence_marker: Option<char>,
-    fence_len: usize,
-    code_lang: Option<String>,
+    fence: Option<CodeFence>,
 }
 
 enum Section {
@@ -111,7 +108,7 @@ impl SectionSplitter {
     }
 
     fn push_line(&mut self, line: &str) {
-        if self.state.in_code {
+        if self.state.fence.is_some() {
             self.push_code_line(line);
         } else {
             self.push_markdown_line(line);
@@ -121,37 +118,34 @@ impl SectionSplitter {
     fn push_code_line(&mut self, line: &str) {
         if self
             .state
-            .fence_marker
-            .is_some_and(|marker| CodeFence::is_closing(line, marker, self.state.fence_len))
+            .fence
+            .as_ref()
+            .is_some_and(|fence| fence.is_closing(line))
         {
-            self.flush_code(true, true);
+            self.flush_code(true);
             self.close_code();
-            return;
-        }
-
-        if self.should_recover_markdown(line) {
-            self.flush_code(true, false);
+        } else if self.should_recover_markdown(line) {
+            self.flush_code(false);
             self.close_code();
             self.push_markdown_line(line);
-            return;
+        } else {
+            self.code_lines.push(line.to_string());
         }
-
-        self.code_lines.push(line.to_string());
     }
 
     fn push_markdown_line(&mut self, line: &str) {
-        let Some(fence) = CodeFence::opening(line) else {
-            self.markdown_lines.push(line.to_string());
-            return;
-        };
-
-        self.flush_markdown();
-        self.open_code(fence);
+        match CodeFence::opening(line) {
+            Some(fence) => {
+                self.flush_markdown();
+                self.open_code(fence);
+            }
+            None => self.markdown_lines.push(line.to_string()),
+        }
     }
 
     fn finish(mut self) -> (Vec<Section>, RenderState) {
-        if self.state.in_code {
-            self.flush_code(false, false);
+        if self.state.fence.is_some() {
+            self.flush_code(false);
         } else {
             self.flush_markdown();
         }
@@ -160,137 +154,105 @@ impl SectionSplitter {
     }
 
     fn flush_markdown(&mut self) {
-        if self.markdown_lines.is_empty() {
-            return;
+        if !self.markdown_lines.is_empty() {
+            self.sections
+                .push(Section::Markdown(self.markdown_lines.join("\n")));
+            self.markdown_lines.clear();
         }
-
-        self.sections
-            .push(Section::Markdown(self.markdown_lines.join("\n")));
-        self.markdown_lines.clear();
     }
 
-    fn flush_code(&mut self, close_fence: bool, trim_trailing_blank_lines: bool) {
-        if self.code_lines.is_empty() && !self.code_started_in_current_batch {
-            if close_fence {
-                self.state.code_lang.take();
-            }
-            return;
+    fn flush_code(&mut self, trim_trailing_blank_lines: bool) {
+        if !self.code_lines.is_empty() || self.code_started_in_current_batch {
+            let lang = self
+                .state
+                .fence
+                .as_ref()
+                .and_then(|fence| fence.lang.clone());
+            self.sections.push(Section::Code(CodeSection::new(
+                lang,
+                std::mem::take(&mut self.code_lines),
+                self.code_started_in_current_batch,
+                trim_trailing_blank_lines,
+            )));
         }
-
-        let lang = if close_fence {
-            self.state.code_lang.take()
-        } else {
-            self.state.code_lang.clone()
-        };
-
-        self.sections.push(Section::Code(CodeSection::new(
-            lang,
-            std::mem::take(&mut self.code_lines),
-            self.code_started_in_current_batch,
-            trim_trailing_blank_lines,
-        )));
     }
 
     fn open_code(&mut self, fence: CodeFence) {
-        self.state.in_code = true;
-        self.state.fence_marker = Some(fence.marker);
-        self.state.fence_len = fence.len;
-        self.state.code_lang = fence.lang;
+        self.state.fence = Some(fence);
         self.code_started_in_current_batch = true;
     }
 
     fn close_code(&mut self) {
-        self.state.in_code = false;
-        self.state.fence_marker = None;
-        self.state.fence_len = 0;
+        self.state.fence = None;
         self.code_started_in_current_batch = false;
     }
 
     fn should_recover_markdown(&self, line: &str) -> bool {
-        if self
+        !self
             .state
-            .code_lang
-            .as_deref()
+            .fence
+            .as_ref()
+            .and_then(|fence| fence.lang.as_deref())
             .is_some_and(DrawLine::is_diff_lang)
-        {
-            return false;
-        }
-
-        self.code_lines
-            .last()
-            .is_some_and(|line| line.trim().is_empty())
+            && self
+                .code_lines
+                .last()
+                .is_some_and(|line| line.trim().is_empty())
             && self.looks_like_markdown_after_code(line)
     }
 
     fn looks_like_markdown_after_code(&self, line: &str) -> bool {
-        let Some(marker) = DrawLine::markdown_list_marker(line) else {
-            return false;
-        };
-
-        let content = marker.content.trim_start();
-        self.code_content_is_elided()
-            || content.starts_with("**")
-            || content.starts_with("__")
-            || content.starts_with('`')
-            || content.starts_with('[')
-            || content.contains("**")
-            || content.contains("__")
+        DrawLine::markdown_list_marker(line).is_some_and(|marker| {
+            let content = marker.content.trim_start();
+            self.code_content_is_elided()
+                || content.starts_with("**")
+                || content.starts_with("__")
+                || content.starts_with('`')
+                || content.starts_with('[')
+                || content.contains("**")
+                || content.contains("__")
+        })
     }
 
     fn code_content_is_elided(&self) -> bool {
-        let mut saw_content = false;
-
-        for line in &self.code_lines {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-
-            saw_content = true;
-            if !matches!(trimmed, "..." | "…") {
-                return false;
-            }
-        }
-
-        saw_content
+        let mut content = self
+            .code_lines
+            .iter()
+            .map(|line| line.trim())
+            .filter(|line| !line.is_empty())
+            .peekable();
+        content.peek().is_some() && content.all(|line| matches!(line, "..." | "…"))
     }
 }
 
-struct CodeFence {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CodeFence {
     marker: char,
     len: usize,
     lang: Option<String>,
 }
 
 impl CodeFence {
-    fn opening(line: &str) -> Option<Self> {
+    pub(crate) fn opening(line: &str) -> Option<Self> {
         let trimmed = line.trim_start();
-        let marker = trimmed.chars().next()?;
-        if !matches!(marker, '`' | '~') {
-            return None;
+        match trimmed.chars().next() {
+            Some(marker @ ('`' | '~')) => {
+                let len = Self::leading_markers(trimmed, marker);
+                let info = trimmed[len..].trim();
+                (len >= 3 && !(marker == '`' && info.contains('`'))).then(|| Self {
+                    marker,
+                    len,
+                    lang: Self::language(info),
+                })
+            }
+            _ => None,
         }
-
-        let len = Self::leading_markers(trimmed, marker);
-        if len < 3 {
-            return None;
-        }
-
-        let info = trimmed[len..].trim();
-        if marker == '`' && info.contains('`') {
-            return None;
-        }
-
-        Some(Self {
-            marker,
-            len,
-            lang: Self::language(info),
-        })
     }
 
-    fn is_closing(line: &str, marker: char, opening_len: usize) -> bool {
+    pub(crate) fn is_closing(&self, line: &str) -> bool {
         let trimmed = line.trim();
-        let len = Self::leading_markers(trimmed, marker);
-        len >= opening_len && trimmed.len() == len
+        let len = Self::leading_markers(trimmed, self.marker);
+        len >= self.len && trimmed.len() == len
     }
 
     fn leading_markers(line: &str, marker: char) -> usize {
@@ -341,14 +303,6 @@ impl DrawLine {
             })
             .collect()
     }
-
-    /// Split raw message lines into code blocks and markdown text.
-    ///
-    /// Code fences are detected line-by-line: an opening fence is any line
-    /// starting with at least three backticks or tildes (optionally followed by
-    /// a language). A closing fence uses the same marker and consists only of
-    /// at least as many markers as the opening fence. This avoids toggling on
-    /// marker-like content inside a code block.
     fn split_sections(lines: &[String], state: RenderState) -> (Vec<Section>, RenderState) {
         SectionSplitter::split(lines, state)
     }
@@ -356,26 +310,23 @@ impl DrawLine {
     fn render_code_section(&self, section: &CodeSection) -> Vec<Line<'static>> {
         let lines = section.trimmed_lines();
         if lines.is_empty() {
-            return vec![Line::from("")];
+            vec![Line::from("")]
+        } else if section.lang.as_deref().is_some_and(Self::is_diff_lang) {
+            Self::render_diff_section(lines)
+        } else {
+            let ps = &self.syntax_set;
+            let theme = &self.theme_set.themes[CODE_THEME];
+            let syntax = section
+                .lang
+                .as_deref()
+                .and_then(|lang| ps.find_syntax_by_token(lang))
+                .unwrap_or_else(|| ps.find_syntax_plain_text());
+            let mut highlighter = HighlightLines::new(syntax, theme);
+            lines
+                .iter()
+                .map(|line| self.render_highlighted_code_line(line, &mut highlighter))
+                .collect()
         }
-
-        if section.lang.as_deref().is_some_and(Self::is_diff_lang) {
-            return Self::render_diff_section(lines);
-        }
-
-        let ps = &self.syntax_set;
-        let theme = &self.theme_set.themes[CODE_THEME];
-        let syntax = section
-            .lang
-            .as_deref()
-            .and_then(|l| ps.find_syntax_by_token(l))
-            .unwrap_or_else(|| ps.find_syntax_plain_text());
-
-        let mut h = HighlightLines::new(syntax, theme);
-        lines
-            .iter()
-            .map(|line| self.render_highlighted_code_line(line, &mut h))
-            .collect()
     }
 
     fn is_diff_lang(lang: &str) -> bool {
@@ -470,24 +421,19 @@ impl DrawLine {
     }
     fn render_markdown_section(text: &str) -> Vec<Line<'static>> {
         if text.trim().is_empty() {
-            return text
-                .split('\n')
+            text.split('\n')
                 .map(|line| Line::from(Self::expand_tabs(line)))
-                .collect();
-        }
-        let normalized = Self::normalize_markdown(text);
-        let tree = match markdown::to_mdast(&normalized, &Self::markdown_parse_options()) {
-            Ok(tree) => tree,
-            Err(_) => {
-                return text
+                .collect()
+        } else {
+            let normalized = Self::normalize_markdown(text);
+            match markdown::to_mdast(&normalized, &Self::markdown_parse_options()) {
+                Ok(Node::Root(root)) => Self::render_root(&root, &normalized),
+                Ok(tree) => Self::render_block(&tree),
+                Err(_) => text
                     .lines()
                     .map(|line| Line::from(Self::expand_tabs(line)))
-                    .collect();
+                    .collect(),
             }
-        };
-        match &tree {
-            Node::Root(root) => Self::render_root(root, &normalized),
-            _ => Self::render_block(&tree),
         }
     }
 
@@ -505,11 +451,9 @@ impl DrawLine {
 
             let rendered = match child {
                 Node::List(list) => Self::render_list(list, Some(&source_lines)),
-                _ => Self::restore_root_indentation(
-                    child,
-                    Self::render_block(child),
-                    &source_lines,
-                ),
+                _ => {
+                    Self::restore_root_indentation(child, Self::render_block(child), &source_lines)
+                }
             };
             lines.extend(rendered);
 
@@ -529,45 +473,38 @@ impl DrawLine {
         mut rendered: Vec<Line<'static>>,
         source_lines: &[&str],
     ) -> Vec<Line<'static>> {
-        let Some(position) = node.position() else {
-            return rendered;
-        };
-        let start = position.start.line.saturating_sub(1);
-        let Some(first_source_line) = source_lines.get(start) else {
-            return rendered;
-        };
-
-        if matches!(node, Node::Paragraph(_)) {
-            let end = if position.end.column == 1 {
-                position.end.line.saturating_sub(1)
-            } else {
-                position.end.line
-            };
-            let source_block = source_lines.get(start..end).unwrap_or_default();
-            if source_block.len() == rendered.len() {
-                for (line, source_line) in rendered.iter_mut().zip(source_block) {
-                    Self::prepend_indent(line, Self::leading_space_count(source_line));
+        if let Some(position) = node.position() {
+            let start = position.start.line.saturating_sub(1);
+            if let Some(first_source_line) = source_lines.get(start) {
+                let end = if position.end.column == 1 {
+                    position.end.line.saturating_sub(1)
+                } else {
+                    position.end.line
+                };
+                let source_block = source_lines.get(start..end).unwrap_or_default();
+                if matches!(node, Node::Paragraph(_)) && source_block.len() == rendered.len() {
+                    for (line, source_line) in rendered.iter_mut().zip(source_block) {
+                        Self::prepend_indent(line, Self::leading_space_count(source_line));
+                    }
+                } else {
+                    let indent = if matches!(node, Node::Code(_)) {
+                        Self::leading_space_count(first_source_line).min(TAB_STOP_WIDTH)
+                    } else {
+                        Self::leading_space_count(first_source_line)
+                    };
+                    for line in &mut rendered {
+                        Self::prepend_indent(line, indent);
+                    }
                 }
-                return rendered;
             }
-        }
-
-        let indent = if matches!(node, Node::Code(_)) {
-            Self::leading_space_count(first_source_line).min(TAB_STOP_WIDTH)
-        } else {
-            Self::leading_space_count(first_source_line)
-        };
-        for line in &mut rendered {
-            Self::prepend_indent(line, indent);
         }
         rendered
     }
 
     fn prepend_indent(line: &mut Line<'static>, indent: usize) {
-        if indent == 0 || Self::line_plain_text(line).is_empty() {
-            return;
+        if indent > 0 && !Self::line_plain_text(line).is_empty() {
+            line.spans.insert(0, Span::raw(" ".repeat(indent)));
         }
-        line.spans.insert(0, Span::raw(" ".repeat(indent)));
     }
 
     fn leading_space_count(line: &str) -> usize {
@@ -575,33 +512,33 @@ impl DrawLine {
     }
 
     pub(crate) fn expand_tabs(text: &str) -> String {
-        if !text.contains('\t') {
-            return text.to_string();
-        }
+        if text.contains('\t') {
+            let mut expanded = String::with_capacity(text.len());
+            let mut column = 0;
 
-        let mut expanded = String::with_capacity(text.len());
-        let mut column = 0;
-
-        for ch in text.chars() {
-            match ch {
-                '\t' => {
-                    let spaces = TAB_STOP_WIDTH - (column % TAB_STOP_WIDTH);
-                    expanded.push_str(&" ".repeat(spaces));
-                    column += spaces;
-                }
-                '\n' | '\r' => {
-                    expanded.push(ch);
-                    column = 0;
-                }
-                _ => {
-                    let mut buffer = [0; 4];
-                    column += display_width(ch.encode_utf8(&mut buffer));
-                    expanded.push(ch);
+            for ch in text.chars() {
+                match ch {
+                    '\t' => {
+                        let spaces = TAB_STOP_WIDTH - (column % TAB_STOP_WIDTH);
+                        expanded.push_str(&" ".repeat(spaces));
+                        column += spaces;
+                    }
+                    '\n' | '\r' => {
+                        expanded.push(ch);
+                        column = 0;
+                    }
+                    _ => {
+                        let mut buffer = [0; 4];
+                        column += display_width(ch.encode_utf8(&mut buffer));
+                        expanded.push(ch);
+                    }
                 }
             }
-        }
 
-        expanded
+            expanded
+        } else {
+            text.to_string()
+        }
     }
 
     fn normalize_markdown(text: &str) -> String {
@@ -638,52 +575,36 @@ impl DrawLine {
     }
 
     fn next_loose_nested_content_indent(line: &str, current: Option<usize>) -> Option<usize> {
-        let Some(marker) = Self::markdown_list_marker(line) else {
-            return if line.trim().is_empty() {
-                current
-            } else {
-                None
-            };
-        };
-
-        if marker.content.trim_end().ends_with(':') {
-            return Some(marker.content_indent);
+        match Self::markdown_list_marker(line) {
+            Some(marker) if marker.content.trim_end().ends_with(':') => Some(marker.content_indent),
+            Some(marker) if marker.indent > 0 => current,
+            None if line.trim().is_empty() => current,
+            _ => None,
         }
-
-        if marker.indent == 0 { None } else { current }
     }
 
     fn normalize_markdown_line(line: &str) -> String {
         let line = Self::expand_tabs(line);
-        let indent_len = line.bytes().take_while(|b| *b == b' ').count();
-        if indent_len > 3 {
-            return line;
-        }
-
+        let indent_len = Self::leading_space_count(&line);
         let rest = &line[indent_len..];
-        let hash_count = rest.bytes().take_while(|b| *b == b'#').count();
-        if !(1..=6).contains(&hash_count) {
-            return line;
-        }
-
+        let hash_count = rest.bytes().take_while(|byte| *byte == b'#').count();
         let after_hashes = &rest[hash_count..];
-        if after_hashes.is_empty() || after_hashes.starts_with([' ', '\t']) {
-            return line;
-        }
-        if !after_hashes
-            .chars()
-            .next()
-            .is_some_and(|ch| ch.is_ascii_digit())
+        if indent_len <= 3
+            && (1..=6).contains(&hash_count)
+            && after_hashes
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_digit())
         {
-            return line;
+            format!(
+                "{}{} {}",
+                &line[..indent_len],
+                &rest[..hash_count],
+                after_hashes
+            )
+        } else {
+            line
         }
-
-        format!(
-            "{}{} {}",
-            &line[..indent_len],
-            &rest[..hash_count],
-            after_hashes
-        )
     }
 
     fn list_should_interrupt_after(line: &str) -> bool {
@@ -721,12 +642,8 @@ impl DrawLine {
                     .iter()
                     .take_while(|byte| byte.is_ascii_digit())
                     .count();
-                if digit_len == 0 || digit_len > 9 {
-                    return None;
-                }
-
                 match rest_bytes.get(digit_len).copied() {
-                    Some(b'.' | b')') => {
+                    Some(b'.' | b')') if (1..=9).contains(&digit_len) => {
                         let marker_len = digit_len
                             + 1
                             + Self::following_space_len(&rest_bytes[digit_len + 1..])?;
@@ -801,9 +718,6 @@ impl DrawLine {
                 let spans = Self::render_inline_children(&heading.children, style);
                 Self::spans_to_lines(spans)
             }
-
-            // Fallback for indented code blocks that the AST parser finds
-            // (fenced blocks are already handled by split_sections)
             Node::Code(code) => {
                 let code_style = Style::default();
 
@@ -840,9 +754,7 @@ impl DrawLine {
                     .collect()
             }
 
-            Node::List(list) => {
-                Self::render_list(list, None)
-            }
+            Node::List(list) => Self::render_list(list, None),
 
             Node::ThematicBreak(_) => {
                 vec![Line::from(Span::styled(
@@ -907,15 +819,16 @@ impl DrawLine {
                 .add_modifier(Modifier::BOLD);
             let indent = " ".repeat(bullet.chars().count());
             let source_indent = source_lines
-                .and_then(|lines| item.position.as_ref().and_then(|position| {
-                    lines
-                        .get(position.start.line.saturating_sub(1))
-                        .map(|line| Self::leading_space_count(line))
-                }))
+                .and_then(|lines| {
+                    item.position.as_ref().and_then(|position| {
+                        lines
+                            .get(position.start.line.saturating_sub(1))
+                            .map(|line| Self::leading_space_count(line))
+                    })
+                })
                 .unwrap_or_default();
 
-            let item_lines: Vec<Line> =
-                item.children.iter().flat_map(Self::render_block).collect();
+            let item_lines: Vec<Line> = item.children.iter().flat_map(Self::render_block).collect();
             for (j, line) in item_lines.into_iter().enumerate() {
                 let mut spans = Vec::new();
                 if source_indent > 0 {
@@ -948,21 +861,20 @@ impl DrawLine {
         parent_indent: &str,
         bullet_style: Style,
     ) -> Option<Vec<Span<'static>>> {
-        let plain_text = Self::line_plain_text(&line);
-        let marker = Self::markdown_list_marker(&plain_text)?;
-        if marker.content.trim().is_empty() {
-            return None;
-        }
-
-        let mut spans = vec![
-            Span::raw(parent_indent.to_string()),
-            Span::styled("• ", bullet_style),
-        ];
-        spans.extend(Self::strip_span_prefix(
-            line.spans.clone(),
-            marker.content_indent,
-        ));
-        Some(spans)
+        let plain_text = Self::line_plain_text(line);
+        Self::markdown_list_marker(&plain_text)
+            .filter(|marker| !marker.content.trim().is_empty())
+            .map(|marker| {
+                let mut spans = vec![
+                    Span::raw(parent_indent.to_string()),
+                    Span::styled("• ", bullet_style),
+                ];
+                spans.extend(Self::strip_span_prefix(
+                    line.spans.clone(),
+                    marker.content_indent,
+                ));
+                spans
+            })
     }
 
     fn line_plain_text(line: &Line<'static>) -> String {
@@ -1077,10 +989,6 @@ impl DrawLine {
     }
 
     fn spans_to_lines(spans: Vec<Span<'static>>) -> Vec<Line<'static>> {
-        if spans.is_empty() {
-            return vec![Line::from("")];
-        }
-
         let mut lines: Vec<Vec<Span<'static>>> = vec![Vec::new()];
         for span in spans {
             let text = span.content.as_ref();
@@ -1148,75 +1056,71 @@ impl DrawLine {
             })
             .collect();
 
-        if rows.is_empty() {
-            return vec![Line::from("")];
-        }
-
         let column_count = table
             .align
             .len()
             .max(rows.iter().map(|row| row.children.len()).max().unwrap_or(0));
         if column_count == 0 {
-            return vec![Line::from("")];
-        }
+            vec![Line::from("")]
+        } else {
+            let is_continuation = rows
+                .first()
+                .is_some_and(|row| Self::is_table_block_continuation_row(row));
+            let column_widths = rows
+                .first()
+                .and_then(|row| Self::table_row_width_hint(row))
+                .map(|widths| Self::normalize_table_width_hint(widths, column_count))
+                .unwrap_or_else(|| {
+                    (0..column_count)
+                        .map(|column| {
+                            rows.iter()
+                                .filter_map(|row| row.children.get(column))
+                                .map(Self::node_display_width)
+                                .max()
+                                .unwrap_or(0)
+                                .max(1)
+                        })
+                        .collect()
+                });
 
-        let is_continuation = rows
-            .first()
-            .is_some_and(|row| Self::is_table_block_continuation_row(row));
-        let column_widths = rows
-            .first()
-            .and_then(|row| Self::table_row_width_hint(row))
-            .map(|widths| Self::normalize_table_width_hint(widths, column_count))
-            .unwrap_or_else(|| {
-                (0..column_count)
-                    .map(|column| {
-                        rows.iter()
-                            .filter_map(|row| row.children.get(column))
-                            .map(Self::node_display_width)
-                            .max()
-                            .unwrap_or(0)
-                            .max(1)
-                    })
-                    .collect()
-            });
+            let mut logical_rows: Vec<Vec<&markdown::mdast::TableRow>> = Vec::new();
+            for (row_index, row) in rows.iter().copied().enumerate() {
+                if is_continuation && row_index == 0 {
+                    continue;
+                }
 
-        let mut logical_rows: Vec<Vec<&markdown::mdast::TableRow>> = Vec::new();
-        for (row_index, row) in rows.iter().copied().enumerate() {
-            if is_continuation && row_index == 0 {
-                continue;
+                if Self::is_table_continuation_row(row) {
+                    if let Some(logical_row) = logical_rows.last_mut() {
+                        logical_row.push(row);
+                        continue;
+                    }
+                }
+
+                logical_rows.push(vec![row]);
             }
 
-            if Self::is_table_continuation_row(row) {
-                if let Some(logical_row) = logical_rows.last_mut() {
-                    logical_row.push(row);
-                    continue;
+            let mut lines = Vec::with_capacity(logical_rows.len() * 2);
+            if is_continuation && !logical_rows.is_empty() {
+                lines.push(Self::render_table_separator(&column_widths));
+            }
+
+            for (row_index, logical_row) in logical_rows.iter().enumerate() {
+                for (line_index, row) in logical_row.iter().enumerate() {
+                    lines.push(Self::render_table_row(
+                        row,
+                        &column_widths,
+                        &table.align,
+                        !is_continuation && row_index == 0 && line_index == 0,
+                    ));
+                }
+
+                if row_index < logical_rows.len().saturating_sub(1) {
+                    lines.push(Self::render_table_separator(&column_widths));
                 }
             }
 
-            logical_rows.push(vec![row]);
+            lines
         }
-
-        let mut lines = Vec::with_capacity(logical_rows.len() * 2);
-        if is_continuation && !logical_rows.is_empty() {
-            lines.push(Self::render_table_separator(&column_widths));
-        }
-
-        for (row_index, logical_row) in logical_rows.iter().enumerate() {
-            for (line_index, row) in logical_row.iter().enumerate() {
-                lines.push(Self::render_table_row(
-                    row,
-                    &column_widths,
-                    &table.align,
-                    !is_continuation && row_index == 0 && line_index == 0,
-                ));
-            }
-
-            if row_index < logical_rows.len().saturating_sub(1) {
-                lines.push(Self::render_table_separator(&column_widths));
-            }
-        }
-
-        lines
     }
 
     fn render_table_row(
@@ -1360,22 +1264,14 @@ impl DrawLine {
     }
 
     fn parse_table_width_marker(value: &str) -> Option<Vec<usize>> {
-        if !Self::is_table_width_marker_value(value) {
-            return None;
-        }
-
-        let payload =
-            &value[TABLE_WIDTH_MARKER_PREFIX.len()..value.len() - HTML_COMMENT_SUFFIX.len()];
-        let widths = payload
+        let payload = value
+            .strip_prefix(TABLE_WIDTH_MARKER_PREFIX)?
+            .strip_suffix(HTML_COMMENT_SUFFIX)?;
+        payload
             .split(',')
             .map(|part| part.parse::<usize>().ok())
-            .collect::<Option<Vec<_>>>()?;
-
-        if widths.is_empty() {
-            None
-        } else {
-            Some(widths)
-        }
+            .collect::<Option<Vec<_>>>()
+            .filter(|widths| !widths.is_empty())
     }
 
     fn is_table_width_marker_value(value: &str) -> bool {
@@ -1568,7 +1464,7 @@ mod tests {
         assert_eq!(first[0].spans[0].style.fg, Some(Color::Red));
         assert_eq!(second[0].spans[0].style.fg, Some(Color::Green));
         assert_eq!(line_text(&second[1]), "after");
-        assert!(!state.in_code);
+        assert!(state.fence.is_none());
     }
 
     #[test]
@@ -1584,7 +1480,7 @@ mod tests {
         let text = rendered.iter().map(line_text).collect::<Vec<_>>();
 
         assert_eq!(text, vec![String::new(), "fn main() {}".to_string()]);
-        assert!(!state.in_code);
+        assert!(state.fence.is_none());
     }
 
     #[test]
@@ -1656,7 +1552,7 @@ mod tests {
                 "  • Detects diff-like languages.".to_string(),
             ]
         );
-        assert!(!state.in_code);
+        assert!(state.fence.is_none());
     }
 
     #[test]
@@ -1682,7 +1578,7 @@ mod tests {
             ]
         );
         assert_eq!(rendered[2].spans[0].style.fg, Some(Color::Red));
-        assert!(state.in_code);
+        assert!(state.fence.is_some());
     }
 
     #[test]
@@ -1793,10 +1689,8 @@ mod tests {
     #[test]
     fn expands_tabs_in_fenced_code_without_wrapping_code_lines() {
         let draw_line = DrawLine::new();
-        let wrapped = DrawTable::wrap_markdown_tables(
-            "```rust\n\tlet value = 1;\nvalue\t+= 1;\n```",
-            12,
-        );
+        let wrapped =
+            DrawTable::wrap_markdown_tables("```rust\n\tlet value = 1;\nvalue\t+= 1;\n```", 12);
         let rendered = draw_line.render_lines(&wrapped);
         let text = rendered.iter().map(line_text).collect::<Vec<_>>();
 

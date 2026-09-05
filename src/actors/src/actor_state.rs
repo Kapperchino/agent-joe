@@ -46,7 +46,6 @@ impl<C: Context + Clone> ActorState<C> {
                     .unwrap_or_default()
                     .as_secs()
             ));
-            // Ensure the log directory exists
             if let Some(parent) = path.parent() {
                 tokio::fs::create_dir_all(parent).await?;
             }
@@ -124,8 +123,8 @@ impl<C: Context + Clone> ActorState<C> {
                             invocation,
                             content,
                         } => {
-                            self.find_tool(&invocation.name)?.add_context(
-                                &invocation.input,
+                            self.find_tool(invocation.name.as_ref())?.add_context(
+                                &serde_json::Value::Object(invocation.input.clone()),
                                 &mut self.cur_context,
                                 content,
                             )?;
@@ -144,8 +143,6 @@ impl<C: Context + Clone> ActorState<C> {
                 }
             }
         }
-        // Keep the provider's entire assistant response in order, then return
-        // every tool result together (also required by Claude's message format).
         if !assistant.is_empty() {
             self.history.push(Message {
                 role: Role::Assistant,
@@ -174,16 +171,16 @@ impl<C: Context + Clone> ActorState<C> {
     }
 
     pub fn tool_display(&self, tool_call: &ToolCall) -> anyhow::Result<String> {
-        let tool = self.find_tool(&tool_call.name)?;
-        let input = tool_call.input_value()?;
+        let tool = self.find_tool(tool_call.name.as_ref())?;
+        let input = tool_call.input_value();
         tool.display_erased(&input)
     }
 
     async fn tool_use(&self, tool_call: ToolCall) -> anyhow::Result<ToolResult> {
-        let tool = self.find_tool(&tool_call.name)?;
+        let tool = self.find_tool(tool_call.name.as_ref())?;
         let tool_name = tool_call.name.clone();
         let id = tool_call.id.clone();
-        let input = tool_call.input_value()?;
+        let input = tool_call.input_value();
 
         if self.debug_mode {
             warn!(tool_name = %tool_name, tool_id = ?id, input = ?input, "tool input");
@@ -191,7 +188,7 @@ impl<C: Context + Clone> ActorState<C> {
 
         let invocation = ToolInvocation {
             name: tool_name.clone(),
-            input: input.clone(),
+            input: tool_call.input.clone(),
             display: tool.display_erased(&input)?,
         };
 
@@ -228,7 +225,7 @@ impl<C: Context + Clone> ActorState<C> {
                 Ok(ToolResult::error(
                     id,
                     tool_name,
-                    input.clone(),
+                    tool_call.input,
                     err.to_string(),
                 ))
             }
@@ -244,12 +241,7 @@ impl<C: Context + Clone> ActorState<C> {
             ProcessedItem::Tool(tool) => {
                 let result = match self.tool_use(tool.clone()).await {
                     Ok(result) => result,
-                    Err(err) => ToolResult::error(
-                        tool.id,
-                        tool.name,
-                        serde_json::from_str(&tool.json)?,
-                        err.to_string(),
-                    ),
+                    Err(err) => ToolResult::error(tool.id, tool.name, tool.input, err.to_string()),
                 };
                 Ok(StreamRes::Tool(result))
             }

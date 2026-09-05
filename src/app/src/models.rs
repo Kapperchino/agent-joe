@@ -34,11 +34,11 @@ impl ModelSelections {
 }
 
 impl EffortsSelection {
-    pub fn get_efforts(&self) -> Vec<String> {
+    pub fn get_efforts(&self, model: &str) -> Vec<String> {
         match self {
-            EffortsSelection::OpenAI => OpenAIEffort::VARIANTS
-                .into_iter()
-                .map(|x| x.to_string())
+            EffortsSelection::OpenAI => OpenAIEffort::supported_for_model(model)
+                .iter()
+                .map(|effort| effort.as_ref().to_string())
                 .collect(),
             EffortsSelection::Claude => ClaudeEffort::VARIANTS
                 .into_iter()
@@ -52,8 +52,14 @@ impl EffortsSelection {
 }
 #[derive(Debug, PartialEq, EnumString, VariantNames, Clone)]
 pub enum OpenAIModels {
+    #[strum(serialize = "gpt-6-astra")]
+    GPT6_ASTRA,
     #[strum(serialize = "gpt-5.6-sol")]
     GPT5_6_SOL,
+    #[strum(serialize = "gpt-5.6-terra")]
+    GPT5_6_TERRA,
+    #[strum(serialize = "gpt-5.6-luna")]
+    GPT5_6_LUNA,
     #[strum(serialize = "gpt-5.5")]
     GPT5_5,
     #[strum(serialize = "gpt-5.4")]

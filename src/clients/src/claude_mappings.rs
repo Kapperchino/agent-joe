@@ -23,38 +23,38 @@ impl TryFrom<llm::ContentBlock> for ContentBlock {
     type Error = anyhow::Error;
 
     fn try_from(value: llm::ContentBlock) -> anyhow::Result<Self> {
-        Ok(match value {
-            llm::ContentBlock::MessageBlock { text, .. } => ContentBlock::MessageBlock { text },
-            llm::ContentBlock::OpenAIReasoning(_) => anyhow::bail!(
+        match value {
+            llm::ContentBlock::MessageBlock { text, .. } => Ok(ContentBlock::MessageBlock { text }),
+            llm::ContentBlock::OpenAIReasoning(_) => Err(anyhow::anyhow!(
                 "This history contains OpenAI reasoning state; start a new conversation before using Claude"
-            ),
+            )),
             llm::ContentBlock::ThinkingBlock {
                 thinking,
                 signature,
                 ..
-            } => ContentBlock::ThinkingBlock {
+            } => Ok(ContentBlock::ThinkingBlock {
                 thinking,
                 signature,
-            },
+            }),
             llm::ContentBlock::ToolBlock {
                 tool_id,
                 name,
                 input,
-            } => ContentBlock::ToolBlock {
+            } => Ok(ContentBlock::ToolBlock {
                 id: tool_id.id,
                 name,
                 input,
-            },
+            }),
             llm::ContentBlock::ToolResult {
                 tool_id,
                 content,
                 is_error,
-            } => ContentBlock::ToolResult {
+            } => Ok(ContentBlock::ToolResult {
                 tool_use_id: tool_id.id,
                 content,
                 is_error,
-            },
-        })
+            }),
+        }
     }
 }
 
@@ -156,7 +156,10 @@ impl Into<llm::StreamEvent> for StreamEvent {
                     llm::StreamEvent::ContentBlockStart {
                         index,
                         content_block: llm::ContentBlockInfo::ToolUse {
-                            id: ToolId { call_id: None, id },
+                            id: llm::PendingToolId {
+                                call_id: None,
+                                id: Some(id),
+                            },
                             name,
                             input,
                         },
