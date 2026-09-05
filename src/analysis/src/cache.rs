@@ -1,9 +1,11 @@
 use crate::analysis::SymbolInfo;
+use anyhow::Context;
 use heed::types::{SerdeJson, Str};
 use heed::{Database, Env, EnvOpenOptions, RoTxn, RwTxn};
-use std::io::ErrorKind;
 use std::path::PathBuf;
 use tokio::fs;
+
+const CACHE_MAP_SIZE: usize = 1024 * 1024 * 1024;
 
 pub trait CacheKey {
     fn get_key(&self) -> String;
@@ -27,21 +29,14 @@ pub struct TypedCache<K: CacheKey, V: CacheVal> {
 
 impl<K: CacheKey + 'static, V: CacheVal + 'static> TypedCache<K, V> {
     pub async fn new(path: PathBuf) -> anyhow::Result<Self> {
-        match fs::create_dir(path.clone()).await {
-            Ok(_) => Ok(()),
-            Err(err) => {
-                if err.kind() != ErrorKind::AlreadyExists {
-                    Err(err)
-                } else {
-                    Ok(())
-                }
-            }
-        }
-        .unwrap();
-        let env = unsafe { EnvOpenOptions::new().map_size(4096000).open(&path) }?;
-        let db_env = env.clone();
-        let mut wtxn = db_env.write_txn()?;
-        db_env.create_database::<Str, SerdeJson<V>>(&mut wtxn, None)?;
+        fs::create_dir_all(&path)
+            .await
+            .with_context(|| format!("Failed to create cache directory {}", path.display()))?;
+        let env = unsafe { EnvOpenOptions::new().map_size(CACHE_MAP_SIZE).open(&path) }
+            .with_context(|| format!("Failed to open cache {}", path.display()))?;
+        let mut wtxn = env.write_txn()?;
+        env.create_database::<Str, SerdeJson<V>>(&mut wtxn, None)?;
+        wtxn.commit()?;
 
         Ok(Self {
             env,

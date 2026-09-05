@@ -4,6 +4,7 @@ use actors::worker::{Worker, WorkerAdapter};
 use actors::workers::base_worker::BaseWorker;
 use actors::workers::simple_worker::SimpleWorker;
 use analysis::contexts::rust_context::RustContext;
+use anyhow::{Context, Result};
 use app::init_app::InitApp;
 use app::tui::TUIApp;
 use clap::Parser;
@@ -19,7 +20,7 @@ use crossterm::execute;
 use flume::Sender;
 use mimalloc::MiMalloc;
 use ractor::{Actor, ActorRef};
-use ratatui::{TerminalOptions, Viewport};
+use ratatui::{DefaultTerminal, TerminalOptions, Viewport};
 use std::io::stdout;
 use tokio::main;
 use tokio::task::JoinHandle;
@@ -41,7 +42,7 @@ struct Cli {
 static GLOBAL: MiMalloc = MiMalloc;
 
 #[main]
-async fn main() {
+async fn main() -> Result<()> {
     let cli = Cli::parse();
     if cli.debug {
         println!("Debug mode enabled");
@@ -57,12 +58,13 @@ async fn main() {
         .with_writer(file_appender)
         .finish();
 
-    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
+    tracing::subscriber::set_global_default(subscriber)
+        .context("Failed to set the tracing subscriber")?;
 
-    color_eyre::install().unwrap();
-    let mut terminal = ratatui::init_with_options(TerminalOptions {
+    color_eyre::install().map_err(|error| anyhow::Error::from_boxed(error.into()))?;
+    let terminal = ratatui::try_init_with_options(TerminalOptions {
         viewport: Viewport::Inline(INLINE_VIEWPORT_HEIGHT),
-    });
+    })?;
     execute!(
         stdout(),
         EnableBracketedPaste,
@@ -70,25 +72,7 @@ async fn main() {
     )
     .ok();
 
-    let config = Config::load_optional().unwrap();
-    let (config, mut terminal) = if config.is_none() {
-        let continue_term = InitApp::default().run(terminal).await.unwrap();
-        let config = Config::load_optional().unwrap().unwrap();
-        (config, continue_term)
-    } else {
-        (config.unwrap(), terminal)
-    };
-    let config = config.prepare().await.unwrap();
-    let config_context = ConfigContext::new(config);
-
-    let (tx, rx) = flume::unbounded();
-
-    let (joe, actor_handle) = get_actor(&cli, tx, config_context.clone()).await;
-
-    terminal.clear().ok();
-    let app = TUIApp::new(joe, config_context.clone(), cli.debug);
-    app.run(terminal, rx).await.unwrap();
-    actor_handle.await.expect("Actor failed to exit cleanly");
+    let result = run(&cli, terminal).await;
     execute!(
         stdout(),
         SetCursorStyle::DefaultUserShape,
@@ -97,61 +81,67 @@ async fn main() {
     )
     .ok();
     ratatui::restore();
+    result
 }
 
-async fn get_actor(
+async fn run(cli: &Cli, terminal: DefaultTerminal) -> Result<()> {
+    let (config, mut terminal) = match Config::load_optional()? {
+        Some(config) => (config, terminal),
+        None => {
+            let terminal = InitApp::default().run(terminal).await?;
+            let config = Config::load_optional()?.context("Setup ended without a configuration")?;
+            (config, terminal)
+        }
+    };
+    let config_context = ConfigContext::new(config.prepare().await?);
+    let (tx, rx) = flume::unbounded();
+    let (joe, actor_handle) = if cli.simple {
+        get_actor(cli, SimpleWorker::new(), tx, config_context.clone()).await
+    } else {
+        get_actor(cli, BaseWorker::new(), tx, config_context.clone()).await
+    }?;
+
+    terminal.clear().ok();
+    let app = TUIApp::new(joe.clone(), config_context, cli.debug);
+    let result = app
+        .run(terminal, rx)
+        .await
+        .map_err(|error| anyhow::Error::from_boxed(error.into()));
+    if result.is_err() {
+        let _ = joe.send_message(Message::KYS);
+    }
+    let stopped = actor_handle.await.context("Actor failed to exit cleanly");
+    result.and(stopped)
+}
+
+async fn get_actor<W: Worker<C = RustContext>>(
     cli: &Cli,
+    worker: W,
     chan: Sender<ActorToTui>,
     config_context: ConfigContext,
-) -> (ActorRef<Message>, JoinHandle<()>) {
-    let client = LLmClient::new(config_context.clone()).unwrap();
+) -> Result<(ActorRef<Message>, JoinHandle<()>)> {
+    let client = LLmClient::new(config_context)?;
+    let context = RustContext::new(W::init_prompt(None), 0)
+        .await
+        .context("Failed to initialize project analysis")?;
 
     let (supervisor, _) = Actor::spawn(None, WorkerSupervisor, ())
         .await
-        .expect("Failed to start supervisor");
+        .context("Failed to start supervisor")?;
 
-    match cli.simple {
-        true => {
-            let context = RustContext::new(SimpleWorker::init_prompt(None), 0)
-                .await
-                .unwrap();
-
-            Actor::spawn_linked(
-                None,
-                WorkerAdapter::new(SimpleWorker::new()),
-                Dependency {
-                    runtime: Default::default(),
-                    client,
-                    tools: SimpleWorker::tools(),
-                    tui_tx: chan,
-                    debug_mode: cli.debug,
-                    context,
-                },
-                supervisor.get_cell(),
-            )
-            .await
-            .expect("Failed to start actor")
-        }
-        false => {
-            let context = RustContext::new(BaseWorker::init_prompt(None), 0)
-                .await
-                .unwrap();
-
-            Actor::spawn_linked(
-                None,
-                WorkerAdapter::new(BaseWorker::new()),
-                Dependency {
-                    runtime: Default::default(),
-                    client,
-                    tools: BaseWorker::tools(),
-                    tui_tx: chan,
-                    debug_mode: cli.debug,
-                    context,
-                },
-                supervisor.get_cell(),
-            )
-            .await
-            .expect("Failed to start actor")
-        }
-    }
+    Actor::spawn_linked(
+        None,
+        WorkerAdapter::new(worker),
+        Dependency {
+            runtime: Default::default(),
+            client,
+            tools: W::tools(),
+            tui_tx: chan,
+            debug_mode: cli.debug,
+            context,
+        },
+        supervisor.get_cell(),
+    )
+    .await
+    .context("Failed to start actor")
 }

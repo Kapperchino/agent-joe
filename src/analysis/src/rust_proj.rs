@@ -10,7 +10,7 @@ use ra_ap_project_model::CargoConfig;
 use ra_ap_vfs::file_set::FileSet;
 use ra_ap_vfs::{Change, FileId, Vfs, VfsPath};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tracing::error;
 
@@ -220,11 +220,16 @@ impl RustProject {
             .flat_map(|root| {
                 root.files
                     .iter()
-                    .filter_map(|(id, file)| {
-                        file.exists.then(|| FileInfo {
-                            id: *id,
-                            path: file.path.clone(),
-                        })
+                    .filter(|(_, file)| {
+                        file.exists
+                            && file.path.as_path().is_some_and(|path| {
+                                let path: &Path = path.as_ref();
+                                path.starts_with(&self.root)
+                            })
+                    })
+                    .map(|(id, file)| FileInfo {
+                        id: *id,
+                        path: file.path.clone(),
                     })
                     .collect::<Vec<_>>()
             })
@@ -268,5 +273,115 @@ impl RustProject {
                 }
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::proj_meta::ProjMeta;
+    use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    struct ProjectFixture {
+        directory: PathBuf,
+    }
+
+    impl ProjectFixture {
+        fn new() -> Self {
+            static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+            let directory = std::env::temp_dir().join(format!(
+                "joe-analysis-{}-{}",
+                std::process::id(),
+                NEXT_ID.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir_all(directory.join("app/src")).unwrap();
+            fs::create_dir_all(directory.join("dependency/src")).unwrap();
+            fs::write(
+                directory.join("app/Cargo.toml"),
+                "[package]\nname = 'app'\nversion = '0.1.0'\nedition = '2024'\n\
+                 [dependencies]\ndependency = { path = '../dependency' }\n",
+            )
+            .unwrap();
+            fs::write(
+                directory.join("app/src/lib.rs"),
+                "pub struct Local;\npub fn local() { let _ = dependency::External; }\n",
+            )
+            .unwrap();
+            fs::write(
+                directory.join("dependency/Cargo.toml"),
+                "[package]\nname = 'dependency'\nversion = '0.1.0'\nedition = '2024'\n",
+            )
+            .unwrap();
+            fs::write(
+                directory.join("dependency/src/lib.rs"),
+                "pub struct External;\n",
+            )
+            .unwrap();
+            Self {
+                directory: directory.canonicalize().unwrap(),
+            }
+        }
+    }
+
+    impl Drop for ProjectFixture {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.directory).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn project_index_excludes_external_dependencies() {
+        let fixture = ProjectFixture::new();
+        let root = fixture.directory.join("app");
+        let project = RustProject::new(&root).unwrap();
+        let symbols = project.get_all_proj_symbols().await.unwrap();
+
+        assert!(symbols.iter().any(|symbol| symbol.name == "Local"));
+        assert!(symbols.iter().any(|symbol| symbol.name == "local"));
+        assert!(
+            symbols
+                .iter()
+                .all(|symbol| symbol.rpath.inner == "src/lib.rs")
+        );
+
+        let hashes = ProjMeta::get_file_hashes(&project).await.unwrap();
+        assert!(
+            hashes
+                .iter()
+                .any(|(path, _)| path == &root.join("src/lib.rs"))
+        );
+        assert!(hashes.iter().all(|(path, _)| path.starts_with(&root)));
+
+        let metadata = ProjMeta::get_proj_meta_from_symbols(symbols, &project)
+            .await
+            .unwrap();
+        assert!(
+            metadata
+                .files
+                .values()
+                .any(|file| file.rpath == "src/lib.rs")
+        );
+        assert!(
+            metadata
+                .files
+                .keys()
+                .all(|path| Path::new(path).is_relative())
+        );
+    }
+
+    #[tokio::test]
+    async fn project_index_loads_from_a_subdirectory() {
+        let fixture = ProjectFixture::new();
+        let root = fixture.directory.join("app/src");
+        let project = RustProject::new(&root).unwrap();
+        let symbols = project.get_all_proj_symbols().await.unwrap();
+
+        assert!(symbols.iter().any(|symbol| symbol.name == "Local"));
+        assert!(symbols.iter().all(|symbol| symbol.rpath.inner == "lib.rs"));
+
+        let hashes = ProjMeta::get_file_hashes(&project).await.unwrap();
+        assert_eq!(hashes.len(), 1);
+        assert_eq!(hashes[0].0, root.join("lib.rs"));
     }
 }

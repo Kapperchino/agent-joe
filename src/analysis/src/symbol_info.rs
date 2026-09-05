@@ -2,7 +2,6 @@ use crate::analysis::Range;
 use crate::cache::{TypedCache, TypedCacheDb};
 use crate::rust_proj::RustProject;
 use crate::utils::RPath;
-use anyhow::anyhow;
 use itertools::Itertools;
 use ra_ap_ide::{LineIndex, NavigationTarget, StructureNode, StructureNodeKind};
 use ra_ap_ide_db::SymbolKind;
@@ -169,23 +168,13 @@ impl SymbolInfo {
         if is_empty {
             let symbols = rust_proj.get_all_proj_symbols().await?;
             cache.transaction(|db: &mut TypedCacheDb<_, _>| {
-                let (_, errs): (Vec<_>, Vec<_>) = symbols
+                symbols
                     .iter()
-                    .map(|v| db.put(v, v))
-                    .partition(|r| r.is_ok());
-                // report on this
-                let errs: Vec<_> = errs.into_iter().flat_map(|x1| x1.err()).collect();
-                println!("{:?}", errs);
-                if !errs.is_empty() {
-                    return Err(anyhow!("Error while wrriting to DB! {:?}", errs));
-                }
+                    .try_for_each(|symbol| db.put(symbol, symbol))?;
                 Ok(symbols)
             })
         } else {
-            cache.read_transaction(|db| {
-                let res: Vec<_> = db.iter()?.collect();
-                Ok(res.into_iter().collect())
-            })
+            Self::get_symbols_from_cache(cache).await
         }
     }
 }

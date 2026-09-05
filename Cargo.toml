@@ -10,6 +10,7 @@ edition = "2024"
 opt-level = 3
 
 [dependencies]
+anyhow = "1.0"
 actors = { path = "src/actors" }
 app = { path = "src/app" }
 analysis = { path = "src/analysis" }

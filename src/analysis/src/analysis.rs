@@ -2,11 +2,12 @@ use crate::rust_proj::RustProject;
 pub(crate) use crate::symbol_info::SymbolInfo;
 use ra_ap_ide::{
     Analysis, FilePosition, FileStructureConfig, GotoImplementationConfig, LineIndex,
-    StructureNode, TextSize,
+    NavigationTarget, StructureNode, TextSize,
 };
 use ra_ap_ide_db::symbol_index::Query;
 use ra_ap_vfs::{FileId, VfsPath};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::Path;
 
 #[derive(Clone)]
@@ -88,33 +89,31 @@ impl<'a> AnalysisSession<'a> {
             },
             FilePosition { file_id, offset },
         )?;
-        let vfs = self.proj.vfs.lock().unwrap();
-        let res = res.map(|rinfo| {
-            rinfo
-                .info
-                .into_iter()
-                .map(|n| {
-                    let line_ind = self.get_line_indecies(n.file_id)?;
-                    SymbolInfo::from_nav(n, &vfs, line_ind.clone(), &self.proj.root)
-                })
-                .collect::<Result<Vec<_>, anyhow::Error>>()
-        });
-        res.transpose()
+        res.map(|rinfo| self.symbols_from_targets(rinfo.info))
+            .transpose()
     }
 
     pub fn get_symboles(&self) -> anyhow::Result<Vec<SymbolInfo>> {
         let mut q = Query::new("".to_string());
         q.exclude_imports();
         let search_res = self.analysis.symbol_search(q, usize::MAX)?;
+        self.symbols_from_targets(search_res)
+    }
+
+    fn symbols_from_targets(
+        &self,
+        targets: Vec<NavigationTarget>,
+    ) -> anyhow::Result<Vec<SymbolInfo>> {
+        let work_files: HashSet<_> = self.work_files.iter().map(|file| file.id).collect();
         let vfs = self.proj.vfs.lock().unwrap();
-        let res: Result<Vec<_>, _> = search_res
+        targets
             .into_iter()
+            .filter(|target| work_files.contains(&target.file_id))
             .map(|n| {
                 let line_ind = self.get_line_indecies(n.file_id)?;
-                SymbolInfo::from_nav(n, &vfs, line_ind.clone(), &self.proj.root)
+                SymbolInfo::from_nav(n, &vfs, line_ind, &self.proj.root)
             })
-            .collect();
-        res
+            .collect()
     }
 
     pub fn get_line_indecies(&self, file: FileId) -> anyhow::Result<triomphe::Arc<LineIndex>> {
