@@ -219,7 +219,10 @@ impl<C: Context + Clone + 'static> Executor<C> {
             .tasks
             .clone()
             .spawn(async move {
-                let result = AssertUnwindSafe(self.run(jobs, tag)).catch_unwind().await;
+                let scope = self.dependency.runtime.scope.clone();
+                let result = scope
+                    .enter(AssertUnwindSafe(self.run(jobs, tag)).catch_unwind())
+                    .await;
                 let result = result.map(|_| ()).map_err(|_| {
                     ToolFailure::new(
                         ToolFailureKind::Panicked,
@@ -281,7 +284,12 @@ impl<C: Context + Clone + 'static> Executor<C> {
     #[cfg(test)]
     pub async fn replay(&self, mut batch: crate::turn::ToolBatch) -> crate::turn::ToolBatch {
         let jobs = batch.jobs();
-        let results = self.run(jobs.clone(), batch.tag).await;
+        let results = self
+            .dependency
+            .runtime
+            .scope
+            .enter(self.run(jobs.clone(), batch.tag))
+            .await;
         for (job, result) in jobs.into_iter().zip(results) {
             assert!(batch.complete(job.operation, result).is_some());
         }

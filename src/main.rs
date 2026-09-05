@@ -95,7 +95,10 @@ async fn run(cli: &Cli, terminal: DefaultTerminal) -> Result<()> {
     };
     let config_context = ConfigContext::new(config.prepare().await?);
     let (tx, rx) = flume::unbounded();
-    let (joe, actor_handle) = if cli.simple {
+    let RunningActor {
+        actor: joe,
+        handle: actor_handle,
+    } = if cli.simple {
         get_actor(cli, SimpleWorker::new(), tx, config_context.clone()).await
     } else {
         get_actor(cli, BaseWorker::new(), tx, config_context.clone()).await
@@ -114,26 +117,37 @@ async fn run(cli: &Cli, terminal: DefaultTerminal) -> Result<()> {
     result.and(stopped)
 }
 
+struct RunningActor {
+    actor: ActorRef<Message>,
+    handle: JoinHandle<()>,
+}
+
 async fn get_actor<W: Worker<C = RustContext>>(
     cli: &Cli,
     worker: W,
     chan: Sender<ActorToTui>,
     config_context: ConfigContext,
-) -> Result<(ActorRef<Message>, JoinHandle<()>)> {
-    let client = LLmClient::new(config_context)?;
-    let context = RustContext::new(W::init_prompt(None), 0)
+) -> Result<RunningActor> {
+    let runtime = actors::runtime::Runtime::for_workspace(std::env::current_dir()?)?;
+    let workspace = runtime.scope.workspace()?;
+    let context = runtime
+        .scope
+        .enter(RustContext::new(
+            W::init_prompt(None),
+            0,
+            workspace.root().to_path_buf(),
+        ))
         .await
         .context("Failed to initialize project analysis")?;
-
+    let client = LLmClient::new(config_context)?;
     let (supervisor, _) = Actor::spawn(None, WorkerSupervisor, ())
         .await
         .context("Failed to start supervisor")?;
-
-    Actor::spawn_linked(
+    let (actor, handle) = Actor::spawn_linked(
         None,
         WorkerAdapter::new(worker),
         Dependency {
-            runtime: Default::default(),
+            runtime,
             client,
             tools: W::tools(),
             tui_tx: chan,
@@ -143,5 +157,6 @@ async fn get_actor<W: Worker<C = RustContext>>(
         supervisor.get_cell(),
     )
     .await
-    .context("Failed to start actor")
+    .context("Failed to start actor")?;
+    Ok(RunningActor { actor, handle })
 }

@@ -94,44 +94,51 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
         message: Message,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
-        match message {
-            Message::StartWork(prompt) => {
-                state
-                    .dispatch(SessionEvent::Start(FollowUp::new(prompt)))
-                    .await
-            }
-            Message::RunWorker(reply) => state.dispatch(SessionEvent::StartWorker(reply)).await,
-            Message::Provider { tag, event } => state.provider_event(tag, event).await,
-            Message::Tools { tag, event } => {
-                let revision = state.dependency.runtime.workspace.revision();
-                state
-                    .dispatch(SessionEvent::Tools {
-                        tag,
-                        event,
-                        revision,
-                    })
-                    .await;
-            }
-            Message::CleanupFinished { turn } => {
-                state.dispatch(SessionEvent::CleanupFinished(turn)).await
-            }
-            Message::Interrupt => {
-                state
-                    .dispatch(SessionEvent::Interrupt(HistoryDisposition::Retain))
-                    .await
-            }
-            Message::Clear => {
-                state
-                    .dispatch(SessionEvent::Interrupt(HistoryDisposition::Clear))
-                    .await
-            }
-            Message::Command(command) => state.command(command).await,
-            Message::KYS => state.actor_ref.stop(None),
-            #[cfg(test)]
-            Message::Inspect(reply) => {
-                let _ = reply.send(state.visible_history());
-            }
-        }
+        let scope = state.dependency.runtime.scope.clone();
+        scope
+            .enter(async {
+                match message {
+                    Message::StartWork(prompt) => {
+                        state
+                            .dispatch(SessionEvent::Start(FollowUp::new(prompt)))
+                            .await
+                    }
+                    Message::RunWorker(reply) => {
+                        state.dispatch(SessionEvent::StartWorker(reply)).await
+                    }
+                    Message::Provider { tag, event } => state.provider_event(tag, event).await,
+                    Message::Tools { tag, event } => {
+                        let revision = state.dependency.runtime.workspace.revision();
+                        state
+                            .dispatch(SessionEvent::Tools {
+                                tag,
+                                event,
+                                revision,
+                            })
+                            .await;
+                    }
+                    Message::CleanupFinished { turn } => {
+                        state.dispatch(SessionEvent::CleanupFinished(turn)).await
+                    }
+                    Message::Interrupt => {
+                        state
+                            .dispatch(SessionEvent::Interrupt(HistoryDisposition::Retain))
+                            .await
+                    }
+                    Message::Clear => {
+                        state
+                            .dispatch(SessionEvent::Interrupt(HistoryDisposition::Clear))
+                            .await
+                    }
+                    Message::Command(command) => state.command(command).await,
+                    Message::KYS => state.actor_ref.stop(None),
+                    #[cfg(test)]
+                    Message::Inspect(reply) => {
+                        let _ = reply.send(state.visible_history());
+                    }
+                }
+            })
+            .await;
         Ok(())
     }
 

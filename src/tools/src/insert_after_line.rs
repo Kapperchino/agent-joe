@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::cmp::min;
 use std::fmt::{Display, Formatter};
-use tokio::fs;
 use turbo_code_macros::{ToolDef, ToolInput};
+use utils::files::Files;
 use utils::utils::FnvHashMap;
 
 #[async_trait]
@@ -93,16 +93,13 @@ impl Display for InsertAfterLine {
 
 impl InsertAfterLine {
     async fn insert_after_line(&self) -> anyhow::Result<()> {
-        let line_num = self.input.line_num.clone() - 1;
-        let path = self.input.file_path.clone();
-        let insert_lines: Vec<_> = self.input.content.lines().collect();
-        let file_content = fs::read_to_string(&path).await?;
-        let mut lines: Vec<_> = file_content.lines().collect();
-        let line_num = min(line_num, lines.len() - 1);
-        lines.splice(line_num..line_num, insert_lines);
-        let mut res = lines.join("\n");
-        res.push_str("\n");
-        utils::files::Files::write_to_file(&path.into(), &res).await?;
-        Ok(())
+        let path = std::path::Path::new(&self.input.file_path);
+        let content = Files::read_file(path).await?;
+        let mut lines: Vec<_> = content.lines().collect();
+        let line = min(self.input.line_num.saturating_sub(1), lines.len());
+        lines.splice(line..line, self.input.content.lines());
+        let mut content = lines.join("\n");
+        content.push('\n');
+        Files::write_to_file(path, &content).await
     }
 }

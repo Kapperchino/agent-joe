@@ -3,8 +3,7 @@ use analysis::contexts::context::Context;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use similar::TextDiff;
-use std::fmt::{Display, Formatter, Write as _};
-use std::fs;
+use std::fmt::{Display, Formatter};
 use std::path::Path;
 use turbo_code_macros::{ToolDef, ToolInput};
 use utils::diff::{DiffSet, Patch, apply_diff};
@@ -248,44 +247,40 @@ fn pretty_patch_diff(patch: Patch<'_>) -> Option<String> {
     let mut output = String::new();
     match patch {
         Patch::AddFile { path, diff } => {
-            let new_content = apply_diff("", Patch::AddFile { path, diff }).ok()?;
-            write_content_diff(&mut output, None, Some(path), "", &new_content).ok()?;
+            let content = apply_diff("", Patch::AddFile { path, diff }).ok()?;
+            write_content_diff(&mut output, None, Some(path), "", &content).ok()?;
         }
         Patch::DeleteFile { path } => {
-            let old_content = fs::read_to_string(path).ok()?;
-            write_content_diff(&mut output, Some(path), None, &old_content, "").ok()?;
+            let content = Files::read_file_sync(path).ok()?;
+            write_content_diff(&mut output, Some(path), None, &content, "").ok()?;
         }
         Patch::UpdateFile { path, changes } => {
-            let old_content = fs::read_to_string(path).ok()?;
-            let new_content = apply_diff(&old_content, Patch::UpdateFile { path, changes }).ok()?;
-            write_content_diff(
-                &mut output,
-                Some(path),
-                Some(path),
-                &old_content,
-                &new_content,
-            )
-            .ok()?;
+            let content = Files::read_file_sync(path).ok()?;
+            let updated = apply_diff(&content, Patch::UpdateFile { path, changes }).ok()?;
+            write_content_diff(&mut output, Some(path), Some(path), &content, &updated).ok()?;
         }
         Patch::MoveFile {
             from,
             to,
             changes: None,
         } => {
-            fs::read_to_string(from).ok()?;
-            writeln!(output, "diff --git a/{} b/{}", from.display(), to.display()).ok()?;
-            writeln!(output, "similarity index 100%").ok()?;
-            writeln!(output, "rename from {}", from.display()).ok()?;
-            write!(output, "rename to {}", to.display()).ok()?;
+            Files::read_file_sync(from).ok()?;
+            output = format!(
+                "diff --git a/{} b/{}\nsimilarity index 100%\nrename from {}\nrename to {}",
+                from.display(),
+                to.display(),
+                from.display(),
+                to.display()
+            );
         }
         Patch::MoveFile {
             from,
             to,
             changes: Some(changes),
         } => {
-            let old_content = fs::read_to_string(from).ok()?;
-            let new_content = apply_diff(
-                &old_content,
+            let content = Files::read_file_sync(from).ok()?;
+            let updated = apply_diff(
+                &content,
                 Patch::MoveFile {
                     from,
                     to,
@@ -293,17 +288,9 @@ fn pretty_patch_diff(patch: Patch<'_>) -> Option<String> {
                 },
             )
             .ok()?;
-            write_content_diff(
-                &mut output,
-                Some(from),
-                Some(to),
-                &old_content,
-                &new_content,
-            )
-            .ok()?;
+            write_content_diff(&mut output, Some(from), Some(to), &content, &updated).ok()?;
         }
     }
-
     Some(output)
 }
 
@@ -343,8 +330,22 @@ fn diff_header(prefix: &str, path: Option<&Path>) -> String {
 
 impl ApplyPatch {
     async fn apply_patch(&self) -> anyhow::Result<()> {
-        let patches = DiffSet::new(&self.input.patch)?;
-        for patch in patches.into_patches() {
+        let patches = DiffSet::new(&self.input.patch)?.into_patches();
+        let workspace = utils::execution::ExecutionScope::current().workspace()?;
+        for patch in &patches {
+            match patch {
+                Patch::AddFile { path, .. }
+                | Patch::DeleteFile { path }
+                | Patch::UpdateFile { path, .. } => {
+                    workspace.check(path, utils::workspace::Access::Write)?
+                }
+                Patch::MoveFile { from, to, .. } => {
+                    workspace.check(from, utils::workspace::Access::Write)?;
+                    workspace.check(to, utils::workspace::Access::Write)?;
+                }
+            }
+        }
+        for patch in patches {
             Self::process_patch(patch).await?;
         }
         Ok(())
@@ -352,61 +353,50 @@ impl ApplyPatch {
 
     async fn process_patch(patch: Patch<'_>) -> anyhow::Result<()> {
         match patch {
-            Patch::DeleteFile { path } => {
-                Files::delete_file(&path.to_path_buf()).await?;
-            }
+            Patch::DeleteFile { path } => Files::delete_file(path).await,
             Patch::AddFile { path, diff } => {
                 let content = apply_diff("", Patch::AddFile { path, diff })?;
-                Files::write_to_file(&path.to_path_buf(), &content).await?;
+                Files::write_to_file(path, &content).await
             }
             Patch::UpdateFile { path, changes } => {
-                let path = path.to_path_buf();
-                let base = Files::read_file(&path).await?;
-                let patched = apply_diff(
-                    &base,
-                    Patch::UpdateFile {
-                        path: &path,
-                        changes,
-                    },
-                )?;
-                Files::write_to_file(&path, &patched).await?;
+                let content = Files::read_file(path).await?;
+                let updated = apply_diff(&content, Patch::UpdateFile { path, changes })?;
+                Files::write_to_file(path, &updated).await
             }
             Patch::MoveFile {
                 from,
                 to,
                 changes: None,
-            } => {
-                Files::rename_file(&from.to_path_buf(), &to.to_path_buf()).await?;
-            }
+            } => Files::rename_file(from, to).await,
             Patch::MoveFile {
                 from,
                 to,
                 changes: Some(changes),
             } => {
-                let src = from.to_path_buf();
-                let dst = to.to_path_buf();
-                let base = Files::read_file(&src).await?;
-                let patched = apply_diff(
-                    &base,
+                let content = Files::read_file(from).await?;
+                let updated = apply_diff(
+                    &content,
                     Patch::MoveFile {
-                        from: &src,
-                        to: &dst,
+                        from,
+                        to,
                         changes: Some(changes),
                     },
                 )?;
-                Files::create_parent_dirs(&dst).await?;
-                Files::write_to_file(&dst, &patched).await?;
-                if src != dst {
-                    Files::delete_file(&src).await?;
-                }
+                Files::rename_file(from, to).await?;
+                Files::write_to_file(to, &updated).await
             }
         }
-        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    fn workspace_scope() -> utils::execution::ExecutionScope {
+        utils::execution::ExecutionScope::with_workspace(
+            utils::workspace::WorkspacePolicy::workspace(std::env::temp_dir()).unwrap(),
+        )
+    }
+
     use super::*;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -429,9 +419,53 @@ mod tests {
         }
     }
 
-    #[test]
-    fn displays_custom_patch_operations() {
-        let patch = "\
+    #[tokio::test]
+    async fn previews_and_patch_operations_enforce_the_configured_workspace() {
+        let directory = temp_path("policy");
+        let root = directory.join("workspace");
+        let outside = directory.join("outside");
+        std::fs::create_dir_all(root.join(".turbo-code")).unwrap();
+        std::fs::write(root.join("file"), "original\n").unwrap();
+        std::fs::write(root.join(".turbo-code/config"), "stored credential\n").unwrap();
+        std::fs::write(&outside, "outside secret\n").unwrap();
+        let scope = utils::execution::ExecutionScope::with_workspace(
+            utils::workspace::WorkspacePolicy::workspace(root.clone()).unwrap(),
+        );
+        scope.enter(async {
+            let allowed = tool("*** Begin Patch\n*** Update File: file\n@@\n-original\n+changed\n*** End Patch".into());
+            assert!(allowed.to_string().contains("-original\n+changed"));
+            allowed.apply_patch().await.unwrap();
+            assert_eq!(std::fs::read_to_string(root.join("file")).unwrap(), "changed\n");
+            let protected = tool("*** Begin Patch\n*** Update File: file\n@@\n-changed\n+unexpected\n*** Add File: .git/config\n+unexpected\n*** End Patch".into());
+            assert!(protected.apply_patch().await.is_err());
+            assert_eq!(std::fs::read_to_string(root.join("file")).unwrap(), "changed\n");
+            let forbidden = tool(format!("*** Begin Patch\n*** Delete File: {}\n*** Delete File: .turbo-code/config\n*** End Patch", outside.display()));
+            assert!(!forbidden.to_string().contains("outside secret"));
+            assert!(!forbidden.to_string().contains("stored credential"));
+            assert!(forbidden.apply_patch().await.is_err());
+            let move_outside = tool(format!("*** Begin Patch\n*** Update File: file\n*** Move to: {}\n*** End Patch", outside.display()));
+            assert!(move_outside.apply_patch().await.is_err());
+            assert_eq!(std::fs::read_to_string(root.join("file")).unwrap(), "changed\n");
+            let move_alias = tool(format!("*** Begin Patch\n*** Update File: file\n*** Move to: {}\n@@\n-changed\n+updated\n*** End Patch", root.join("file").display()));
+            move_alias.apply_patch().await.unwrap();
+            assert_eq!(std::fs::read_to_string(root.join("file")).unwrap(), "updated\n");
+        }).await;
+        assert_eq!(
+            std::fs::read_to_string(&outside).unwrap(),
+            "outside secret\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join(".turbo-code/config")).unwrap(),
+            "stored credential\n"
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn displays_custom_patch_operations() {
+        workspace_scope()
+            .enter(async {
+                let patch = "\
 *** Begin Patch
 *** Add File: new.txt
 +new
@@ -440,24 +474,28 @@ mod tests {
 *** Delete File: gone.txt
 *** End Patch";
 
-        let display = tool(patch.to_string()).to_string();
+                let display = tool(patch.to_string()).to_string();
 
-        assert!(display.starts_with(
+                assert!(display.starts_with(
             "- apply patch: create `new.txt`, move `old.txt` -> `moved.txt`, delete `gone.txt`"
         ));
-        assert!(display.contains("\n\n```diff\n"));
-        assert!(display.contains("diff --git a/new.txt b/new.txt"));
-        assert!(display.contains("--- /dev/null\n+++ b/new.txt"));
-        assert!(display.contains("+new"));
+                assert!(display.contains("\n\n```diff\n"));
+                assert!(display.contains("diff --git a/new.txt b/new.txt"));
+                assert!(display.contains("--- /dev/null\n+++ b/new.txt"));
+                assert!(display.contains("+new"));
+            })
+            .await;
     }
 
-    #[test]
-    fn displays_pretty_update_diff() {
-        let updated = temp_path("display-update.txt");
-        std::fs::write(&updated, "old\nsame\n").unwrap();
+    #[tokio::test]
+    async fn displays_pretty_update_diff() {
+        workspace_scope()
+            .enter(async {
+                let updated = temp_path("display-update.txt");
+                std::fs::write(&updated, "old\nsame\n").unwrap();
 
-        let patch = format!(
-            "\
+                let patch = format!(
+                    "\
 *** Begin Patch
 *** Update File: {}
 @@
@@ -465,34 +503,38 @@ mod tests {
 +new
  same
 *** End Patch",
-            updated.display(),
-        );
+                    updated.display(),
+                );
 
-        let display = tool(patch).to_string();
+                let display = tool(patch).to_string();
 
-        std::fs::remove_file(&updated).unwrap();
+                std::fs::remove_file(&updated).unwrap();
 
-        assert!(display.starts_with("- apply patch: modify `"));
-        assert!(display.contains("\n\n```diff\n"));
-        assert!(display.contains("-old\n+new\n same"));
-        assert!(display.ends_with("```"));
+                assert!(display.starts_with("- apply patch: modify `"));
+                assert!(display.contains("\n\n```diff\n"));
+                assert!(display.contains("-old\n+new\n same"));
+                assert!(display.ends_with("```"));
+            })
+            .await;
     }
 
     #[tokio::test]
     async fn applies_custom_patch_file_operations() {
-        let added = temp_path("added.txt");
-        let updated = temp_path("updated.txt");
-        let move_from = temp_path("move-from.txt");
-        let move_dir = temp_path("move-dir");
-        let move_to = move_dir.join("move-to.txt");
-        let deleted = temp_path("deleted.txt");
+        workspace_scope()
+            .enter(async {
+                let added = temp_path("added.txt");
+                let updated = temp_path("updated.txt");
+                let move_from = temp_path("move-from.txt");
+                let move_dir = temp_path("move-dir");
+                let move_to = move_dir.join("move-to.txt");
+                let deleted = temp_path("deleted.txt");
 
-        tokio::fs::write(&updated, "old\n").await.unwrap();
-        tokio::fs::write(&move_from, "same\n").await.unwrap();
-        tokio::fs::write(&deleted, "delete\n").await.unwrap();
+                tokio::fs::write(&updated, "old\n").await.unwrap();
+                tokio::fs::write(&move_from, "same\n").await.unwrap();
+                tokio::fs::write(&deleted, "delete\n").await.unwrap();
 
-        let patch = format!(
-            "\
+                let patch = format!(
+                    "\
 *** Begin Patch
 *** Add File: {}
 +created
@@ -504,30 +546,32 @@ mod tests {
 *** Move to: {}
 *** Delete File: {}
 *** End Patch",
-            added.display(),
-            updated.display(),
-            move_from.display(),
-            move_to.display(),
-            deleted.display(),
-        );
+                    added.display(),
+                    updated.display(),
+                    move_from.display(),
+                    move_to.display(),
+                    deleted.display(),
+                );
 
-        tool(patch).apply_patch().await.unwrap();
+                tool(patch).apply_patch().await.unwrap();
 
-        let added_content = tokio::fs::read_to_string(&added).await.unwrap();
-        let updated_content = tokio::fs::read_to_string(&updated).await.unwrap();
-        let moved_content = tokio::fs::read_to_string(&move_to).await.unwrap();
-        let source_exists = tokio::fs::try_exists(&move_from).await.unwrap();
-        let deleted_exists = tokio::fs::try_exists(&deleted).await.unwrap();
+                let added_content = tokio::fs::read_to_string(&added).await.unwrap();
+                let updated_content = tokio::fs::read_to_string(&updated).await.unwrap();
+                let moved_content = tokio::fs::read_to_string(&move_to).await.unwrap();
+                let source_exists = tokio::fs::try_exists(&move_from).await.unwrap();
+                let deleted_exists = tokio::fs::try_exists(&deleted).await.unwrap();
 
-        tokio::fs::remove_file(&added).await.unwrap();
-        tokio::fs::remove_file(&updated).await.unwrap();
-        tokio::fs::remove_file(&move_to).await.unwrap();
-        tokio::fs::remove_dir(&move_dir).await.unwrap();
+                tokio::fs::remove_file(&added).await.unwrap();
+                tokio::fs::remove_file(&updated).await.unwrap();
+                tokio::fs::remove_file(&move_to).await.unwrap();
+                tokio::fs::remove_dir(&move_dir).await.unwrap();
 
-        assert_eq!(added_content, "created");
-        assert_eq!(updated_content, "changed\n");
-        assert_eq!(moved_content, "same\n");
-        assert!(!source_exists);
-        assert!(!deleted_exists);
+                assert_eq!(added_content, "created");
+                assert_eq!(updated_content, "changed\n");
+                assert_eq!(moved_content, "same\n");
+                assert!(!source_exists);
+                assert!(!deleted_exists);
+            })
+            .await;
     }
 }

@@ -95,43 +95,52 @@ impl Grep {
         before: usize,
         after: usize,
     ) -> anyhow::Result<Vec<GrepMatch>> {
-        let results: Vec<_> = futures::stream::iter(files)
+        let scope = crate::execution::ExecutionScope::current();
+        let results: Vec<anyhow::Result<Vec<GrepMatch>>> = futures::stream::iter(files)
             .map(|file| {
-                let file = file.clone();
-                let mut searcher = SearcherBuilder::new()
-                    .line_number(true)
-                    .before_context(before)
-                    .after_context(after)
-                    .build();
-                let regex = regex.to_string();
-                tokio::spawn(async move {
-                    let matcher = RegexMatcher::new(&regex)?;
-                    let mut collector = LineCollector::new();
-                    searcher.search_path(&matcher, &file, &mut collector)?;
-                    let matches = collector
-                        .groups
-                        .into_iter()
-                        .filter(|group| !group.is_empty())
-                        .map(|lines| GrepMatch {
-                            path: file.to_string_lossy().to_string(),
-                            lines,
+                let scope = scope.clone();
+                let regex = regex.to_owned();
+                async move {
+                    scope
+                        .enter(async move {
+                            let content = crate::files::Files::read_file(&file).await?;
+                            let matcher = RegexMatcher::new(&regex)?;
+                            let mut searcher = SearcherBuilder::new()
+                                .line_number(true)
+                                .before_context(before)
+                                .after_context(after)
+                                .build();
+                            let mut collector = LineCollector::new();
+                            searcher.search_slice(&matcher, content.as_bytes(), &mut collector)?;
+                            Ok(collector
+                                .groups
+                                .into_iter()
+                                .filter(|group| !group.is_empty())
+                                .map(|lines| GrepMatch {
+                                    path: file.to_string_lossy().into_owned(),
+                                    lines,
+                                })
+                                .collect())
                         })
-                        .collect();
-                    Ok::<Vec<GrepMatch>, anyhow::Error>(matches)
-                })
+                        .await
+                }
             })
-            .buffer_unordered(100)
-            .collect::<Vec<_>>()
+            .buffered(16)
+            .collect()
             .await;
-
-        let results: Vec<_> = results.into_iter().flatten().flatten().flatten().collect();
-
-        Ok(results)
+        let groups = results.into_iter().collect::<anyhow::Result<Vec<_>>>()?;
+        Ok(groups.into_iter().flatten().collect())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    fn workspace_scope() -> crate::execution::ExecutionScope {
+        crate::execution::ExecutionScope::with_workspace(
+            crate::workspace::WorkspacePolicy::workspace(std::env::temp_dir()).unwrap(),
+        )
+    }
+
     use super::*;
     use std::path::PathBuf;
 
@@ -143,71 +152,79 @@ mod tests {
 
     #[tokio::test]
     async fn grep_returns_match_and_context_lines_with_numbers() {
-        let path = temp_file("alpha\nbravo\nmatch here\ncharlie\ndelta\n");
+        workspace_scope()
+            .enter(async {
+                let path = temp_file("alpha\nbravo\nmatch here\ncharlie\ndelta\n");
 
-        let results = Grep::grep("match", vec![path.clone()], 1, 1).await.unwrap();
+                let results = Grep::grep("match", vec![path.clone()], 1, 1).await.unwrap();
 
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].path, path.to_string_lossy());
-        assert_eq!(
-            results[0].lines,
-            vec![
-                GrepLine {
-                    line_number: Some(2),
-                    line: "bravo".into(),
-                },
-                GrepLine {
-                    line_number: Some(3),
-                    line: "match here".into(),
-                },
-                GrepLine {
-                    line_number: Some(4),
-                    line: "charlie".into(),
-                },
-            ]
-        );
+                assert_eq!(results.len(), 1);
+                assert_eq!(results[0].path, path.to_string_lossy());
+                assert_eq!(
+                    results[0].lines,
+                    vec![
+                        GrepLine {
+                            line_number: Some(2),
+                            line: "bravo".into(),
+                        },
+                        GrepLine {
+                            line_number: Some(3),
+                            line: "match here".into(),
+                        },
+                        GrepLine {
+                            line_number: Some(4),
+                            line: "charlie".into(),
+                        },
+                    ]
+                );
+            })
+            .await;
     }
 
     #[tokio::test]
     async fn grep_splits_disjoint_match_groups_per_file() {
-        let path = temp_file("alpha\nmatch\ncharlie\n\nomega\nmatch\nzulu\n");
+        workspace_scope()
+            .enter(async {
+                let path = temp_file("alpha\nmatch\ncharlie\n\nomega\nmatch\nzulu\n");
 
-        let results = Grep::grep("match", vec![path.clone()], 1, 1).await.unwrap();
+                let results = Grep::grep("match", vec![path.clone()], 1, 1).await.unwrap();
 
-        assert_eq!(results.len(), 2);
-        assert_eq!(
-            results[0].lines,
-            vec![
-                GrepLine {
-                    line_number: Some(1),
-                    line: "alpha".into(),
-                },
-                GrepLine {
-                    line_number: Some(2),
-                    line: "match".into(),
-                },
-                GrepLine {
-                    line_number: Some(3),
-                    line: "charlie".into(),
-                },
-            ]
-        );
-        assert_eq!(
-            results[1].lines,
-            vec![
-                GrepLine {
-                    line_number: Some(5),
-                    line: "omega".into(),
-                },
-                GrepLine {
-                    line_number: Some(6),
-                    line: "match".into(),
-                },
-                GrepLine {
-                    line_number: Some(7),
-                    line: "zulu".into(),
-                },
-            ]
-        );
+                assert_eq!(results.len(), 2);
+                assert_eq!(
+                    results[0].lines,
+                    vec![
+                        GrepLine {
+                            line_number: Some(1),
+                            line: "alpha".into(),
+                        },
+                        GrepLine {
+                            line_number: Some(2),
+                            line: "match".into(),
+                        },
+                        GrepLine {
+                            line_number: Some(3),
+                            line: "charlie".into(),
+                        },
+                    ]
+                );
+                assert_eq!(
+                    results[1].lines,
+                    vec![
+                        GrepLine {
+                            line_number: Some(5),
+                            line: "omega".into(),
+                        },
+                        GrepLine {
+                            line_number: Some(6),
+                            line: "match".into(),
+                        },
+                        GrepLine {
+                            line_number: Some(7),
+                            line: "zulu".into(),
+                        },
+                    ]
+                );
+            })
+            .await;
     }
 }

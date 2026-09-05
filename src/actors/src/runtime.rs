@@ -38,6 +38,13 @@ impl Default for Runtime {
     }
 }
 impl Runtime {
+    pub fn for_workspace(root: std::path::PathBuf) -> anyhow::Result<Self> {
+        utils::workspace::WorkspacePolicy::workspace(root).map(|workspace| Self {
+            scope: ExecutionScope::with_workspace(workspace),
+            ..Self::default()
+        })
+    }
+
     pub fn child(&self, scope: ExecutionScope) -> Self {
         Self {
             scope,

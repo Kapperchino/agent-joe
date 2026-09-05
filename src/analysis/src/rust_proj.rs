@@ -278,6 +278,12 @@ impl RustProject {
 
 #[cfg(test)]
 mod tests {
+    fn workspace_scope() -> utils::execution::ExecutionScope {
+        utils::execution::ExecutionScope::with_workspace(
+            utils::workspace::WorkspacePolicy::workspace(std::env::temp_dir()).unwrap(),
+        )
+    }
+
     use super::*;
     use crate::proj_meta::ProjMeta;
     use std::fs;
@@ -332,56 +338,64 @@ mod tests {
 
     #[tokio::test]
     async fn project_index_excludes_external_dependencies() {
-        let fixture = ProjectFixture::new();
-        let root = fixture.directory.join("app");
-        let project = RustProject::new(&root).unwrap();
-        let symbols = project.get_all_proj_symbols().await.unwrap();
+        workspace_scope()
+            .enter(async {
+                let fixture = ProjectFixture::new();
+                let root = fixture.directory.join("app");
+                let project = RustProject::new(&root).unwrap();
+                let symbols = project.get_all_proj_symbols().await.unwrap();
 
-        assert!(symbols.iter().any(|symbol| symbol.name == "Local"));
-        assert!(symbols.iter().any(|symbol| symbol.name == "local"));
-        assert!(
-            symbols
-                .iter()
-                .all(|symbol| symbol.rpath.inner == "src/lib.rs")
-        );
+                assert!(symbols.iter().any(|symbol| symbol.name == "Local"));
+                assert!(symbols.iter().any(|symbol| symbol.name == "local"));
+                assert!(
+                    symbols
+                        .iter()
+                        .all(|symbol| symbol.rpath.inner == "src/lib.rs")
+                );
 
-        let hashes = ProjMeta::get_file_hashes(&project).await.unwrap();
-        assert!(
-            hashes
-                .iter()
-                .any(|(path, _)| path == &root.join("src/lib.rs"))
-        );
-        assert!(hashes.iter().all(|(path, _)| path.starts_with(&root)));
+                let hashes = ProjMeta::get_file_hashes(&project).await.unwrap();
+                assert!(
+                    hashes
+                        .iter()
+                        .any(|(path, _)| path == &root.join("src/lib.rs"))
+                );
+                assert!(hashes.iter().all(|(path, _)| path.starts_with(&root)));
 
-        let metadata = ProjMeta::get_proj_meta_from_symbols(symbols, &project)
-            .await
-            .unwrap();
-        assert!(
-            metadata
-                .files
-                .values()
-                .any(|file| file.rpath == "src/lib.rs")
-        );
-        assert!(
-            metadata
-                .files
-                .keys()
-                .all(|path| Path::new(path).is_relative())
-        );
+                let metadata = ProjMeta::get_proj_meta_from_symbols(symbols, &project)
+                    .await
+                    .unwrap();
+                assert!(
+                    metadata
+                        .files
+                        .values()
+                        .any(|file| file.rpath == "src/lib.rs")
+                );
+                assert!(
+                    metadata
+                        .files
+                        .keys()
+                        .all(|path| Path::new(path).is_relative())
+                );
+            })
+            .await;
     }
 
     #[tokio::test]
     async fn project_index_loads_from_a_subdirectory() {
-        let fixture = ProjectFixture::new();
-        let root = fixture.directory.join("app/src");
-        let project = RustProject::new(&root).unwrap();
-        let symbols = project.get_all_proj_symbols().await.unwrap();
+        workspace_scope()
+            .enter(async {
+                let fixture = ProjectFixture::new();
+                let root = fixture.directory.join("app/src");
+                let project = RustProject::new(&root).unwrap();
+                let symbols = project.get_all_proj_symbols().await.unwrap();
 
-        assert!(symbols.iter().any(|symbol| symbol.name == "Local"));
-        assert!(symbols.iter().all(|symbol| symbol.rpath.inner == "lib.rs"));
+                assert!(symbols.iter().any(|symbol| symbol.name == "Local"));
+                assert!(symbols.iter().all(|symbol| symbol.rpath.inner == "lib.rs"));
 
-        let hashes = ProjMeta::get_file_hashes(&project).await.unwrap();
-        assert_eq!(hashes.len(), 1);
-        assert_eq!(hashes[0].0, root.join("lib.rs"));
+                let hashes = ProjMeta::get_file_hashes(&project).await.unwrap();
+                assert_eq!(hashes.len(), 1);
+                assert_eq!(hashes[0].0, root.join("lib.rs"));
+            })
+            .await;
     }
 }

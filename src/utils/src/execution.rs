@@ -13,16 +13,41 @@ pub struct ExecutionScope {
     pub cancel: CancellationToken,
     pub tasks: TaskTracker,
     resources: Arc<Mutex<BTreeMap<u64, Resource>>>,
+    workspace: WorkspaceAccess,
+}
+
+#[derive(Clone, Default)]
+enum WorkspaceAccess {
+    #[default]
+    Unconfigured,
+    Configured(Arc<crate::workspace::WorkspacePolicy>),
 }
 
 tokio::task_local! { static CURRENT: ExecutionScope; }
 
 impl ExecutionScope {
+    pub fn with_workspace(workspace: crate::workspace::WorkspacePolicy) -> Self {
+        Self {
+            workspace: WorkspaceAccess::Configured(Arc::new(workspace)),
+            ..Self::default()
+        }
+    }
+
+    pub fn workspace(&self) -> anyhow::Result<Arc<crate::workspace::WorkspacePolicy>> {
+        match &self.workspace {
+            WorkspaceAccess::Configured(workspace) => Ok(workspace.clone()),
+            WorkspaceAccess::Unconfigured => {
+                Err(anyhow::anyhow!("No workspace policy is configured"))
+            }
+        }
+    }
+
     pub fn child(&self) -> Self {
         Self {
             cancel: self.cancel.child_token(),
             tasks: TaskTracker::new(),
             resources: self.resources.clone(),
+            workspace: self.workspace.clone(),
         }
     }
 

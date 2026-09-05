@@ -9,12 +9,10 @@ use async_trait::async_trait;
 use itertools::Itertools;
 use ra_ap_ide::LineIndex;
 use std::collections::HashSet;
-use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use triomphe;
-use utils::files::Files;
 use utils::utils::{FnvHashMap, Utils};
 
 pub struct RustContextLineIndexCreator {
@@ -99,9 +97,11 @@ pub struct RustContext {
 }
 
 impl RustContext {
-    pub async fn new(initial_prompt: String, id: u64) -> Result<RustContext, anyhow::Error> {
-        let current_dir = env::current_dir()?;
-        let files = Files::get_dir_files(&current_dir).await?;
+    pub async fn new(
+        initial_prompt: String,
+        id: u64,
+        current_dir: PathBuf,
+    ) -> Result<RustContext, anyhow::Error> {
         let proj = RustProject::new(&current_dir)?;
         let store_dir = Utils::get_store_dir()?;
         let mut cache = TypedCache::new(store_dir).await?;

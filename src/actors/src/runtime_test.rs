@@ -80,12 +80,19 @@ impl Harness {
         tools: Vec<ErasedToolRef<TestContext, ActorContext<TestContext>>>,
         timeout: Duration,
     ) -> Self {
-        let (tx, requests) = flume::unbounded();
-        let (tui_tx, events) = flume::unbounded();
         let runtime = Runtime {
             tool_timeout: timeout,
             ..Runtime::default()
         };
+        Self::with_runtime(tools, runtime).await
+    }
+
+    async fn with_runtime(
+        tools: Vec<ErasedToolRef<TestContext, ActorContext<TestContext>>>,
+        runtime: Runtime,
+    ) -> Self {
+        let (tx, requests) = flume::unbounded();
+        let (tui_tx, events) = flume::unbounded();
         let (actor, handle) = Actor::spawn(
             None,
             WorkerAdapter::new(FixtureWorker),
@@ -755,6 +762,106 @@ fn delegate(
         }),
         requests,
     )
+}
+
+struct WorkspaceFixture {
+    directory: std::path::PathBuf,
+    root: std::path::PathBuf,
+    outside: std::path::PathBuf,
+}
+
+impl WorkspaceFixture {
+    fn new() -> Self {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory =
+            std::env::temp_dir().join(format!("joe-worker-policy-{}-{nonce}", std::process::id()));
+        let root = directory.join("workspace");
+        let outside = directory.join("outside");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("file"), "workspace content").unwrap();
+        std::fs::write(&outside, "outside secret").unwrap();
+        Self {
+            directory,
+            root,
+            outside,
+        }
+    }
+}
+
+impl Drop for WorkspaceFixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.directory);
+    }
+}
+
+fn read_call(path: &std::path::Path, id: &str) -> ContentBlock {
+    let mut block = call("read_file", id);
+    if let ContentBlock::ToolBlock { input, .. } = &mut block {
+        *input = json!({ "file_path": path }).as_object().unwrap().clone();
+    }
+    block
+}
+
+#[tokio::test]
+async fn parent_and_delegated_file_tools_share_workspace_roots_and_denials() {
+    let fixture = WorkspaceFixture::new();
+    let read = tools::tool_defs::erased_tool::<
+        tools::read_file::ReadFile,
+        TestContext,
+        ActorContext<TestContext>,
+    >();
+    let (delegate, child_requests) = delegate(vec![read.clone()], false);
+    let h = Harness::with_runtime(
+        vec![read, delegate],
+        Runtime::for_workspace(fixture.root.clone()).unwrap(),
+    )
+    .await;
+    h.start("read workspace files");
+    answer(
+        h.request().await.1,
+        response(vec![read_call(std::path::Path::new("file"), "parent-read")]),
+    );
+    let (request, reply) = h.request().await;
+    assert!(
+        matches!(&request.messages.last().unwrap().content[0], ContentBlock::ToolResult { content, is_error: None, .. } if content == "1: workspace content")
+    );
+    answer(
+        reply,
+        response(vec![read_call(&fixture.outside, "parent-denied")]),
+    );
+    let (request, reply) = h.request().await;
+    assert!(
+        matches!(&request.messages.last().unwrap().content[0], ContentBlock::ToolResult { content, is_error: Some(true), .. } if content.contains("access denied") && !content.contains("outside secret"))
+    );
+    answer(reply, response(vec![call("delegate", "child")]));
+    let (_, reply) = within(child_requests.recv_async()).await.unwrap();
+    answer(
+        reply,
+        response(vec![read_call(std::path::Path::new("file"), "child-read")]),
+    );
+    let (request, reply) = within(child_requests.recv_async()).await.unwrap();
+    assert!(
+        matches!(&request.messages.last().unwrap().content[0], ContentBlock::ToolResult { content, is_error: None, .. } if content == "1: workspace content")
+    );
+    answer(
+        reply,
+        response(vec![read_call(&fixture.outside, "child-denied")]),
+    );
+    let (request, reply) = within(child_requests.recv_async()).await.unwrap();
+    assert!(
+        matches!(&request.messages.last().unwrap().content[0], ContentBlock::ToolResult { content, is_error: Some(true), .. } if content.contains("access denied") && !content.contains("outside secret"))
+    );
+    answer(reply, response(vec![text("child completed")]));
+    h.terminal(Lifecycle::Completed).await;
+    answer(
+        h.request().await.1,
+        response(vec![text("parent completed")]),
+    );
+    h.terminal(Lifecycle::Completed).await;
+    h.stop().await;
 }
 
 #[tokio::test]

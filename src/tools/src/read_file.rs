@@ -1,18 +1,14 @@
 use crate::tool_defs::{Range, ToolDefTrait, ToolId, ToolTrait, ToolType};
-use analysis::contexts::context::{Context, LineIndexCreator};
+use analysis::contexts::context::Context;
 use async_trait::async_trait;
-use futures::{StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
-use std::cmp::min;
-use std::fmt::Write;
 use std::fmt::{Display, Formatter};
-use std::io::SeekFrom;
 use std::path::PathBuf;
-use tokio::fs::File;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, BufReader};
-use tokio_stream::wrappers::LinesStream;
 use turbo_code_macros::{ToolDef, ToolInput};
-use utils::utils::FnvHashMap;
+use utils::{files::Files, utils::FnvHashMap};
+
+mod line_range;
+use line_range::LineRange;
 
 #[async_trait]
 impl<C: Context, A> ToolTrait<C, A> for ReadFile {
@@ -115,94 +111,45 @@ impl Display for ReadFile {
 
 impl ReadFile {
     pub async fn read_file<C: Context>(&self, cur_context: &C) -> anyhow::Result<String> {
-        let file_path: PathBuf = self.input.file_path.clone().into();
-        let root = cur_context.get_root();
-        let file_path = if file_path.starts_with(&root) {
-            file_path.strip_prefix(root).map(|t| t.to_path_buf())
-        } else {
-            Ok(file_path)
-        }?;
-        match file_path.is_dir() {
+        let path = PathBuf::from(&self.input.file_path);
+        match Files::is_directory(&path).await? {
+            true => Files::get_dir_files(&path).await.map(|entries| {
+                entries
+                    .into_iter()
+                    .map(|entry| entry.name.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }),
             false => match &self.input.range {
-                None => Self::read_entire_file(&file_path).await,
-                Some(range) => Self::read_range(&file_path, range.clone(), cur_context).await,
+                Some(range) => Self::read_range(&path, range.clone(), cur_context).await,
+                None => Files::read_file(&path).await.map(|text| {
+                    text.lines()
+                        .enumerate()
+                        .map(|(index, line)| format!("{}: {line}", index + 1))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                }),
             },
-            true => Self::read_dir(&file_path).await,
         }
     }
 
-    async fn read_dir(file_path: &PathBuf) -> anyhow::Result<String> {
-        let mut entries = tokio::fs::read_dir(file_path).await?;
-        let mut result = String::new();
-        while let Some(entry) = entries.next_entry().await? {
-            result.push_str(&entry.file_name().to_string_lossy());
-            result.push('\n');
-        }
-        Ok(result)
-    }
-
-    async fn read_entire_file(file_path: &PathBuf) -> anyhow::Result<String> {
-        let file = File::open(file_path).await?;
-        let reader = BufReader::new(file);
-
-        let lines = LinesStream::new(reader.lines());
-
-        let res = lines
-            .enumerate()
-            .map(|(line, res)| res.map(|l_content| format!("{line}: {l_content}")))
-            .try_fold(String::new(), |acc, line| async move {
-                if acc.is_empty() {
-                    Ok(format!("{line}"))
-                } else {
-                    Ok(format!("{acc}\n{line}"))
-                }
-            })
-            .await?;
-
-        Ok(res)
-    }
-    async fn read_range<C: Context>(
-        file_path: &PathBuf,
-        range: Range,
-        cur_context: &C,
-    ) -> anyhow::Result<String> {
-        let line_index = cur_context.line_index_creator().await?;
-        let line_index = line_index.create_index(file_path)?;
-
-        let start: u32 = line_index
-            .line(range.start.saturating_sub(1))
-            .unwrap()
-            .start()
-            .into();
-        let start: u64 = start as u64;
-        let end: u64 = line_index
-            .line(range.end.saturating_sub(1))
-            .map(|l| l.start().into())
-            .unwrap_or(u32::MAX) as u64;
-        let start_line = range.start.saturating_sub(1);
-        let mut file = File::open(file_path).await?;
-        file.seek(SeekFrom::Start(start as u64)).await?;
-        let file_size = file.metadata().await?.len();
-        let remaining: usize = (file_size - start) as usize;
-        let buf_size = min(remaining, (end - start) as usize);
-        let mut buf = vec![0; buf_size];
-        file.read_exact(&mut buf).await?;
-        let text = std::str::from_utf8(&buf)?;
-        let mut res = String::with_capacity(text.len() + 128);
-        text.lines().enumerate().try_for_each(|(i, line)| {
-            if i > 0 {
-                res.push('\n');
-            }
-            let line_no = start_line + i as u32 + 1;
-            write!(&mut res, "{line_no}: {line}")
-        })?;
-        Ok(res)
+    async fn read_range<C: Context>(path: &PathBuf, range: Range, _: &C) -> anyhow::Result<String> {
+        let range = LineRange::try_from(range)?;
+        let text = Files::read_file(path).await?;
+        range.render(&text)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    fn workspace_scope() -> utils::execution::ExecutionScope {
+        utils::execution::ExecutionScope::with_workspace(
+            utils::workspace::WorkspacePolicy::workspace(std::env::temp_dir()).unwrap(),
+        )
+    }
+
     use super::*;
+    use analysis::contexts::context::LineIndexCreator;
     use async_trait::async_trait;
     use ra_ap_ide::LineIndex;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -259,38 +206,89 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ranges_validate_bounds_and_read_the_current_file_contents() {
+        workspace_scope()
+            .enter(async {
+                let file_path = write_temp_file("original\n");
+                for range in [
+                    Range { start: 0, end: 2 },
+                    Range { start: 2, end: 2 },
+                    Range { start: 9, end: 10 },
+                ] {
+                    assert!(
+                        ReadFile::read_range(&file_path, range, &TestContext)
+                            .await
+                            .is_err()
+                    );
+                }
+                Files::write_to_file(&file_path, "changed\nnew line\n")
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    ReadFile::read_range(&file_path, Range { start: 2, end: 3 }, &TestContext)
+                        .await
+                        .unwrap(),
+                    "2: new line"
+                );
+                Files::write_to_file(&file_path, "").await.unwrap();
+                assert!(
+                    ReadFile::read_range(&file_path, Range { start: 1, end: 2 }, &TestContext)
+                        .await
+                        .is_err()
+                );
+                std::fs::remove_file(file_path).unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test]
     async fn read_range_returns_requested_exclusive_range_with_line_numbers() {
-        let file_path = write_temp_file("alpha\nbeta\ngamma\ndelta\n");
+        workspace_scope()
+            .enter(async {
+                let file_path = write_temp_file("alpha\nbeta\ngamma\ndelta\n");
 
-        let res = ReadFile::read_range(&file_path, Range { start: 2, end: 4 }, &TestContext)
-            .await
-            .unwrap();
+                let res =
+                    ReadFile::read_range(&file_path, Range { start: 2, end: 4 }, &TestContext)
+                        .await
+                        .unwrap();
 
-        assert_eq!(res, "2: beta\n3: gamma");
-        std::fs::remove_file(file_path).unwrap();
+                assert_eq!(res, "2: beta\n3: gamma");
+                std::fs::remove_file(file_path).unwrap();
+            })
+            .await;
     }
 
     #[tokio::test]
     async fn read_range_reads_to_end_when_end_exceeds_file_length() {
-        let file_path = write_temp_file("one\ntwo\nthree");
+        workspace_scope()
+            .enter(async {
+                let file_path = write_temp_file("one\ntwo\nthree");
 
-        let res = ReadFile::read_range(&file_path, Range { start: 2, end: 99 }, &TestContext)
-            .await
-            .unwrap();
+                let res =
+                    ReadFile::read_range(&file_path, Range { start: 2, end: 99 }, &TestContext)
+                        .await
+                        .unwrap();
 
-        assert_eq!(res, "2: two\n3: three");
-        std::fs::remove_file(file_path).unwrap();
+                assert_eq!(res, "2: two\n3: three");
+                std::fs::remove_file(file_path).unwrap();
+            })
+            .await;
     }
 
     #[tokio::test]
     async fn read_range_handles_utf8_before_requested_range() {
-        let file_path = write_temp_file("åéî\nsecond\n終わり\n");
+        workspace_scope()
+            .enter(async {
+                let file_path = write_temp_file("åéî\nsecond\n終わり\n");
 
-        let res = ReadFile::read_range(&file_path, Range { start: 2, end: 3 }, &TestContext)
-            .await
-            .unwrap();
+                let res =
+                    ReadFile::read_range(&file_path, Range { start: 2, end: 3 }, &TestContext)
+                        .await
+                        .unwrap();
 
-        assert_eq!(res, "2: second");
-        std::fs::remove_file(file_path).unwrap();
+                assert_eq!(res, "2: second");
+                std::fs::remove_file(file_path).unwrap();
+            })
+            .await;
     }
 }

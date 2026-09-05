@@ -1,6 +1,6 @@
 # Agent Joe implementation plan
 
-Status: the first M1 implementation slice and M2 are implemented and validated on macOS. M1 capability/transition work remains in progress; M3 and later milestones remain pending.
+Status: the first M1 slice, M2, and the first M3 slice are implemented and validated on macOS. M1 capability/transition work and M3 remain in progress; M4 and later milestones remain pending.
 
 Cover all ten gaps identified in the Codex comparison while keeping Joe a Rust-focused agent with typed tools and no model-controlled shell. Delivery order follows dependencies, so context compaction follows the response format and turn lifecycle work it needs.
 
@@ -195,7 +195,52 @@ Done when cancellation completes promptly, no owned process/worker is left runni
 
 **M3 — Workspace policy and process isolation**
 
-Primary files: `src/utils/src/{files,cargo}.rs`, `src/tools/src/{tool_defs,apply_patch,read_file,grep}.rs`, `src/analysis/src/rust_proj.rs`, and new policy/executor modules.
+First slice implemented and validated on macOS (2026-09-05):
+
+- `WorkspacePolicy` owns open directory handles for explicit read-only/read-write
+  roots. Startup configures the current workspace once, before context creation,
+  and resolves relative tool paths against that root. `ExecutionScope` shares the
+  same policy with child workers, tool execution, and patch previews. Filesystem
+  helpers reject operations when no policy is configured.
+- Unix filesystem access walks directory descriptors without following symlinks.
+  Path authorization belongs to `ResolvedPath` construction; `WorkspaceFile` and
+  `OrdinaryFileMetadata` own ordinary-file validation for reads and mutations.
+  Ordinary file reads, writes, copies, moves, deletes, and parent creation enforce
+  the policy at the operation boundary. Writes replace a temporary sibling file
+  atomically, preserve ordinary permission bits, and reject hard links and special
+  files. Copies retain binary content and source permissions. Directory identities
+  prevent alternate casing or renaming from bypassing read-only roots.
+- Traversal and outside-root paths are denied. Joe's `.turbo-code` storage is
+  denied reads and writes; `.git`, `.agents`, and `.codex` deny ordinary writes.
+  Allowed absolute paths remain supported. Filesystem failures use ordinary errors
+  propagated with `?`, the sole exception to the no-early-return rule. Native error
+  categories are inspected only where missing files or existing directories require
+  different behavior.
+- Read, search, replace, insert, and patch tools use the shared filesystem helpers.
+  Patch previews cannot read outside the policy, and every patch path receives a
+  lexical authorization check before the first mutation. Line ranges read current
+  file contents without cached semantic offsets. A `LineRange` type validates the
+  input range and checks bounds against the current contents, using one-based
+  numbering with exclusive ends. Search failures propagate to the tool.
+
+Validation: `cargo test --workspace` passes all 135 tests;
+`cargo check --workspace --offline` passes with existing warnings. New regressions
+cover outside paths, traversal, protected storage and previews, read-only roots,
+symlink replacement, hard links, FIFOs, binary copies, permission preservation,
+cancelled/unconfigured access, fresh line ranges, and actual parent/child tool
+requests through injected providers. Native tests ran on macOS without live model
+calls. Changed Rust files are formatted and the diff passes the whitespace check.
+
+M3 remains incomplete. These descriptor operations are a filesystem tool boundary,
+not OS process isolation. Hostile processes can still reparent an already-open
+ancestor or race directory entries; multi-operation patches are not transactional.
+Cargo, build scripts, proc macros, rust-analyzer loading, background discovery, and
+trusted storage still require the planned isolation audit. The Unix implementation
+has not been validated on Linux; other platforms reject workspace initialization.
+The next slice is the typed executor and macOS isolation backend, followed by Linux
+validation, network grants, and the permission broker/TUI flow.
+
+Primary files: `src/utils/src/{workspace,files,cargo}.rs`, `src/utils/src/workspace/*`, `src/tools/src/{tool_defs,apply_patch,read_file,grep}.rs`, `src/analysis/src/rust_proj.rs`, and new executor modules.
 
 - Introduce a workspace handle with explicit readable/writable roots, protected paths, network policy, and scoped permission decisions. Carry it through every tool and worker.
 - Resolve relative paths against the workspace handle instead of process-global CWD. Check existing paths and the nearest existing parents of creation targets. Cover symlinks, traversal, moves, deletes, and filesystem race conditions with descriptor-based access or equivalent OS enforcement.
