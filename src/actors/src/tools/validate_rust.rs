@@ -1,10 +1,9 @@
-use crate::actor::{ActorContext, Dependency, Message};
-use crate::worker::{Worker, WorkerAdapter};
+use crate::actor::{ActorContext, Dependency};
+use crate::worker::Worker;
 use crate::workers::validate_worker::ValidateWorker;
 use analysis::contexts::rust_empty_context::RustEmptyContext;
 use anyhow::anyhow;
 use async_trait::async_trait;
-use ractor::{Actor, call};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use tools::tool_defs::{ToolDefTrait, ToolId, ToolTrait, ToolType};
@@ -32,25 +31,21 @@ impl ToolTrait<RustEmptyContext, ActorContext<RustEmptyContext>> for ValidateRus
         cur_context.inner.task_prompt = Some(input.context.clone());
         cur_context.stack_context = false;
 
-        let (joe, actor_handle) = Actor::spawn_linked(
-            None,
-            WorkerAdapter::new(ValidateWorker::new()),
+        crate::worker::run_worker(
+            ValidateWorker::new(),
             Dependency {
                 client: info.dep.client.clone(),
                 tools: ValidateWorker::tools(),
                 tui_tx: info.dep.tui_tx.clone(),
-                debug_mode: info.dep.debug_mode.clone(),
+                debug_mode: info.dep.debug_mode,
                 context: cur_context,
+                runtime: info.dep.runtime.child(info.dep.runtime.scope.child()),
             },
-            info.actor_ref.get_cell(),
+            info.actor_ref.clone(),
         )
-        .await?;
-        joe.send_message(Message::StartWork(None))?;
-        let res = call!(joe, |reply| {
-            Message::RegisterCallback(info.actor_ref.get_id(), reply)
-        })?;
-
-        Ok(ValidateRustResult { res, id: tool_id })
+        .await
+        .map_err(|error| error.into_tool_failure().into())
+        .map(|res| ValidateRustResult { res, id: tool_id })
     }
 
     fn display_input(input: &Self::Input) -> String {
@@ -71,6 +66,10 @@ impl ToolTrait<RustEmptyContext, ActorContext<RustEmptyContext>> for ValidateRus
 
     fn output_to_content(_input: &Self::Input, output: &Self::Output) -> anyhow::Result<String> {
         Ok(output.res.clone())
+    }
+
+    fn effect() -> tools::tool_defs::ToolEffect {
+        tools::tool_defs::ToolEffect::DelegateValidate
     }
 
     fn tool_type() -> ToolType {

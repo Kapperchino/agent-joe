@@ -1,8 +1,6 @@
 use anyhow::anyhow;
 use cargo_metadata::diagnostic::DiagnosticLevel;
 use cargo_metadata::{CompilerMessage, Message};
-use std::process::Stdio;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::Command;
 
 pub struct Cargo {}
@@ -24,40 +22,36 @@ pub enum CargoTest {
 
 impl Cargo {
     pub async fn cargo_check() -> anyhow::Result<CargoCheck> {
-        let mut child = Command::new("cargo")
-            .args(["check", "--message-format=json-diagnostic-short"])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()?;
-        let stdout = child.stdout.take().ok_or(anyhow!("no std output"))?;
-        let mut reader = BufReader::new(stdout).lines();
-        let mut warnings = Vec::new();
-        let mut failures = Vec::new();
-        let mut success = false;
-        while let Some(line) = reader.next_line().await? {
-            let message: Message = serde_json::from_str(&line)?;
-            match message {
-                Message::CompilerMessage(msg) => match msg.message.level {
-                    DiagnosticLevel::Warning => {
-                        warnings.push(msg);
+        let mut command = Command::new("cargo");
+        command.args(["check", "--message-format=json-diagnostic-short"]);
+        crate::process::output(command).await.and_then(|output| {
+            String::from_utf8_lossy(&output.stdout).lines()
+                .map(serde_json::from_str::<Message>)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(anyhow::Error::from)
+                .and_then(|messages| {
+                    let success = output.status.success() && messages.iter()
+                        .any(|message| matches!(message, Message::BuildFinished(finished) if finished.success));
+                    let mut warnings = Vec::new();
+                    let mut failures = Vec::new();
+                    for message in messages {
+                        if let Message::CompilerMessage(message) = message {
+                            match message.message.level {
+                                DiagnosticLevel::Warning => warnings.push(message),
+                                DiagnosticLevel::Error => failures.push(message),
+                                _ => {},
+                            }
+                        }
                     }
-                    DiagnosticLevel::Error => {
-                        failures.push(msg);
+                    if !output.status.success() && failures.is_empty() {
+                        Err(anyhow!("Cargo check failed: {}", String::from_utf8_lossy(&output.stderr)))
+                    } else if success {
+                        Ok(CargoCheck::CheckPasses { warnings })
+                    } else {
+                        Ok(CargoCheck::CheckFailed { failures, warnings })
                     }
-                    _ => {}
-                },
-                Message::BuildFinished(finished) => {
-                    success = finished.success;
-                }
-                _ => {}
-            }
-        }
-
-        child.wait().await?;
-        match success {
-            true => Ok(CargoCheck::CheckPasses { warnings }),
-            false => Ok(CargoCheck::CheckFailed { failures, warnings }),
-        }
+                })
+        })
     }
 
     pub async fn cargo_test(
@@ -72,49 +66,24 @@ impl Cargo {
         if let Some(test_name) = test_name.filter(|name| !name.trim().is_empty()) {
             command.arg(test_name);
         }
-        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        crate::process::output(command).await.map(|result| {
+            let status = result.status;
+            let stdout = String::from_utf8_lossy(&result.stdout).into_owned();
+            let stderr = String::from_utf8_lossy(&result.stderr).into_owned();
 
-        let mut child = command.spawn()?;
-        let mut stdout = child.stdout.take().ok_or(anyhow!("no stdout"))?;
-        let mut stderr = child.stderr.take().ok_or(anyhow!("no stderr"))?;
+            let output = if stderr.trim().is_empty() {
+                stdout
+            } else if stdout.trim().is_empty() {
+                stderr
+            } else {
+                format!("STDOUT:\n{}\n\nSTDERR:\n{}", stdout, stderr)
+            };
 
-        let stdout_task = tokio::spawn(async move {
-            let mut buf = String::new();
-            stdout.read_to_string(&mut buf).await?;
-            Ok::<String, std::io::Error>(buf)
-        });
-        let stderr_task = tokio::spawn(async move {
-            let mut buf = String::new();
-            stderr.read_to_string(&mut buf).await?;
-            Ok::<String, std::io::Error>(buf)
-        });
-
-        let status = child.wait().await?;
-        let stdout = stdout_task.await??;
-        let stderr = stderr_task.await??;
-
-        let output = if stderr.trim().is_empty() {
-            stdout
-        } else if stdout.trim().is_empty() {
-            stderr
-        } else {
-            format!("STDOUT:\n{}\n\nSTDERR:\n{}", stdout, stderr)
-        };
-
-        if status.success() {
-            Ok(CargoTest::TestPasses { output })
-        } else {
-            Ok(CargoTest::TestFailed { output })
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn temp_file() {
-        Cargo::cargo_check().await.unwrap();
+            if status.success() {
+                CargoTest::TestPasses { output }
+            } else {
+                CargoTest::TestFailed { output }
+            }
+        })
     }
 }

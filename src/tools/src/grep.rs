@@ -49,6 +49,10 @@ impl<C: Context, A> ToolTrait<C, A> for GrepTool {
         Ok(output.res.clone())
     }
 
+    fn effect() -> crate::tool_defs::ToolEffect {
+        crate::tool_defs::ToolEffect::Read
+    }
+
     fn tool_type() -> ToolType {
         ToolType::Client
     }

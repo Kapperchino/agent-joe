@@ -25,6 +25,27 @@ pub trait ToolInputSchema {
 
 pub trait ToolUse {}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolEffect {
+    Read,
+    Write,
+    Validate,
+    DelegateRead,
+    DelegateWrite,
+    DelegateValidate,
+}
+impl ToolEffect {
+    pub fn concurrent(self) -> bool {
+        matches!(self, Self::Read | Self::DelegateRead)
+    }
+    pub fn delegates(self) -> bool {
+        matches!(
+            self,
+            Self::DelegateRead | Self::DelegateWrite | Self::DelegateValidate
+        )
+    }
+}
+
 #[async_trait]
 pub trait ToolTrait<C: Context, A>: ToolDefTrait + Display {
     type Input;
@@ -42,6 +63,10 @@ pub trait ToolTrait<C: Context, A>: ToolDefTrait + Display {
 
     fn output_to_content(input: &Self::Input, output: &Self::Output) -> anyhow::Result<String>;
 
+    fn output_is_error(_output: &Self::Output) -> bool {
+        false
+    }
+
     fn name(&self) -> String {
         Self::tool_name().to_string()
     }
@@ -53,6 +78,10 @@ pub trait ToolTrait<C: Context, A>: ToolDefTrait + Display {
     fn add_context(input: &Self::Input, _context: &mut C, _addition: &str) {}
 
     fn tool_type() -> ToolType;
+
+    fn effect() -> ToolEffect {
+        ToolEffect::Write
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -75,6 +104,10 @@ pub enum ToolType {
 pub trait ErasedToolTrait<C: Context, A>: Send + Sync {
     fn definition(&self) -> ToolDefinition;
 
+    fn effect(&self) -> ToolEffect {
+        ToolEffect::Write
+    }
+
     fn name(&self) -> String {
         match self.definition() {
             ToolDefinition::Client { name, .. } => name,
@@ -95,6 +128,10 @@ pub trait ErasedToolTrait<C: Context, A>: Send + Sync {
     ) -> anyhow::Result<Value>;
 
     fn output_to_content_erased(&self, input: &Value, output: &Value) -> anyhow::Result<String>;
+
+    fn output_is_error_erased(&self, _output: &Value) -> anyhow::Result<bool> {
+        Ok(false)
+    }
 
     fn add_context(&self, input: &Value, context: &mut C, addition: &str) -> anyhow::Result<()>;
 }
@@ -138,6 +175,10 @@ where
         }
     }
 
+    fn effect(&self) -> ToolEffect {
+        T::effect()
+    }
+
     fn display_erased(&self, input: &Value) -> anyhow::Result<String> {
         let typed_input: T::Input = T::Input::deserialize_lenient(input.clone())?;
         Ok(T::display_input(&typed_input))
@@ -169,6 +210,11 @@ where
         let typed_input: T::Input = T::Input::deserialize_lenient(input.clone())?;
         let typed_output: T::Output = serde_json::from_value(output.clone())?;
         T::output_to_content(&typed_input, &typed_output)
+    }
+
+    fn output_is_error_erased(&self, output: &Value) -> anyhow::Result<bool> {
+        let output: T::Output = serde_json::from_value(output.clone())?;
+        Ok(T::output_is_error(&output))
     }
 
     fn add_context(&self, input: &Value, context: &mut C, addition: &str) -> anyhow::Result<()> {
@@ -251,30 +297,22 @@ impl Display for NonEmptyString {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ToolId {
     pub call_id: Option<NonEmptyString>,
     pub id: NonEmptyString,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ToolInvocation {
     pub name: NonEmptyString,
     pub input: serde_json::Map<String, Value>,
     pub display: String,
 }
 
-#[derive(Debug)]
-pub enum ToolResult {
-    Success {
-        id: ToolId,
-        invocation: ToolInvocation,
-        content: String,
-    },
-    Failure {
-        id: ToolId,
-        msg: String,
-        name: NonEmptyString,
-        input: serde_json::Map<String, Value>,
-    },
+#[derive(Debug, Clone)]
+pub struct ToolResult {
+    pub id: ToolId,
+    pub invocation: ToolInvocation,
+    pub outcome: Result<String, crate::tool_error::ToolFailure>,
 }

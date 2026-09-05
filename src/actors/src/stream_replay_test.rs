@@ -4,9 +4,8 @@ use crate::stream_processor::StreamNextStep;
 use analysis::contexts::context::Context;
 use analysis::contexts::rust_context::RustContextLineIndexCreator;
 use async_trait::async_trait;
-use clients::config::{Config, ConfigContext};
 use clients::llm::{self, LLmClient};
-use clients::{LocalOpenAIConfig, OpenAIAuthConfig, OpenAIConfig, OpenAIEffort, claude, openai};
+use clients::{claude, openai};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -14,13 +13,13 @@ use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
-use tools::tool_defs::{ErasedToolTrait, ToolDefinition, ToolId};
+use tools::tool_defs::{ErasedToolTrait, ToolDefinition, ToolEffect, ToolId};
 use utils::utils::FnvHashMap;
 
 #[derive(Clone)]
-struct TestContext {
-    task: Option<String>,
-    revision: usize,
+pub(crate) struct TestContext {
+    pub task: Option<String>,
+    pub revision: usize,
 }
 
 #[async_trait]
@@ -78,6 +77,9 @@ impl Actor for IdleActor {
 struct EchoTool(Arc<AtomicUsize>);
 #[async_trait]
 impl ErasedToolTrait<TestContext, ActorContext<TestContext>> for EchoTool {
+    fn effect(&self) -> ToolEffect {
+        ToolEffect::Read
+    }
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::Client {
             name: "echo".into(),
@@ -130,20 +132,12 @@ impl Drop for Harness {
 
 async fn harness() -> Harness {
     let (actor, _) = Actor::spawn(None, IdleActor, ()).await.unwrap();
-    let config = ConfigContext::new(Config::OpenAI(OpenAIConfig {
-        auth: OpenAIAuthConfig::Local(LocalOpenAIConfig {
-            api_key: None,
-            url: "http://127.0.0.1:1".into(),
-        }),
-        model: "fixture".into(),
-        effort: OpenAIEffort::Low,
-        request_encrypted_reasoning: None,
-    }));
     let calls = Arc::new(AtomicUsize::new(0));
     let (tui_tx, _) = flume::unbounded();
     let state = ActorState::new(
         Dependency {
-            client: LLmClient::new(config).unwrap(),
+            runtime: Default::default(),
+            client: LLmClient::Injected(Arc::new(UnusedProvider)),
             tools: vec![Arc::new(EchoTool(calls.clone()))],
             context: TestContext {
                 task: Some("Inspect the fixture.".into()),
@@ -172,13 +166,29 @@ async fn consume(
     match state.stream_processor.process_stream_event(event).await? {
         StreamNextStep::ToolUse => {
             let items = state.stream_processor.extract_and_pre_process()?;
-            let results = state.process_tools(items).await;
-            state.save_history(results)?;
+            let batch =
+                crate::turn::ToolBatch::new(common_models::runtime_ids::TurnId::new(), items);
+            let batch = state
+                .executor(state.dependency.runtime.scope.clone())
+                .replay(batch)
+                .await;
+            state.history.extend(batch.messages());
         }
         StreamNextStep::Done => {
             let items = state.stream_processor.extract_and_pre_process()?;
-            let results = state.stream_items_to_res(items).await;
-            state.save_history(results)?;
+            let content = items
+                .into_iter()
+                .map(|item| match item {
+                    crate::stream_processor::ProcessedItem::Content(content) => Ok(content),
+                    crate::stream_processor::ProcessedItem::Tool(_) => {
+                        Err(anyhow::anyhow!("Unexpected tool in a completed response"))
+                    }
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            state.history.push(llm::Message {
+                role: llm::Role::Assistant,
+                content,
+            });
         }
         _ => {}
     }
@@ -233,7 +243,7 @@ async fn replay_preserves_reasoning_phase_arguments_and_results_across_turns() {
     assert_eq!(input[5]["call_id"], "call_2");
     assert_eq!(input[6]["type"], "function_call_output");
     assert_eq!(input[6]["call_id"], "call_1");
-    assert_eq!(input[7]["output"], "synthetic tool failure");
+    assert_eq!(input[7]["output"], "Execution: synthetic tool failure");
     assert!(matches!(
         &h.state.history[3].content[1],
         llm::ContentBlock::ToolResult {
@@ -518,4 +528,17 @@ async fn a_streamed_tool_can_receive_its_id_at_completion() {
     let input = serde_json::to_value(request.input).unwrap();
     assert_eq!(input[2]["id"], "fc_1");
     assert_eq!(input[2]["call_id"], "call_1");
+}
+
+struct UnusedProvider;
+impl llm::StreamProvider for UnusedProvider {
+    fn chat_stream(
+        &self,
+        _: llm::ClientRequest,
+    ) -> futures::future::BoxFuture<
+        'static,
+        anyhow::Result<futures::stream::BoxStream<'static, anyhow::Result<llm::StreamEvent>>>,
+    > {
+        Box::pin(async { Err(anyhow::anyhow!("Replay fixtures never open a transport")) })
+    }
 }

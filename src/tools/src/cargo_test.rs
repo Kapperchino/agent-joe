@@ -66,6 +66,14 @@ impl<C: Context, A> ToolTrait<C, A> for CargoTest {
         }
     }
 
+    fn output_is_error(output: &Self::Output) -> bool {
+        matches!(output.result, CargoTestResult::Failed { .. })
+    }
+
+    fn effect() -> crate::tool_defs::ToolEffect {
+        crate::tool_defs::ToolEffect::Validate
+    }
+
     fn tool_type() -> ToolType {
         ToolType::Client
     }

@@ -193,59 +193,54 @@ pub struct ApplyPatchResult {
 
 impl Display for ApplyPatch {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let patch_set = match DiffSet::new(&self.input.patch) {
-            Ok(patch_set) => patch_set,
-            Err(_) => return write!(f, "- apply patch"),
-        };
-
-        let paths: Vec<_> = patch_set
-            .patches()
-            .iter()
-            .map(|patch| match patch {
-                Patch::DeleteFile { path } => format!("delete `{}`", path.display()),
-                Patch::AddFile { path, .. } => format!("create `{}`", path.display()),
-                Patch::UpdateFile { path, .. } => format!("modify `{}`", path.display()),
-                Patch::MoveFile { from, to, .. } => {
-                    format!("move `{}` -> `{}`", from.display(), to.display())
-                }
-            })
-            .collect();
-
-        let summary = match paths.as_slice() {
-            [] => write!(f, "- apply patch"),
-            [path] => write!(f, "- apply patch: {path}"),
-            paths => {
-                let shown = paths
+        let display = DiffSet::new(&self.input.patch)
+            .map(|patch_set| {
+                let paths = patch_set
+                    .patches()
                     .iter()
-                    .take(3)
-                    .map(String::as_str)
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                if paths.len() > 3 {
-                    write!(f, "- apply patch: {shown}, and {} more", paths.len() - 3)
-                } else {
-                    write!(f, "- apply patch: {shown}")
+                    .map(|patch| match patch {
+                        Patch::DeleteFile { path } => format!("delete `{}`", path.display()),
+                        Patch::AddFile { path, .. } => format!("create `{}`", path.display()),
+                        Patch::UpdateFile { path, .. } => format!("modify `{}`", path.display()),
+                        Patch::MoveFile { from, to, .. } => {
+                            format!("move `{}` -> `{}`", from.display(), to.display())
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let mut display = match paths.as_slice() {
+                    [] => "- apply patch".to_owned(),
+                    [path] => format!("- apply patch: {path}"),
+                    paths => {
+                        let shown = paths
+                            .iter()
+                            .take(3)
+                            .map(String::as_str)
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        if paths.len() > 3 {
+                            format!("- apply patch: {shown}, and {} more", paths.len() - 3)
+                        } else {
+                            format!("- apply patch: {shown}")
+                        }
+                    }
+                };
+                let pretty_diffs = patch_set
+                    .into_patches()
+                    .into_iter()
+                    .filter_map(pretty_patch_diff)
+                    .collect::<Vec<_>>();
+                if !pretty_diffs.is_empty() {
+                    display.push_str("\n\n```diff\n");
+                    display.push_str(&pretty_diffs.join("\n"));
+                    if !display.ends_with('\n') {
+                        display.push('\n');
+                    }
+                    display.push_str("```");
                 }
-            }
-        };
-        summary?;
-
-        let pretty_diffs = patch_set
-            .into_patches()
-            .into_iter()
-            .filter_map(pretty_patch_diff)
-            .collect::<Vec<_>>();
-
-        if !pretty_diffs.is_empty() {
-            let pretty_diffs = pretty_diffs.join("\n");
-            write!(f, "\n\n```diff\n{pretty_diffs}")?;
-            if !pretty_diffs.ends_with('\n') {
-                writeln!(f)?;
-            }
-            write!(f, "```")?;
-        }
-
-        Ok(())
+                display
+            })
+            .unwrap_or_else(|_| "- apply patch".to_owned());
+        f.write_str(&display)
     }
 }
 
@@ -399,9 +394,7 @@ impl ApplyPatch {
                         changes: Some(changes),
                     },
                 )?;
-                if let Some(parent) = dst.parent() {
-                    tokio::fs::create_dir_all(parent).await?;
-                }
+                Files::create_parent_dirs(&dst).await?;
                 Files::write_to_file(&dst, &patched).await?;
                 if src != dst {
                     Files::delete_file(&src).await?;

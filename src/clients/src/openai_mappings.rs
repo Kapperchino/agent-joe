@@ -129,24 +129,35 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
             StreamEvent::ResponseIncomplete {
                 response,
                 sequence_number: _,
-            } => Some(llm::StreamEvent::Error {
-                error: llm::ApiErrorDetail {
-                    error_type: "incomplete_response".into(),
-                    message: format!(
-                        "OpenAI response incomplete: {}",
-                        response
-                            .incomplete_details
-                            .map(|details| details.reason)
-                            .unwrap_or_default()
-                    ),
-                },
-            }),
+            } => {
+                let reason = response
+                    .incomplete_details
+                    .map(|details| details.reason)
+                    .unwrap_or_default();
+                let code = match reason.as_str() {
+                    "context_length_exceeded" | "context_window_exceeded" | "context_exceeded" => {
+                        "context_length_exceeded"
+                    }
+                    "content_filter" => "content_filter",
+                    _ => "incomplete_response",
+                };
+                Some(llm::StreamEvent::Error {
+                    error: llm::ApiErrorDetail {
+                        error_type: code.into(),
+                        message: format!("OpenAI response incomplete: {reason}"),
+                    },
+                })
+            }
             StreamEvent::ResponseFailed {
                 response,
                 sequence_number: _,
             } => Some(llm::StreamEvent::Error {
                 error: llm::ApiErrorDetail {
-                    error_type: "failed_response".into(),
+                    error_type: response
+                        .error
+                        .as_ref()
+                        .and_then(|error| error.code.clone())
+                        .unwrap_or_else(|| "failed_response".into()),
                     message: format!(
                         "OpenAI response failed: {}",
                         response
@@ -340,6 +351,34 @@ impl From<tool_defs::ToolProperty> for openai::ToolProperty {
                 description,
                 properties: properties.into_iter().map(|(k, v)| (k, v.into())).collect(),
             },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::failure::{Failure, FailureKind};
+
+    #[test]
+    fn incomplete_response_preserves_the_structured_reason() {
+        for (reason, kind) in [
+            ("max_output_tokens", FailureKind::Truncation),
+            ("context_length_exceeded", FailureKind::ContextOverflow),
+            ("content_filter", FailureKind::InvalidInput),
+        ] {
+            let event: openai::StreamEvent = serde_json::from_value(serde_json::json!({
+                "type": "response.incomplete", "sequence_number": 1,
+                "response": {"incomplete_details": {"reason": reason}}
+            }))
+            .unwrap();
+            let Some(llm::StreamEvent::Error { error }) = Option::<llm::StreamEvent>::from(event)
+            else {
+                panic!("incomplete response must fail");
+            };
+            let failure = Failure::api(&error.error_type, &error.message);
+            assert_eq!(failure.kind, kind);
+            assert!(!failure.retryable());
         }
     }
 }

@@ -1,6 +1,5 @@
 use crate::tool_defs::{ToolDefTrait, ToolId, ToolTrait, ToolType};
 use analysis::contexts::context::Context;
-use anyhow::bail;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
@@ -18,7 +17,9 @@ impl<C: Context, A> ToolTrait<C, A> for WebSearch {
         _cur_context: &C,
         _actor_context: &A,
     ) -> anyhow::Result<Self::Output> {
-        bail!("web_search is a provider-hosted tool and cannot be executed locally")
+        Err(anyhow::anyhow!(
+            "web_search is a provider-hosted tool and cannot be executed locally"
+        ))
     }
 
     fn display_input(input: &Self::Input) -> String {
@@ -39,6 +40,10 @@ impl<C: Context, A> ToolTrait<C, A> for WebSearch {
 
     fn output_to_content(_input: &Self::Input, output: &Self::Output) -> anyhow::Result<String> {
         Ok(output.content.clone())
+    }
+
+    fn effect() -> crate::tool_defs::ToolEffect {
+        crate::tool_defs::ToolEffect::Read
     }
 
     fn tool_type() -> ToolType {

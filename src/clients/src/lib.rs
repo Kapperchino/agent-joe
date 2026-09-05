@@ -13,3 +13,6 @@ pub use openai_config::{
     LocalOpenAIConfig, OpenAIAuthConfig, OpenAICodexConfig, OpenAIConfig, OpenAIEffort,
     OpenAIKeyConfig, OpenRouterConfig,
 };
+
+pub mod failure;
+mod sse;

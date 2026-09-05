@@ -1,6 +1,6 @@
 # Agent Joe implementation plan
 
-Status: the first M1 implementation slice is implemented and validated. M1 is in progress; later milestones remain pending.
+Status: the first M1 implementation slice and M2 are implemented and validated on macOS. M1 capability/transition work remains in progress; M3 and later milestones remain pending.
 
 Cover all ten gaps identified in the Codex comparison while keeping Joe a Rust-focused agent with typed tools and no model-controlled shell. Delivery order follows dependencies, so context compaction follows the response format and turn lifecycle work it needs.
 
@@ -88,8 +88,8 @@ fixture. No live provider request is required.
 
 Remaining M1 work: general capability discovery/overrides for hosted search and
 compaction, and model/provider transition handling beyond rejecting incompatible
-reasoning. M0's broader task benchmark fixtures and M2's injectable transport and
-turn recovery remain pending.
+reasoning. M0's broader task benchmark fixtures remain pending. M2 now supplies the
+injectable transport and turn recovery described below.
 
 Primary files: `src/clients/src/{llm,openai,openai_mappings,claude_mappings}.rs`, `src/actors/src/{actor,actor_state,batch,stream_processor}.rs`, and context/prompt assembly.
 
@@ -105,6 +105,78 @@ Validation: deterministic round trips across multiple tool calls; an empty reaso
 Done when repeated tool turns preserve instruction roles, original call data, and all required continuation state.
 
 **M2 — Turn lifecycle, cancellation, and scheduling**
+
+Implemented and validated on macOS (2026-09-05):
+
+- Both simple and delegated modes use the same turn runtime. Provider requests,
+  streaming, tools, worker startup, and cleanup run in owned background tasks.
+  Turn/operation IDs tag events, and obsolete events cannot mutate history.
+- One `Turn<P>` carries shared turn data through provider execution, tools, and
+  cleanup, with distinct `TurnId`, `OperationId`, and `WorkspaceRevision` types.
+  Actor messages dispatch to phase-specific transitions. One `ToolBatch`
+  owns accepted calls and their queued/running/completed outcomes; replay tests
+  use this same representation. Duplicate and mismatched completions are ignored.
+  Tool results share their invocation data and use a standard `Result` for the
+  outcome. Definitions, execution, and context updates share one tool collection.
+  Phase handlers consume typed states through expression-based control flow.
+  Error categories are retained where recovery depends on them; other failures
+  use ordinary errors. The M2 code has no explicit returns, `ensure!`, or comments.
+- The runtime registers active providers, tools, workers, and processes. Interrupt,
+  clear, and application shutdown cancel the task tree and await cleanup. Worker
+  replies register before work starts; immediate completion, startup failure, and
+  provider failure resolve the parent. Successful replies take precedence over
+  the child's subsequent shutdown signal.
+- New messages during work become visible FIFO follow-ups. Interrupt and clear
+  cancel queued follow-ups. No provider continuation starts until the preceding
+  provider task exits. Active steering and question/permission interfaces remain
+  assigned to M9/M3; their waiting lifecycle states are defined here.
+- Trusted tool effects allow four concurrent reads, share a workspace lease across
+  workers, and serialize mutations and validation. The scheduler consumes read
+  groups and exclusive operations through one tool cleanup path. Mutation attempts advance an
+  in-memory workspace revision. Validation holds the workspace lease for its run;
+  detecting changes from external editors remains M5/M8 work.
+- Accepted tool calls enter history with individual pending outcomes. Completed
+  results survive cancellation; interrupted operations retain uncertainty and
+  unstarted calls are explicitly marked unexecuted. A failed or timed-out write
+  stops automatic continuation and remaining writes. Repeated identical tool
+  failures at the same revision stop after three attempts. Cargo validation
+  failures retain diagnostics and are recorded as error results. A timed-out read
+  also stops the batch before a subsequent write can start.
+- Authentication, rate-limit, transport, truncation, context-overflow, invalid-input,
+  tool, and worker failures have distinct handling. Transient provider failures
+  retry at most twice after existing HTTP retries, using accepted history without
+  rerunning tools. Complete non-tool content is retained on final interruption;
+  partial argument buffers and calls from failed responses never execute.
+- Provider recovery uses HTTP status and structured error codes. Tool and worker
+  failures carry explicit categories and effect certainty; diagnostic wording
+  cannot select recovery behavior. Workspace leases own their locks and update
+  mutation revisions on release, after outstanding work has finished.
+- Both adapters share byte-oriented SSE decoding with split UTF-8, LF/CRLF/CR
+  framing, multiline data, keepalives, terminal errors, and premature-EOF checks.
+  SSE events are limited to 16 MiB. Fake providers exercise whole turns without
+  HTTP clients, credentials, personal configuration, or paid requests.
+
+Validation: `cargo test --workspace --offline` passes all 110 tests and
+`cargo check --workspace --offline` passes with existing warnings. Tests cover
+request and tool interruption, stale stream/tool completions, queueing, bounded
+concurrent reads, ordered writes, revision-bound validation, timeouts, repeated
+failures, worker completion/failure/cancellation, and clear during tools. Panics
+in preparation, execution, and output conversion preserve other read results and
+prevent subsequent writes. Native
+macOS tests cancel a running Rust test process and its descendant, verify process
+reaping and empty resource registries, and drain both pipes beyond pipe capacity.
+The final suite runs inside the execution sandbox: replay tests no longer construct
+HTTP clients, avoiding the earlier macOS system-proxy fixture panic. Changed Rust
+files are formatted and the diff passes the whitespace check.
+
+Process cleanup uses Unix process groups and reaps direct children. Native Linux
+execution has not been validated in this environment; non-Unix execution reports
+an unsupported capability. Deliberate process-group escapes require M3 isolation.
+Filesystem mutations that have already entered a blocking OS call are awaited
+before cancellation releases the workspace lease; cancellation cannot roll them
+back. The former Cargo test against the live working directory was replaced by
+deterministic managed-process fixtures. Output artifacts, durable revisions and
+journaling remain M4/M6 work.
 
 Primary files: `src/actors/src/{actor,actor_state,supervisor,stream_processor}.rs`, worker tool adapters, and `src/common-models/src/tui_models.rs`.
 

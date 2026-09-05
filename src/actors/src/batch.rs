@@ -1,4 +1,4 @@
-use crate::stream_processor::{PreprocessedStreamItem, ProcessedItem};
+use crate::stream_processor::ProcessedItem;
 use crate::tool_call::ToolCall;
 use anyhow::anyhow;
 use clients::llm::PendingToolId;
@@ -16,6 +16,23 @@ impl Batch {
         Self::default()
     }
 
+    pub fn completed_content(&self) -> Vec<MessageContent> {
+        self.blocks
+            .values()
+            .filter_map(|block| match block {
+                ContentBlock::Complete(content)
+                    if !matches!(
+                        content,
+                        MessageContent::ToolBlock { .. } | MessageContent::ToolResult { .. }
+                    ) =>
+                {
+                    Some(content.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     pub fn has_tool(&self) -> bool {
         self.blocks
             .values()
@@ -30,7 +47,7 @@ impl Batch {
         self.blocks.insert(index, ContentBlock::Complete(content));
     }
 
-    pub fn extract_and_pre_process(&mut self) -> anyhow::Result<Vec<PreprocessedStreamItem>> {
+    pub fn extract_and_pre_process(&mut self) -> anyhow::Result<Vec<ProcessedItem>> {
         let result = self
             .blocks
             .iter()
@@ -49,7 +66,7 @@ impl Batch {
                         }),
                         content => ProcessedItem::Content(content.clone()),
                     };
-                    Ok(PreprocessedStreamItem { index, processed })
+                    Ok(processed)
                 }
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
@@ -279,7 +296,7 @@ mod tests {
 
         let items = batch.extract_and_pre_process().unwrap();
         assert!(matches!(
-            &items[0].processed,
+            &items[0],
             ProcessedItem::Content(MessageContent::MessageBlock { text, .. })
                 if text == "First second"
         ));
@@ -309,7 +326,7 @@ mod tests {
 
         let items = batch.extract_and_pre_process().unwrap();
         assert!(matches!(
-            &items[0].processed,
+            &items[0],
             ProcessedItem::Content(MessageContent::MessageBlock { text, .. })
                 if text == "Final"
         ));

@@ -66,9 +66,7 @@ async fn main() {
     execute!(
         stdout(),
         EnableBracketedPaste,
-        PushKeyboardEnhancementFlags(
-            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-        )
+        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
     )
     .ok();
 
@@ -122,6 +120,7 @@ async fn get_actor(
                 None,
                 WorkerAdapter::new(SimpleWorker::new()),
                 Dependency {
+                    runtime: Default::default(),
                     client,
                     tools: SimpleWorker::tools(),
                     tui_tx: chan,
@@ -142,6 +141,7 @@ async fn get_actor(
                 None,
                 WorkerAdapter::new(BaseWorker::new()),
                 Dependency {
+                    runtime: Default::default(),
                     client,
                     tools: BaseWorker::tools(),
                     tui_tx: chan,

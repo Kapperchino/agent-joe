@@ -1,3 +1,4 @@
+use crate::runtime_ids::{OperationId, TurnId};
 use commands::command::Command;
 
 pub struct ActorToTui {
@@ -7,6 +8,21 @@ pub struct ActorToTui {
 #[derive(Debug, Clone)]
 pub enum ActorToTuiPacket {
     StateChanged(State),
+    TurnChanged {
+        turn_id: TurnId,
+        state: Lifecycle,
+        detail: Option<String>,
+    },
+    OperationChanged {
+        turn_id: TurnId,
+        operation_id: OperationId,
+        state: Lifecycle,
+        detail: String,
+    },
+    Queued {
+        turn_id: TurnId,
+        position: usize,
+    },
     Data(String),
     ToolUse(Vec<String>),
     CommandResult(Command, String),
@@ -31,4 +47,22 @@ pub enum State {
     ToolStart,
     ToolStop,
     Stopped,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lifecycle {
+    Ready,
+    Running,
+    WaitingForTools,
+    WaitingForInput,
+    WaitingForPermission,
+    Cancelling,
+    Completed,
+    Cancelled,
+    Failed,
+}
+impl Lifecycle {
+    pub fn terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Cancelled | Self::Failed)
+    }
 }

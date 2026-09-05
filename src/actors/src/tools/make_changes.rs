@@ -1,12 +1,11 @@
-use crate::actor::{ActorContext, Dependency, Message};
-use crate::worker::{Worker, WorkerAdapter};
+use crate::actor::{ActorContext, Dependency};
+use crate::worker::Worker;
 use crate::workers::write_worker::WriteWorker;
 use analysis::contexts::context::Context;
 use analysis::contexts::rust_context::RustContext;
 use analysis::contexts::rust_empty_context::RustEmptyContext;
 use anyhow::anyhow;
 use async_trait::async_trait;
-use ractor::{Actor, call};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use tools::tool_defs::{ToolDefTrait, ToolId, ToolTrait, ToolType};
@@ -35,25 +34,21 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for MakeChanges {
 
         let empty_context = RustEmptyContext::new(new_context, true, cur_context.gen_id());
 
-        let (joe, actor_handle) = Actor::spawn_linked(
-            None,
-            WorkerAdapter::new(WriteWorker::new()),
+        crate::worker::run_worker(
+            WriteWorker::new(),
             Dependency {
                 client: info.dep.client.clone(),
                 tools: WriteWorker::tools(),
                 tui_tx: info.dep.tui_tx.clone(),
-                debug_mode: info.dep.debug_mode.clone(),
+                debug_mode: info.dep.debug_mode,
                 context: empty_context,
+                runtime: info.dep.runtime.child(info.dep.runtime.scope.child()),
             },
-            info.actor_ref.get_cell(),
+            info.actor_ref.clone(),
         )
-        .await?;
-        joe.send_message(Message::StartWork(None))?;
-        let res = call!(joe, |reply| {
-            Message::RegisterCallback(info.actor_ref.get_id(), reply)
-        })?;
-
-        Ok(MakeChangesResult { res, id: tool_id })
+        .await
+        .map_err(|error| error.into_tool_failure().into())
+        .map(|res| MakeChangesResult { res, id: tool_id })
     }
 
     fn display_input(input: &Self::Input) -> String {
@@ -80,6 +75,10 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for MakeChanges {
         context
             .stacked_context
             .push(format!("{}\n{addition}", input.context))
+    }
+
+    fn effect() -> tools::tool_defs::ToolEffect {
+        tools::tool_defs::ToolEffect::DelegateWrite
     }
 
     fn tool_type() -> ToolType {

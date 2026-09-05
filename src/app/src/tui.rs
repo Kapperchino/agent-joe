@@ -36,6 +36,7 @@ pub struct TUIApp {
     do_quit: bool,
     actor_ref: ActorRef<Message>,
     actor_state: State,
+    root_busy: bool,
     token_count: TokenCount,
     debug_mode: bool,
     input_box: InputBoxState,
@@ -83,6 +84,7 @@ impl TUIApp {
             do_quit: false,
             actor_ref: actor_ref.clone(),
             actor_state: State::Ready,
+            root_busy: false,
             token_count: TokenCount::default(),
             debug_mode,
             input_box: InputBoxState::new(config),
@@ -99,7 +101,7 @@ impl TUIApp {
                 .actor_ref
                 .send_message(Message::StartWork(Some(self.input_box.get_input())))
             {
-                Ok(_) => {}
+                Ok(_) => self.root_busy = true,
                 Err(_) => {
                     eprintln!("it's joever")
                 }
@@ -117,41 +119,39 @@ impl TUIApp {
             let submitted_command = format!("/{}", &input);
             let command = Command::from_str(&input);
             match command {
-                Ok(command) => {
-                    match command {
-                        Command::PrintContext => {
-                            match self.actor_ref.send_message(Message::Command(command)) {
-                                Ok(_) => {}
-                                Err(_) => {
-                                    eprintln!("it's joever")
-                                }
-                            };
-                            self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
-                        }
-                        Command::Logout => {
-                            match self.actor_ref.send_message(Message::Command(command)) {
-                                Ok(_) => {}
-                                Err(_) => {
-                                    eprintln!("it's joever")
-                                }
-                            };
-                            self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
-                        }
-                        Command::Clear => {
-                            self.clear_messages_and_terminal();
-                            match self.actor_ref.send_message(Message::Command(command)) {
-                                Ok(_) => {}
-                                Err(_) => {
-                                    eprintln!("it's joever")
-                                }
-                            };
-                            self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
-                        }
-                        Command::ChangeModel(_, _) => self
-                            .update_input_mode(InputMode::CommandMenu(CommandMenu::ModelSelector)),
+                Ok(command) => match command {
+                    Command::PrintContext => {
+                        match self.actor_ref.send_message(Message::Command(command)) {
+                            Ok(_) => {}
+                            Err(_) => {
+                                eprintln!("it's joever")
+                            }
+                        };
+                        self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
                     }
-                    //self.message_box.append(Msg::Message(submitted_command));
-                }
+                    Command::Logout => {
+                        match self.actor_ref.send_message(Message::Command(command)) {
+                            Ok(_) => {}
+                            Err(_) => {
+                                eprintln!("it's joever")
+                            }
+                        };
+                        self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
+                    }
+                    Command::Clear => {
+                        self.clear_messages_and_terminal();
+                        match self.actor_ref.send_message(Message::Command(command)) {
+                            Ok(_) => {}
+                            Err(_) => {
+                                eprintln!("it's joever")
+                            }
+                        };
+                        self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
+                    }
+                    Command::ChangeModel(_, _) => {
+                        self.update_input_mode(InputMode::CommandMenu(CommandMenu::ModelSelector))
+                    }
+                },
                 Err(err) => {
                     self.message_box.append(Msg::Message(submitted_command));
                     self.message_box.append(Msg::Message(err.to_string()));
@@ -233,6 +233,31 @@ impl TUIApp {
 
     fn handle_actor_msg(&mut self, msg: ActorToTui) {
         match msg.packet {
+            ActorToTuiPacket::Queued { turn_id, position } => {
+                self.message_box.append(Msg::Message(format!(
+                    "Follow-up {turn_id} queued (position {position})."
+                )));
+            }
+            ActorToTuiPacket::TurnChanged {
+                turn_id,
+                state,
+                detail,
+            } => {
+                if msg.actor_id == 0 {
+                    self.root_busy = !state.terminal();
+                }
+                if state.terminal() || detail.is_some() {
+                    self.message_box.append(Msg::Message(format!(
+                        "Turn {turn_id}: {state:?}{}",
+                        detail.map(|text| format!(" — {text}")).unwrap_or_default()
+                    )));
+                }
+            }
+            ActorToTuiPacket::OperationChanged { state, detail, .. } => {
+                if state == common_models::tui_models::Lifecycle::Failed {
+                    self.message_box.append(Msg::Message(detail));
+                }
+            }
             ActorToTuiPacket::StateChanged(state) => {
                 self.update_actor_state(state);
                 match self.actor_state {
@@ -311,7 +336,7 @@ impl TUIApp {
                             self.input_box.clear();
                             self.input_box.force_normal_mode();
                             self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
-                        } else if let State::Ready = self.actor_state {
+                        } else if !self.root_busy {
                             self.kill()
                         } else {
                             self.interrupt();
@@ -436,7 +461,7 @@ impl TUIApp {
 
     fn kill(&mut self) {
         self.do_quit = true;
-        self.actor_ref.kill();
+        self.actor_ref.stop(None);
     }
 
     fn interrupt(&mut self) {
@@ -447,7 +472,7 @@ impl TUIApp {
             }
         };
         self.message_box
-            .append(Msg::Message("Interrupted".to_string()))
+            .append(Msg::Message("Cancelling active work…".to_string()))
     }
 
     fn clear_messages_and_terminal(&mut self) {
@@ -468,7 +493,6 @@ impl TUIApp {
         self.message_box
             .update_width_height(msg_area.width, msg_area.height);
 
-        // ── token counter: pretty spans, bottom-right of input box ─────────
         let token_line = Line::from(vec![
             Span::styled(
                 " ↑ ",

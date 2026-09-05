@@ -1,43 +1,21 @@
-use crate::actor_state::ActorState;
-use crate::stream_processor::{PreprocessedStreamItem, ProcessedItem, StreamNextStep};
-use crate::worker::{Worker, WorkerAdapter};
+use crate::{
+    actor_state::ActorState,
+    provider_task::ProviderEvent,
+    scheduler::ToolEvent,
+    turn::{HistoryDisposition, Tag},
+    worker::{Worker, WorkerAdapter, WorkerFailure},
+};
 use analysis::contexts::context::Context;
-use clients::llm;
-use clients::llm::{LLmClient, StreamEvent};
+use clients::llm::LLmClient;
 use commands::command::Command;
-use common_models::tui_models::State;
-use common_models::tui_models::{ActorToTui, ActorToTuiPacket};
+use common_models::{runtime_ids::TurnId, tui_models::ActorToTui};
 use flume::Sender;
-use futures::StreamExt;
-use ractor::ActorProcessingErr;
-use ractor::ActorRef;
-use ractor::SupervisionEvent;
-use ractor::{Actor, ActorId, RpcReplyPort};
-use ractor_actors::streams::spawn_stream_pump;
-use thiserror::Error;
-use tools::tool_defs::{ErasedToolRef, ToolResult};
-use tracing::error;
+use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, SupervisionEvent};
+use tools::tool_defs::ErasedToolRef;
 
-#[derive(Error, Debug)]
-pub enum WorkerError {
-    #[error("Claude API error: {0}")]
-    Claude(#[from] clients::claude::ClaudeError),
-
-    #[error("Still working")]
-    WIP,
-
-    #[error("Actor already stopped")]
-    Ended,
-
-    #[error(transparent)]
-    Other(#[from] anyhow::Error),
-}
-
-// Define a trait to convert errors
 pub trait IntoActorErr<T> {
     fn actor_err(self) -> Result<T, ActorProcessingErr>;
 }
-
 impl<T, E: std::fmt::Display> IntoActorErr<T> for Result<T, E> {
     fn actor_err(self) -> Result<T, ActorProcessingErr> {
         self.map_err(|e| ActorProcessingErr::from(e.to_string()))
@@ -45,21 +23,23 @@ impl<T, E: std::fmt::Display> IntoActorErr<T> for Result<T, E> {
 }
 
 #[derive(Debug)]
-pub enum StreamItem {
-    Item(StreamEvent),
-    Err(anyhow::Error),
-    Finished(),
-}
-
-#[derive(Debug)]
 pub enum Message {
     StartWork(Option<String>),
+    #[cfg(test)]
+    Inspect(RpcReplyPort<Vec<clients::llm::Message>>),
+    RunWorker(RpcReplyPort<Result<String, WorkerFailure>>),
     Command(Command),
-    UseTool(Vec<PreprocessedStreamItem>),
-    Finished(Vec<PreprocessedStreamItem>),
-    ProcessStreamItem(StreamItem),
-    RegisterCallback(ActorId, RpcReplyPort<String>),
-    Callback(ActorId, String),
+    Provider {
+        tag: Tag,
+        event: ProviderEvent,
+    },
+    Tools {
+        tag: Tag,
+        event: ToolEvent,
+    },
+    CleanupFinished {
+        turn: TurnId,
+    },
     Interrupt,
     Clear,
     KYS,
@@ -72,26 +52,22 @@ pub struct Dependency<C: Context> {
     pub tui_tx: Sender<ActorToTui>,
     pub debug_mode: bool,
     pub context: C,
+    pub runtime: crate::runtime::Runtime,
+}
+impl<C: Context> Dependency<C> {
+    pub fn tool(&self, name: &str) -> Option<&ErasedToolRef<C, ActorContext<C>>> {
+        self.tools.iter().find(|tool| tool.name() == name)
+    }
 }
 
 pub enum ActorContext<C: Context> {
     Noop,
     ActorInfo(ActorInfo<C>),
 }
-
 pub struct ActorInfo<C: Context> {
     pub dep: Dependency<C>,
     pub actor_ref: ActorRef<Message>,
 }
-
-impl Message {}
-
-#[derive(Debug)]
-pub enum StreamRes {
-    Content(llm::ContentBlock),
-    Tool(ToolResult),
-}
-
 #[cfg_attr(feature = "async-trait", ractor::async_trait)]
 impl<W: Worker> Actor for WorkerAdapter<W> {
     type Msg = Message;
@@ -100,192 +76,58 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
 
     async fn pre_start(
         &self,
-        myself: ActorRef<Self::Msg>,
+        myself: ActorRef<Message>,
         dependency: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
-        self.worker.startup_hook(myself, dependency).await
+        let scope = dependency.runtime.scope.clone();
+        tokio::select! {
+            biased;
+            _ = scope.cancel.cancelled() => Err("Worker startup cancelled".into()),
+            state = scope.enter(self.worker.startup_hook(myself, dependency)) => state,
+        }
     }
 
     async fn handle(
         &self,
-        myself: ActorRef<Self::Msg>,
-        message: Self::Msg,
+        _: ActorRef<Message>,
+        message: Message,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
-            Message::StartWork(prompt) => {
-                prompt.map(|p| {
-                    state.history.push(llm::Message::new(p));
-                });
-                let req = state.build_request();
-
-                let stream = state.llm.chat_stream(req).await?;
-
-                let actor = spawn_stream_pump(
-                    stream,
-                    myself,
-                    |event| match event {
-                        None => Message::ProcessStreamItem(StreamItem::Finished()),
-                        Some(res) => match res {
-                            Ok(item) => Message::ProcessStreamItem(StreamItem::Item(item)),
-                            Err(err) => Message::ProcessStreamItem(StreamItem::Err(err)),
-                        },
-                    },
-                    None,
-                )
-                .await?;
-
-                state.stream_actor.as_ref().map(|cell| cell.stop(None));
-
-                state.stream_actor = Some(actor)
+            Message::StartWork(prompt) => state.start_work(prompt),
+            Message::RunWorker(reply) => state.start_worker(reply),
+            Message::Provider { tag, event } => state.provider_event(tag, event).await,
+            Message::Tools { tag, event } => state.tool_event(tag, event),
+            Message::CleanupFinished { turn } => state.cleanup_finished(turn).await,
+            Message::Interrupt => state.interrupt(HistoryDisposition::Retain).await,
+            Message::Clear => state.interrupt(HistoryDisposition::Clear).await,
+            Message::Command(command) => state.command(command).await,
+            Message::KYS => state.actor_ref.stop(None),
+            #[cfg(test)]
+            Message::Inspect(reply) => {
+                let _ = reply.send(state.visible_history());
             }
-            Message::Finished(res) => {
-                let res = state.stream_items_to_res(res).await;
-                state.save_history(res)?;
-                state.pending_ports.iter().try_for_each(|(id, port)| {
-                    myself.send_message(Message::Callback(
-                        id.clone(),
-                        match state.history.last() {
-                            None => "".to_string(),
-                            Some(msg) => msg.text(),
-                        },
-                    ))
-                })?;
-            }
-            Message::UseTool(vec) => {
-                let tool_lines: Result<Vec<String>, anyhow::Error> = vec
-                    .iter()
-                    .filter_map(|x| {
-                        if let ProcessedItem::Tool(t) = &x.processed {
-                            Some(state.tool_display(t))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                let tool_lines = tool_lines.unwrap_or(vec!["Invalid input".to_owned()]);
-
-                if !tool_lines.is_empty() {
-                    state.reporter.send(ActorToTuiPacket::ToolUse(tool_lines));
-                }
-
-                state.change_state(State::ToolStart);
-                let res = state.process_tools(vec).await;
-                state.save_history(res)?;
-                state.change_state(State::ToolStop);
-                myself.send_message(Message::StartWork(None))?;
-            }
-            Message::ProcessStreamItem(item) => match item {
-                StreamItem::Item(event) => {
-                    match state
-                        .stream_processor
-                        .process_stream_event(event.clone())
-                        .await?
-                    {
-                        StreamNextStep::ToolUse => {
-                            let pre_processed = state.stream_processor.extract_and_pre_process()?;
-                            myself.send_message(Message::UseTool(pre_processed))?;
-                        }
-                        StreamNextStep::NewStream => {
-                            // clear intermediate states
-                            state.stream_processor.clear();
-                            myself.send_message(Message::StartWork(None))?;
-                        }
-                        StreamNextStep::Done => {
-                            let pre_processed = state.stream_processor.extract_and_pre_process()?;
-                            myself.send_message(Message::Finished(pre_processed))?;
-                        }
-                        StreamNextStep::Accum => {}
-                        StreamNextStep::Noop => {}
-                    }
-                }
-                StreamItem::Err(err) => {
-                    error!("\nError: {:?}", err);
-                }
-                StreamItem::Finished() => {}
-            },
-            Message::KYS => myself.kill(),
-            Message::Command(command) => match command {
-                Command::PrintContext => {
-                    let ctx = state.cur_context.get_ctx().await;
-                    let _ = state
-                        .reporter
-                        .send(ActorToTuiPacket::CommandResult(command, ctx));
-                }
-                Command::Logout => match clients::config::Config::delete().await {
-                    Ok(_) => {
-                        let _ = state.reporter.send(ActorToTuiPacket::CommandResult(
-                            command,
-                            "Logged out. Removed config".to_string(),
-                        ));
-                    }
-                    Err(err) => {
-                        let _ = state.reporter.send(ActorToTuiPacket::CommandResult(
-                            command,
-                            format!("Deletion failed: {err}"),
-                        ));
-                    }
-                },
-                Command::Clear => {
-                    myself.send_message(Message::Clear)?;
-                    let _ = state.reporter.send(ActorToTuiPacket::CommandResult(
-                        command,
-                        "History cleared".to_string(),
-                    ));
-                }
-                Command::ChangeModel(name, effort) => {
-                    state.llm.change_model_and_effort(name, effort).await?;
-                }
-            },
-            Message::Interrupt => {
-                state.stream_processor.clear();
-                state.stream_actor.as_ref().map(|cell| cell.stop(None));
-                state.stream_actor = None;
-                state.change_state(State::Ready);
-            }
-            Message::Clear => {
-                state.clear_history().await;
-                state.stream_processor.clear();
-                state.stream_actor.as_ref().map(|cell| cell.stop(None));
-                state.stream_actor = None;
-                state.change_state(State::Ready);
-            }
-            Message::RegisterCallback(id, port) => {
-                state.pending_ports.insert(id, port);
-            }
-            Message::Callback(id, res) => match state.pending_ports.remove(&id) {
-                Some(port) => {
-                    port.send(res)?;
-                }
-                None => {}
-            },
         }
+        Ok(())
+    }
+
+    async fn post_stop(
+        &self,
+        _: ActorRef<Message>,
+        state: &mut Self::State,
+    ) -> Result<(), ActorProcessingErr> {
+        state.shutdown().await;
         Ok(())
     }
 
     async fn handle_supervisor_evt(
         &self,
-        _myself: ActorRef<Self::Msg>,
-        message: SupervisionEvent,
-        state: &mut Self::State,
+        _: ActorRef<Message>,
+        event: SupervisionEvent,
+        _: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
-        match message {
-            SupervisionEvent::ActorTerminated(who, boxed_state, reason) => {
-                if state
-                    .stream_actor
-                    .as_ref()
-                    .map(|t| t.get_id() == who.get_id())
-                    .unwrap_or(false)
-                {
-                    state.stream_actor = None;
-                } else {
-                    error!("{:?}", reason);
-                }
-            }
-            SupervisionEvent::ActorFailed(who, reason) => {
-                error!("Child actor {:?} failed: {:?}", who.get_id(), reason);
-            }
-            _ => {}
+        if let SupervisionEvent::ActorFailed(who, reason) = event {
+            tracing::error!("Child actor {:?} failed: {:?}", who.get_id(), reason);
         }
         Ok(())
     }

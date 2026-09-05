@@ -16,14 +16,13 @@ impl BusyIndicator {
     }
 
     pub(super) fn advance(&mut self, actor_state: &State) {
-        if !Self::should_tick(actor_state) {
+        if Self::should_tick(actor_state) {
+            self.ticks = self.ticks.wrapping_add(1);
+            if self.ticks % THROBBER_FRAME_TICKS == 0 {
+                self.state.calc_next();
+            }
+        } else {
             self.reset();
-            return;
-        }
-
-        self.ticks = self.ticks.wrapping_add(1);
-        if self.ticks % THROBBER_FRAME_TICKS == 0 {
-            self.state.calc_next();
         }
     }
 
@@ -38,6 +37,7 @@ impl BusyIndicator {
 
     fn label(actor_state: &State) -> Option<&'static str> {
         match actor_state {
+            State::StreamStart => Some("requesting"),
             State::ThinkingStart => Some("thinking"),
             State::ToolStart => Some("working"),
             _ => None,
@@ -47,7 +47,11 @@ impl BusyIndicator {
     fn should_tick(actor_state: &State) -> bool {
         matches!(
             actor_state,
-            State::ThinkingStart | State::ToolStart | State::ThinkingStop | State::ToolStop
+            State::StreamStart
+                | State::ThinkingStart
+                | State::ToolStart
+                | State::ThinkingStop
+                | State::ToolStop
         )
     }
 

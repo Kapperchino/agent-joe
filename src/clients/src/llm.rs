@@ -3,11 +3,13 @@ use crate::config::{Config, ConfigContext};
 use crate::openai::OpenAIClient;
 use crate::{ClaudeEffort, OpenAIEffort};
 use futures::Stream;
-use futures::future::Either;
+use futures::StreamExt;
+use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
+use std::sync::Arc;
 use tools::tool_defs::{NonEmptyString, ToolDefinition, ToolId};
 
 pub trait LLmClientTrait {
@@ -18,8 +20,19 @@ pub trait LLmClientTrait {
     async fn send_request(&self, request: ClientRequest) -> anyhow::Result<ClientResponse>;
 }
 
+pub trait StreamProvider: Send + Sync {
+    fn chat_stream(
+        &self,
+        request: ClientRequest,
+    ) -> futures::future::BoxFuture<
+        'static,
+        anyhow::Result<BoxStream<'static, anyhow::Result<StreamEvent>>>,
+    >;
+}
+
 #[derive(Clone)]
 pub enum LLmClient {
+    Injected(Arc<dyn StreamProvider>),
     Claude {
         client: ClaudeClient,
         config: ConfigContext,
@@ -32,15 +45,18 @@ pub enum LLmClient {
 
 impl LLmClient {
     pub fn new(config_context: ConfigContext) -> anyhow::Result<LLmClient> {
-        let config = config_context.get_config();
-        match &config {
-            Config::Claude(claude_config) => Ok(LLmClient::Claude {
-                client: ClaudeClient::new(claude_config.clone())?,
-                config: config_context.clone(),
-            }),
-            Config::OpenAI(openai_config) => Ok(LLmClient::OpenApi {
-                client: OpenAIClient::new(openai_config.clone())?,
-                config: config_context.clone(),
+        match config_context.get_config() {
+            Config::Claude(config) => {
+                ClaudeClient::new(config)
+                    .map_err(anyhow::Error::from)
+                    .map(|client| LLmClient::Claude {
+                        client,
+                        config: config_context,
+                    })
+            }
+            Config::OpenAI(config) => OpenAIClient::new(config).map(|client| LLmClient::OpenApi {
+                client,
+                config: config_context,
             }),
         }
     }
@@ -48,12 +64,22 @@ impl LLmClient {
     pub async fn chat_stream(
         &mut self,
         req: ClientRequest,
-    ) -> Result<impl Stream<Item = anyhow::Result<StreamEvent>> + Send + 'static, anyhow::Error>
-    {
-        self.refresh_config()?;
-        match self {
-            LLmClient::Claude { client, .. } => Ok(Either::Left(client.chat_stream(req).await?)),
-            LLmClient::OpenApi { client, .. } => Ok(Either::Right(client.chat_stream(req).await?)),
+    ) -> Result<BoxStream<'static, anyhow::Result<StreamEvent>>, anyhow::Error> {
+        match self.refresh_config() {
+            Ok(()) => match self {
+                LLmClient::Injected(provider) => provider.chat_stream(req).await,
+                LLmClient::Claude { client, .. } => {
+                    client.chat_stream(req).await.map(StreamExt::boxed)
+                }
+                LLmClient::OpenApi { client, .. } => {
+                    client.chat_stream(req).await.map(StreamExt::boxed)
+                }
+            },
+            Err(error) => Err(crate::failure::Failure::new(
+                crate::failure::FailureKind::InvalidInput,
+                error.to_string(),
+            )
+            .into()),
         }
     }
 
@@ -66,61 +92,77 @@ impl LLmClient {
         name: String,
         effort: String,
     ) -> anyhow::Result<()> {
-        let mut conf = self.get_config();
-        match &mut conf {
-            Config::Claude(config) => {
-                config.model = name;
-                config.effort = ClaudeEffort::from_str(effort.as_str())?;
-            }
-            Config::OpenAI(config) => {
-                config.model = name;
-                config.effort = OpenAIEffort::from_str(effort.as_str())?;
-            }
-        };
-
-        self.save_config(conf).await
+        let config = self
+            .get_config()
+            .ok_or_else(|| anyhow::anyhow!("Injected provider has no model configuration"))
+            .and_then(|config| match config {
+                Config::Claude(mut config) => ClaudeEffort::from_str(&effort)
+                    .map_err(anyhow::Error::from)
+                    .map(|effort| {
+                        config.model = name;
+                        config.effort = effort;
+                        Config::Claude(config)
+                    }),
+                Config::OpenAI(mut config) => OpenAIEffort::from_str(&effort)
+                    .map_err(anyhow::Error::from)
+                    .map(|effort| {
+                        config.model = name;
+                        config.effort = effort;
+                        Config::OpenAI(config)
+                    }),
+            });
+        match config {
+            Ok(config) => self.save_config(config).await,
+            Err(error) => Err(error),
+        }
     }
 
-    fn get_config(&self) -> Config {
+    fn get_config(&self) -> Option<Config> {
         match self {
+            LLmClient::Injected(_) => None,
             LLmClient::Claude { config, .. } | LLmClient::OpenApi { config, .. } => {
-                config.get_config()
+                Some(config.get_config())
             }
         }
     }
 
     fn refresh_config(&mut self) -> anyhow::Result<()> {
-        let current = self.get_config();
-        match (self, current) {
-            (LLmClient::Claude { client, .. }, Config::Claude(config)) => {
+        match (self.get_config(), self) {
+            (None, _) => Ok(()),
+            (Some(Config::Claude(config)), LLmClient::Claude { client, .. }) => {
                 if client.config.auth != config.auth {
-                    *client = ClaudeClient::new(config)?;
+                    ClaudeClient::new(config)
+                        .map(|updated| *client = updated)
+                        .map_err(Into::into)
                 } else {
                     client.config = config;
+                    Ok(())
                 }
-                Ok(())
             }
-            (LLmClient::OpenApi { client, .. }, Config::OpenAI(config)) => {
+            (Some(Config::OpenAI(config)), LLmClient::OpenApi { client, .. }) => {
                 if client.config.auth != config.auth {
-                    *client = OpenAIClient::new(config)?;
+                    OpenAIClient::new(config).map(|updated| *client = updated)
                 } else {
                     client.config = config;
+                    Ok(())
                 }
-                Ok(())
             }
             _ => Err(anyhow::anyhow!("Changing providers requires a new session")),
         }
     }
+
     async fn save_config(&mut self, config: Config) -> anyhow::Result<()> {
         match self {
+            LLmClient::Injected(_) => {
+                Err(anyhow::anyhow!("Injected provider has no configuration"))
+            }
             LLmClient::Claude {
                 config: context, ..
-            } => context.update_config(config),
-            LLmClient::OpenApi {
+            }
+            | LLmClient::OpenApi {
                 config: context, ..
-            } => context.update_config(config),
+            } => context.update_config(config).await,
         }
-        .await
     }
 }
 

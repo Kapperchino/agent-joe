@@ -93,7 +93,6 @@ impl Display for InsertAfterLine {
 
 impl InsertAfterLine {
     async fn insert_after_line(&self) -> anyhow::Result<()> {
-        // line number starts at 1 for the agent
         let line_num = self.input.line_num.clone() - 1;
         let path = self.input.file_path.clone();
         let insert_lines: Vec<_> = self.input.content.lines().collect();
@@ -103,7 +102,7 @@ impl InsertAfterLine {
         lines.splice(line_num..line_num, insert_lines);
         let mut res = lines.join("\n");
         res.push_str("\n");
-        fs::write(&path, res).await?;
+        utils::files::Files::write_to_file(&path.into(), &res).await?;
         Ok(())
     }
 }

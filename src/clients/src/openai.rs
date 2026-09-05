@@ -2,7 +2,6 @@ use crate::llm;
 use crate::llm::{ClientResponse, LLmClientTrait};
 use crate::openai_config::{OpenAIAuthConfig, OpenAIConfig, OpenAIEffort};
 use anyhow::{Error, anyhow};
-use async_stream::try_stream;
 use futures::{Stream, StreamExt};
 use reqwest::{Client, header};
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
@@ -15,7 +14,6 @@ use std::str::FromStr;
 use std::time::Duration;
 use thiserror::Error;
 use tools::tool_defs::NonEmptyString;
-use tracing::info;
 use utils::utils::FnvHashMap;
 
 const HTTP_MAX_RETRIES: u32 = 5;
@@ -778,7 +776,8 @@ impl OpenAIClient {
     pub async fn chat_stream_openai(
         &self,
         req: ClientRequest,
-    ) -> Result<impl Stream<Item = OpenAIResult<StreamEvent>> + Send + 'static, anyhow::Error> {
+    ) -> Result<impl Stream<Item = anyhow::Result<StreamEvent>> + Send + 'static, anyhow::Error>
+    {
         let url = format!("{}/responses", self.config.get_url());
 
         let request = ResponseRequest::new(&self.config, req, true);
@@ -786,47 +785,19 @@ impl OpenAIClient {
         let initial = self.client.post(&url).json(&request).send().await?;
 
         if initial.status().is_success() {
-            let mut byte_stream = initial.bytes_stream();
-            let mut buffer = String::new();
-
-            let stream = try_stream! {
-                while let Some(chunk) = byte_stream.next().await {
-                    let chunk = chunk?;
-                    buffer.push_str(&String::from_utf8_lossy(&chunk));
-
-                    while let Some(event) = Self::extract_sse_event(&mut buffer)? {
-                        info!("{:?}", event);
-                        yield event;
-                    }
-                }
-            };
-
-            Ok(stream)
+            Ok(crate::sse::decode(initial.bytes_stream(), |event| {
+                matches!(
+                    event,
+                    StreamEvent::ResponseCompleted { .. }
+                        | StreamEvent::ResponseIncomplete { .. }
+                        | StreamEvent::ResponseFailed { .. }
+                        | StreamEvent::Error { .. }
+                )
+            }))
         } else {
             let status = initial.status();
             let body = initial.text().await.unwrap_or_default();
-            Err(anyhow!("API error {status}: {body}"))
-        }
-    }
-
-    fn extract_sse_event(buffer: &mut String) -> OpenAIResult<Option<StreamEvent>> {
-        match buffer.find("\n\n") {
-            Some(delimiter_pos) => {
-                let event_text = buffer[..delimiter_pos].to_string();
-                buffer.drain(..=delimiter_pos + 1);
-                let data = event_text
-                    .lines()
-                    .filter_map(|line| line.trim().strip_prefix("data: "))
-                    .collect::<String>();
-                if data.is_empty() || data == "[DONE]" {
-                    Ok(None)
-                } else {
-                    serde_json::from_str(&data)
-                        .map(Some)
-                        .map_err(OpenAIError::Serialization)
-                }
-            }
-            None => Ok(None),
+            Err(crate::failure::Failure::http(status.as_u16(), body).into())
         }
     }
 }
@@ -836,7 +807,13 @@ impl LLmClientTrait for OpenAIClient {
         &self,
         req: llm::ClientRequest,
     ) -> Result<impl Stream<Item = anyhow::Result<llm::StreamEvent>> + Send + 'static, Error> {
-        match self.chat_stream_openai(req.try_into()?).await {
+        let request = req.try_into().map_err(|error: anyhow::Error| {
+            crate::failure::Failure::new(
+                crate::failure::FailureKind::InvalidInput,
+                error.to_string(),
+            )
+        })?;
+        match self.chat_stream_openai(request).await {
             Ok(stream) => Ok(stream
                 .map(|x| match x {
                     Ok(event) => {

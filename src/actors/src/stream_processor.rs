@@ -23,14 +23,8 @@ pub enum StreamNextStep {
     Done,
     ToolUse,
     Noop,
-    NewStream,
 }
 
-#[derive(Debug)]
-pub struct PreprocessedStreamItem {
-    pub index: usize,
-    pub processed: ProcessedItem,
-}
 #[derive(Debug, Clone)]
 pub enum ProcessedItem {
     Content(clients::llm::ContentBlock),
@@ -39,19 +33,22 @@ pub enum ProcessedItem {
 
 impl StreamNextStep {
     pub fn new(reason: &StopReason, batch: &Batch) -> anyhow::Result<Self> {
-        match batch.has_tool() {
-            true => Ok(StreamNextStep::ToolUse),
-            false => match reason {
-                StopReason::EndTurn => Ok(StreamNextStep::Done),
-                StopReason::MaxTokens => Ok(StreamNextStep::NewStream),
-                StopReason::StopSequence => Ok(StreamNextStep::Done),
-                StopReason::ToolUse => Ok(StreamNextStep::ToolUse),
-                StopReason::Refusal => {
-                    error!("Stream refusal");
-                    Ok(StreamNextStep::Done)
-                }
-                _ => Ok(StreamNextStep::Done),
-            },
+        use clients::failure::{Failure, FailureKind};
+        match reason {
+            StopReason::MaxTokens => Err(Failure::new(
+                FailureKind::Truncation,
+                "Provider output reached its token limit; no pending tools were executed",
+            )
+            .into()),
+            StopReason::ContextExceeded => Err(Failure::new(
+                FailureKind::ContextOverflow,
+                "Provider context limit exceeded",
+            )
+            .into()),
+            _ if batch.has_tool() || matches!(reason, StopReason::ToolUse) => {
+                Ok(StreamNextStep::ToolUse)
+            }
+            _ => Ok(StreamNextStep::Done),
         }
     }
 }
@@ -98,7 +95,9 @@ impl StreamProcessor {
                 Ok(StreamNextStep::Accum)
             }
             StreamEvent::MessageStop {} => Ok(StreamNextStep::Noop),
-            StreamEvent::Error { error } => Err(anyhow!("{}: {}", error.error_type, error.message)),
+            StreamEvent::Error { error } => {
+                Err(clients::failure::Failure::api(&error.error_type, &error.message).into())
+            }
             StreamEvent::MessageDelta { delta, usage } => {
                 if let Some(batch) = self.batches.last()
                     && let Some(reason) = delta.stop_reason
@@ -180,7 +179,7 @@ impl StreamProcessor {
         self.cur_state = new_state.clone();
         self.reporter.state_changed(new_state.clone())
     }
-    pub fn extract_and_pre_process(&mut self) -> anyhow::Result<Vec<PreprocessedStreamItem>> {
+    pub fn extract_and_pre_process(&mut self) -> anyhow::Result<Vec<ProcessedItem>> {
         match self.batches.last_mut() {
             Some(batch) => batch.extract_and_pre_process(),
             None => Err(anyhow!("Can't extract this, batch shouldn't be empty")),

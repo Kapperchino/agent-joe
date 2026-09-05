@@ -5179,6 +5179,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]
@@ -5653,9 +5654,11 @@ dependencies = [
  "futures",
  "grep",
  "itertools 0.15.0",
+ "libc",
  "serde_json",
  "tokio",
  "tokio-stream",
+ "tokio-util",
  "uuid",
 ]
 

@@ -2,7 +2,6 @@ use crate::claude_config::{ClaudeAuthConfig, ClaudeConfig, ClaudeEffort};
 use crate::llm;
 use crate::llm::{ClientResponse, LLmClientTrait};
 use anyhow::{Error, anyhow};
-use async_stream::try_stream;
 use futures::{Stream, StreamExt};
 use reqwest::{Client, header};
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
@@ -439,7 +438,8 @@ impl ClaudeClient {
     pub async fn chat_stream_claude(
         &self,
         req: ClientRequest,
-    ) -> Result<impl Stream<Item = ClaudeResult<StreamEvent>> + Send + 'static, anyhow::Error> {
+    ) -> Result<impl Stream<Item = anyhow::Result<StreamEvent>> + Send + 'static, anyhow::Error>
+    {
         let url = format!("{}/messages", self.base_url);
         let request = ChatRequestStream {
             model: req.model.unwrap_or_else(|| self.config.model.clone()),
@@ -463,46 +463,14 @@ impl ClaudeClient {
         let initial = self.client.post(&url).json(&request).send().await?;
 
         if initial.status().is_success() {
-            let mut byte_stream = initial.bytes_stream();
-            let mut buffer = String::new();
-
-            let stream = try_stream! {
-                while let Some(chunk) = byte_stream.next().await {
-                    let chunk = chunk?;
-                    buffer.push_str(&String::from_utf8_lossy(&chunk));
-
-                    while let Some(stream_event) = extract_sse_event(&mut buffer)?{
-                        yield stream_event;
-                    }
-                }
-            };
-            Ok(stream)
+            Ok(crate::sse::decode(initial.bytes_stream(), |event| {
+                matches!(event, StreamEvent::MessageStop | StreamEvent::Error { .. })
+            }))
         } else {
             let status = initial.status();
             let body = initial.text().await.unwrap_or_default();
-            Err(anyhow!("API error {status}: {body}"))
+            Err(crate::failure::Failure::http(status.as_u16(), body).into())
         }
-    }
-}
-
-fn extract_sse_event(buffer: &mut String) -> ClaudeResult<Option<StreamEvent>> {
-    match buffer.find("\n\n") {
-        Some(delimiter_pos) => {
-            let event_text = buffer[..delimiter_pos].to_string();
-            buffer.drain(..=delimiter_pos + 1);
-            let data = event_text
-                .lines()
-                .filter_map(|line| line.trim().strip_prefix("data: "))
-                .collect::<String>();
-            if data.is_empty() || data == "[DONE]" {
-                Ok(None)
-            } else {
-                serde_json::from_str(&data)
-                    .map(Some)
-                    .map_err(ClaudeError::Serialization)
-            }
-        }
-        None => Ok(None),
     }
 }
 
@@ -511,7 +479,12 @@ impl LLmClientTrait for ClaudeClient {
         &self,
         req: llm::ClientRequest,
     ) -> Result<impl Stream<Item = anyhow::Result<llm::StreamEvent>> + Send + 'static, Error> {
-        let mut claude_req: ClientRequest = req.try_into()?;
+        let mut claude_req: ClientRequest = req.try_into().map_err(|error: anyhow::Error| {
+            crate::failure::Failure::new(
+                crate::failure::FailureKind::InvalidInput,
+                error.to_string(),
+            )
+        })?;
         claude_req.effort = Some(self.config.effort.clone());
         let stream = self.chat_stream_claude(claude_req).await?;
         Ok(stream.map(|res| match res {
