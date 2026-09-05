@@ -1,8 +1,4 @@
-use crate::turn::Tag;
-use common_models::{
-    runtime_ids::TurnId,
-    tui_models::{ActorToTui, ActorToTuiPacket, Lifecycle, State},
-};
+use common_models::tui_models::{ActorToTui, ActorToTuiPacket, State};
 use flume::Sender;
 #[derive(Clone)]
 pub struct EventReporter {
@@ -23,21 +19,6 @@ impl EventReporter {
         let _ = self.tui_tx.send(ActorToTui {
             actor_id: self.actor_id,
             packet: item,
-        });
-    }
-    pub fn turn(&self, id: TurnId, state: Lifecycle, detail: Option<String>) {
-        self.send(ActorToTuiPacket::TurnChanged {
-            turn_id: id,
-            state,
-            detail,
-        });
-    }
-    pub fn operation(&self, tag: Tag, state: Lifecycle, detail: impl Into<String>) {
-        self.send(ActorToTuiPacket::OperationChanged {
-            turn_id: tag.turn,
-            operation_id: tag.operation,
-            state,
-            detail: detail.into(),
         });
     }
 }

@@ -2,7 +2,8 @@ use crate::{
     actor_state::ActorState,
     provider_task::ProviderEvent,
     scheduler::ToolEvent,
-    turn::{HistoryDisposition, Tag},
+    turn::{FollowUp, HistoryDisposition, Tag},
+    turn_machine::{Event, SessionEvent},
     worker::{Worker, WorkerAdapter, WorkerFailure},
 };
 use analysis::contexts::context::Context;
@@ -94,13 +95,36 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
-            Message::StartWork(prompt) => state.start_work(prompt),
-            Message::RunWorker(reply) => state.start_worker(reply),
+            Message::StartWork(prompt) => {
+                state
+                    .dispatch(SessionEvent::Start(FollowUp::new(prompt)))
+                    .await
+            }
+            Message::RunWorker(reply) => state.dispatch(SessionEvent::StartWorker(reply)).await,
             Message::Provider { tag, event } => state.provider_event(tag, event).await,
-            Message::Tools { tag, event } => state.tool_event(tag, event),
-            Message::CleanupFinished { turn } => state.cleanup_finished(turn).await,
-            Message::Interrupt => state.interrupt(HistoryDisposition::Retain).await,
-            Message::Clear => state.interrupt(HistoryDisposition::Clear).await,
+            Message::Tools { tag, event } => {
+                let revision = state.dependency.runtime.workspace.revision();
+                state
+                    .dispatch(SessionEvent::Tools {
+                        tag,
+                        event,
+                        revision,
+                    })
+                    .await;
+            }
+            Message::CleanupFinished { turn } => {
+                state.dispatch(SessionEvent::CleanupFinished(turn)).await
+            }
+            Message::Interrupt => {
+                state
+                    .dispatch(SessionEvent::Interrupt(HistoryDisposition::Retain))
+                    .await
+            }
+            Message::Clear => {
+                state
+                    .dispatch(SessionEvent::Interrupt(HistoryDisposition::Clear))
+                    .await
+            }
             Message::Command(command) => state.command(command).await,
             Message::KYS => state.actor_ref.stop(None),
             #[cfg(test)]
@@ -116,7 +140,7 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
         _: ActorRef<Message>,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
-        state.shutdown().await;
+        state.dispatch(Event::Shutdown).await;
         Ok(())
     }
 

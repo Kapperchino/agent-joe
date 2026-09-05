@@ -53,17 +53,29 @@ pub enum TurnState {
     Tools(Turn<ToolBatch>),
     Stopping(Turn<Cleanup>),
 }
+
+pub struct ToolBatchMut<'a> {
+    pub failures: &'a mut FailureTracker,
+    pub batch: &'a mut ToolBatch,
+}
+
 impl TurnState {
-    pub fn tools_mut(&mut self, tag: Tag) -> Option<(&mut FailureTracker, &mut ToolBatch)> {
+    pub fn tools_mut(&mut self, tag: Tag) -> Option<ToolBatchMut<'_>> {
         let tools = match self {
-            Self::Tools(turn) => Some((&mut turn.failures, &mut turn.phase)),
+            Self::Tools(turn) => Some(ToolBatchMut {
+                failures: &mut turn.failures,
+                batch: &mut turn.phase,
+            }),
             Self::Stopping(turn) => match &mut turn.phase.work {
-                CleanupWork::Tools(batch) => Some((&mut turn.failures, batch)),
+                CleanupWork::Tools(batch) => Some(ToolBatchMut {
+                    failures: &mut turn.failures,
+                    batch,
+                }),
                 CleanupWork::Provider(_) => None,
             },
             _ => None,
         };
-        tools.filter(|(_, batch)| batch.tag == tag)
+        tools.filter(|tools| tools.batch.tag == tag)
     }
 
     #[cfg(test)]
@@ -149,6 +161,7 @@ impl From<ToolBatch> for CleanupWork {
     }
 }
 
+#[derive(Clone)]
 pub struct ProviderRun {
     pub tag: Tag,
     pub scope: ExecutionScope,
@@ -165,6 +178,7 @@ impl ProviderRun {
         }
     }
 }
+#[derive(Clone, Copy)]
 pub enum ResponseState {
     Streaming,
     Complete,
@@ -174,16 +188,20 @@ pub enum AcceptedResponse {
     Complete(Message),
     Tools(ToolBatch),
 }
-impl ProviderRun {
-    pub fn finish(&self, stream: &mut StreamProcessor) -> Result<AcceptedResponse, Failure> {
-        match self.response {
+impl ResponseState {
+    pub fn finish(
+        self,
+        turn: TurnId,
+        stream: &mut StreamProcessor,
+    ) -> Result<AcceptedResponse, Failure> {
+        match self {
             ResponseState::Streaming => Err(Failure::new(
                 FailureKind::Transport,
                 "Provider stream ended without a complete response",
             )),
             ResponseState::ToolUse => stream
                 .extract_and_pre_process()
-                .map(|items| AcceptedResponse::Tools(ToolBatch::new(self.tag.turn, items)))
+                .map(|items| AcceptedResponse::Tools(ToolBatch::new(turn, items)))
                 .map_err(|error| Failure::new(FailureKind::InvalidInput, error.to_string())),
             ResponseState::Complete => stream
                 .extract_and_pre_process()
@@ -246,7 +264,13 @@ pub struct ToolBatch {
     pub tag: Tag,
     assistant: Vec<ContentBlock>,
     entries: Vec<ToolEntry>,
-    pub continuation: Result<(), Failure>,
+    pub continuation: Continuation,
+}
+
+#[derive(Clone)]
+pub enum Continuation {
+    Continue,
+    Stop(Failure),
 }
 struct ToolEntry {
     job: ToolJob,
@@ -281,7 +305,7 @@ impl ToolBatch {
             tag: Tag::new(turn),
             assistant,
             entries,
-            continuation: Ok(()),
+            continuation: Continuation::Continue,
         }
     }
 
@@ -357,11 +381,7 @@ struct FailureFingerprint {
     message: String,
 }
 impl FailureTracker {
-    pub fn record(
-        &mut self,
-        result: &ToolResult,
-        revision: WorkspaceRevision,
-    ) -> Result<(), Failure> {
+    pub fn record(&mut self, result: &ToolResult, revision: WorkspaceRevision) -> Continuation {
         match &result.outcome {
             Err(failure) => {
                 let fingerprint = FailureFingerprint {
@@ -375,12 +395,12 @@ impl FailureTracker {
                 let count = self.0.entry(fingerprint).or_default();
                 *count = count.saturating_add(1);
                 if *count >= 3 || failure.stops_turn() {
-                    Err(tool_failure(failure))
+                    Continuation::Stop(tool_failure(failure))
                 } else {
-                    Ok(())
+                    Continuation::Continue
                 }
             }
-            Ok(_) => Ok(()),
+            Ok(_) => Continuation::Continue,
         }
     }
 }
@@ -455,7 +475,7 @@ mod tests {
         for _ in 0..2 {
             assert!(matches!(
                 failures.record(&result, workspace.revision()),
-                Ok(())
+                Continuation::Continue
             ));
         }
         drop(
@@ -467,12 +487,12 @@ mod tests {
         for _ in 0..2 {
             assert!(matches!(
                 failures.record(&result, workspace.revision()),
-                Ok(())
+                Continuation::Continue
             ));
         }
         assert!(matches!(
             failures.record(&result, workspace.revision()),
-            Err(_)
+            Continuation::Stop(_)
         ));
     }
 }

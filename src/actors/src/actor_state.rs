@@ -12,9 +12,7 @@ use tools::tool_defs::ToolDefinition;
 
 pub struct ActorState<C: Context> {
     pub cur_context: C,
-    pub(crate) turn: crate::turn::TurnState,
-    pub(crate) queue: std::collections::VecDeque<crate::turn::FollowUp>,
-    pub(crate) role: crate::turn_driver::SessionRole,
+    pub(crate) turn: crate::turn_machine::TurnMachine,
     pub history: Vec<Message>,
     pub llm: LLmClient,
     pub file_actor: Option<ActorRef<file_actor::Message>>,
@@ -61,9 +59,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             cur_context: context,
             history,
             llm: dependency.client,
-            turn: Default::default(),
-            queue: Default::default(),
-            role: crate::turn_driver::SessionRole::Interactive,
+            turn: crate::turn_machine::TurnMachine::new(dep_clone.runtime.scope.clone()),
             reporter: reporter.clone(),
             debug_mode: dependency.debug_mode,
             file_actor,

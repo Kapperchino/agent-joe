@@ -232,6 +232,8 @@ enum GateOutcome {
     PreparePanic,
     RunPanic,
     RenderPanic,
+    ContextFailure,
+    ContextPanic,
 }
 struct Active(Arc<AtomicUsize>);
 impl Drop for Active {
@@ -288,7 +290,11 @@ impl ErasedToolTrait<TestContext, ActorContext<TestContext>> for GateTool {
         }
     }
     fn add_context(&self, _: &Value, _: &mut TestContext, _: &str) -> anyhow::Result<()> {
-        Ok(())
+        match self.outcome {
+            GateOutcome::ContextFailure => Err(anyhow::anyhow!("fixture context failure")),
+            GateOutcome::ContextPanic => panic!("fixture context panic"),
+            _ => Ok(()),
+        }
     }
 }
 fn gate(
@@ -591,6 +597,31 @@ async fn tool_panics_preserve_other_reads_and_stop_subsequent_writes() {
         );
         assert!(writes.is_empty());
         assert!(h.requests.is_empty());
+        assert!(h.runtime.workspace.is_idle());
+        h.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn context_update_feedback_stops_before_the_next_provider_request() {
+    for outcome in [GateOutcome::ContextFailure, GateOutcome::ContextPanic] {
+        let (mut read, entered) = gate("read", ToolEffect::Read);
+        Arc::get_mut(&mut read).unwrap().outcome = outcome;
+        let h = Harness::new(vec![read], Duration::from_secs(10)).await;
+        h.start("work");
+        answer(h.request().await.1, response(vec![call("read", "done")]));
+        within(entered.recv_async())
+            .await
+            .unwrap()
+            .1
+            .send(())
+            .unwrap();
+        h.terminal(Lifecycle::Failed).await;
+        assert!(h.requests.is_empty());
+        let history = h.history().await;
+        assert!(matches!(&history.last().unwrap().content[0],
+            ContentBlock::ToolResult { content, is_error: None, .. } if content.contains("done")
+        ));
         assert!(h.runtime.workspace.is_idle());
         h.stop().await;
     }
