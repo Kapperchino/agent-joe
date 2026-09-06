@@ -1,6 +1,6 @@
 # Agent Joe implementation plan
 
-Status: M1–M3 are complete. M4 — sessions and context management — is next; M5–M10 remain planned.
+Status: M1–M3 are complete. M4 — sessions and context management — is in progress; M5–M10 remain planned.
 
 Cover all ten gaps identified in the Codex comparison while keeping Joe a Rust-focused agent with typed tools and no model-controlled shell. Delivery order follows dependencies, so context compaction follows the response format and turn lifecycle work it needs.
 
@@ -22,7 +22,7 @@ Cover all ten gaps identified in the Codex comparison while keeping Joe a Rust-f
 | M1 | Complete | Correct instructions, provider state, and tool-call history | 1: model state | M0 |
 | M2 | Complete | Cancellable turns, tool scheduling, and recoverable errors | 3: runtime reliability | M1 |
 | M3 | Complete | Workspace policy and reusable isolation for Cargo | 4: sandbox | M2 |
-| M4 | Next | Durable sessions, bounded context, and compaction | 2: context and sessions | M1–M3 |
+| M4 | In progress | Durable sessions, bounded context, and compaction | 2: context and sessions | M1–M3 |
 | M5 | Planned | Full repository discovery and scoped instructions | 5: instructions; 7: discovery | M3–M4 |
 | M6 | Planned | Complete typed Cargo validation and process results | 6: validation | M2–M5 |
 | M7 | Planned | Direct work plus optional, bounded delegation | 8: worker coordination | M4–M6 |
@@ -134,16 +134,55 @@ workspace formatting baseline.
 
 Primary files: `src/actors/src/actor_state.rs`, client request models, and new session/history modules; commands and TUI session controls.
 
-- Use versioned per-session JSONL events plus atomic snapshots and bounded output artifacts under protected project-local Joe storage. Make the location configurable for tests and protect it with appropriate permissions.
+- Use the existing LMDB technology (`heed`) for versioned per-session events, atomic snapshots, and bounded output artifacts under protected project-local Joe storage. Commit events and snapshots together in durable transactions. Make the location configurable for tests and protect it with appropriate permissions.
 - Persist session/workspace identity, user messages, provider-native output, tool intent/results, worker linkage, usage, pending questions, and turn status. Keep credentials and authorization headers out of records.
 - Journal side-effect intent before execution and record completion afterward. A crash between them leaves an uncertain operation to reconcile with workspace state; resume must never blindly repeat it.
-- Add `/sessions`, `/resume`, `/fork`, `/compact`, and explicit new/clear semantics. Recover valid records from a truncated final journal entry and reject unsupported schema versions clearly.
+- Add `/sessions`, `/resume`, `/fork`, `/compact`, and explicit new/clear semantics. Recover the last committed LMDB transaction after a crash and reject unsupported schema versions clearly.
 - Fork conversation state separately from filesystem state. Revalidate workspace identity, current instructions, and fixed project policy on resume; a saved session cannot increase current access.
 - Bound individual reads/search/process outputs and retain full content as artifacts with a retrieval mechanism. Budget instructions, user constraints, recent complete tool exchanges, and the next response before optional context.
 - Use provider-native compaction when the route supports it, preserving returned opaque items intact. Otherwise summarize only completed older exchanges and retain recent complete exchanges, current requirements, pending work, and failure/validation evidence.
 - Trigger compaction before the context ceiling, with a user-visible indication and recovery path if compaction fails. Distinguish per-request context size from cumulative usage.
 
-Validation: resume after restart, truncated journal, incompatible schema/provider, crash between write intent and result, fork history isolation, giant test output, forced low context limit, repeated compaction retaining user constraints, and no orphan tool calls/results.
+Validation: resume after restart, abandoned transactions, incompatible schema/provider, crash between write intent and result, fork history isolation, giant test output, forced low context limit, repeated compaction retaining user constraints, and no orphan tool calls/results.
+
+First slice: durable sessions
+
+- Shared simple/worker runtime persists conversation history, native provider items,
+  queued user messages, tool batches, intent/results, usage, turn status, and worker
+  parent IDs. Each event and updated snapshot commit in one LMDB transaction;
+  provider configuration and authorization headers are not serialized.
+- Storage uses `.turbo-code/sessions` with private directory/file permissions,
+  descriptor-based preflight checks, and transactional LMDB ownership per loaded
+  session. Ownership records contain a process identity and unique token;
+  dead owners can be reclaimed, and stale handles cannot access or release a
+  newer owner's session. Process identity includes boot and start time to
+  distinguish reused PIDs.
+  `Runtime::with_session_namespace` configures a separate protected namespace for
+  tests. Saved data cannot supply workspace roots or grant access.
+- `/sessions`, `/resume`, `/resume <id>`, and `/new` are available. Bare `/resume`
+  opens a searchable picker with recent conversations first, keyboard selection,
+  cancellation, and transcript restoration. Only nonempty root sessions for the
+  current provider appear; LMDB ownership is checked when a session is selected.
+  `/clear` cancels active work
+  and starts a new session while preserving the previous session. Resume requires
+  an idle actor, revalidates workspace identity and provider route, refreshes current
+  workspace context/instructions, and waits for a user message before continuing.
+- Tool intent commits before execution and completion commits before reporting.
+  Recovery supplies matched results for every saved call: completed, unexecuted,
+  or uncertain. It never launches saved operations. Storage failures stop automatic
+  continuation; shutdown retains results committed before actor delivery.
+- The environment currently has a 1 GiB map limit. History and outputs remain
+  inline and unbounded within that limit; map exhaustion fails closed. Artifacts,
+  history forks, context budgeting, compaction, and pending question state remain
+  subsequent slices. No older session format exists to migrate.
+
+Slice validation (2026-09-06): `cargo test --workspace --offline` passes 174 tests
+on macOS ARM64, including process-exit recovery, abandoned transactions, map
+exhaustion, exclusive ownership across processes, schema/provider/workspace checks,
+durable simple/worker turns, picker navigation and cancellation, narrow terminal
+rendering, and transcript restoration. `cargo check --workspace --offline` passes with
+existing warnings. Changed Rust files pass formatting and whitespace checks.
+Linux and Windows have not been validated for this slice.
 
 Done when a long task can survive compaction and restart without losing requirements or duplicating side effects.
 
@@ -240,10 +279,11 @@ Done when skills and configured integrations work through the same session, life
 
 **Next implementation slice — M4**
 
-Start with versioned session events and atomic snapshots in protected project-local
-storage. Record tool intent and completion so restart can identify uncertain side
-effects without replaying them. Add session listing/resume and recovery fixtures
-before layering bounded context and compaction onto the persisted history.
+Build bounded output artifacts and retrieval on the LMDB session foundation, then
+budget request context and add `/compact` with provider-compatible fallback
+summaries. Add conversation-only `/fork` without implying filesystem isolation.
+Preserve current requirements, recent complete tool exchanges, and failure evidence
+through repeated compaction; distinguish request context size from cumulative usage.
 
 **Validation and rollout**
 

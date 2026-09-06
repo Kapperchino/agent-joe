@@ -262,7 +262,7 @@ fn clear_upgrades_pending_cleanup_and_precedes_the_next_queued_prompt() {
         .unwrap();
     let prompt = effects
         .iter()
-        .position(|effect| matches!(effect, Effect::AppendHistory(_)))
+        .position(|effect| matches!(effect, Effect::BeginTurn(_)))
         .unwrap();
     let request = effects
         .iter()

@@ -58,6 +58,7 @@ pub(crate) enum ProviderUpdate {
 }
 
 pub(crate) enum Effect {
+    BeginTurn(FollowUp),
     AppendHistory(Vec<llm::Message>),
     ClearHistory,
     ClearStream,
@@ -211,7 +212,16 @@ impl TurnMachine {
         }
     }
 
-    #[cfg(test)]
+    pub fn is_idle(&self) -> bool {
+        matches!(
+            &self.state,
+            SessionState::Running(Session {
+                state: TurnState::Idle,
+                ..
+            })
+        )
+    }
+
     pub fn batch(&self) -> Option<&crate::turn::ToolBatch> {
         match &self.state {
             SessionState::Running(session) => session.state.batch(),
@@ -304,10 +314,9 @@ impl Session {
     }
 
     fn begin(&mut self, follow_up: FollowUp, effects: &mut Vec<Effect>) {
-        if let Some(prompt) = follow_up.prompt {
-            effects.push(Effect::AppendHistory(vec![llm::Message::new(prompt)]));
-        }
-        self.launch_provider(Turn::new(follow_up.id, self.scope.child()), None, effects);
+        let id = follow_up.id;
+        effects.push(Effect::BeginTurn(follow_up));
+        self.launch_provider(Turn::new(id, self.scope.child()), None, effects);
     }
 
     fn launch_provider(

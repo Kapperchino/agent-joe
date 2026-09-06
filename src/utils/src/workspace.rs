@@ -171,6 +171,9 @@ impl<'a> ResolvedPath<'a> {
 #[cfg(unix)]
 mod unix;
 
+#[cfg(unix)]
+pub use unix::PrivateStorage;
+
 pub struct DirectoryEntry {
     pub name: std::ffi::OsString,
     pub path: PathBuf,
@@ -192,6 +195,9 @@ fn protected(path: &Path, access: Access) -> bool {
 
 #[cfg(not(unix))]
 mod unsupported;
+
+#[cfg(not(unix))]
+pub use unsupported::PrivateStorage;
 
 #[cfg(all(test, unix))]
 mod tests;

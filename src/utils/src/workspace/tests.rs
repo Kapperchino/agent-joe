@@ -33,6 +33,55 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn session_storage_is_private_and_inaccessible_to_file_tools() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new();
+    let policy = fixture.policy();
+    let storage = policy.session_storage("test-sessions").unwrap();
+    for directory in [
+        fixture.root.join(crate::utils::CONFIG_DIR_NAME),
+        storage.path().to_owned(),
+    ] {
+        assert_eq!(
+            std::fs::metadata(directory).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+    }
+    for name in ["data.mdb", "lock.mdb"] {
+        let path = storage.path().join(name);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(policy.read(&path).is_err());
+        assert!(policy.write(&path, "overwrite").is_err());
+    }
+    assert!(policy.session_storage("../outside").is_err());
+}
+
+#[test]
+fn session_storage_rejects_linked_directories_and_database_files() {
+    use std::os::unix::fs::symlink;
+    let fixture = Fixture::new();
+    let policy = fixture.policy();
+    let protected = fixture.root.join(crate::utils::CONFIG_DIR_NAME);
+    symlink(&fixture.outside, &protected).unwrap();
+    assert!(policy.session_storage("sessions").is_err());
+    std::fs::remove_file(&protected).unwrap();
+    let storage = policy.session_storage("sessions").unwrap();
+    let data = storage.path().join("data.mdb");
+    std::fs::remove_file(&data).unwrap();
+    let target = fixture.outside.join("secret");
+    std::fs::write(&target, "private").unwrap();
+    symlink(&target, &data).unwrap();
+    assert!(policy.session_storage("sessions").is_err());
+    std::fs::remove_file(&data).unwrap();
+    std::fs::hard_link(&target, &data).unwrap();
+    assert!(policy.session_storage("sessions").is_err());
+    assert_eq!(std::fs::read_to_string(target).unwrap(), "private");
+}
+
+#[test]
 fn paths_are_relative_to_the_workspace_and_ordinary_file_operations_work() {
     let fixture = Fixture::new();
     let policy = fixture.policy();

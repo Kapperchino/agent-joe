@@ -7,6 +7,10 @@ pub struct ActorToTui {
 }
 #[derive(Debug, Clone)]
 pub enum ActorToTuiPacket {
+    SessionChanged,
+    SessionError(String),
+    SessionChoices(Result<Vec<SessionSummary>, String>),
+    SessionResumed(Result<SessionTranscript, String>),
     StateChanged(State),
     TurnChanged {
         turn_id: TurnId,
@@ -29,7 +33,30 @@ pub enum ActorToTuiPacket {
     TokensUpdated(TokenCount),
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
+pub struct SessionSummary {
+    pub id: String,
+    pub title: String,
+    pub preview: String,
+    pub updated_at: Option<std::time::SystemTime>,
+    pub status: Lifecycle,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionTranscript {
+    pub id: String,
+    pub messages: Vec<SessionMessage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionMessage {
+    User(String),
+    Assistant(String),
+    Tool(String),
+    Thinking(String),
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct TokenCount {
     pub input_tokens: u32,
     pub output_tokens: u32,
@@ -49,7 +76,7 @@ pub enum State {
     Stopped,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Lifecycle {
     Ready,
     Running,

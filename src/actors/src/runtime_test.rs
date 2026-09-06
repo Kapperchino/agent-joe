@@ -1298,3 +1298,268 @@ async fn shutdown_waits_for_active_tool_cleanup() {
         }
     )));
 }
+
+#[tokio::test]
+async fn durable_session_resumes_after_actor_restart_and_clear_keeps_the_archive() {
+    use commands::command::{Command, ResumeTarget};
+    let workspace = crate::session::tests::Workspace::new();
+    let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
+    let store = runtime.sessions.clone().unwrap();
+    let (write, entered) = gate("write", ToolEffect::Write);
+    let h = Harness::with_runtime(vec![write.clone()], runtime).await;
+    let id = store.list().unwrap()[0].id.clone();
+    h.start("Keep existing changes; fix this bug");
+    answer(h.request().await.1, response(vec![call("write", "edit")]));
+    within(entered.recv_async())
+        .await
+        .unwrap()
+        .1
+        .send(())
+        .unwrap();
+    answer(h.request().await.1, response(vec![text("Fix validated")]));
+    h.terminal(Lifecycle::Completed).await;
+    h.stop().await;
+    drop(store);
+    let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
+    let store = runtime.sessions.clone().unwrap();
+    let h = Harness::with_runtime(vec![write], runtime).await;
+    h.actor
+        .send_message(Message::Command(Command::Sessions))
+        .unwrap();
+    let listing = h
+        .event(|packet| {
+            matches!(
+                packet,
+                ActorToTuiPacket::CommandResult(Command::Sessions, _)
+            )
+        })
+        .await;
+    assert!(matches!(listing, ActorToTuiPacket::CommandResult(_, text) if text.contains(&id)));
+    h.actor
+        .send_message(Message::Command(Command::Resume(ResumeTarget::Picker)))
+        .unwrap();
+    let choices = h
+        .event(|packet| matches!(packet, ActorToTuiPacket::SessionChoices(_)))
+        .await;
+    assert!(
+        matches!(choices, ActorToTuiPacket::SessionChoices(Ok(choices)) if choices.len() == 1 && choices[0].id == id)
+    );
+    assert!(h.requests.is_empty());
+    assert!(entered.is_empty());
+    h.actor
+        .send_message(Message::Command(Command::Resume(ResumeTarget::Session {
+            id: id.clone(),
+        })))
+        .unwrap();
+    let restored = h
+        .event(|packet| matches!(packet, ActorToTuiPacket::SessionResumed(_)))
+        .await;
+    assert!(
+        matches!(restored, ActorToTuiPacket::SessionResumed(Ok(transcript)) if transcript.id == id
+        && transcript.messages.contains(&common_models::tui_models::SessionMessage::User("Keep existing changes; fix this bug".into()))
+        && transcript.messages.contains(&common_models::tui_models::SessionMessage::Assistant("Fix validated".into()))
+        && !transcript.messages.iter().any(|message| matches!(message, common_models::tui_models::SessionMessage::User(text) if text.starts_with("workspace revision"))))
+    );
+    assert!(h.requests.is_empty());
+    assert!(entered.is_empty());
+    h.start("continue");
+    let (request, reply) = h.request().await;
+    assert_eq!(request.messages[0].text(), "workspace revision 1");
+    assert_eq!(
+        request.system.as_deref(),
+        Some("Follow the fixture's operating instructions.")
+    );
+    assert!(
+        request
+            .messages
+            .iter()
+            .any(|message| message.text() == "Keep existing changes; fix this bug")
+    );
+    assert!(request.messages.iter().any(|message| matches!(&message.content[0], ContentBlock::ToolResult { tool_id, .. } if tool_id.id.as_ref() == "edit")));
+    answer(reply, response(vec![text("continued")]));
+    h.terminal(Lifecycle::Completed).await;
+    h.actor
+        .send_message(Message::Command(Command::Clear))
+        .unwrap();
+    h.event(|packet| matches!(packet, ActorToTuiPacket::CommandResult(Command::Clear, _)))
+        .await;
+    assert_eq!(h.history().await.len(), 1);
+    assert!(store.list().unwrap().iter().any(|snapshot| {
+        snapshot.id == id
+            && snapshot
+                .history
+                .iter()
+                .any(|message| message.text() == "continued")
+    }));
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn durable_worker_sessions_link_to_the_parent_and_commit_intent_before_execution() {
+    let workspace = crate::session::tests::Workspace::new();
+    let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
+    let store = runtime.sessions.clone().unwrap();
+    let (write, entered) = gate("write", ToolEffect::Write);
+    let (delegate, child_requests) = delegate(vec![write], false);
+    let h = Harness::with_runtime(vec![delegate], runtime).await;
+    let parent = store.list().unwrap()[0].id.clone();
+    h.start("delegate this change");
+    answer(
+        h.request().await.1,
+        response(vec![call("delegate", "child")]),
+    );
+    answer(
+        within(child_requests.recv_async()).await.unwrap().1,
+        response(vec![call("write", "edit")]),
+    );
+    let (_, pending) = within(entered.recv_async()).await.unwrap();
+    let snapshots = store.list().unwrap();
+    let child = snapshots
+        .iter()
+        .find(|snapshot| snapshot.parent.as_deref() == Some(&parent))
+        .unwrap();
+    assert!(matches!(
+        child.pending.as_ref().unwrap().operations[0].state,
+        crate::session::OperationState::Intended {
+            effect: ToolEffect::Write
+        }
+    ));
+    pending.send(()).unwrap();
+    answer(
+        within(child_requests.recv_async()).await.unwrap().1,
+        response(vec![text("child completed")]),
+    );
+    h.terminal(Lifecycle::Completed).await;
+    answer(
+        h.request().await.1,
+        response(vec![text("parent completed")]),
+    );
+    h.terminal(Lifecycle::Completed).await;
+    h.stop().await;
+    let snapshots = store.list().unwrap();
+    assert_eq!(snapshots.len(), 2);
+    assert!(
+        snapshots
+            .iter()
+            .all(|snapshot| snapshot.status == Lifecycle::Completed && snapshot.pending.is_none())
+    );
+}
+
+#[tokio::test]
+async fn persistence_failure_prevents_tool_execution_and_further_provider_requests() {
+    let workspace = crate::session::tests::Workspace::new();
+    let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
+    let store = runtime.sessions.clone().unwrap();
+    let (write, entered) = gate("write", ToolEffect::Write);
+    let h = Harness::with_runtime(vec![write], runtime).await;
+    let id = store.list().unwrap()[0].id.clone();
+    h.start("make changes");
+    let (_, reply) = h.request().await;
+    crate::session::tests::invalidate(&store, &id);
+    answer(reply, response(vec![call("write", "edit")]));
+    h.terminal(Lifecycle::Failed).await;
+    assert!(entered.is_empty());
+    assert!(h.requests.is_empty());
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn resume_rejects_an_active_turn_and_refreshes_old_workspace_context() {
+    use commands::command::{Command, ResumeTarget};
+    let workspace = crate::session::tests::Workspace::new();
+    let runtime =
+        Runtime::with_session_namespace(workspace.path.clone(), "custom-sessions").unwrap();
+    let store = runtime.sessions.clone().unwrap();
+    let saved = store
+        .create(
+            llm::SessionProvider::Injected,
+            None,
+            vec![
+                llm::Message::new("stale workspace data".into()),
+                llm::Message::new("preserve this requirement".into()),
+            ],
+        )
+        .unwrap();
+    let id = saved.id.clone();
+    drop(saved);
+    let h = Harness::with_runtime(vec![], runtime).await;
+    h.start("working");
+    let (_, reply) = h.request().await;
+    h.actor
+        .send_message(Message::Command(Command::Resume(ResumeTarget::Picker)))
+        .unwrap();
+    let rejected = h
+        .event(|packet| matches!(packet, ActorToTuiPacket::SessionChoices(_)))
+        .await;
+    assert!(
+        matches!(rejected, ActorToTuiPacket::SessionChoices(Err(error)) if error.contains("Interrupt"))
+    );
+    h.actor
+        .send_message(Message::Command(Command::Resume(ResumeTarget::Session {
+            id: id.clone(),
+        })))
+        .unwrap();
+    let rejected = h
+        .event(|packet| matches!(packet, ActorToTuiPacket::SessionResumed(_)))
+        .await;
+    assert!(
+        matches!(rejected, ActorToTuiPacket::SessionResumed(Err(text)) if text.contains("Interrupt"))
+    );
+    answer(reply, response(vec![text("done")]));
+    h.terminal(Lifecycle::Completed).await;
+    let locked = store
+        .create(
+            llm::SessionProvider::Injected,
+            None,
+            vec![
+                llm::Message::new("context".into()),
+                llm::Message::new("another actor owns this session".into()),
+            ],
+        )
+        .unwrap();
+    let before = serde_json::to_value(h.history().await).unwrap();
+    h.actor
+        .send_message(Message::Command(Command::Resume(ResumeTarget::Session {
+            id: locked.id.clone(),
+        })))
+        .unwrap();
+    let rejected = h
+        .event(|packet| matches!(packet, ActorToTuiPacket::SessionResumed(_)))
+        .await;
+    assert!(
+        matches!(rejected, ActorToTuiPacket::SessionResumed(Err(error)) if error.contains("already open"))
+    );
+    assert_eq!(serde_json::to_value(h.history().await).unwrap(), before);
+    assert!(h.requests.is_empty());
+    drop(locked);
+    h.actor
+        .send_message(Message::Command(Command::Resume(ResumeTarget::Session {
+            id,
+        })))
+        .unwrap();
+    h.event(|packet| matches!(packet, ActorToTuiPacket::SessionResumed(_)))
+        .await;
+    let history = h.history().await;
+    assert_eq!(history[0].text(), "workspace revision 1");
+    assert_eq!(history[1].text(), "preserve this requirement");
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn shutdown_preserves_durable_results_even_when_the_actor_cannot_receive_them() {
+    let workspace = crate::session::tests::Workspace::new();
+    let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
+    let store = runtime.sessions.clone().unwrap();
+    let (write, entered) = gate("write", ToolEffect::Write);
+    let h = Harness::with_runtime(vec![write], runtime).await;
+    h.start("work");
+    answer(h.request().await.1, response(vec![call("write", "active")]));
+    let (_, pending) = within(entered.recv_async()).await.unwrap();
+    h.stop().await;
+    assert!(pending.is_closed());
+    let snapshot = store.list().unwrap().remove(0);
+    assert!(snapshot.pending.is_none());
+    assert!(
+        matches!(&snapshot.history.last().unwrap().content[0], ContentBlock::ToolResult { content, .. } if content.contains("Cancelled"))
+    );
+}

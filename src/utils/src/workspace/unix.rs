@@ -6,6 +6,9 @@ use std::{
     os::unix::ffi::OsStrExt,
 };
 
+mod storage;
+pub use storage::PrivateStorage;
+
 struct Parent {
     directory: File,
     name: OsString,

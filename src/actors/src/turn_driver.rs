@@ -2,6 +2,7 @@ use crate::{
     actor::{Dependency, Message},
     actor_state::ActorState,
     provider_task::{self, ProviderEvent},
+    session_control::Persistence,
     turn::{HistoryDisposition, Tag},
     turn_machine::{
         Effect, EffectOutcome, Event, ProviderUpdate, SessionEvent, ShutdownScope, WorkerOutcome,
@@ -31,16 +32,26 @@ impl<C: Context + Clone + 'static> ActorState<C> {
 
     async fn execute(&mut self, effect: Effect) -> EffectOutcome {
         match effect {
+            Effect::BeginTurn(input) => {
+                self.begin_turn(input);
+                EffectOutcome::Applied
+            }
             Effect::AppendHistory(messages) => {
-                self.history.extend(messages);
+                self.append_history(messages);
                 EffectOutcome::Applied
             }
             Effect::ClearHistory => {
-                self.clear_history().await;
-                self.reporter.send(ActorToTuiPacket::CommandResult(
-                    Command::Clear,
-                    "History cleared".into(),
-                ));
+                match self.clear_history().await {
+                    Ok(()) => {
+                        self.reporter
+                            .send(ActorToTuiPacket::TokensUpdated(Default::default()));
+                        self.reporter.send(ActorToTuiPacket::CommandResult(
+                            Command::Clear,
+                            "Started a new session. Previous history remains available through /sessions.".into(),
+                        ));
+                    }
+                    Err(error) => self.persistence_failed(error),
+                }
                 EffectOutcome::Applied
             }
             Effect::ClearStream => {
@@ -55,7 +66,15 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 self.change_state(state);
                 EffectOutcome::Applied
             }
-            Effect::Report(packet) => {
+            Effect::Report(mut packet) => {
+                self.persist_report(&packet);
+                if let ActorToTuiPacket::TurnChanged { state, detail, .. } = &mut packet
+                    && state.terminal()
+                    && let Persistence::Failed(failure) = &self.persistence
+                {
+                    *state = common_models::tui_models::Lifecycle::Failed;
+                    *detail = Some(failure.to_string());
+                }
                 self.reporter.send(packet);
                 EffectOutcome::Applied
             }
@@ -67,19 +86,44 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 if let Some(previous) = &previous {
                     previous.cancel.cancel();
                 }
-                provider_task::spawn(
-                    self.actor_ref.clone(),
-                    self.llm.clone(),
-                    self.build_request(),
-                    &run,
-                    &owner,
-                    previous,
-                    self.dependency.runtime.request_timeout,
-                );
+                self.persist(crate::session::Event::Usage(
+                    self.stream_processor.token_count.clone(),
+                ));
+                match &self.persistence {
+                    Persistence::Ready => provider_task::spawn(
+                        self.actor_ref.clone(),
+                        self.llm.clone(),
+                        self.build_request(),
+                        &run,
+                        &owner,
+                        previous,
+                        self.dependency.runtime.request_timeout,
+                    ),
+                    Persistence::Failed(failure) => {
+                        let _ = self.actor_ref.send_message(Message::Provider {
+                            tag: run.tag,
+                            event: ProviderEvent::Finished(Err(failure.clone())),
+                        });
+                    }
+                }
                 EffectOutcome::Applied
             }
             Effect::LaunchTools { jobs, tag, scope } => {
-                self.executor(scope).spawn(jobs, tag);
+                self.prepare_batch();
+                match &self.persistence {
+                    Persistence::Ready => self.executor(scope).spawn(jobs, tag),
+                    Persistence::Failed(failure) => {
+                        let failure = tools::tool_error::ToolFailure::new(
+                            tools::tool_error::ToolFailureKind::Persistence,
+                            tools::tool_error::ToolEffects::NotStarted,
+                            failure.to_string(),
+                        );
+                        let _ = self.actor_ref.send_message(Message::Tools {
+                            tag,
+                            event: crate::scheduler::ToolEvent::Finished(Err(failure)),
+                        });
+                    }
+                }
                 EffectOutcome::Applied
             }
             Effect::UpdateContext { tag, result } => {
@@ -106,6 +150,12 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 EffectOutcome::ShutdownFinished
             }
             Effect::ReplyWorker { reply, outcome } => {
+                let outcome = match &self.persistence {
+                    Persistence::Ready => outcome,
+                    Persistence::Failed(failure) => {
+                        WorkerOutcome::Failed(crate::worker::WorkerFailure::Turn(failure.clone()))
+                    }
+                };
                 let result = match outcome {
                     WorkerOutcome::Completed => Ok(self
                         .history
@@ -138,19 +188,28 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                     ProviderUpdate::Finished(response.finish(tag.turn, &mut self.stream_processor))
                 }
             };
+            if matches!(update, ProviderUpdate::Finished(_)) {
+                self.persist(crate::session::Event::Usage(
+                    self.stream_processor.token_count.clone(),
+                ));
+            }
             self.dispatch(SessionEvent::Provider { tag, update }).await;
         }
     }
 
     fn preserve_completed_content(&mut self) {
-        if let Some(batch) = self.stream_processor.batches.last() {
-            let content = batch.completed_content();
-            if !content.is_empty() {
-                self.history.push(llm::Message {
-                    role: llm::Role::Assistant,
-                    content,
-                });
-            }
+        let content = self
+            .stream_processor
+            .batches
+            .last()
+            .map(|batch| batch.completed_content())
+            .filter(|content| !content.is_empty());
+        if let Some(content) = content {
+            let message = llm::Message {
+                role: llm::Role::Assistant,
+                content,
+            };
+            self.append_history(vec![message]);
         }
         self.stream_processor.clear();
     }
@@ -166,6 +225,9 @@ impl<C: Context + Clone + 'static> ActorState<C> {
 
     pub(crate) async fn command(&mut self, command: Command) {
         match command {
+            Command::Sessions | Command::Resume(_) | Command::New => {
+                self.session_command(command).await
+            }
             Command::Clear => {
                 self.dispatch(SessionEvent::Interrupt(HistoryDisposition::Clear))
                     .await

@@ -48,6 +48,11 @@ enum ToolGroup {
     Exclusive(ToolJob),
 }
 
+enum Schedule {
+    Run(ToolGroup),
+    Stopped,
+}
+
 impl<C: Context + Clone + 'static> PreparedTool<C> {
     fn new(
         job: ToolJob,
@@ -87,17 +92,21 @@ impl<C: Context + Clone + 'static> PreparedTool<C> {
         input: &serde_json::Value,
         output: &serde_json::Value,
     ) -> Result<String, ToolFailure> {
-        match self.implementation.output_to_content_erased(input, output) {
-            Ok(content) => match self.implementation.output_is_error_erased(output) {
-                Ok(false) => Ok(content),
-                Ok(true) => Err(ToolFailure::new(
-                    ToolFailureKind::Validation,
-                    ToolEffects::NoWorkspaceChange,
-                    content,
-                )),
-                Err(error) => Err(execution_error(error, self.effect)),
-            },
-            Err(error) => Err(execution_error(error, self.effect)),
+        let content = self
+            .implementation
+            .output_to_content_erased(input, output)
+            .map_err(|error| execution_error(error, self.effect))?;
+        match self
+            .implementation
+            .output_is_error_erased(output)
+            .map_err(|error| execution_error(error, self.effect))?
+        {
+            false => Ok(content),
+            true => Err(ToolFailure::new(
+                ToolFailureKind::Validation,
+                ToolEffects::NoWorkspaceChange,
+                content,
+            )),
         }
     }
 }
@@ -132,45 +141,17 @@ impl<C: Context + Clone + 'static> Executor<C> {
             });
         let result = match prepared {
             Ok(prepared) => {
-                let scope = self.dependency.runtime.scope.child();
-                let _registration =
-                    scope.register(ResourceKind::Tool, prepared.job.call.name.to_string());
-                let outcome = match self
-                    .dependency
-                    .runtime
-                    .workspace
-                    .acquire(prepared.effect, &scope)
-                    .await
-                {
-                    Ok(lease) => {
-                        self.emit(
-                            tag,
-                            ToolEvent::Started {
-                                operation: job.operation,
-                                effect: prepared.effect,
-                                revision: lease.revision(),
-                                display: prepared.display.clone(),
-                            },
-                        );
-                        let outcome = AssertUnwindSafe(self.invoke(&prepared, &scope))
-                            .catch_unwind()
-                            .await
-                            .unwrap_or_else(|_| {
-                                Err(ToolFailure::new(
-                                    ToolFailureKind::Panicked,
-                                    effects(prepared.effect),
-                                    "Tool implementation panicked",
-                                ))
-                            });
-                        scope.finish().await;
-                        drop(lease);
-                        outcome
-                    }
-                    Err(failure) => Err(failure),
-                };
+                let outcome = self.execute_prepared(&prepared, tag).await;
                 prepared.into_result(outcome)
             }
             Err(failure) => job.call.failed(failure),
+        };
+        let result = match self.record_completion(job.operation, &result) {
+            Ok(()) => result,
+            Err(failure) => ToolResult {
+                outcome: Err(failure),
+                ..result
+            },
         };
         self.emit(
             tag,
@@ -182,11 +163,91 @@ impl<C: Context + Clone + 'static> Executor<C> {
         result
     }
 
+    async fn execute_prepared(
+        &self,
+        prepared: &PreparedTool<C>,
+        tag: Tag,
+    ) -> Result<String, ToolFailure> {
+        let scope = self.dependency.runtime.scope.child();
+        let _registration = scope.register(ResourceKind::Tool, prepared.job.call.name.to_string());
+        let lease = self
+            .dependency
+            .runtime
+            .workspace
+            .acquire(prepared.effect, &scope)
+            .await?;
+        let outcome = AssertUnwindSafe(self.invoke(prepared, &scope, tag, lease.revision()))
+            .catch_unwind()
+            .await
+            .unwrap_or_else(|_| {
+                Err(ToolFailure::new(
+                    ToolFailureKind::Panicked,
+                    effects(prepared.effect),
+                    "Tool implementation panicked",
+                ))
+            });
+        scope.finish().await;
+        drop(lease);
+        outcome
+    }
+
+    fn record_intent(&self, prepared: &PreparedTool<C>) -> Result<(), ToolFailure> {
+        match &self.dependency.runtime.session {
+            Some(session) => session
+                .record(crate::session::Event::Intent {
+                    operation: session.key(prepared.job.operation),
+                    effect: prepared.effect,
+                })
+                .map_err(|error| {
+                    ToolFailure::new(
+                        ToolFailureKind::Persistence,
+                        ToolEffects::NotStarted,
+                        error.to_string(),
+                    )
+                }),
+            None => Ok(()),
+        }
+    }
+
+    fn record_completion(
+        &self,
+        operation: OperationId,
+        result: &ToolResult,
+    ) -> Result<(), ToolFailure> {
+        match &self.dependency.runtime.session {
+            Some(session) => session
+                .record(crate::session::Event::Completed {
+                    operation: session.key(operation),
+                    result: result.clone(),
+                })
+                .map_err(|error| {
+                    ToolFailure::new(
+                        ToolFailureKind::Persistence,
+                        ToolEffects::MayHaveChanged,
+                        format!("Could not record tool completion: {error}"),
+                    )
+                }),
+            None => Ok(()),
+        }
+    }
+
     async fn invoke(
         &self,
         prepared: &PreparedTool<C>,
         scope: &ExecutionScope,
+        tag: Tag,
+        revision: Option<WorkspaceRevision>,
     ) -> Result<String, ToolFailure> {
+        self.record_intent(prepared)?;
+        self.emit(
+            tag,
+            ToolEvent::Started {
+                operation: prepared.job.operation,
+                effect: prepared.effect,
+                revision,
+                display: prepared.display.clone(),
+            },
+        );
         let runtime = &self.dependency.runtime;
         let input = prepared.job.call.input_value();
         let context = ActorContext::ActorInfo(ActorInfo {
@@ -254,13 +315,21 @@ impl<C: Context + Clone + 'static> Executor<C> {
         })
     }
 
+    fn schedule(&self, pending: &mut VecDeque<ToolJob>) -> Schedule {
+        match self.dependency.runtime.scope.cancel.is_cancelled() {
+            true => Schedule::Stopped,
+            false => self
+                .next_group(pending)
+                .map(Schedule::Run)
+                .unwrap_or(Schedule::Stopped),
+        }
+    }
+
     async fn run(&self, jobs: Vec<ToolJob>, tag: Tag) -> Vec<ToolResult> {
         let mut pending = VecDeque::from(jobs);
         let mut results = Vec::new();
-        while let Some(group) = self.next_group(&mut pending) {
-            if self.dependency.runtime.scope.cancel.is_cancelled() {
-                break;
-            }
+        let mut schedule = self.schedule(&mut pending);
+        while let Schedule::Run(group) = schedule {
             let completed = match group {
                 ToolGroup::Reads(jobs) => {
                     futures::stream::iter(jobs.into_iter().map(|job| self.execute(job, tag)))
@@ -273,10 +342,11 @@ impl<C: Context + Clone + 'static> Executor<C> {
             let stop = completed
                 .iter()
                 .any(|result| result.outcome.as_ref().is_err_and(ToolFailure::stops_turn));
+            schedule = match stop {
+                true => Schedule::Stopped,
+                false => self.schedule(&mut pending),
+            };
             results.extend(completed);
-            if stop {
-                break;
-            }
         }
         results
     }

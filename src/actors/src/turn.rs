@@ -78,7 +78,6 @@ impl TurnState {
         tools.filter(|tools| tools.batch.tag == tag)
     }
 
-    #[cfg(test)]
     pub fn batch(&self) -> Option<&ToolBatch> {
         match self {
             Self::Tools(turn) => Some(&turn.phase),
@@ -313,6 +312,13 @@ impl ToolBatch {
         self.entries.iter().map(|entry| entry.job.clone()).collect()
     }
 
+    pub fn assistant_message(&self) -> Message {
+        Message {
+            role: Role::Assistant,
+            content: self.assistant.clone(),
+        }
+    }
+
     pub fn start(&mut self, operation: OperationId) -> Option<&ToolJob> {
         self.entries
             .iter_mut()
@@ -358,10 +364,7 @@ impl ToolBatch {
             ToolState::Running => entry.job.call.error_content("Interrupted operation: completion is unknown. Inspect possible partial effects before retrying."),
         }).collect();
         [
-            Message {
-                role: Role::Assistant,
-                content: self.assistant.clone(),
-            },
+            self.assistant_message(),
             Message {
                 role: Role::User,
                 content: outputs,

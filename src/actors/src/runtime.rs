@@ -22,6 +22,8 @@ impl std::fmt::Display for WorkspaceRevision {
 
 #[derive(Clone)]
 pub struct Runtime {
+    pub sessions: Option<Arc<crate::session::SessionStore>>,
+    pub(crate) session: Option<Arc<crate::session::Session>>,
     pub workspace: Arc<Workspace>,
     pub scope: ExecutionScope,
     pub tool_timeout: Duration,
@@ -30,6 +32,8 @@ pub struct Runtime {
 impl Default for Runtime {
     fn default() -> Self {
         Self {
+            sessions: None,
+            session: None,
             workspace: Arc::new(Workspace::new(4)),
             scope: ExecutionScope::default(),
             tool_timeout: Duration::from_secs(300),
@@ -39,7 +43,17 @@ impl Default for Runtime {
 }
 impl Runtime {
     pub fn for_workspace(root: std::path::PathBuf) -> anyhow::Result<Self> {
-        utils::workspace::WorkspacePolicy::workspace(root).map(|workspace| Self {
+        Self::with_session_namespace(root, "sessions")
+    }
+
+    pub fn with_session_namespace(
+        root: std::path::PathBuf,
+        namespace: &str,
+    ) -> anyhow::Result<Self> {
+        let workspace = utils::workspace::WorkspacePolicy::workspace(root)?;
+        let sessions = crate::session::SessionStore::open(&workspace, namespace)?;
+        Ok(Self {
+            sessions: Some(sessions),
             scope: ExecutionScope::with_workspace(workspace),
             ..Self::default()
         })

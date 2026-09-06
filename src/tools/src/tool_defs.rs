@@ -25,7 +25,7 @@ pub trait ToolInputSchema {
 
 pub trait ToolUse {}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ToolEffect {
     Read,
     Write,
@@ -303,14 +303,14 @@ pub struct ToolId {
     pub id: NonEmptyString,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolInvocation {
     pub name: NonEmptyString,
     pub input: serde_json::Map<String, Value>,
     pub display: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResult {
     pub id: ToolId,
     pub invocation: ToolInvocation,

@@ -1,6 +1,6 @@
 use std::fmt;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ToolFailureKind {
     InvalidInput,
     Execution,
@@ -9,16 +9,17 @@ pub enum ToolFailureKind {
     Timeout,
     Cancelled,
     Panicked,
+    Persistence,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ToolEffects {
     NotStarted,
     NoWorkspaceChange,
     MayHaveChanged,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ToolFailure {
     pub kind: ToolFailureKind,
     pub effects: ToolEffects,
@@ -41,6 +42,7 @@ impl ToolFailure {
                     | ToolFailureKind::Timeout
                     | ToolFailureKind::Cancelled
                     | ToolFailureKind::Panicked
+                    | ToolFailureKind::Persistence
             )
     }
 }

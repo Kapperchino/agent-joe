@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use tools::tool_defs::ToolDefinition;
 
 pub struct ActorState<C: Context> {
+    pub(crate) persistence: crate::session_control::Persistence,
     pub cur_context: C,
     pub(crate) turn: crate::turn_machine::TurnMachine,
     pub history: Vec<Message>,
@@ -24,12 +25,24 @@ pub struct ActorState<C: Context> {
 }
 impl<C: Context + Clone + 'static> ActorState<C> {
     pub async fn new(
-        dependency: Dependency<C>,
+        mut dependency: Dependency<C>,
         actor_ref: ActorRef<actor::Message>,
         file_actor: Option<ActorRef<file_actor::Message>>,
     ) -> anyhow::Result<Self> {
-        let dep_clone = dependency.clone();
         let history = Self::initial_history(&dependency.context).await;
+        if let Some(store) = &dependency.runtime.sessions {
+            let parent = dependency
+                .runtime
+                .session
+                .as_ref()
+                .map(|session| session.id.clone());
+            dependency.runtime.session = Some(store.create(
+                dependency.client.session_provider(),
+                parent,
+                history.clone(),
+            )?);
+        }
+        let dep_clone = dependency.clone();
 
         let stream_log = if dependency.debug_mode {
             let path = PathBuf::from(format!(
@@ -54,6 +67,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         };
 
         Ok(Self {
+            persistence: crate::session_control::Persistence::Ready,
             cur_context: context,
             history,
             llm: dependency.client,
@@ -75,11 +89,13 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     }
 
     async fn initial_history(context: &C) -> Vec<Message> {
-        let mut history = vec![Message::new(context.get_ctx().await)];
-        if let Some(task) = context.initial_task() {
-            history.push(Message::new(task.to_owned()));
-        }
-        history
+        std::iter::once(Message::new(context.get_ctx().await))
+            .chain(
+                context
+                    .initial_task()
+                    .map(|task| Message::new(task.to_owned())),
+            )
+            .collect()
     }
 
     pub fn build_request(&self) -> clients::llm::ClientRequest {
@@ -89,9 +105,19 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             .with_thinking()
     }
 
-    pub async fn clear_history(&mut self) {
-        self.cur_context.clear_task_context();
-        self.history = Self::initial_history(&self.cur_context).await;
+    pub async fn clear_history(&mut self) -> anyhow::Result<()> {
+        let mut context = self.cur_context.clone();
+        context.clear_task_context();
+        let history = Self::initial_history(&context).await;
+        if let Some(store) = &self.dependency.runtime.sessions {
+            self.dependency.runtime.session =
+                Some(store.create(self.llm.session_provider(), None, history.clone())?);
+        }
+        self.cur_context = context;
+        self.history = history;
+        self.persistence = crate::session_control::Persistence::Ready;
+        self.stream_processor.token_count = Default::default();
+        Ok(())
     }
 
     pub fn tool_definitions(&self) -> Vec<ToolDefinition> {

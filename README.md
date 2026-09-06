@@ -28,6 +28,36 @@ The tui supports some flags
 | --debug  | Adds significantly more logging and prints out thinking tokens. |
 | --simple | Multi-agent mode will be disabled, will work just like codex    |
 
+## Sessions
+
+Conversations are saved automatically in a project-local LMDB environment at
+`.turbo-code/sessions`. The same session runtime serves simple and worker modes.
+
+- `/sessions` lists saved conversations and their IDs.
+- `/resume` opens a searchable picker of saved conversations in this project,
+  most recently updated first. Use arrow keys to select, Enter to resume, and Esc
+  to cancel. Selecting a session restores its transcript without starting a turn.
+- `/resume <id>` restores a conversation while idle. Send a message to continue.
+- `/new` starts a fresh conversation while idle.
+- `/clear` cancels active work and starts a fresh conversation. Previous sessions
+  remain available; it does not delete saved history or undo workspace changes.
+
+Resume uses current instructions and project access policy. A saved session must
+match the current workspace identity and provider route. Saved tool calls never
+execute automatically; calls with intent but no completion are marked uncertain
+and require inspecting the workspace before retrying. Worker sessions stay linked
+to their parent conversation.
+
+Storage uses private permissions and is inaccessible to model-facing file tools.
+Events and snapshots commit together; a crash discards uncommitted transactions.
+LMDB also stores exclusive session ownership. Claims and releases are atomic;
+each owner records its process identity and a unique token. Resume can reclaim
+ownership after that process exits, and stale handles cannot read or update the
+session or release a newer owner's claim.
+Provider credentials and authorization headers are not serialized. The LMDB map
+currently allows 1 GiB; storage errors stop automatic continuation. Context
+budgeting, output artifacts, `/fork`, and `/compact` are still planned.
+
 ## Supported llm providers
 
 | Provider   | Support                                                |

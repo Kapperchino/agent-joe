@@ -99,9 +99,9 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
             .enter(async {
                 match message {
                     Message::StartWork(prompt) => {
-                        state
-                            .dispatch(SessionEvent::Start(FollowUp::new(prompt)))
-                            .await
+                        let follow_up = FollowUp::new(prompt);
+                        state.queue_input(&follow_up);
+                        state.dispatch(SessionEvent::Start(follow_up)).await
                     }
                     Message::RunWorker(reply) => {
                         state.dispatch(SessionEvent::StartWorker(reply)).await

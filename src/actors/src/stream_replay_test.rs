@@ -332,7 +332,7 @@ async fn clear_reloads_workspace_and_keeps_instructions_without_the_old_task() {
         .history
         .push(llm::Message::new_assistant("Old result.".into()));
     h.state.cur_context.revision = 2;
-    h.state.clear_history().await;
+    h.state.clear_history().await.unwrap();
     let request = h.state.build_request();
     assert_eq!(
         request.system.as_deref(),

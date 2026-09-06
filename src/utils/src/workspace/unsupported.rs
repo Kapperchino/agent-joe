@@ -1,6 +1,30 @@
 use super::*;
 
+pub enum PrivateStorage {}
+
+impl PrivateStorage {
+    pub fn workspace_identity(&self) -> &str {
+        match *self {}
+    }
+    pub fn new_id(&self) -> String {
+        match *self {}
+    }
+    pub fn path(&self) -> &Path {
+        match *self {}
+    }
+}
+
 impl WorkspacePolicy {
+    pub fn workspace_identity(&self) -> anyhow::Result<String> {
+        Err(anyhow::anyhow!(
+            "Protected session storage is unsupported on this platform"
+        ))
+    }
+    pub fn session_storage(&self, _: &str) -> anyhow::Result<PrivateStorage> {
+        Err(anyhow::anyhow!(
+            "Protected session storage is unsupported on this platform"
+        ))
+    }
     pub fn open_append(&self, _: &Path) -> anyhow::Result<File> {
         Err(anyhow::anyhow!(
             "Descriptor-based workspace access is unsupported on this platform"

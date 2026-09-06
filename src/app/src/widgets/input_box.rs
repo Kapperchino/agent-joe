@@ -2,6 +2,7 @@ use crate::models::{EffortsSelection, ModelSelections};
 use crate::tui::{CommandMenu, HomeMenu, InputMode};
 use crate::widgets::command_box::CommandBox;
 use crate::widgets::model_box::{ModelBox, ModelBoxResult, ModelBoxState};
+use crate::widgets::session_box::{SessionBox, SessionPickerState};
 use clients::config::Config;
 use commands::command::CommandContext;
 use crossterm::event::KeyEvent;
@@ -20,6 +21,7 @@ pub struct InputBoxState {
     pub input_mode: InputMode,
     command_context: CommandContext,
     model_box_state: ModelBoxState,
+    pub(crate) session_picker: SessionPickerState,
 }
 
 impl StatefulWidget for InputBox {
@@ -88,6 +90,9 @@ impl StatefulWidget for InputBox {
                 CommandMenu::ModelSelector => {
                     self.model_box.render(area, buf, &mut state.model_box_state)
                 }
+                CommandMenu::SessionSelector => {
+                    SessionBox.render(area, buf, &mut state.session_picker)
+                }
             },
             InputMode::None => (),
         }
@@ -130,6 +135,7 @@ impl InputBoxState {
             input_mode: Default::default(),
             command_context: CommandContext::new(),
             model_box_state,
+            session_picker: SessionPickerState::default(),
         }
     }
 
@@ -202,6 +208,7 @@ impl InputBoxState {
         match self.input_mode {
             InputMode::HomeMenu(HomeMenu::InputCommand) => command_input_lines as u16 + 9,
             InputMode::CommandMenu(CommandMenu::ModelSelector) => self.model_box_state.height(),
+            InputMode::CommandMenu(CommandMenu::SessionSelector) => 18,
             InputMode::HomeMenu(HomeMenu::Normal | HomeMenu::Editing) | InputMode::None => {
                 editing_input_lines as u16 + 2
             }

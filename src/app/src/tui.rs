@@ -3,16 +3,16 @@
 use actors::actor::Message;
 use common_models::tui_models::State;
 use common_models::tui_models::TokenCount;
-use common_models::tui_models::{ActorToTui, ActorToTuiPacket};
-use std::str::FromStr;
+use common_models::tui_models::{ActorToTui, ActorToTuiPacket, SessionMessage, SessionTranscript};
 use std::time::Duration;
 
 use crate::widgets::input_box::{InputBox, InputBoxState};
 use crate::widgets::message_box::message_box::{MessageBox, MessageBoxState, Msg};
 use crate::widgets::model_box::ModelBoxResult;
+use crate::widgets::session_box::{PickerAction, SessionPickerState};
 use clients::config::ConfigContext;
 use color_eyre::Result;
-use commands::command::Command;
+use commands::command::{Command, ResumeTarget};
 use crossterm::{
     cursor::SetCursorStyle,
     event::{EventStream, KeyEvent, KeyModifiers},
@@ -45,6 +45,9 @@ pub struct TUIApp {
     config_context: ConfigContext,
     cursor_style: Option<SetCursorStyle>,
 }
+
+#[cfg(test)]
+mod tests;
 #[derive(Clone, Copy)]
 pub enum InputMode {
     None,
@@ -70,6 +73,7 @@ pub enum HomeMenu {
 pub enum CommandMenu {
     #[default]
     ModelSelector,
+    SessionSelector,
 }
 
 impl TUIApp {
@@ -117,49 +121,60 @@ impl TUIApp {
         if !self.input_box.is_empty() {
             let input = self.input_box.get_input();
             let submitted_command = format!("/{}", &input);
-            let command = Command::from_str(&input);
+            let command = Command::parse(&input);
             match command {
-                Ok(command) => match command {
-                    Command::PrintContext => {
-                        match self.actor_ref.send_message(Message::Command(command)) {
-                            Ok(_) => {}
-                            Err(_) => {
-                                eprintln!("it's joever")
-                            }
-                        };
-                        self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
+                Ok(Command::ChangeModel(_, _)) => {
+                    self.update_input_mode(InputMode::CommandMenu(CommandMenu::ModelSelector));
+                }
+                Ok(Command::Resume(target)) => self.resume(target),
+                Ok(command) => {
+                    if let Err(error) = self.actor_ref.send_message(Message::Command(command)) {
+                        self.message_box.append(Msg::Message(error.to_string()));
                     }
-                    Command::Logout => {
-                        match self.actor_ref.send_message(Message::Command(command)) {
-                            Ok(_) => {}
-                            Err(_) => {
-                                eprintln!("it's joever")
-                            }
-                        };
-                        self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
-                    }
-                    Command::Clear => {
-                        self.clear_messages_and_terminal();
-                        match self.actor_ref.send_message(Message::Command(command)) {
-                            Ok(_) => {}
-                            Err(_) => {
-                                eprintln!("it's joever")
-                            }
-                        };
-                        self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
-                    }
-                    Command::ChangeModel(_, _) => {
-                        self.update_input_mode(InputMode::CommandMenu(CommandMenu::ModelSelector))
-                    }
-                },
-                Err(err) => {
+                    self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
+                }
+                Err(error) => {
                     self.message_box.append(Msg::Message(submitted_command));
-                    self.message_box.append(Msg::Message(err.to_string()));
+                    self.message_box.append(Msg::Message(error));
                 }
             }
 
             self.input_box.clear();
         }
+    }
+
+    fn resume(&mut self, target: ResumeTarget) {
+        self.input_box.session_picker = SessionPickerState::new(&target);
+        self.update_input_mode(InputMode::CommandMenu(CommandMenu::SessionSelector));
+        if let Err(error) = self
+            .actor_ref
+            .send_message(Message::Command(Command::Resume(target)))
+        {
+            self.input_box.session_picker = SessionPickerState::Failed(error.to_string());
+        }
+    }
+
+    fn restore_transcript(&mut self, transcript: SessionTranscript) {
+        self.clear_messages_and_terminal();
+        self.update_actor_state(State::Ready);
+        self.root_busy = false;
+        for message in transcript.messages {
+            let message = match message {
+                SessionMessage::User(text)
+                | SessionMessage::Assistant(text)
+                | SessionMessage::Thinking(text) => Msg::Message(text),
+                SessionMessage::Tool(text) => Msg::Tool(text),
+            };
+            self.message_box.append(message);
+            self.message_box.append(Msg::Empty);
+        }
+        self.message_box.append(Msg::Message(format!(
+            "Resumed session {}. Send a message to continue.",
+            transcript.id
+        )));
+        self.input_box.clear();
+        self.input_box.force_normal_mode();
+        self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
     }
 
     fn update_input_mode(&mut self, mode: InputMode) {
@@ -233,6 +248,19 @@ impl TUIApp {
 
     fn handle_actor_msg(&mut self, msg: ActorToTui) {
         match msg.packet {
+            ActorToTuiPacket::SessionChoices(result) if msg.actor_id == 0 => {
+                self.input_box.session_picker.load(result);
+            }
+            ActorToTuiPacket::SessionResumed(result) if msg.actor_id == 0 => {
+                if let Some(transcript) = self.input_box.session_picker.resumed(result) {
+                    self.restore_transcript(transcript);
+                }
+            }
+            ActorToTuiPacket::SessionChoices(_) | ActorToTuiPacket::SessionResumed(_) => {}
+            ActorToTuiPacket::SessionChanged => self.clear_messages_and_terminal(),
+            ActorToTuiPacket::SessionError(message) => {
+                self.message_box.append(Msg::Message(message))
+            }
             ActorToTuiPacket::Queued { turn_id, position } => {
                 self.message_box.append(Msg::Message(format!(
                     "Follow-up {turn_id} queued (position {position})."
@@ -286,11 +314,17 @@ impl TUIApp {
                 });
             }
             ActorToTuiPacket::CommandResult(command, command_res) => {
+                if matches!(command, Command::Clear) {
+                    self.clear_messages_and_terminal();
+                }
                 self.message_box.append(Msg::Message(command_res));
                 match command {
                     Command::Logout => self.kill(),
-                    Command::Clear => self.clear_messages_and_terminal(),
-                    Command::PrintContext => {}
+                    Command::Clear
+                    | Command::New
+                    | Command::Sessions
+                    | Command::Resume(_)
+                    | Command::PrintContext => {}
                     Command::ChangeModel(_, _) => {}
                 }
             }
@@ -307,6 +341,9 @@ impl TUIApp {
             Event::Key(key) => self.handle_key_event(key),
             Event::Mouse(_) => {}
             Event::Paste(text) => match self.input_mode {
+                InputMode::CommandMenu(CommandMenu::SessionSelector) => {
+                    self.input_box.session_picker.paste(text)
+                }
                 InputMode::HomeMenu(HomeMenu::Editing | HomeMenu::InputCommand) => {
                     self.input_box.paste(text);
                 }
@@ -431,6 +468,13 @@ impl TUIApp {
                 _ => {}
             },
             InputMode::CommandMenu(menu) => match menu {
+                CommandMenu::SessionSelector => match self.input_box.session_picker.key(key) {
+                    PickerAction::Stay => {}
+                    PickerAction::Cancel => {
+                        self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal))
+                    }
+                    PickerAction::Resume { id } => self.resume(ResumeTarget::Session { id }),
+                },
                 CommandMenu::ModelSelector => match key.code {
                     KeyCode::Down | KeyCode::Char('j') => self.input_box.select_next_model(),
                     KeyCode::Up | KeyCode::Char('k') => self.input_box.select_previous_model(),

@@ -1,7 +1,7 @@
 use serde_json::{Map, Value};
 use tools::tool_defs::{NonEmptyString, ToolId};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ToolCall {
     pub id: ToolId,
     pub name: NonEmptyString,

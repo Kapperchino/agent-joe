@@ -44,6 +44,22 @@ pub enum LLmClient {
 }
 
 impl LLmClient {
+    pub fn session_provider(&self) -> SessionProvider {
+        match self.get_config() {
+            None => SessionProvider::Injected,
+            Some(Config::Claude(_)) => SessionProvider::Claude,
+            Some(Config::OpenAI(config)) => {
+                use sha2::{Digest, Sha256};
+                SessionProvider::OpenAI {
+                    route: Sha256::digest(config.get_url().trim_end_matches('/'))
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect(),
+                }
+            }
+        }
+    }
+
     pub fn new(config_context: ConfigContext) -> anyhow::Result<LLmClient> {
         match config_context.get_config() {
             Config::Claude(config) => {
@@ -392,10 +408,17 @@ pub enum ContentBlock {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub role: Role,
     pub content: Vec<ContentBlock>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SessionProvider {
+    Injected,
+    Claude,
+    OpenAI { route: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
