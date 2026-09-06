@@ -1,5 +1,5 @@
-use super::IsolatedCommand;
-use crate::workspace::{Access, WorkspacePolicy};
+use super::{IsolatedCommand, TemporaryDirectory};
+use crate::workspace::{Access, ProcessWorkspace};
 use anyhow::Context;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -7,9 +7,10 @@ use tokio::process::Command;
 
 pub(super) fn prepare(
     source: Command,
-    workspace: &WorkspacePolicy,
+    workspace: &ProcessWorkspace<'_>,
+    temporary: TemporaryDirectory,
 ) -> anyhow::Result<IsolatedCommand> {
-    workspace.validate_process_root()?;
+    let workspace = workspace.policy();
     let home = dirs::home_dir().context("Cannot locate the installed Rust toolchain")?;
     let cargo_home = std::env::var_os("CARGO_HOME")
         .map(PathBuf::from)
@@ -102,7 +103,6 @@ pub(super) fn prepare(
         }
         let local_cargo = workspace.root().join("target/.joe/cargo");
         workspace.create_parent_dirs(&local_cargo.join("placeholder"))?;
-        workspace.create_parent_dirs(Path::new("target/.joe/tmp/placeholder"))?;
         for directory in ["index", "cache"] {
             let source = cargo_home.join("registry").join(directory);
             if source.exists() {
@@ -114,7 +114,7 @@ pub(super) fn prepare(
         }
         for (key, value) in [
             ("HOME", workspace.root().to_path_buf()),
-            ("TMPDIR", workspace.root().join("target/.joe/tmp")),
+            ("TMPDIR", temporary.path().to_path_buf()),
             ("CARGO_TARGET_DIR", workspace.root().join("target")),
             ("CARGO_HOME", local_cargo),
             ("RUSTUP_HOME", rustup_home),
@@ -146,6 +146,7 @@ pub(super) fn prepare(
             .args(source.get_args());
         Ok(IsolatedCommand {
             command,
+            temporary,
             _filter: filter,
         })
     } else {

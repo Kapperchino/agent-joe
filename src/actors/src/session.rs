@@ -1,3 +1,4 @@
+use anyhow::Context;
 use clients::llm::{ContentBlock, Message, Role, SessionProvider};
 use common_models::tui_models::{Lifecycle, SessionSummary, TokenCount};
 use heed::{
@@ -197,12 +198,15 @@ impl SessionStore {
         let _guard = OPEN
             .lock()
             .map_err(|_| anyhow::anyhow!("Session storage initialization lock poisoned"))?;
-        let storage = workspace.session_storage(namespace)?;
+        let storage = workspace
+            .session_storage(namespace)
+            .context("Creating private session storage")?;
         let env = unsafe {
             EnvOpenOptions::new()
                 .map_size(1024 * 1024 * 1024)
                 .max_dbs(3)
-                .open(storage.path())?
+                .open(storage.path())
+                .context("Opening the LMDB session environment")?
         };
         let mut transaction = env.write_txn()?;
         let snapshots = env.create_database(&mut transaction, Some("session_snapshots"))?;

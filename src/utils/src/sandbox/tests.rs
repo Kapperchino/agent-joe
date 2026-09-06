@@ -8,6 +8,38 @@ struct Fixture {
     outside: PathBuf,
 }
 
+#[cfg(target_os = "macos")]
+struct Semaphore {
+    id: i32,
+}
+
+#[cfg(target_os = "macos")]
+impl Semaphore {
+    fn new() -> Self {
+        let id = unsafe { libc::semget(libc::IPC_PRIVATE, 1, libc::IPC_CREAT | 0o600) };
+        assert!(id >= 0, "{}", std::io::Error::last_os_error());
+        let semaphore = Self { id };
+        assert_eq!(unsafe { libc::semctl(id, 0, libc::SETVAL, 1) }, 0);
+        semaphore
+    }
+
+    fn acquire(&self) {
+        let mut operation = libc::sembuf {
+            sem_num: 0,
+            sem_op: -1,
+            sem_flg: libc::SEM_UNDO as i16,
+        };
+        assert_eq!(unsafe { libc::semop(self.id, &mut operation, 1) }, 0);
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for Semaphore {
+    fn drop(&mut self) {
+        unsafe { libc::semctl(self.id, 0, libc::IPC_RMID) };
+    }
+}
+
 impl Fixture {
     fn new() -> Self {
         let directory = std::env::temp_dir().join(format!("joe-process-{}", uuid::Uuid::new_v4()));
@@ -128,6 +160,38 @@ fn process_fixture() {
             let _ = std::io::stdout().write_all(&vec![b'x'; 17 * 1024 * 1024]);
         }
 
+        Ok("temporary-storage") => {
+            #[cfg(target_os = "macos")]
+            {
+                let semaphore = Semaphore::new();
+                semaphore.acquire();
+                let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+                let size = std::mem::size_of_val(&info) as i32;
+                let read = unsafe {
+                    libc::proc_pidinfo(
+                        std::process::id() as i32,
+                        libc::PROC_PIDTBSDINFO,
+                        0,
+                        info.as_mut_ptr().cast(),
+                        size,
+                    )
+                };
+                assert_eq!(read, size, "{}", std::io::Error::last_os_error());
+            }
+            let project = std::env::temp_dir().join("storage-fixture");
+            std::fs::create_dir(&project).unwrap();
+            let policy = crate::workspace::WorkspacePolicy::workspace(project).unwrap();
+            let storage = policy.session_storage("sessions").unwrap();
+            std::fs::write(storage.path().join("data.mdb"), "fixture").unwrap();
+            let saved = std::env::current_dir().unwrap().join(".turbo-code");
+            let alias = std::env::temp_dir().join("saved-session-alias");
+            std::os::unix::fs::symlink(&saved, &alias).unwrap();
+            for directory in [saved, alias] {
+                assert!(std::fs::read(directory.join("secret")).is_err());
+                assert!(std::fs::write(directory.join("secret"), "overwrite").is_err());
+            }
+        }
+
         Ok("environment-parent") => {
             assert!(std::env::var_os("JOE_INHERITED_SECRET").is_some());
             let project = Fixture::new();
@@ -203,6 +267,35 @@ async fn drains_both_pipes_beyond_pipe_capacity() {
 }
 
 #[tokio::test]
+async fn temporary_workspaces_can_create_private_session_storage() {
+    let project = Fixture::new();
+    let saved = project.root.join(".turbo-code");
+    std::fs::create_dir(&saved).unwrap();
+    std::fs::write(saved.join("secret"), "saved session").unwrap();
+    let result = project
+        .scope()
+        .enter(output(fixture("temporary-storage", &PathBuf::new())))
+        .await
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(saved.join("secret")).unwrap(),
+        "saved session"
+    );
+    assert!(
+        std::fs::read_dir(project.root.join("target/.joe/tmp"))
+            .unwrap()
+            .next()
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn cancellation_and_dropping_future_kill_descendants_and_reap_leader() {
     for drop_future in [false, true] {
         let project = Fixture::new();
@@ -234,6 +327,12 @@ async fn cancellation_and_dropping_future_kill_descendants_and_reap_leader() {
             .await
             .unwrap();
         assert_eq!(scope.tasks.len(), 0);
+        assert!(
+            std::fs::read_dir(project.root.join("target/.joe/tmp"))
+                .unwrap()
+                .next()
+                .is_none()
+        );
         #[cfg(target_os = "macos")]
         for pid in pids
             .split_whitespace()
@@ -306,7 +405,7 @@ async fn process_scope_denies_host_effects_and_inherits_into_new_sessions() {
 }
 
 #[tokio::test]
-async fn preexisting_hardlinks_and_missing_scope_prevent_execution() {
+async fn outside_hardlinks_and_missing_scope_prevent_execution() {
     let project = Fixture::new();
     std::fs::write(project.outside.join("secret"), "secret").unwrap();
     std::fs::hard_link(project.outside.join("secret"), project.root.join("linked")).unwrap();
@@ -392,6 +491,14 @@ async fn protected_symlinks_cannot_add_host_mounts() {
 #[tokio::test]
 async fn cargo_build_scripts_proc_macros_and_tests_cannot_escape() {
     let project = Fixture::new();
+    let object = project.root.join("target/debug/deps/object.rcgu.o");
+    let cached = project
+        .root
+        .join("target/debug/incremental/session/object.rcgu.o");
+    std::fs::create_dir_all(object.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
+    std::fs::write(&object, "cached object").unwrap();
+    std::fs::hard_link(&object, &cached).unwrap();
     std::fs::create_dir(project.root.join("src")).unwrap();
     std::fs::write(project.outside.join("secret"), "secret").unwrap();
     std::fs::write(project.root.join("Cargo.toml"), "[package]\nname = 'isolation_fixture'\nversion = '0.1.0'\nedition = '2024'\n[dependencies]\nisolation_macro = { path = 'macros' }\nitertools = '=0.15.0'\n").unwrap();

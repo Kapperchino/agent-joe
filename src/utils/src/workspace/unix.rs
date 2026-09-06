@@ -9,6 +9,9 @@ use std::{
 mod storage;
 pub use storage::PrivateStorage;
 
+mod process;
+pub(crate) use process::ProcessWorkspace;
+
 struct Parent {
     directory: File,
     name: OsString,
@@ -269,36 +272,6 @@ impl WorkspacePolicy {
             }
             Err(error) => Err(io_error(error)),
         }
-    }
-
-    pub(crate) fn validate_process_root(&self) -> anyhow::Result<()> {
-        for root in &self.roots {
-            root.validate_identity()?;
-        }
-        self.check(&self.base, Access::Read)?;
-        let mut directories = vec![self.base.clone()];
-        while let Some(directory) = directories.pop() {
-            let directory_handle = self.resolve(&directory, Access::Read)?.open()?;
-            for entry in self.entries(&directory)? {
-                if self.check(&entry.path, Access::Read).is_ok() {
-                    let stat =
-                        fs::statat(&directory_handle, &entry.name, AtFlags::SYMLINK_NOFOLLOW)
-                            .map_err(io_error)?;
-                    match FileType::from_raw_mode(stat.st_mode) {
-                        FileType::Directory => directories.push(entry.path),
-                        FileType::RegularFile => {
-                            OrdinaryFileMetadata::new(stat, &entry.path)?;
-                        }
-                        FileType::Symlink => {}
-                        _ => Err(anyhow::anyhow!(
-                            "Special files are not allowed in a process workspace: {}",
-                            entry.path.display()
-                        ))?,
-                    }
-                }
-            }
-        }
-        Ok(())
     }
 
     pub fn open_append(&self, path: &Path) -> anyhow::Result<File> {

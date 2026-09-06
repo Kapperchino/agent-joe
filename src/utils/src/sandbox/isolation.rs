@@ -1,25 +1,33 @@
-use crate::workspace::WorkspacePolicy;
+use crate::workspace::{ProcessWorkspace, WorkspacePolicy};
 use tokio::process::Command;
+
+mod temporary;
+pub(crate) use temporary::TemporaryDirectory;
 
 #[cfg(target_os = "linux")]
 mod linux;
 
 pub(super) struct IsolatedCommand {
     pub(super) command: Command,
+    pub(super) temporary: TemporaryDirectory,
     #[cfg(target_os = "linux")]
     pub(super) _filter: super::seccomp::Filter,
 }
 
 impl IsolatedCommand {
     pub(super) fn new(command: Command, workspace: &WorkspacePolicy) -> anyhow::Result<Self> {
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        let workspace = ProcessWorkspace::new(workspace)?;
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        let temporary = TemporaryDirectory::new(workspace.policy())?;
         #[cfg(target_os = "macos")]
         {
-            let command = macos::prepare(command, workspace)?;
-            Ok(Self { command })
+            let command = macos::prepare(command, &workspace, &temporary)?;
+            Ok(Self { command, temporary })
         }
         #[cfg(target_os = "linux")]
         {
-            linux::prepare(command, workspace)
+            linux::prepare(command, &workspace, temporary)
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
@@ -70,12 +78,14 @@ mod macos {
             workspace: &WorkspacePolicy,
             executable: &Path,
             home: &Path,
+            temporary: &TemporaryDirectory,
         ) -> anyhow::Result<Self> {
-            workspace.validate_process_root()?;
             let mut profile = Self {
                 rules: r#"(version 1)
 (deny default)
 (allow process-exec process-fork)
+(allow process-info-pidinfo)
+(allow ipc-sysv-sem)
 (allow signal (target self))
 (allow sysctl-read)
 (allow file-read-metadata)
@@ -97,10 +107,13 @@ mod macos {
                     profile.path("allow", "file-read*", "subpath", &path.canonicalize()?);
                 }
             }
-            profile.rules.push_str(r#"(deny file-link)
-(deny file-read* file-write* (regex #"(^|/)[.]([tT][uU][rR][bB][oO]-[cC][oO][dD][eE])(/|$)"))
+            let temporary = profile.parameter(temporary.path());
+            profile.rules.push_str(&format!(r#"(deny file-link)
+(deny file-read* file-write* (require-all
+    (regex #"(^|/)[.]([tT][uU][rR][bB][oO]-[cC][oO][dD][eE])(/|$)")
+    (require-not (subpath (param "{temporary}")))))
 (deny file-write* (regex #"(^|/)[.]([gG][iI][tT]|[aA][gG][eE][nN][tT][sS]|[cC][oO][dD][eE][xX])(/|$)"))
-"#);
+"#));
             for root in workspace.read_only_roots() {
                 profile.path("deny", "file-write*", "subpath", root);
             }
@@ -108,20 +121,27 @@ mod macos {
         }
 
         fn path(&mut self, decision: &str, operations: &str, filter: &str, path: &Path) {
+            let name = self.parameter(path);
+            self.rules.push_str(&format!(
+                "({decision} {operations} ({filter} (param \"{name}\")))\n"
+            ));
+        }
+
+        fn parameter(&mut self, path: &Path) -> String {
             let name = format!("PATH_{}", self.parameters.len());
             let mut parameter = OsString::from(format!("{name}="));
             parameter.push(path);
             self.parameters.push(parameter);
-            self.rules.push_str(&format!(
-                "({decision} {operations} ({filter} (param \"{name}\")))\n"
-            ));
+            name
         }
     }
 
     pub(super) fn prepare(
         command: Command,
-        workspace: &WorkspacePolicy,
+        workspace: &ProcessWorkspace<'_>,
+        temporary: &TemporaryDirectory,
     ) -> anyhow::Result<Command> {
+        let workspace = workspace.policy();
         let source = command.as_std();
         let home = dirs::home_dir()
             .context("Cannot locate the installed Rust toolchain")?
@@ -132,7 +152,7 @@ mod macos {
             PathBuf::from(source.get_program())
         };
         if executable.is_absolute() && executable.is_file() {
-            let profile = Profile::new(workspace, &executable.canonicalize()?, &home)?;
+            let profile = Profile::new(workspace, &executable.canonicalize()?, &home, temporary)?;
             let cargo_home = CargoHome::new(workspace, &home)?;
             let mut isolated = Command::new("/usr/bin/sandbox-exec");
             isolated.env_clear().current_dir(workspace.root());
@@ -142,7 +162,7 @@ mod macos {
             isolated.args(["-p", &profile.rules, "/usr/bin/env", "-i"]);
             for (key, value) in [
                 ("HOME", workspace.root().to_path_buf()),
-                ("TMPDIR", workspace.root().join("target/.joe/tmp")),
+                ("TMPDIR", temporary.path().to_path_buf()),
                 ("CARGO_TARGET_DIR", workspace.root().join("target")),
                 ("CARGO_HOME", cargo_home.path),
                 ("RUSTUP_HOME", home.join(".rustup")),
@@ -165,7 +185,6 @@ mod macos {
                     isolated.arg(assignment);
                 }
             }
-            workspace.create_parent_dirs(Path::new("target/.joe/tmp/placeholder"))?;
             isolated.arg(executable).args(source.get_args());
             Ok(isolated)
         } else {

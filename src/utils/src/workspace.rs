@@ -3,7 +3,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Access {
     Read,
     Write,
@@ -173,6 +173,9 @@ mod unix;
 
 #[cfg(unix)]
 pub use unix::PrivateStorage;
+
+#[cfg(unix)]
+pub(crate) use unix::ProcessWorkspace;
 
 pub struct DirectoryEntry {
     pub name: std::ffi::OsString,

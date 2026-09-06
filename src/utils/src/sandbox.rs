@@ -74,7 +74,7 @@ async fn execute(command: Command, limits: ProcessLimits) -> anyhow::Result<Outp
 
 #[cfg(unix)]
 mod unix {
-    use super::isolation::IsolatedCommand;
+    use super::isolation::{IsolatedCommand, TemporaryDirectory};
     use super::*;
     use crate::execution::{ExecutionScope, ResourceKind};
     use std::process::Stdio;
@@ -98,6 +98,7 @@ mod unix {
         group: ProcessGroup,
         stdout: ChildStdout,
         stderr: ChildStderr,
+        temporary: TemporaryDirectory,
     }
     impl RunningProcess {
         async fn spawn(mut prepared: IsolatedCommand) -> anyhow::Result<Self> {
@@ -115,6 +116,7 @@ mod unix {
                         group: ProcessGroup(pid),
                         stdout,
                         stderr,
+                        temporary: prepared.temporary,
                     }),
                     _ => {
                         let _ = child.start_kill();
@@ -138,6 +140,7 @@ mod unix {
                 group,
                 stdout,
                 stderr,
+                temporary: _temporary,
             } = self;
             let completion = async {
                 let read = async {

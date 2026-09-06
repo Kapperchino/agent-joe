@@ -110,6 +110,16 @@ worker tool adapters, and `src/common-models/src/tui_models.rs`.
   project-local writes, read-only toolchains/caches, and no network or unrelated
   host signals. Unsupported or unavailable isolation fails closed while file tools
   remain available. Linux requires `/usr/bin/bwrap` and host namespace support.
+- Process workspace construction permits existing hard links only when every
+  alias is inside the workspace with the same access permissions. This supports
+  Cargo's linked build artifacts while rejecting outside and protected aliases;
+  sandboxed processes still cannot create new hard links.
+- Each command owns a fresh temporary directory that is removed when execution
+  finishes or is cancelled. Test workspaces there can create private session
+  storage; existing project storage remains inaccessible, including through
+  aliases. macOS permits System V semaphores and read-only process information
+  for LMDB and session ownership. Semaphore access is not scoped by workspace
+  on macOS; normal operating-system ownership permissions still apply.
 - Execution is limited to five minutes and 16 MiB per output stream. Descendants
   remain confined after changing sessions; guaranteed termination of deliberately
   detached descendants is outside the accepted scope. There is no permission
@@ -176,12 +186,16 @@ First slice: durable sessions
   history forks, context budgeting, compaction, and pending question state remain
   subsequent slices. No older session format exists to migrate.
 
-Slice validation (2026-09-06): `cargo test --workspace --offline` passes 174 tests
+Slice validation (2026-09-06): `cargo test --workspace --offline` passes 178 tests
 on macOS ARM64, including process-exit recovery, abandoned transactions, map
 exhaustion, exclusive ownership across processes, schema/provider/workspace checks,
 durable simple/worker turns, picker navigation and cancellation, narrow terminal
-rendering, and transcript restoration. `cargo check --workspace --offline` passes with
+rendering, transcript restoration, and confined Cargo hard links. `cargo check --workspace --offline` passes with
 existing warnings. Changed Rust files pass formatting and whitespace checks.
+The 14 session tests also pass through Joe's own sandbox, including LMDB
+initialization, competing processes, and crash recovery. Sandbox regressions
+cover temporary storage, semaphore and process identity access, cleanup, and
+denial of aliases to saved project storage.
 Linux and Windows have not been validated for this slice.
 
 Done when a long task can survive compaction and restart without losing requirements or duplicating side effects.

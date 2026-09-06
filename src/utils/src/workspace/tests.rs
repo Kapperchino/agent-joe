@@ -33,6 +33,79 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn process_workspaces_allow_internal_hard_links_with_matching_access() {
+    for access in [RootAccess::ReadOnly, RootAccess::ReadWrite] {
+        let fixture = Fixture::new();
+        let target = fixture.root.join("target");
+        let object = target.join("debug/deps/object.rcgu.o");
+        let cached = target.join("debug/incremental/session/object.rcgu.o");
+        std::fs::create_dir_all(object.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
+        std::fs::write(&object, "object").unwrap();
+        std::fs::hard_link(&object, &cached).unwrap();
+        let policy = WorkspacePolicy::new(
+            fixture.root.clone(),
+            vec![
+                RootSpec {
+                    path: fixture.root.clone(),
+                    access: RootAccess::ReadWrite,
+                },
+                RootSpec {
+                    path: target,
+                    access,
+                },
+            ],
+        )
+        .unwrap();
+        let workspace = ProcessWorkspace::new(&policy).unwrap();
+        assert_eq!(workspace.policy().root(), policy.root());
+        assert!(policy.write(&object, "overwrite").is_err());
+    }
+}
+
+#[test]
+fn process_workspace_hard_links_cannot_cross_protected_access_boundaries() {
+    for directory in [".git", ".agents", ".codex", ".turbo-code", "readonly"] {
+        let fixture = Fixture::new();
+        let protected = fixture.root.join(directory);
+        let readonly = fixture.root.join("readonly");
+        std::fs::create_dir_all(&protected).unwrap();
+        std::fs::create_dir_all(&readonly).unwrap();
+        std::fs::write(protected.join("original"), "protected").unwrap();
+        std::fs::hard_link(protected.join("original"), fixture.root.join("linked")).unwrap();
+        let policy = WorkspacePolicy::new(
+            fixture.root.clone(),
+            vec![
+                RootSpec {
+                    path: fixture.root.clone(),
+                    access: RootAccess::ReadWrite,
+                },
+                RootSpec {
+                    path: readonly,
+                    access: RootAccess::ReadOnly,
+                },
+            ],
+        )
+        .unwrap();
+        assert!(ProcessWorkspace::new(&policy).is_err());
+    }
+}
+
+#[test]
+fn process_workspace_hard_links_require_every_alias_to_be_inside_the_project() {
+    let fixture = Fixture::new();
+    std::fs::write(fixture.root.join("first"), "object").unwrap();
+    std::fs::hard_link(fixture.root.join("first"), fixture.root.join("second")).unwrap();
+    std::fs::hard_link(fixture.root.join("first"), fixture.outside.join("third")).unwrap();
+    std::os::unix::fs::symlink(&fixture.outside, fixture.root.join("outside-alias")).unwrap();
+    assert!(ProcessWorkspace::new(&fixture.policy()).is_err());
+    assert_eq!(
+        std::fs::read_to_string(fixture.outside.join("third")).unwrap(),
+        "object"
+    );
+}
+
+#[test]
 fn session_storage_is_private_and_inaccessible_to_file_tools() {
     use std::os::unix::fs::PermissionsExt;
     let fixture = Fixture::new();
