@@ -56,7 +56,7 @@ impl WorkspacePolicy {
             let base = std::fs::canonicalize(&base)?;
             let roots = roots
                 .into_iter()
-                .map(Root::open)
+                .map(|spec| Root::open(spec, &base))
                 .collect::<anyhow::Result<Vec<_>>>()?;
             Ok(Self { base, roots })
         }
@@ -72,6 +72,36 @@ impl WorkspacePolicy {
 
     pub fn root(&self) -> &Path {
         &self.base
+    }
+
+    pub(crate) fn read_only_roots(&self) -> impl Iterator<Item = &Path> {
+        self.roots
+            .iter()
+            .filter(|root| matches!(root.access, RootAccess::ReadOnly))
+            .map(|root| root.path.as_path())
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn process_protected_paths(&self) -> anyhow::Result<Vec<PathBuf>> {
+        let mut directories = vec![self.base.clone()];
+        let mut paths = Vec::new();
+        while let Some(directory) = directories.pop() {
+            for entry in self.entries(&directory)? {
+                if protected(&entry.path, Access::Write) {
+                    let metadata = std::fs::symlink_metadata(&entry.path)?;
+                    if metadata.is_symlink() {
+                        Err(anyhow::anyhow!(
+                            "Protected process paths cannot be symlinks: {}",
+                            entry.path.display()
+                        ))?;
+                    }
+                    paths.push(entry.path);
+                } else if self.is_directory(&entry.path).unwrap_or(false) {
+                    directories.push(entry.path);
+                }
+            }
+        }
+        Ok(paths)
     }
 
     pub fn check(&self, path: &Path, access: Access) -> anyhow::Result<()> {

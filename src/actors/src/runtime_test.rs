@@ -1105,18 +1105,7 @@ async fn read_concurrency_remains_bounded() {
 }
 
 #[cfg(unix)]
-#[test]
-fn process_fixture() {
-    if let Some(marker) = std::env::var_os("JOE_M2_ACTOR_PROCESS_MARKER") {
-        std::fs::write(marker, std::process::id().to_string()).unwrap();
-        loop {
-            std::thread::sleep(Duration::from_secs(1));
-        }
-    }
-}
-
-#[cfg(unix)]
-struct ProcessTool(std::path::PathBuf);
+struct ProcessTool;
 #[cfg(unix)]
 #[async_trait]
 impl ErasedToolTrait<TestContext, ActorContext<TestContext>> for ProcessTool {
@@ -1144,18 +1133,9 @@ impl ErasedToolTrait<TestContext, ActorContext<TestContext>> for ProcessTool {
         _: &TestContext,
         _: &ActorContext<TestContext>,
     ) -> anyhow::Result<Value> {
-        match std::env::current_exe() {
-            Ok(executable) => {
-                let mut command = tokio::process::Command::new(executable);
-                command
-                    .args(["--exact", "runtime_test::process_fixture", "--nocapture"])
-                    .env("JOE_M2_ACTOR_PROCESS_MARKER", &self.0);
-                utils::process::output(command)
-                    .await
-                    .map(|result| json!(result.status.success()))
-            }
-            Err(error) => Err(error.into()),
-        }
+        utils::cargo::Cargo::cargo_test(None, None)
+            .await
+            .map(|result| json!(matches!(result, utils::cargo::CargoTest::TestPasses { .. })))
     }
     fn output_to_content_erased(&self, _: &Value, output: &Value) -> anyhow::Result<String> {
         Ok(output.to_string())
@@ -1165,33 +1145,48 @@ impl ErasedToolTrait<TestContext, ActorContext<TestContext>> for ProcessTool {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[tokio::test]
-async fn interrupt_reaps_a_running_test_process_before_publishing_cancelled() {
-    let marker = std::env::temp_dir().join(format!(
+async fn interrupt_reaps_a_running_cargo_process_before_publishing_cancelled() {
+    let directory = std::env::temp_dir().join(format!(
         "joe-m2-actor-process-{}-{}",
         std::process::id(),
         common_models::runtime_ids::OperationId::new()
     ));
-    let h = Harness::new(
-        vec![Arc::new(ProcessTool(marker.clone()))],
-        Duration::from_secs(10),
+    std::fs::create_dir(&directory).unwrap();
+    let marker = directory.join("process");
+    std::fs::create_dir(directory.join("src")).unwrap();
+    std::fs::write(
+        directory.join("Cargo.toml"),
+        "[package]\nname = 'actor_process_fixture'\nversion = '0.1.0'\nedition = '2024'\n",
     )
-    .await;
+    .unwrap();
+    std::fs::write(
+        directory.join("src/lib.rs"),
+        r#"
+#[test]
+fn waits_for_cancellation() {
+    std::fs::write("process", std::process::id().to_string()).unwrap();
+    loop { std::thread::sleep(std::time::Duration::from_secs(1)); }
+}
+"#,
+    )
+    .unwrap();
+    let mut runtime = Runtime::for_workspace(directory.clone()).unwrap();
+    runtime.tool_timeout = Duration::from_secs(10);
+    let h = Harness::with_runtime(vec![Arc::new(ProcessTool)], runtime).await;
     h.start("run test");
     answer(
         h.request().await.1,
         response(vec![call("test_process", "test")]),
     );
-    within(async {
-        loop {
-            if marker.exists() {
-                break;
-            }
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !marker.exists() {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
     })
-    .await;
+    .await
+    .unwrap();
     assert!(
         h.runtime
             .scope
@@ -1203,7 +1198,7 @@ async fn interrupt_reaps_a_running_test_process_before_publishing_cancelled() {
     h.terminal(Lifecycle::Cancelled).await;
     assert!(h.runtime.scope.resources().is_empty());
     assert!(h.runtime.workspace.is_idle());
-    std::fs::remove_file(marker).unwrap();
+    std::fs::remove_dir_all(directory).unwrap();
     h.stop().await;
 }
 

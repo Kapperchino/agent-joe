@@ -55,7 +55,6 @@ pub enum Lifecycle {
     Running,
     WaitingForTools,
     WaitingForInput,
-    WaitingForPermission,
     Cancelling,
     Completed,
     Cancelled,

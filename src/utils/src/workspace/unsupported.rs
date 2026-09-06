@@ -1,6 +1,12 @@
 use super::*;
 
 impl WorkspacePolicy {
+    pub fn open_append(&self, _: &Path) -> anyhow::Result<File> {
+        Err(anyhow::anyhow!(
+            "Descriptor-based workspace access is unsupported on this platform"
+        ))
+    }
+
     pub fn read(&self, _: &Path) -> anyhow::Result<String> {
         Err(anyhow::anyhow!(
             "Descriptor-based workspace access is unsupported on this platform"

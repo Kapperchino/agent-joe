@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use triomphe;
-use utils::utils::{FnvHashMap, Utils};
+use utils::utils::FnvHashMap;
 
 pub struct RustContextLineIndexCreator {
     pub(crate) proj_meta: Arc<ProjMeta>,
@@ -103,13 +103,11 @@ impl RustContext {
         current_dir: PathBuf,
     ) -> Result<RustContext, anyhow::Error> {
         let proj = RustProject::new(&current_dir)?;
-        let store_dir = Utils::get_store_dir()?;
-        let mut cache = TypedCache::new(store_dir).await?;
+        let mut cache = TypedCache::new();
         let hashes: FnvHashMap<_, _> = ProjMeta::get_file_hashes(&proj)
             .await?
             .into_iter()
             .collect();
-        //validate old one
         let proj_meta = Self::get_proj_meta_init(&mut cache, &proj).await?;
         let _ = Self::validate_and_update_cache(hashes, &proj_meta, &mut cache, &proj).await?;
 
@@ -189,7 +187,9 @@ impl RustContext {
                 let rpath = RPath::new(path.clone(), proj.root.clone())?;
                 let iter = db.prefix_iter(rpath.inner)?;
                 let invalidates: Vec<_> = iter.collect();
-                invalidates.iter().try_for_each(|(_, v)| db.delete(v))
+                invalidates
+                    .iter()
+                    .try_for_each(|entry| db.delete(&entry.value))
             })?;
             meta.iter().try_for_each(|s| db.put(s, s))?;
             Ok(())

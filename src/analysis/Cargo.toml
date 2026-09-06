@@ -7,8 +7,6 @@ edition = "2024"
 utils = { path = "../utils" }
 anyhow = "1.0.99"
 ra_ap_ide = "0.0.344"
-ra_ap_load-cargo = "0.0.344"
-ra_ap_project_model = "0.0.344"
 ra_ap_ide_db = "0.0.344"
 ra_ap_vfs = "0.0.344"
 itertools = "0.15.0"
@@ -16,7 +14,7 @@ dashmap = "6.1.0"
 tracing = "0.1.44"
 serde = { version = "1.0", features = ["derive"] }
 futures = "0.3"
-heed = "0.22.0"
+serde_json = "1.0"
 tokio = { version = "1.0", features = ["full"] }
 blake3 = "1.8.3"
 triomphe = "0.1.15"

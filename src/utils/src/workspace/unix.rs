@@ -62,16 +62,37 @@ impl WorkspaceFile {
 }
 
 impl Root {
-    pub(super) fn open(spec: RootSpec) -> anyhow::Result<Self> {
+    fn validate_identity(&self) -> anyhow::Result<()> {
+        let pinned = fs::fstat(&self.directory).map_err(io_error)?;
+        let current = fs::stat(&self.path).map_err(io_error)?;
+        if pinned.st_dev == current.st_dev && pinned.st_ino == current.st_ino {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!(
+                "A configured workspace root changed since initialization: {}",
+                self.path.display()
+            ))
+        }
+    }
+
+    pub(super) fn open(spec: RootSpec, base: &Path) -> anyhow::Result<Self> {
         if spec.path.is_absolute() {
             let path = std::fs::canonicalize(&spec.path)?;
-            let directory = fs::open(&path, directory_flags(), Mode::empty()).map_err(io_error)?;
-            Ok(Self {
-                path,
-                alias: spec.path,
-                access: spec.access,
-                directory: directory.into(),
-            })
+            if path.starts_with(base) {
+                let directory =
+                    fs::open(&path, directory_flags(), Mode::empty()).map_err(io_error)?;
+                Ok(Self {
+                    path,
+                    alias: spec.path,
+                    access: spec.access,
+                    directory: directory.into(),
+                })
+            } else {
+                Err(anyhow::anyhow!(
+                    "Workspace roots must remain inside the project: {}",
+                    path.display()
+                ))
+            }
         } else {
             Err(anyhow::anyhow!(
                 "Workspace roots must be absolute: {}",
@@ -221,6 +242,80 @@ impl Parent {
 }
 
 impl WorkspacePolicy {
+    pub(crate) fn link_process_cache(
+        &self,
+        source: &Path,
+        destination: &Path,
+    ) -> anyhow::Result<()> {
+        let parent = self
+            .resolve(destination, Access::Write)?
+            .parent(Parents::Create)?;
+        match fs::symlinkat(source, &parent.directory, &parent.name) {
+            Ok(()) => Ok(()),
+            Err(rustix::io::Errno::EXIST) => {
+                let target = fs::readlinkat(&parent.directory, &parent.name, Vec::new())
+                    .map_err(io_error)?;
+                if target.to_bytes() == source.as_os_str().as_bytes() {
+                    Ok(())
+                } else {
+                    Err(anyhow::anyhow!(
+                        "The process cache location changed: {}",
+                        destination.display()
+                    ))
+                }
+            }
+            Err(error) => Err(io_error(error)),
+        }
+    }
+
+    pub(crate) fn validate_process_root(&self) -> anyhow::Result<()> {
+        for root in &self.roots {
+            root.validate_identity()?;
+        }
+        self.check(&self.base, Access::Read)?;
+        let mut directories = vec![self.base.clone()];
+        while let Some(directory) = directories.pop() {
+            let directory_handle = self.resolve(&directory, Access::Read)?.open()?;
+            for entry in self.entries(&directory)? {
+                if self.check(&entry.path, Access::Read).is_ok() {
+                    let stat =
+                        fs::statat(&directory_handle, &entry.name, AtFlags::SYMLINK_NOFOLLOW)
+                            .map_err(io_error)?;
+                    match FileType::from_raw_mode(stat.st_mode) {
+                        FileType::Directory => directories.push(entry.path),
+                        FileType::RegularFile => {
+                            OrdinaryFileMetadata::new(stat, &entry.path)?;
+                        }
+                        FileType::Symlink => {}
+                        _ => Err(anyhow::anyhow!(
+                            "Special files are not allowed in a process workspace: {}",
+                            entry.path.display()
+                        ))?,
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn open_append(&self, path: &Path) -> anyhow::Result<File> {
+        let parent = self.resolve(path, Access::Write)?.parent(Parents::Create)?;
+        let handle = fs::openat(
+            &parent.directory,
+            &parent.name,
+            OFlags::WRONLY
+                | OFlags::APPEND
+                | OFlags::CREATE
+                | OFlags::CLOEXEC
+                | OFlags::NOFOLLOW
+                | OFlags::NONBLOCK,
+            Mode::from_raw_mode(0o600),
+        )
+        .map_err(io_error)?;
+        OrdinaryFileMetadata::new(fs::fstat(&handle).map_err(io_error)?, path)?;
+        Ok(handle.into())
+    }
+
     pub fn read(&self, path: &Path) -> anyhow::Result<String> {
         WorkspaceFile::open(self.resolve(path, Access::Read)?)?.read_text()
     }

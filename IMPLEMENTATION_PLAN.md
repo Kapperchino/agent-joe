@@ -1,269 +1,144 @@
 # Agent Joe implementation plan
 
-Status: the first M1 slice, M2, and the first M3 slice are implemented and validated on macOS. M1 capability/transition work and M3 remain in progress; M4 and later milestones remain pending.
+Status: M1–M3 are complete. M4 — sessions and context management — is next; M5–M10 remain planned.
 
 Cover all ten gaps identified in the Codex comparison while keeping Joe a Rust-focused agent with typed tools and no model-controlled shell. Delivery order follows dependencies, so context compaction follows the response format and turn lifecycle work it needs.
 
 **Scope and operating decisions**
 
 - Preserve the existing TUI, Vim bindings, provider choices, and `--simple` option. Both agent modes use the same runtime services.
-- Keep process execution behind validated tool schemas. Add Cargo, Git, and integration capabilities through explicit operations, with no arbitrary command-string or shell tool.
-- Make workspace reads and ordinary edits automatic within the configured policy. Request additional permissions only for an operation that actually needs them; remember narrowly scoped grants.
-- Implement and validate process isolation on macOS first, then Linux. Other platforms must report unsupported isolation explicitly until an equivalent backend is validated.
+- Keep process execution behind validated tool schemas. Cargo is the only current executable operation. The shared sandbox accepts registered operation types so future tools can reuse it without adding arbitrary command-string or shell access.
+- Keep every agent operation inside a fixed project boundary. Allowed operations run automatically; denied operations fail without permission prompts or access escalation.
+- Isolate executable repository operations on macOS and Linux. File tools and passive analysis use the project filesystem policy in process. Unsupported or unavailable isolation disables executable operations without disabling file tools.
 - Keep existing provider configuration readable. Add runtime, workspace, and session settings separately from credentials, with backward-compatible defaults.
 - Use recorded fixtures and local fake providers for deterministic tests. Live provider checks and model comparisons are a separate, explicitly configured validation path.
 - Measure task correctness, preservation of existing changes, completion time, and token use. A new feature alone does not establish better coding performance.
 
 **Coverage and delivery order**
 
-| Milestone | Result | Comparison gaps covered | Depends on |
-| --- | --- | --- | --- |
-| M0 | Trustworthy build/test baseline and small task fixtures | Validation across all gaps | — |
-| M1 | Correct instructions, provider state, and tool-call history | 1: model state | M0 |
-| M2 | Cancellable turns, tool scheduling, and recoverable errors | 3: runtime reliability | M1 |
-| M3 | Workspace policy and isolated process execution | 4: sandbox | M2 |
-| M4 | Durable sessions, bounded context, and compaction | 2: context and sessions | M1–M3 |
-| M5 | Full repository discovery and scoped instructions | 5: instructions; 7: discovery | M3–M4 |
-| M6 | Complete typed Cargo validation and process results | 6: validation | M2–M5 |
-| M7 | Direct work plus optional, bounded delegation | 8: worker coordination | M4–M6 |
-| M8 | Git awareness, aggregate review, and change isolation | 9: Git | M3–M7 |
-| M9 | Plan mode, tracked steps, questions, and steering | 10: collaboration | M4–M8 |
-| M10 | Skills and controlled MCP integrations | 10: extensibility | M3–M5, M9 |
+| Milestone | Status | Result | Comparison gaps covered | Depends on |
+| --- | --- | --- | --- | --- |
+| M0 | Baseline established | Trustworthy build/test baseline and small task fixtures | Validation across all gaps | — |
+| M1 | Complete | Correct instructions, provider state, and tool-call history | 1: model state | M0 |
+| M2 | Complete | Cancellable turns, tool scheduling, and recoverable errors | 3: runtime reliability | M1 |
+| M3 | Complete | Workspace policy and reusable isolation for Cargo | 4: sandbox | M2 |
+| M4 | Next | Durable sessions, bounded context, and compaction | 2: context and sessions | M1–M3 |
+| M5 | Planned | Full repository discovery and scoped instructions | 5: instructions; 7: discovery | M3–M4 |
+| M6 | Planned | Complete typed Cargo validation and process results | 6: validation | M2–M5 |
+| M7 | Planned | Direct work plus optional, bounded delegation | 8: worker coordination | M4–M6 |
+| M8 | Planned | Git awareness, aggregate review, and change isolation | 9: Git | M3–M7 |
+| M9 | Planned | Plan mode, tracked steps, questions, and steering | 10: collaboration | M4–M8 |
+| M10 | Planned | Skills and controlled MCP integrations | 10: extensibility | M3–M5, M9 |
 
 **Shared architecture**
 
 Keep the existing crates initially and introduce focused modules as they become necessary:
 
 - `clients`: provider capabilities, request construction, native response items, stream decoding, and provider-specific compaction.
-- `actors`: turn lifecycle, session coordination, scheduling, worker registry, and pending questions/permissions.
+- `actors`: turn lifecycle, session coordination, scheduling, worker registry, and pending questions.
 - `tools`: validated operation schemas and declared effects; concrete tool implementations use shared execution services.
-- `utils`: bounded filesystem/process operations, workspace policy, and low-level storage helpers. Keep dependencies acyclic; move shared contracts into a small leaf crate only if the existing dependency graph requires it.
+- `utils`: bounded filesystem operations, workspace policy, a shared sandbox for registered executable operations, and low-level storage helpers. Keep dependencies acyclic; move shared contracts into a small leaf crate only if the existing dependency graph requires it.
 - `analysis`: optional Rust semantic context layered over a complete workspace file inventory.
 - `common-models`, `commands`, and `app`: typed progress/results and TUI flows for the same runtime operations.
 
 The model receives a bounded view of session state. The persisted session contains the event history and references to full tool-output artifacts. Provider-native reasoning/compaction items remain separate from display text and are replayed only to a compatible provider.
 
-**M0 — Baseline and test seams**
+**Completed foundation**
 
-Current evidence:
+The build/test baseline and deterministic provider/tool test seams are established.
+Tests use temporary workspaces and fake providers without personal configuration,
+credentials, live model calls, or changes to the working repository. Broader task
+benchmarks belong to validation and rollout below.
 
-- `cargo check --workspace --offline` passes with existing warnings after refreshing the commands crate's build fingerprint. An initial stale artifact referred to `Command::Plan`, which is absent from the current source. No source edit was needed.
-- `cargo test -p clients -p actors -p tools --lib --offline` reaches the actor suite and fails both existing replay tests. One fixture uses `end_turn` while the current enum expects `EndTurn`; the stored stream fixture also does not decode into valid current events. These are pre-existing fixture/schema mismatches, and the combined command stops before the other suites run.
-- `cargo test -p clients -p tools --lib --offline` passes: 1 client test and 6 tool tests. The actor fixture failures remain the known test baseline to address in M0/M1.
-- The existing stream replay tests deserialize events but do not verify a complete request → tools → continuation → completion cycle.
+**M1 — Model state and instruction correctness — complete**
 
-Work:
+- Operating instructions, workspace context, and user/delegated messages use
+  separate request channels. Clearing history preserves operating configuration
+  and refreshes workspace context.
+- Provider-native reasoning, identifiers, encrypted content, message phases, and
+  Claude signatures survive history and continuation. Incompatible reasoning is
+  rejected instead of being sent to another provider. Optional request fields
+  remain route-specific; public OpenAI requests encrypted reasoning automatically,
+  while other routes can opt in with `request_encrypted_reasoning`.
+- Native JSON arguments, stable call IDs, and grouped tool results survive replay.
+  Only complete, validated tool batches execute; malformed, partial, failed, or
+  truncated responses cannot trigger tool side effects.
+- Deterministic round trips cover provider mapping, streaming, tool execution,
+  history, continuation, and clear behavior.
 
-- Record existing failures separately from new regressions. Address failures that prevent validation of these milestones without expanding into unrelated cleanup.
-- Introduce a fake streaming provider and injectable tool executor as the M1/M2 changes need them.
-- Add a small set of temporary Rust workspaces covering a bug fix, a multi-file change, feature-specific tests, a manifest/CI change, and a pre-existing dirty working tree.
-- Keep all deterministic fixtures independent of personal configuration, credentials, network access, and the live repository's working directory.
+Primary files: `src/clients/src/{llm,openai,openai_mappings,claude_mappings}.rs`,
+`src/actors/src/{actor,actor_state,batch,stream_processor}.rs`, and context/prompt assembly.
 
-Done when the relevant baseline results are recorded and new runtime behavior can be exercised without a paid model call.
+**M2 — Turn lifecycle, cancellation, and scheduling — complete**
 
-**M1 — Model state and instruction correctness**
+- Simple and delegated modes share a typed turn state machine, stable turn and
+  operation IDs, owned background tasks, and a resource registry. Stale or duplicate
+  events cannot alter active history; worker completion and failures resolve parents.
+- Interrupt, clear, and shutdown cancel owned tasks and await cleanup. Process
+  groups are signalled and leaders reaped. Blocking filesystem work finishes before
+  its workspace lease is released; cancellation does not roll back completed writes.
+- New messages queue as FIFO follow-ups. Reads have bounded concurrency; writes
+  and validation share an exclusive workspace lease and revision tracking.
+- Accepted results survive interruption. Unstarted calls are marked unexecuted,
+  uncertain side effects are not replayed, and failures stop unsafe continuation.
+  Provider recovery uses structured categories and bounded retries.
+- Shared SSE decoding handles split UTF-8, framing, keepalives, terminal failures,
+  and premature EOF with bounded event sizes. Fake-provider tests exercise whole
+  turns, concurrency, cancellation, recovery, and worker lifecycle races.
 
-First slice implemented: operating instructions and delegated tasks use separate
-request channels; clear refreshes workspace context; typed JSON tool arguments and
-grouped results survive history reconstruction; complete OpenAI reasoning items
-and message phases are replayed; Claude signatures are preserved; incompatible
-cross-provider reasoning is rejected. Complete-batch validation prevents execution
-of incomplete or malformed calls and failed/truncated provider responses.
+Primary files: `src/actors/src/{actor,actor_state,supervisor,stream_processor}.rs`,
+worker tool adapters, and `src/common-models/src/tui_models.rs`.
 
-Validation: `cargo check --workspace --offline` passes; `cargo test --workspace
---offline` passes all 73 tests, including eight actor regression tests and three
-new provider request/configuration tests. The full suite ran outside the execution
-sandbox because macOS system-proxy discovery panics inside it when the fixtures
-construct HTTP clients. Tests make no live provider calls. Changed Rust files were
-formatted and the diff checked for whitespace errors.
+**M3 — Workspace policy and reusable sandbox — complete**
 
-The public OpenAI route requests encrypted reasoning automatically. Other routes
-can opt in with `request_encrypted_reasoning`; returned state is preserved without
-assuming that every compatible endpoint accepts the optional request field.
+- `WorkspacePolicy` and descriptor-based filesystem helpers enforce the fixed
+  project boundary for tools, workers, previews, watchers, and logs. Validation
+  belongs to path/file types. Traversal, symlinks, hard links, special files, and
+  read-only directory aliases cannot redirect ordinary file operations. Writes
+  replace sibling files atomically and preserve ordinary permissions. Joe storage
+  is inaccessible to tools; repository control directories deny writes.
+- File tools and source analysis run in process. Analysis is passive, with an
+  in-memory symbol cache; startup executes no Cargo, build scripts, proc macros,
+  or sandbox probes. Dependency resolution and macro expansion are unavailable.
+- The shared `Sandbox::output` accepts registered `SandboxOperation` types through
+  a crate-controlled sealed trait. `CargoOperation` is its only production caller,
+  with validated `Check` and `Test` operations. Future executable tools register
+  typed operations and reuse isolation, limits, and cancellation without exposing
+  arbitrary commands or shell text.
+- macOS uses Seatbelt; Linux uses Bubblewrap namespaces, dropped capabilities,
+  and a sealed seccomp filter. Cargo runs offline with a clean environment,
+  project-local writes, read-only toolchains/caches, and no network or unrelated
+  host signals. Unsupported or unavailable isolation fails closed while file tools
+  remain available. Linux requires `/usr/bin/bwrap` and host namespace support.
+- Execution is limited to five minutes and 16 MiB per output stream. Descendants
+  remain confined after changing sessions; guaranteed termination of deliberately
+  detached descendants is outside the accepted scope. There is no permission
+  broker, access escalation, unconfined fallback, or custom process scanning.
 
-The new deterministic replay tests cover the provider mapping, stream processing,
-fake tool execution, history, and continuation request together. The historical
-parse-only tests were replaced by these regression tests and a synthetic JSONL
-fixture. No live provider request is required.
+Primary files: `src/utils/src/{workspace,files,cargo,sandbox}.rs`,
+`src/utils/src/{workspace,sandbox}/*`, analysis startup/cache, and watcher actors.
 
-Remaining M1 work: general capability discovery/overrides for hosted search and
-compaction, and model/provider transition handling beyond rejecting incompatible
-reasoning. M0's broader task benchmark fixtures remain pending. M2 now supplies the
-injectable transport and turn recovery described below.
+Boundary limits: trusted provider connections and user setup stay outside the model
+tool surface. Concurrent hostile host processes are outside the threat model, and
+multi-operation patches remain nontransactional.
 
-Primary files: `src/clients/src/{llm,openai,openai_mappings,claude_mappings}.rs`, `src/actors/src/{actor,actor_state,batch,stream_processor}.rs`, and context/prompt assembly.
-
-- Separate worker operating instructions from workspace context and user messages. Populate OpenAI instructions and Claude system content through the provider adapter. Clearing conversation history must retain the active operating configuration and regenerate appropriate workspace context.
-- Preserve OpenAI reasoning items, identifiers, encrypted content, and required ordering through streaming, history, and the next request. Preserve Claude thinking signatures independently. Display summaries must not substitute for provider continuation data.
-- Preserve native tool arguments as JSON values or original argument strings, including booleans, numbers, arrays, and nested objects. The current string-map conversion must not alter replayed calls or fail while recording a tool error.
-- Record all calls from a response and their corresponding outputs with stable IDs. Execute only complete, validated calls; never execute a partial streamed argument buffer.
-- Introduce provider capability checks for reasoning replay, compaction, hosted search, and supported request fields. Public OpenAI API behavior is not sufficient evidence that the Codex-auth endpoint, OpenRouter, or a local server implements every field.
-- Keep provider-native state tied to its provider/session. Define compatible model switching and an explicit transition for incompatible providers without sending opaque state to the wrong endpoint.
-
-Validation: deterministic round trips across multiple tool calls; an empty reasoning summary with encrypted content; nested JSON arguments; failed tool results; clear/new-session behavior; Claude signature preservation; unsupported capability fallback; request snapshots for each supported provider route.
-
-Done when repeated tool turns preserve instruction roles, original call data, and all required continuation state.
-
-**M2 — Turn lifecycle, cancellation, and scheduling**
-
-Implemented and validated on macOS (2026-09-05):
-
-- Both simple and delegated modes use the same turn runtime. Provider requests,
-  streaming, tools, worker startup, and cleanup run in owned background tasks.
-  Turn/operation IDs tag events, and obsolete events cannot mutate history.
-- One `Turn<P>` carries shared turn data through provider execution, tools, and
-  cleanup, with distinct `TurnId`, `OperationId`, and `WorkspaceRevision` types.
-  Actor messages dispatch to phase-specific transitions. One `ToolBatch`
-  owns accepted calls and their queued/running/completed outcomes; replay tests
-  use this same representation. Duplicate and mismatched completions are ignored.
-  Tool results share their invocation data and use a standard `Result` for the
-  outcome. Definitions, execution, and context updates share one tool collection.
-  Phase handlers consume typed states through expression-based control flow.
-  Error categories are retained where recovery depends on them; other failures
-  use ordinary errors. The M2 code has no explicit returns, `ensure!`, or comments.
-- The runtime registers active providers, tools, workers, and processes. Interrupt,
-  clear, and application shutdown cancel the task tree and await cleanup. Worker
-  replies register before work starts; immediate completion, startup failure, and
-  provider failure resolve the parent. Successful replies take precedence over
-  the child's subsequent shutdown signal.
-- New messages during work become visible FIFO follow-ups. Interrupt and clear
-  cancel queued follow-ups. No provider continuation starts until the preceding
-  provider task exits. Active steering and question/permission interfaces remain
-  assigned to M9/M3; their waiting lifecycle states are defined here.
-- Trusted tool effects allow four concurrent reads, share a workspace lease across
-  workers, and serialize mutations and validation. The scheduler consumes read
-  groups and exclusive operations through one tool cleanup path. Mutation attempts advance an
-  in-memory workspace revision. Validation holds the workspace lease for its run;
-  detecting changes from external editors remains M5/M8 work.
-- Accepted tool calls enter history with individual pending outcomes. Completed
-  results survive cancellation; interrupted operations retain uncertainty and
-  unstarted calls are explicitly marked unexecuted. A failed or timed-out write
-  stops automatic continuation and remaining writes. Repeated identical tool
-  failures at the same revision stop after three attempts. Cargo validation
-  failures retain diagnostics and are recorded as error results. A timed-out read
-  also stops the batch before a subsequent write can start.
-- Authentication, rate-limit, transport, truncation, context-overflow, invalid-input,
-  tool, and worker failures have distinct handling. Transient provider failures
-  retry at most twice after existing HTTP retries, using accepted history without
-  rerunning tools. Complete non-tool content is retained on final interruption;
-  partial argument buffers and calls from failed responses never execute.
-- Provider recovery uses HTTP status and structured error codes. Tool and worker
-  failures carry explicit categories and effect certainty; diagnostic wording
-  cannot select recovery behavior. Workspace leases own their locks and update
-  mutation revisions on release, after outstanding work has finished.
-- Both adapters share byte-oriented SSE decoding with split UTF-8, LF/CRLF/CR
-  framing, multiline data, keepalives, terminal errors, and premature-EOF checks.
-  SSE events are limited to 16 MiB. Fake providers exercise whole turns without
-  HTTP clients, credentials, personal configuration, or paid requests.
-
-Validation: `cargo test --workspace --offline` passes all 110 tests and
-`cargo check --workspace --offline` passes with existing warnings. Tests cover
-request and tool interruption, stale stream/tool completions, queueing, bounded
-concurrent reads, ordered writes, revision-bound validation, timeouts, repeated
-failures, worker completion/failure/cancellation, and clear during tools. Panics
-in preparation, execution, and output conversion preserve other read results and
-prevent subsequent writes. Native
-macOS tests cancel a running Rust test process and its descendant, verify process
-reaping and empty resource registries, and drain both pipes beyond pipe capacity.
-The final suite runs inside the execution sandbox: replay tests no longer construct
-HTTP clients, avoiding the earlier macOS system-proxy fixture panic. Changed Rust
-files are formatted and the diff passes the whitespace check.
-
-Process cleanup uses Unix process groups and reaps direct children. Native Linux
-execution has not been validated in this environment; non-Unix execution reports
-an unsupported capability. Deliberate process-group escapes require M3 isolation.
-Filesystem mutations that have already entered a blocking OS call are awaited
-before cancellation releases the workspace lease; cancellation cannot roll them
-back. The former Cargo test against the live working directory was replaced by
-deterministic managed-process fixtures. Output artifacts, durable revisions and
-journaling remain M4/M6 work.
-
-Primary files: `src/actors/src/{actor,actor_state,supervisor,stream_processor}.rs`, worker tool adapters, and `src/common-models/src/tui_models.rs`.
-
-- Give every turn and operation a stable ID and explicit lifecycle: ready, running, waiting for tools/input/permission, cancelling, completed, cancelled, or failed.
-- Run provider requests and tools outside the actor message handler. Deliver progress and completion through tagged messages so the actor remains responsive.
-- Maintain a registry of active model streams, tools, and workers. Cancel their task tree, stop/reap child processes, resolve pending replies, and discard late events from an obsolete turn.
-- Add tool effect metadata. Allow bounded concurrent reads; serialize writes initially and coordinate validation against a stable workspace revision. File-level concurrency can follow after conflict detection exists.
-- Make a new message during work an explicit steer or queued follow-up. Do not launch overlapping streams against the same mutable history.
-- Distinguish authentication, rate-limit, transport, truncation, context-overflow, invalid-input, tool, and worker failures. Existing HTTP retries remain useful; add turn-level recovery for interrupted streams and worker failure.
-- Handle incomplete output without losing already accepted state. Stop repeated identical failures with a useful recoverable outcome; never automatically replay uncertain side effects.
-- Make SSE decoding handle UTF-8 split across chunks, event framing, keepalives, terminal errors, and premature EOF.
-
-Validation: interrupt during a model request, test process, and delegated write; stale completion after cancellation; independent reads executing concurrently; writes executing in order; tool timeout; child failure resolving the parent; interrupted streams; steering without duplicate execution.
-
-Done when cancellation completes promptly, no owned process/worker is left running, and every turn reaches a visible terminal or waiting state.
-
-**M3 — Workspace policy and process isolation**
-
-First slice implemented and validated on macOS (2026-09-05):
-
-- `WorkspacePolicy` owns open directory handles for explicit read-only/read-write
-  roots. Startup configures the current workspace once, before context creation,
-  and resolves relative tool paths against that root. `ExecutionScope` shares the
-  same policy with child workers, tool execution, and patch previews. Filesystem
-  helpers reject operations when no policy is configured.
-- Unix filesystem access walks directory descriptors without following symlinks.
-  Path authorization belongs to `ResolvedPath` construction; `WorkspaceFile` and
-  `OrdinaryFileMetadata` own ordinary-file validation for reads and mutations.
-  Ordinary file reads, writes, copies, moves, deletes, and parent creation enforce
-  the policy at the operation boundary. Writes replace a temporary sibling file
-  atomically, preserve ordinary permission bits, and reject hard links and special
-  files. Copies retain binary content and source permissions. Directory identities
-  prevent alternate casing or renaming from bypassing read-only roots.
-- Traversal and outside-root paths are denied. Joe's `.turbo-code` storage is
-  denied reads and writes; `.git`, `.agents`, and `.codex` deny ordinary writes.
-  Allowed absolute paths remain supported. Filesystem failures use ordinary errors
-  propagated with `?`, the sole exception to the no-early-return rule. Native error
-  categories are inspected only where missing files or existing directories require
-  different behavior.
-- Read, search, replace, insert, and patch tools use the shared filesystem helpers.
-  Patch previews cannot read outside the policy, and every patch path receives a
-  lexical authorization check before the first mutation. Line ranges read current
-  file contents without cached semantic offsets. A `LineRange` type validates the
-  input range and checks bounds against the current contents, using one-based
-  numbering with exclusive ends. Search failures propagate to the tool.
-
-Validation: `cargo test --workspace` passes all 135 tests;
-`cargo check --workspace --offline` passes with existing warnings. New regressions
-cover outside paths, traversal, protected storage and previews, read-only roots,
-symlink replacement, hard links, FIFOs, binary copies, permission preservation,
-cancelled/unconfigured access, fresh line ranges, and actual parent/child tool
-requests through injected providers. Native tests ran on macOS without live model
-calls. Changed Rust files are formatted and the diff passes the whitespace check.
-
-M3 remains incomplete. These descriptor operations are a filesystem tool boundary,
-not OS process isolation. Hostile processes can still reparent an already-open
-ancestor or race directory entries; multi-operation patches are not transactional.
-Cargo, build scripts, proc macros, rust-analyzer loading, background discovery, and
-trusted storage still require the planned isolation audit. The Unix implementation
-has not been validated on Linux; other platforms reject workspace initialization.
-The next slice is the typed executor and macOS isolation backend, followed by Linux
-validation, network grants, and the permission broker/TUI flow.
-
-Primary files: `src/utils/src/{workspace,files,cargo}.rs`, `src/utils/src/workspace/*`, `src/tools/src/{tool_defs,apply_patch,read_file,grep}.rs`, `src/analysis/src/rust_proj.rs`, and new executor modules.
-
-- Introduce a workspace handle with explicit readable/writable roots, protected paths, network policy, and scoped permission decisions. Carry it through every tool and worker.
-- Resolve relative paths against the workspace handle instead of process-global CWD. Check existing paths and the nearest existing parents of creation targets. Cover symlinks, traversal, moves, deletes, and filesystem race conditions with descriptor-based access or equivalent OS enforcement.
-- Protect agent credentials/session storage and repository control directories from ordinary model writes. Explicit grants must identify the operation and resource, and cannot be minted by a worker.
-- Route all child processes through a typed executor with explicit executable/arguments, working directory, sanitized environment, bounded output, timeout, cancellation, and process-tree cleanup.
-- Isolate Cargo tests, build scripts, proc macros, and analysis startup. Audit rust-analyzer workspace loading and proc-macro helpers; either launch them through an isolated analysis helper or disable executable analysis features until isolation is available.
-- Implement a macOS backend and Linux backend with equivalent documented filesystem/network behavior. Probe availability at startup. Unsupported isolation must produce a capability error or require a clearly configured external isolation boundary, never silently fall back to unrestricted execution.
-- Separate the networked model client from repository-code execution. Add narrow network grants for dependency fetching and configured integrations where needed.
-- Use a single permission broker and TUI event flow. Ordinary allowed operations continue automatically; requests show the concrete resource/action and optional narrow remembered scope.
-
-Validation: outside-root reads/writes, absolute paths, traversal, symlink swaps, protected files, inherited credential variables, test/build-script/proc-macro escapes, network denial, permitted dependency fetching, backend unavailability, and cancellation of descendants. Run OS-specific integration tests on their actual platforms.
-
-Done when all executable repository code and filesystem tools respect the same policy, including before the first model turn.
+Latest validation (2026-09-06): `cargo test --workspace --offline` passes 146 tests
+on macOS and 147 on Linux, both ARM64. `cargo check --workspace --offline` passes
+on both platforms with existing warnings. Coverage includes filesystem escapes,
+passive startup, Cargo build scripts/proc macros/tests, actor cancellation, inherited
+credentials, network denial, output limits, and timeouts. Changed Rust files pass
+formatting and whitespace checks; existing worker import ordering remains the
+workspace formatting baseline.
 
 **M4 — Sessions and context management**
 
 Primary files: `src/actors/src/actor_state.rs`, client request models, and new session/history modules; commands and TUI session controls.
 
-- Use versioned per-session JSONL events plus atomic snapshots and bounded output artifacts under Joe's existing storage directory. Make the location configurable for tests and protect it with appropriate permissions.
+- Use versioned per-session JSONL events plus atomic snapshots and bounded output artifacts under protected project-local Joe storage. Make the location configurable for tests and protect it with appropriate permissions.
 - Persist session/workspace identity, user messages, provider-native output, tool intent/results, worker linkage, usage, pending questions, and turn status. Keep credentials and authorization headers out of records.
 - Journal side-effect intent before execution and record completion afterward. A crash between them leaves an uncertain operation to reconcile with workspace state; resume must never blindly repeat it.
 - Add `/sessions`, `/resume`, `/fork`, `/compact`, and explicit new/clear semantics. Recover valid records from a truncated final journal entry and reject unsupported schema versions clearly.
-- Fork conversation state separately from filesystem state. Revalidate workspace identity, current instructions, and effective permissions on resume; a saved session cannot increase current access.
+- Fork conversation state separately from filesystem state. Revalidate workspace identity, current instructions, and fixed project policy on resume; a saved session cannot increase current access.
 - Bound individual reads/search/process outputs and retain full content as artifacts with a retrieval mechanism. Budget instructions, user constraints, recent complete tool exchanges, and the next response before optional context.
 - Use provider-native compaction when the route supports it, preserving returned opaque items intact. Otherwise summarize only completed older exchanges and retain recent complete exchanges, current requirements, pending work, and failure/validation evidence.
 - Trigger compaction before the context ceiling, with a user-visible indication and recovery path if compaction fails. Distinguish per-request context size from cumulative usage.
@@ -293,7 +168,7 @@ Primary files: `src/utils/src/cargo.rs`, `src/tools/src/cargo_{check,test}.rs`, 
 
 - Add schema-controlled workspace/package, feature, target, test, example, and binary selection. Validate combinations and treat identifiers as values rather than allowing argument injection.
 - Add formatting/check-format, Clippy, and typed run operations for examples/binaries. Support explicitly allowed program arguments and environment values through the shared policy. Preserve the no-shell constraint.
-- Return command details, exit code, duration, diagnostics, timeout/cancel status, and bounded stdout/stderr with full artifact references. Preserve Cargo startup/dependency errors currently lost by discarding stderr.
+- Return command details, exit code, duration, diagnostics, timeout/cancel status, and bounded stdout/stderr with full artifact references. Preserve existing Cargo startup/dependency errors and stderr in the richer result schema.
 - Support long-running Rust targets through managed process IDs, incremental output, polling, and stop operations; keep them in the turn/session process registry.
 - Let workers add focused regression coverage when behavior warrants it. Record requested checks, checks actually executed, failures, and limitations; passing compilation alone is not proof of behavioral correctness.
 - Reuse a validation result only when the relevant workspace revision, command parameters, and environment match. Run targeted checks before broader checks.
@@ -339,7 +214,7 @@ Primary files: `src/commands/src/command.rs`, actor session state, worker prompt
 - Add `/plan` and an explicit return to implementation mode. Planning applies a read-only tool policy inherited by workers and integrations; mutating calls are rejected at dispatch, not merely discouraged in the prompt.
 - Store a compact plan with step IDs, dependencies, acceptance criteria, and pending/in-progress/completed/blocked status. Persist it across resume and compaction; validate status transitions against reported evidence.
 - Add a structured question tool with question ID, choices/free text, required/optional status, and a typed answer event. Let independent work continue while optional questions are pending.
-- Keep permission decisions distinct from clarification and planning. Required answers remain pending until answered; elapsed time is never consent.
+- Use questions for clarification and planning only. Required answers remain pending until answered; answers cannot widen the project boundary.
 - Finish the steering/queue UI from M2: show what will affect the active turn, what is queued, and what was cancelled. Reconcile changed requirements with the existing plan instead of starting overlapping work.
 - Display worker/progress/validation status compactly while preserving existing Vim interaction and transcript behavior.
 
@@ -352,22 +227,23 @@ Done when a user can plan, clarify, steer, interrupt, and resume a task without 
 Primary files: new skill catalog and MCP client modules, provider/tool schema adapters, runtime policy/configuration, and TUI discovery controls.
 
 - Discover global and repository skill metadata, load full instructions on demand, and resolve references through workspace policy. Support explicit selection and bounded implicit discovery with source attribution.
-- Treat skill instructions as guidance. Scripts must map to supported typed operations or a separately configured integration; a skill cannot introduce a shell escape or bypass permissions.
+- Treat skill instructions as guidance. Scripts must map to supported typed operations or a separately configured integration; a skill cannot introduce a shell escape or bypass the project boundary.
 - Add user-configured MCP servers with namespaced tool discovery, JSON Schema preservation, bounded results, timeout/cancellation, resources, progress, and structured errors. Start with a tested protocol subset and advertise it accurately.
 - Support configured HTTP and stdio transports through the shared network/process policy. Stdio programs and arguments come from trusted configuration, never arbitrary model input.
-- Treat tool annotations as advisory. Derive effective read/write/network/destructive permissions from trusted configuration and enforce plan-mode restrictions independently of server claims.
-- Keep server credentials in configuration/credential storage, redact them from events, and scope remembered permissions to server identity and account. Include authenticated-server/OAuth support as a separate implementation slice with expiry and refresh tests.
+- Treat tool annotations as advisory. Restrict configured integrations to the fixed project boundary and enforce plan-mode restrictions independently of server claims. Disable integrations whose side effects cannot be confined.
+- Keep server credentials in configuration/credential storage, redact them from events, and bind configured access to server identity and account without an interactive grant flow. Include authenticated-server/OAuth support as a separate implementation slice with expiry and refresh tests.
 - Keep startup lazy, schemas/results bounded, and integrations optional so basic Rust tasks work offline without any MCP server.
 
 Validation: lazy skill loading and reference scope, conflicting skill guidance, a skill attempting unsupported execution, local fake MCP servers for both transports, nested schemas, duplicate tool names, failed startup, cancellation, malformed/oversized responses, denied side effects, credential refresh/redaction, and plan-mode restrictions.
 
-Done when skills and configured integrations work through the same session, lifecycle, and permission system as built-in tools.
+Done when skills and configured integrations work through the same session, lifecycle, and project policy as built-in tools.
 
-**First implementation slice**
+**Next implementation slice — M4**
 
-Start M1 with the smallest complete change: separate operating instructions from user/context messages; preserve OpenAI reasoning and original JSON tool arguments through one full tool cycle; preserve the existing Claude route; and add deterministic multi-turn request tests. Include clear/new-session behavior so the initial fix is not immediately lost when history is reset.
-
-Follow with M2's nonblocking execution and cancellation before adding new tools. This gives every later milestone a consistent execution path and a testable failure model.
+Start with versioned session events and atomic snapshots in protected project-local
+storage. Record tool intent and completion so restart can identify uncertain side
+effects without replaying them. Add session listing/resume and recovery fixtures
+before layering bounded context and compaction onto the persisted history.
 
 **Validation and rollout**
 

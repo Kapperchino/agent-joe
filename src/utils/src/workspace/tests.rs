@@ -123,18 +123,11 @@ fn more_specific_read_only_roots_override_parent_write_access() {
                 path: readonly.clone(),
                 access: RootAccess::ReadOnly,
             },
-            RootSpec {
-                path: fixture.outside.clone(),
-                access: RootAccess::ReadOnly,
-            },
         ],
     )
     .unwrap();
     assert_eq!(policy.read(Path::new("readonly/file")).unwrap(), "original");
-    assert_eq!(
-        policy.read(&fixture.outside.join("reference")).unwrap(),
-        "reference"
-    );
+    assert!(policy.read(&fixture.outside.join("reference")).is_err());
     assert!(policy.write(Path::new("readonly/file"), "changed").is_err());
     assert!(policy.delete(Path::new("readonly/file")).is_err());
     assert!(
@@ -384,4 +377,45 @@ async fn searches_propagate_policy_denials_and_do_not_read_protected_storage() {
         std::fs::read_to_string(fixture.root.join(".turbo-code/config")).unwrap(),
         "secret"
     );
+}
+
+#[test]
+fn configuration_cannot_add_roots_outside_the_project() {
+    let fixture = Fixture::new();
+    for access in [RootAccess::ReadOnly, RootAccess::ReadWrite] {
+        assert!(
+            WorkspacePolicy::new(
+                fixture.root.clone(),
+                vec![RootSpec {
+                    path: fixture.outside.clone(),
+                    access,
+                }]
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn log_handles_do_not_follow_replacements_or_open_outside_aliases() {
+    use std::io::Write;
+    use std::os::unix::fs::symlink;
+    let fixture = Fixture::new();
+    let policy = fixture.policy();
+    let outside = fixture.outside.join("secret");
+    std::fs::write(&outside, "secret").unwrap();
+    let mut log = policy.open_append(Path::new("logs/stream")).unwrap();
+    std::fs::rename(
+        fixture.root.join("logs/stream"),
+        fixture.root.join("logs/retained"),
+    )
+    .unwrap();
+    symlink(&outside, fixture.root.join("logs/stream")).unwrap();
+    log.write_all(b"entry").unwrap();
+    assert!(policy.open_append(Path::new("logs/stream")).is_err());
+    assert!(policy.open_append(&outside).is_err());
+    std::fs::hard_link(&outside, fixture.root.join("linked")).unwrap();
+    assert!(policy.open_append(Path::new("linked")).is_err());
+    assert_eq!(std::fs::read_to_string(&outside).unwrap(), "secret");
+    assert_eq!(policy.read(Path::new("logs/retained")).unwrap(), "entry");
 }

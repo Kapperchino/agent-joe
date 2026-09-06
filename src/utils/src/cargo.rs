@@ -5,6 +5,72 @@ use tokio::process::Command;
 
 pub struct Cargo {}
 
+pub struct CargoSelector(String);
+
+impl CargoSelector {
+    pub fn new(value: &str) -> anyhow::Result<Self> {
+        if value.is_empty()
+            || value.starts_with('-')
+            || value.chars().any(char::is_whitespace)
+            || value.chars().any(char::is_control)
+        {
+            Err(anyhow!("Invalid Cargo selector: {value:?}"))
+        } else {
+            Ok(Self(value.to_owned()))
+        }
+    }
+}
+
+pub enum CargoOperation {
+    Check,
+    Test {
+        package: Option<CargoSelector>,
+        test_name: Option<CargoSelector>,
+    },
+}
+
+impl CargoOperation {
+    pub fn test(package: Option<&str>, test_name: Option<&str>) -> anyhow::Result<Self> {
+        Ok(Self::Test {
+            package: package
+                .filter(|name| !name.trim().is_empty())
+                .map(CargoSelector::new)
+                .transpose()?,
+            test_name: test_name
+                .filter(|name| !name.trim().is_empty())
+                .map(CargoSelector::new)
+                .transpose()?,
+        })
+    }
+}
+
+impl crate::sandbox::SandboxOperation for CargoOperation {}
+
+impl crate::sandbox::sealed::Operation for CargoOperation {
+    fn into_command(self) -> Command {
+        let mut command = Command::new("cargo");
+        match self {
+            Self::Check => {
+                command.args([
+                    "check",
+                    "--offline",
+                    "--message-format=json-diagnostic-short",
+                ]);
+            }
+            Self::Test { package, test_name } => {
+                command.args(["test", "--offline"]);
+                if let Some(package) = package {
+                    command.arg("-p").arg(package.0);
+                }
+                if let Some(test_name) = test_name {
+                    command.arg(test_name.0);
+                }
+            }
+        }
+        command
+    }
+}
+
 pub enum CargoCheck {
     CheckPasses {
         warnings: Vec<CompilerMessage>,
@@ -22,9 +88,7 @@ pub enum CargoTest {
 
 impl Cargo {
     pub async fn cargo_check() -> anyhow::Result<CargoCheck> {
-        let mut command = Command::new("cargo");
-        command.args(["check", "--message-format=json-diagnostic-short"]);
-        crate::process::output(command).await.and_then(|output| {
+        crate::sandbox::Sandbox::output(CargoOperation::Check).await.and_then(|output| {
             String::from_utf8_lossy(&output.stdout).lines()
                 .map(serde_json::from_str::<Message>)
                 .collect::<Result<Vec<_>, _>>()
@@ -58,32 +122,47 @@ impl Cargo {
         package: Option<&str>,
         test_name: Option<&str>,
     ) -> anyhow::Result<CargoTest> {
-        let mut command = Command::new("cargo");
-        command.arg("test");
-        if let Some(package) = package.filter(|name| !name.trim().is_empty()) {
-            command.args(["-p", package]);
-        }
-        if let Some(test_name) = test_name.filter(|name| !name.trim().is_empty()) {
-            command.arg(test_name);
-        }
-        crate::process::output(command).await.map(|result| {
-            let status = result.status;
-            let stdout = String::from_utf8_lossy(&result.stdout).into_owned();
-            let stderr = String::from_utf8_lossy(&result.stderr).into_owned();
+        crate::sandbox::Sandbox::output(CargoOperation::test(package, test_name)?)
+            .await
+            .map(|result| {
+                let status = result.status;
+                let stdout = String::from_utf8_lossy(&result.stdout).into_owned();
+                let stderr = String::from_utf8_lossy(&result.stderr).into_owned();
 
-            let output = if stderr.trim().is_empty() {
-                stdout
-            } else if stdout.trim().is_empty() {
-                stderr
-            } else {
-                format!("STDOUT:\n{}\n\nSTDERR:\n{}", stdout, stderr)
-            };
+                let output = if stderr.trim().is_empty() {
+                    stdout
+                } else if stdout.trim().is_empty() {
+                    stderr
+                } else {
+                    format!("STDOUT:\n{}\n\nSTDERR:\n{}", stdout, stderr)
+                };
 
-            if status.success() {
-                CargoTest::TestPasses { output }
-            } else {
-                CargoTest::TestFailed { output }
-            }
-        })
+                if status.success() {
+                    CargoTest::TestPasses { output }
+                } else {
+                    CargoTest::TestFailed { output }
+                }
+            })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selectors_cannot_inject_cargo_options() {
+        for invalid in [
+            "--manifest-path=outside/Cargo.toml",
+            "--config=net.offline=false",
+            "-p",
+            "",
+            "test\n--release",
+        ] {
+            assert!(CargoSelector::new(invalid).is_err());
+        }
+        for valid in ["workspace-package", "module::test", "test_filter"] {
+            assert!(CargoSelector::new(valid).is_ok());
+        }
     }
 }

@@ -25,7 +25,6 @@ use std::io::stdout;
 use tokio::main;
 use tokio::task::JoinHandle;
 use tracing::Level;
-use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::FmtSubscriber;
 
 const INLINE_VIEWPORT_HEIGHT: u16 = 12;
@@ -48,7 +47,8 @@ async fn main() -> Result<()> {
         println!("Debug mode enabled");
     }
 
-    let file_appender = RollingFileAppender::new(Rotation::HOURLY, "./logs", "err.log");
+    let workspace = utils::workspace::WorkspacePolicy::workspace(std::env::current_dir()?)?;
+    let file_appender = workspace.open_append(std::path::Path::new("logs/err.log"))?;
     let (file_appender, _guard) = tracing_appender::non_blocking(file_appender);
 
     let log_level = if cli.debug { Level::INFO } else { Level::WARN };
@@ -130,7 +130,7 @@ async fn get_actor<W: Worker<C = RustContext>>(
 ) -> Result<RunningActor> {
     let runtime = actors::runtime::Runtime::for_workspace(std::env::current_dir()?)?;
     let workspace = runtime.scope.workspace()?;
-    let context = runtime
+    let mut context = runtime
         .scope
         .enter(RustContext::new(
             W::init_prompt(None),
@@ -139,6 +139,9 @@ async fn get_actor<W: Worker<C = RustContext>>(
         ))
         .await
         .context("Failed to initialize project analysis")?;
+    context.initial_prompt.push_str(
+        "\nAll repository operations must remain inside the project. Outside access is denied automatically; do not request permissions or broader access. File tools run through the project filesystem policy. Cargo runs offline inside the project sandbox and fails if isolation is unavailable.",
+    );
     let client = LLmClient::new(config_context)?;
     let (supervisor, _) = Actor::spawn(None, WorkerSupervisor, ())
         .await

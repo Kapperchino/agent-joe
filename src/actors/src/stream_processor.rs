@@ -4,14 +4,12 @@ use crate::tool_call::ToolCall;
 use anyhow::anyhow;
 use clients::llm::{ContentBlockInfo, Delta, StopReason, StreamEvent};
 use common_models::tui_models::{ActorToTuiPacket, State, TokenCount};
-use std::path::PathBuf;
-use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
 use tracing::error;
 
 pub struct StreamProcessor {
     pub batches: Vec<Batch>,
-    pub stream_log_path: Option<PathBuf>,
+    pub stream_log: Option<tokio::fs::File>,
     pub token_count: TokenCount,
     pub reporter: EventReporter,
     pub cur_state: State,
@@ -186,19 +184,17 @@ impl StreamProcessor {
         }
     }
 
-    async fn log_stream_item(&self, item: &StreamEvent) {
-        if let Some(ref path) = self.stream_log_path {
-            if let Ok(mut file) = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-                .await
-            {
-                if let Ok(json) = serde_json::to_string(item) {
-                    let mut line = json;
-                    line.push('\n');
-                    let _ = file.write_all(line.as_bytes()).await;
-                }
+    async fn log_stream_item(&mut self, item: &StreamEvent) {
+        if let Some(file) = self.stream_log.as_mut() {
+            let result = async {
+                let mut line = serde_json::to_vec(item)?;
+                line.push(b'\n');
+                file.write_all(&line).await?;
+                Ok::<_, anyhow::Error>(())
+            }
+            .await;
+            if let Err(error) = result {
+                error!("Failed to write stream log: {error}");
             }
         }
     }

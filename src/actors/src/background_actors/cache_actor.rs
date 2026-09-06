@@ -59,7 +59,9 @@ impl Actor for CacheActor {
                         let rpath = RPath::new(x.path.clone(), state.proj.root.clone())?;
                         let remove_keys: Vec<_> = db.prefix_iter(rpath.inner)?.collect();
 
-                        remove_keys.iter().try_for_each(|(_, v)| db.delete(v))?;
+                        remove_keys
+                            .iter()
+                            .try_for_each(|entry| db.delete(&entry.value))?;
 
                         let nodes = if let Some(f_id) = session.get_file_id(&x.path) {
                             let file_structs = session.get_file_structure(f_id);

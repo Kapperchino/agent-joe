@@ -31,7 +31,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         let dep_clone = dependency.clone();
         let history = Self::initial_history(&dependency.context).await;
 
-        let stream_log_path = if dependency.debug_mode {
+        let stream_log = if dependency.debug_mode {
             let path = PathBuf::from(format!(
                 "./logs/stream_{}.jsonl",
                 std::time::SystemTime::now()
@@ -39,10 +39,8 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                     .unwrap_or_default()
                     .as_secs()
             ));
-            if let Some(parent) = path.parent() {
-                tokio::fs::create_dir_all(parent).await?;
-            }
-            Some(path)
+            let file = dependency.runtime.scope.workspace()?.open_append(&path)?;
+            Some(tokio::fs::File::from_std(file))
         } else {
             None
         };
@@ -65,7 +63,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             file_actor,
             stream_processor: StreamProcessor {
                 batches: vec![],
-                stream_log_path,
+                stream_log,
                 token_count: Default::default(),
                 reporter,
                 cur_state: State::Ready,
