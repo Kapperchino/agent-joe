@@ -148,6 +148,9 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         state.dispatch(Event::Shutdown).await;
+        if let Some(watcher) = &state.file_actor {
+            watcher.stop_and_wait(None, None).await?;
+        }
         Ok(())
     }
 

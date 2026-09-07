@@ -50,7 +50,7 @@ pub(crate) struct ProviderTask {
 impl ProviderTask {
     pub fn spawn(
         self,
-        input: crate::context::ContextInput,
+        input: anyhow::Result<crate::context::ContextInput>,
         run: &ProviderRun,
         owner: &ExecutionScope,
         previous: Option<ExecutionScope>,
@@ -82,9 +82,15 @@ impl ProviderTask {
 
     async fn pump(
         mut self,
-        input: crate::context::ContextInput,
+        input: anyhow::Result<crate::context::ContextInput>,
         attempt: u8,
     ) -> Result<(), Failure> {
+        let input = input.map_err(|error| {
+            Failure::new(
+                FailureKind::InvalidInput,
+                format!("Instruction loading failed: {error}"),
+            )
+        })?;
         if attempt > 0 {
             tokio::time::sleep(Duration::from_millis(100 * u64::from(attempt))).await;
         }

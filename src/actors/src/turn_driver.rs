@@ -288,7 +288,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 scope.tasks.clone().spawn(async move {
                     tokio::select! {
                         _ = scope.cancel.cancelled() => {},
-                        text = context.get_ctx() => reporter.send(ActorToTuiPacket::CommandResult(Command::PrintContext, text)),
+                        text = scope.enter(context.inspect_context()) => reporter.send(ActorToTuiPacket::CommandResult(Command::PrintContext, text.unwrap_or_else(|error| format!("Context inspection failed: {error}")))),
                     }
                 });
             }

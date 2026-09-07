@@ -11,3 +11,6 @@ pub mod workspace;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
+
+pub mod discovery;
+pub mod inventory;

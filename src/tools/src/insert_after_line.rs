@@ -2,7 +2,6 @@ use crate::tool_defs::{ToolDefTrait, ToolId, ToolTrait, ToolType};
 use analysis::contexts::context::Context;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::cmp::min;
 use std::fmt::{Display, Formatter};
 use turbo_code_macros::{ToolDef, ToolInput};
 use utils::files::Files;
@@ -16,9 +15,18 @@ impl<C: Context, A> ToolTrait<C, A> for InsertAfterLine {
     async fn run(
         input: Self::Input,
         tool_id: ToolId,
-        _cur_context: &C,
+        cur_context: &C,
         _actor_context: &A,
     ) -> anyhow::Result<Self::Output> {
+        cur_context
+            .prepare_edit(&[std::path::PathBuf::from(&input.file_path)])
+            .map_err(|error| {
+                crate::tool_error::ToolFailure::new(
+                    crate::tool_error::ToolFailureKind::InvalidInput,
+                    crate::tool_error::ToolEffects::NotStarted,
+                    error.to_string(),
+                )
+            })?;
         InsertAfterLine {
             input,
             id: String::new(),
@@ -26,6 +34,7 @@ impl<C: Context, A> ToolTrait<C, A> for InsertAfterLine {
         .insert_after_line()
         .await?;
 
+        cur_context.refresh_workspace().await?;
         Ok(InsertAfterLineResult {
             status: "ok".to_string(),
             id: tool_id,
@@ -58,7 +67,10 @@ impl<C: Context, A> ToolTrait<C, A> for InsertAfterLine {
 }
 
 #[derive(Default, Serialize, Deserialize, Debug, Clone, ToolDef)]
-#[tool(name = "insert_after_line", description = "Insert content at line_num")]
+#[tool(
+    name = "insert_after_line",
+    description = "Insert content after an existing one-based line number"
+)]
 pub struct InsertAfterLine {
     #[tool(input)]
     pub input: InsertAfterLineInput,
@@ -96,7 +108,14 @@ impl InsertAfterLine {
         let path = std::path::Path::new(&self.input.file_path);
         let content = Files::read_file(path).await?;
         let mut lines: Vec<_> = content.lines().collect();
-        let line = min(self.input.line_num.saturating_sub(1), lines.len());
+        let line = self.input.line_num;
+        match (1..=lines.len()).contains(&line) {
+            true => Ok(()),
+            false => Err(crate::tool_error::ToolFailure::new(
+                crate::tool_error::ToolFailureKind::InvalidInput,
+                crate::tool_error::ToolEffects::NoWorkspaceChange,
+                serde_json::json!({"code": "invalid_line", "line": line, "line_count": lines.len(), "message": "Insert after an existing one-based line"}).to_string())),
+        }?;
         lines.splice(line..line, self.input.content.lines());
         let mut content = lines.join("\n");
         content.push('\n');

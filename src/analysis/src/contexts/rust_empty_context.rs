@@ -1,7 +1,6 @@
 use crate::contexts::context::Context;
 use crate::contexts::rust_context::{RustContext, RustContextLineIndexCreator};
 use async_trait::async_trait;
-use itertools::Itertools;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -9,15 +8,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[derive(Clone)]
 pub struct RustEmptyContext {
     pub inner: RustContext,
-    pub stack_context: bool,
     pub id_gen: Arc<AtomicU64>,
 }
 
 impl RustEmptyContext {
-    pub fn new(context: RustContext, stack_context: bool, id: u64) -> RustEmptyContext {
+    pub fn new(mut context: RustContext, id: u64) -> RustEmptyContext {
+        context.guidance = context.guidance.fork();
         RustEmptyContext {
             inner: context,
-            stack_context,
             id_gen: Arc::new(AtomicU64::new(id)),
         }
     }
@@ -28,23 +26,23 @@ impl Context for RustEmptyContext {
     type LineIndexCreator = RustContextLineIndexCreator;
 
     async fn get_ctx(&self) -> String {
-        let files = self
-            .inner
-            .get_proj_meta()
-            .await
-            .map(|t| t.files)
-            .unwrap_or_default()
-            .values()
-            .join("\n");
-        let stacked_prompt = if self.stack_context {
-            self.inner.stacked_context.join("\n")
-        } else {
-            "".to_owned()
-        };
-        format!(
-            "project_root: {}\n{files}\n{stacked_prompt}",
-            self.inner.cur_dir.display()
-        )
+        self.inner.get_ctx().await
+    }
+
+    fn effective_instructions(&self) -> anyhow::Result<String> {
+        self.inner.effective_instructions()
+    }
+    fn discover_instructions(&self, paths: &[PathBuf]) -> anyhow::Result<()> {
+        self.inner.discover_instructions(paths)
+    }
+    fn prepare_edit(&self, paths: &[PathBuf]) -> anyhow::Result<()> {
+        self.inner.prepare_edit(paths)
+    }
+    async fn refresh_workspace(&self) -> anyhow::Result<()> {
+        self.inner.refresh_workspace().await
+    }
+    async fn inspect_context(&self) -> anyhow::Result<String> {
+        self.inner.inspect_context().await
     }
 
     fn instructions(&self) -> &str {
@@ -64,21 +62,11 @@ impl Context for RustEmptyContext {
     }
 
     async fn get_files(&self) -> anyhow::Result<Vec<PathBuf>> {
-        Ok(self
-            .inner
-            .get_proj_meta()
-            .await?
-            .files
-            .keys()
-            .map(PathBuf::from)
-            .collect())
+        self.inner.get_files().await
     }
 
     async fn line_index_creator(&self) -> anyhow::Result<Box<Self::LineIndexCreator>> {
-        let proj = self.inner.get_proj_meta().await?;
-        Ok(Box::new(RustContextLineIndexCreator {
-            proj_meta: Arc::new(proj),
-        }))
+        self.inner.line_index_creator().await
     }
 
     fn gen_id(&self) -> u64 {

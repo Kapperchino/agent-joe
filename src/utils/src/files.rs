@@ -81,7 +81,7 @@ impl Files {
     }
 }
 
-async fn operation<T, F>(operation: F) -> anyhow::Result<T>
+pub async fn operation<T, F>(operation: F) -> anyhow::Result<T>
 where
     T: Send + 'static,
     F: FnOnce(&WorkspacePolicy) -> anyhow::Result<T> + Send + 'static,

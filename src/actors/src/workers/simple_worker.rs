@@ -11,7 +11,7 @@ use tools::cargo_check::CargoCheck;
 use tools::cargo_test::CargoTest;
 use tools::grep::GrepTool;
 use tools::read_file::ReadFile;
-use tools::tool_defs::{erased_tool, ErasedToolRef};
+use tools::tool_defs::{ErasedToolRef, erased_tool};
 use tools::web_search::WebSearch;
 
 pub struct SimpleWorker<C: Context> {
@@ -34,7 +34,9 @@ impl Worker for SimpleWorker<RustContext> {
         myself: ActorRef<Message>,
         dependency: Dependency<Self::C>,
     ) -> Result<ActorState<Self::C>, ActorProcessingErr> {
-        let state = ActorState::new(dependency, myself.clone(), None)
+        let file_actor =
+            crate::background_actors::file_actor::start(&dependency.context, &myself).await?;
+        let state = ActorState::new(dependency, myself.clone(), Some(file_actor))
             .await
             .actor_err()?;
         Ok(state)
@@ -42,6 +44,9 @@ impl Worker for SimpleWorker<RustContext> {
 
     fn tools() -> Vec<ErasedToolRef<Self::C, ActorContext<Self::C>>> {
         vec![
+            erased_tool::<tools::find_files::FindFiles, Self::C, ActorContext<Self::C>>(),
+            erased_tool::<tools::list_directory::ListDirectory, Self::C, ActorContext<Self::C>>(),
+            erased_tool::<tools::inspect_context::InspectContext, Self::C, ActorContext<Self::C>>(),
             erased_tool::<ReadFile, Self::C, ActorContext<Self::C>>(),
             erased_tool::<GrepTool, Self::C, ActorContext<Self::C>>(),
             erased_tool::<ApplyPatch, Self::C, ActorContext<Self::C>>(),

@@ -82,22 +82,11 @@ fn impl_tool_input(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
         let field_name = &field.ident;
         let field_ty = &field.ty;
 
-        // Generate lenient deserialization for every field
-        if is_option_type(field_ty) {
-            lenient_fields.push(quote! {
-                #field_name: obj.get(#field_name_str)
-                    .cloned()
-                    .and_then(|v| serde_json::from_value(v).ok())
-            });
-        } else {
-            lenient_fields.push(quote! {
-                #field_name: serde_json::from_value(
-                    obj.get(#field_name_str)
-                        .cloned()
-                        .unwrap_or(serde_json::Value::Null)
-                )?
-            });
-        }
+        lenient_fields.push(quote! {
+            #field_name: serde_json::from_value(
+                obj.get(#field_name_str).cloned().unwrap_or(serde_json::Value::Null)
+            )?
+        });
 
         let description =
             extract_field_value_from_attrs_option::<LitStr>(&field.attrs, "description")?;

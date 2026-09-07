@@ -15,9 +15,18 @@ impl<C: Context, A> ToolTrait<C, A> for StringReplace {
     async fn run(
         input: Self::Input,
         tool_id: ToolId,
-        _cur_context: &C,
+        cur_context: &C,
         _actor_context: &A,
     ) -> anyhow::Result<Self::Output> {
+        cur_context
+            .prepare_edit(&[std::path::PathBuf::from(&input.path)])
+            .map_err(|error| {
+                crate::tool_error::ToolFailure::new(
+                    crate::tool_error::ToolFailureKind::InvalidInput,
+                    crate::tool_error::ToolEffects::NotStarted,
+                    error.to_string(),
+                )
+            })?;
         StringReplace {
             input,
             id: String::new(),
@@ -25,6 +34,7 @@ impl<C: Context, A> ToolTrait<C, A> for StringReplace {
         .str_replace()
         .await?;
 
+        cur_context.refresh_workspace().await?;
         Ok(StringReplaceResult {
             status: "ok".to_string(),
             id: tool_id,

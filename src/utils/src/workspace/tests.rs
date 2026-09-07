@@ -190,6 +190,18 @@ fn session_storage_is_private_and_inaccessible_to_file_tools() {
         assert!(policy.read(&path).is_err());
         assert!(policy.write(&path, "overwrite").is_err());
     }
+    let data = storage.path().join("data.mdb");
+    std::fs::write(&data, "retained database bytes").unwrap();
+    std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o644)).unwrap();
+    policy.session_storage("test-sessions").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&data).unwrap(),
+        "retained database bytes"
+    );
+    assert_eq!(
+        std::fs::metadata(&data).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
     assert!(policy.session_storage("../outside").is_err());
 }
 
@@ -210,7 +222,9 @@ fn session_storage_rejects_linked_directories_and_database_files() {
     symlink(&target, &data).unwrap();
     assert!(policy.session_storage("sessions").is_err());
     std::fs::remove_file(&data).unwrap();
-    if crate::test_support::permitted("create hard links", std::fs::hard_link(&target, &data)).is_some() {
+    if crate::test_support::permitted("create hard links", std::fs::hard_link(&target, &data))
+        .is_some()
+    {
         assert!(policy.session_storage("sessions").is_err());
     }
     assert_eq!(std::fs::read_to_string(target).unwrap(), "private");
@@ -392,7 +406,8 @@ fn symlink_swaps_hard_links_and_special_files_do_not_escape_the_policy() {
             .is_err()
     );
     assert!(policy.delete(Path::new("slot/secret")).is_err());
-    let pipe = std::ffi::CString::new(fixture.root.join("pipe").as_os_str().as_encoded_bytes()).unwrap();
+    let pipe =
+        std::ffi::CString::new(fixture.root.join("pipe").as_os_str().as_encoded_bytes()).unwrap();
     let created = match unsafe { libc::mkfifo(pipe.as_ptr(), 0o600) } {
         0 => Ok(()),
         _ => Err(std::io::Error::last_os_error()),

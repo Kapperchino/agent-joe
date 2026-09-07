@@ -1,6 +1,6 @@
 # Agent Joe implementation plan
 
-Status: M1–M4 are complete. M5–M10 remain planned.
+Status: M1–M5 are complete. M6–M10 remain planned.
 
 Cover all ten gaps identified in the Codex comparison while keeping Joe a Rust-focused agent with typed tools and no model-controlled shell. Delivery order follows dependencies, so context compaction follows the response format and turn lifecycle work it needs.
 
@@ -23,7 +23,7 @@ Cover all ten gaps identified in the Codex comparison while keeping Joe a Rust-f
 | M2 | Complete | Cancellable turns, tool scheduling, and recoverable errors | 3: runtime reliability | M1 |
 | M3 | Complete | Workspace policy and reusable isolation for Cargo | 4: sandbox | M2 |
 | M4 | Complete | Durable sessions, bounded context, and compaction | 2: context and sessions | M1–M3 |
-| M5 | Planned | Full repository discovery and scoped instructions | 5: instructions; 7: discovery | M3–M4 |
+| M5 | Complete | Full repository discovery and scoped instructions | 5: instructions; 7: discovery | M3–M4 |
 | M6 | Planned | Complete typed Cargo validation and process results | 6: validation | M2–M5 |
 | M7 | Planned | Direct work plus optional, bounded delegation | 8: worker coordination | M4–M6 |
 | M8 | Planned | Git awareness, aggregate review, and change isolation | 9: Git | M3–M7 |
@@ -269,7 +269,7 @@ LMDB archive space.
 Acceptance: long tasks survive compaction and restart with retained requirements,
 matched tool exchanges, and no automatic replay of saved side effects.
 
-**M5 — Repository discovery and instructions**
+**M5 — Repository discovery and instructions — complete**
 
 Primary files: `src/analysis/src/contexts/*`, `src/actors/src/background_actors/*`, `src/tools/src/{grep,read_file}.rs`, and new workspace inventory/instruction modules.
 
@@ -283,6 +283,62 @@ Primary files: `src/analysis/src/contexts/*`, `src/actors/src/background_actors/
 Validation: finding text in `Cargo.toml`, CI YAML, Markdown, and fixtures; ignored paths; empty/new files; Unicode ranges; post-edit reads in both modes; nested rules; conflicting instructions; symlink-root scope; and bounded results on a large workspace.
 
 Done when Joe can discover and inspect every relevant allowed file with fresh line information and the correct scoped instructions.
+
+Implemented discovery and guidance
+
+- A deterministic inventory traverses the descriptor-based workspace policy and
+  applies nested `.gitignore`/`.ignore` rules independently of Rust symbols.
+  `find_files`, filtered literal/regex `grep`, and paginated `list_directory`
+  cover non-Rust, hidden, empty, and newly created files. Ignored files remain
+  available through explicit allowed reads. Search results report truncation,
+  limits, skipped files, and bounded diagnostics.
+- File reads and reusable line-index creators use current disk content. All line
+  ranges are one-based with exclusive ends; invalid ranges return structured
+  input failures. Rust symbol ranges and insertion-after-line semantics use the
+  same numbering. Semantic sessions hold their analysis lock through queries
+  so watcher refreshes cannot cancel an active snapshot.
+- Simple and worker roots use the same owned watcher startup and shutdown.
+  Create/modify/delete/rename events refresh the passive index, successful edits
+  refresh immediately, and discovery/semantic reads refresh without waiting for
+  notifications. The obsolete separate symbol-cache watcher is removed.
+- Global, repository, and applicable nested `AGENTS.md` sources enter operating
+  instructions with scope and provenance. Rules refresh on every request.
+  Reads and inspection activate scopes; edit preflight checks all source and
+  destination paths and rejects unseen or changed guidance before writing.
+  Child workers receive independent delivery state, and session switches reset
+  activated scopes. Missing or oversized required guidance never silently falls
+  back to stale or truncated instructions.
+- `/context` and `inspect_context` expose active sources, precedence, built-in
+  guidance, and inventory truncation. Ordinary file/external text remains in
+  reference messages. Normal requests omit the complete symbol map and repeated
+  worker reports; delegation supplies selected context in the task.
+- Linux validation exposed an existing session-file permission operation that
+  `rustix` does not implement on Linux. Storage now applies private permissions
+  to the opened, validated descriptor, retaining no-follow and ordinary-file
+  checks. Regression coverage checks existing database bytes and permissions.
+
+M5 validation (2026-09-07): `cargo test --workspace --offline` passes 223 tests
+on macOS ARM64 and 224 on Linux ARM64. `cargo check --workspace --offline`
+passes on both platforms; `cargo clippy --workspace --all-targets --offline`
+passes on macOS with existing warnings. All 47 changed or new Rust files pass
+formatting, and the diff passes whitespace checks. Tests cover ignore precedence,
+non-Rust and Unicode discovery, new/empty files, symlink roots, large inventories,
+bounded output, range failures, fresh semantic ranges, instruction precedence,
+pre-edit delivery, worker isolation, and session switches. Local fake-provider
+turns exercise both simple and delegated edits; shared watcher tests cover
+create/modify/rename/delete and shutdown in both modes.
+
+Linux tests ran in a disposable Rust 1.95 Bookworm container with bubblewrap and
+nested process/mount namespaces enabled. The PATH-only toolchain fixture needed
+`/usr/local/.rustup` linked to the image's `/usr/local/rustup` installation.
+Live providers, model-performance comparisons, and native Windows remain unverified.
+
+Limits: discovery skips `.git`, `target`, and protected storage; it reads only
+project-local ignore files. Inventory scans stop above 250,000 visited entries
+or 32 MiB of paths. Search/list pages default to 200 results and cap at 1000;
+text search caps output at 32 MiB including metadata. Guidance caps each source
+at 64 KiB and active sources at 256 KiB. Exact behavior and configuration are
+in the README. These limits fail or report truncation explicitly.
 
 **M6 — Typed validation and runnable Rust targets**
 
@@ -360,11 +416,11 @@ Validation: lazy skill loading and reference scope, conflicting skill guidance, 
 
 Done when skills and configured integrations work through the same session, lifecycle, and project policy as built-in tools.
 
-**Next implementation slice — M5**
+**Next implementation slice — M6**
 
-Build a deterministic, ignore-aware workspace file inventory independent of Rust
-symbol discovery. Add bounded path/text discovery, fresh line information, shared
-watcher updates, and scoped `AGENTS.md` loading with visible provenance.
+Extend typed Cargo operations with validated package, feature, and target
+selection, formatting and Clippy checks, and managed example/binary execution.
+Return structured diagnostics and process results through the shared sandbox.
 
 **Validation and rollout**
 

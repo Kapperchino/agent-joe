@@ -37,6 +37,12 @@ impl WorkspacePolicy {
         ))
     }
 
+    pub fn file_size(&self, _: &Path) -> anyhow::Result<u64> {
+        Err(anyhow::anyhow!(
+            "Descriptor-based workspace access is unsupported on this platform"
+        ))
+    }
+
     pub fn is_directory(&self, _: &Path) -> anyhow::Result<bool> {
         Err(anyhow::anyhow!(
             "Descriptor-based workspace access is unsupported on this platform"

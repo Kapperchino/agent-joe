@@ -108,6 +108,16 @@ impl WorkspacePolicy {
         self.resolve(path, access).map(|_| ())
     }
 
+    pub fn relative_path(&self, path: &Path, access: Access) -> anyhow::Result<PathBuf> {
+        let resolved = self.resolve(path, access)?;
+        Ok(resolved
+            .root
+            .path
+            .join(resolved.relative)
+            .strip_prefix(&self.base)?
+            .to_path_buf())
+    }
+
     fn resolve(&self, path: &Path, access: Access) -> anyhow::Result<ResolvedPath<'_>> {
         ResolvedPath::new(self, path, access)
     }

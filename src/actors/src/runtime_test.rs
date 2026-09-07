@@ -1142,11 +1142,9 @@ impl ErasedToolTrait<TestContext, ActorContext<TestContext>> for ProcessTool {
     ) -> anyhow::Result<Value> {
         match utils::cargo::Cargo::cargo_test(None, None).await? {
             utils::cargo::CargoTest::TestPasses { output }
-            | utils::cargo::CargoTest::TestFailed { output } => {
-                Err(anyhow::anyhow!(
-                    "Cargo fixture exited before interruption:\n{output}"
-                ))
-            }
+            | utils::cargo::CargoTest::TestFailed { output } => Err(anyhow::anyhow!(
+                "Cargo fixture exited before interruption:\n{output}"
+            )),
         }
     }
     fn output_to_content_erased(&self, _: &Value, output: &Value) -> anyhow::Result<String> {
@@ -1579,3 +1577,6 @@ async fn shutdown_preserves_durable_results_even_when_the_actor_cannot_receive_t
         matches!(&snapshot.history.last().unwrap().content[0], ContentBlock::ToolResult { content, .. } if content.contains("Cancelled"))
     );
 }
+
+#[path = "discovery_runtime_test.rs"]
+mod discovery;

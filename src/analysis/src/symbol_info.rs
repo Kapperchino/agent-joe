@@ -66,7 +66,8 @@ impl SymbolInfo {
         root: &str,
     ) -> anyhow::Result<Self> {
         let start = line_ind.line_col(n.full_range.start()).line + 1;
-        let end = line_ind.line_col(n.full_range.end()).line + 1;
+        let end_position = line_ind.line_col(n.full_range.end());
+        let end = end_position.line + 1 + u32::from(end_position.col > 0);
         let path: PathBuf = vfs
             .file_path(n.file_id)
             .as_path()
@@ -106,7 +107,8 @@ impl SymbolInfo {
             })
             .map(|fs| {
                 let start = line_ind.line_col(fs.node_range.start()).line + 1;
-                let end = line_ind.line_col(fs.node_range.end()).line + 1;
+                let end_position = line_ind.line_col(fs.node_range.end());
+                let end = end_position.line + 1 + u32::from(end_position.col > 0);
 
                 let rpath = RPath::new(path_buf.clone(), root.to_string())?;
                 Ok::<SymbolInfo, anyhow::Error>(SymbolInfo {

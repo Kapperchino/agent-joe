@@ -11,3 +11,10 @@ pub mod tool_defs;
 pub mod web_search;
 
 pub mod tool_error;
+
+pub mod find_files;
+pub mod inspect_context;
+pub mod list_directory;
+
+#[cfg(test)]
+mod discovery_test;

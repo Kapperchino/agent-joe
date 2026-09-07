@@ -3,9 +3,7 @@ use analysis::contexts::context::Context;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
-use std::path::PathBuf;
 use turbo_code_macros::{ToolDef, ToolInput};
-use utils::grep::Grep as ProjectGrep;
 use utils::utils::FnvHashMap;
 
 #[async_trait]
@@ -61,7 +59,7 @@ impl<C: Context, A> ToolTrait<C, A> for GrepTool {
 #[derive(Default, Serialize, Deserialize, Debug, Clone, ToolDef)]
 #[tool(
     name = "grep",
-    description = "Search the current project files with a regex and return matching lines with surrounding context, prefer parallel tool calls"
+    description = "Search all discoverable project text files, including manifests, CI, documentation and fixtures. Regex by default; optional literal mode and include/exclude globs. One-based lines, bounded results and explicit truncation metadata."
 )]
 pub struct GrepTool {
     #[tool(input)]
@@ -83,6 +81,16 @@ pub struct GrepInput {
         required
     )]
     pub add_end: usize,
+    #[tool(description = "Literal search instead of regex; default false")]
+    pub literal: Option<bool>,
+    #[tool(
+        description = "Include workspace-relative globs separated by newlines; ** matches directories"
+    )]
+    pub include: Option<String>,
+    #[tool(description = "Exclude path globs separated by newlines; excludes take priority")]
+    pub exclude: Option<String>,
+    #[tool(description = "Maximum matching lines, 1 to 1000; default 200")]
+    pub limit: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,24 +111,28 @@ impl Display for GrepTool {
 
 impl GrepTool {
     async fn grep<C: Context>(&self, cur_context: &C) -> anyhow::Result<String> {
-        let mut file_paths: Vec<PathBuf> = cur_context.get_files().await?;
-        file_paths.sort();
-        let matches = ProjectGrep::grep(
+        let query = utils::discovery::SearchQuery::new(
             &self.input.regex,
-            file_paths,
+            if self.input.literal.unwrap_or(false) {
+                utils::discovery::SearchMode::Literal
+            } else {
+                utils::discovery::SearchMode::Regex
+            },
+            self.input.include.as_deref().unwrap_or(""),
+            self.input.exclude.as_deref().unwrap_or(""),
+            self.input.limit,
             self.input.add_start,
             self.input.add_end,
-        )
+        )?;
+        let result = utils::files::operation(move |workspace| {
+            query.search(
+                workspace,
+                utils::inventory::Inventory::scan(workspace)?,
+                utils::discovery::SearchTarget::Text,
+            )
+        })
         .await?;
-
-        if matches.is_empty() {
-            Ok("No matches found".to_string())
-        } else {
-            Ok(matches
-                .into_iter()
-                .map(|grep_match| grep_match.to_string())
-                .collect::<Vec<_>>()
-                .join("\n\n"))
-        }
+        let _ = cur_context;
+        Ok(serde_json::to_string(&result)?)
     }
 }

@@ -299,6 +299,11 @@ impl WorkspacePolicy {
         WorkspaceFile::open(self.resolve(path, Access::Read)?)?.read_text()
     }
 
+    pub fn file_size(&self, path: &Path) -> anyhow::Result<u64> {
+        let file = WorkspaceFile::open(self.resolve(path, Access::Read)?)?;
+        Ok(file.handle.metadata()?.len())
+    }
+
     pub fn is_directory(&self, path: &Path) -> anyhow::Result<bool> {
         let file = self.resolve(path, Access::Read)?.open()?;
         Ok(file.metadata()?.is_dir())
