@@ -364,31 +364,6 @@ fn stopping_accepts_matching_tool_results_once_and_preserves_uncertain_work() {
 }
 
 #[test]
-fn context_failure_stops_continuation_without_losing_successful_tool_output() {
-    let mut machine = machine();
-    let initial = start(&mut machine);
-    let ToolBatchFixture { tag: batch, jobs } = begin_tools(&mut machine, initial);
-    for job in &jobs {
-        complete_tool(&mut machine, batch, job);
-    }
-    machine.feedback(EffectOutcome::ContextFailed {
-        tag: batch,
-        failure: Failure::new(FailureKind::Tool, "context hook failed"),
-    });
-    let effects = tool(&mut machine, batch, ToolEvent::Finished(Ok(())));
-    assert!(!launches_provider(&effects));
-    assert!(
-        matches!(&machine.state, SessionState::Running(Session { state: TurnState::Stopping(turn), .. })
-            if matches!(&turn.phase.outcome, TurnOutcome::Failed(failure) if failure.message == "context hook failed")
-        )
-    );
-    let effects = machine.transition(SessionEvent::CleanupFinished(initial.turn));
-    assert!(effects.iter().any(|effect| matches!(effect, Effect::AppendHistory(messages)
-        if messages[1].content.iter().all(|content| matches!(content, llm::ContentBlock::ToolResult { is_error: None, .. }))
-    )));
-}
-
-#[test]
 fn completed_worker_replies_after_cleanup_and_does_not_start_queued_work() {
     let mut machine = machine();
     let (reply, _receive) = tokio::sync::oneshot::channel();

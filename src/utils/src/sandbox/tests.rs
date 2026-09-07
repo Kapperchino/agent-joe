@@ -527,6 +527,84 @@ async fn protected_symlinks_cannot_add_host_mounts() {
 }
 
 #[tokio::test]
+async fn cargo_artifacts_are_reused_across_agents_and_terminal_builds() {
+    if crate::test_support::sandbox_available() {
+        let project = Fixture::new();
+        std::fs::create_dir(project.root.join("src")).unwrap();
+        std::fs::write(
+            project.root.join("Cargo.toml"),
+            "[package]\nname = 'cache_fixture'\nversion = '0.1.0'\nedition = '2024'\n[dependencies]\nitertools = '=0.15.0'\n",
+        )
+        .unwrap();
+        std::fs::write(
+            project.root.join("src/lib.rs"),
+            "#[test] fn cached() { use itertools::Itertools; assert_eq!([1, 2].iter().join(\",\"), \"1,2\"); }",
+        )
+        .unwrap();
+        std::fs::write(project.root.join("build.rs"), "fn main() {}").unwrap();
+        let command = || {
+            let mut command = Command::new("cargo");
+            command.args(["test", "--offline", "--message-format=json"]);
+            command
+        };
+        let scope = project.scope();
+        let first = cargo_artifacts(scope.enter(output(command())).await.unwrap());
+        assert!(first.iter().any(|artifact| !artifact.fresh));
+        let sibling = scope.child();
+        let peer = scope.child();
+        let (second, third) = tokio::join!(
+            sibling.enter(output(command())),
+            peer.enter(output(command())),
+        );
+        for result in [second, third] {
+            let artifacts = cargo_artifacts(result.unwrap());
+            assert!(artifacts.iter().all(|artifact| artifact.fresh), "{artifacts:?}");
+        }
+        sibling.finish().await;
+        peer.finish().await;
+        scope.finish().await;
+        let terminal = command()
+            .current_dir(&project.root)
+            .env_remove("CARGO_TARGET_DIR")
+            .output()
+            .await
+            .unwrap();
+        cargo_artifacts(terminal);
+        let restarted = cargo_artifacts(project.scope().enter(output(command())).await.unwrap());
+        assert!(restarted.iter().all(|artifact| artifact.fresh), "{restarted:?}");
+        std::fs::write(
+            project.root.join("src/lib.rs"),
+            "#[test] fn changed() { panic!(\"changed source must execute\"); }",
+        )
+        .unwrap();
+        let changed = project
+            .scope()
+            .enter(crate::cargo::Cargo::cargo_test(None, None))
+            .await
+            .unwrap();
+        assert!(matches!(changed, crate::cargo::CargoTest::TestFailed { .. }));
+    }
+}
+
+fn cargo_artifacts(result: Output) -> Vec<cargo_metadata::Artifact> {
+    assert!(
+        result.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let artifacts = cargo_metadata::Message::parse_stream(result.stdout.as_slice())
+        .map(Result::unwrap)
+        .filter_map(|message| match message {
+            cargo_metadata::Message::CompilerArtifact(artifact) => Some(artifact),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(!artifacts.is_empty());
+    artifacts
+}
+
+#[tokio::test]
 async fn cargo_build_scripts_proc_macros_and_tests_cannot_escape() {
     if crate::test_support::sandbox_available() {
         let project = Fixture::new();

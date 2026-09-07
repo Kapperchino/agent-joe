@@ -378,7 +378,7 @@ fn execution_error(error: anyhow::Error, effect: ToolEffect) -> ToolFailure {
             ToolFailure::new(
                 ToolFailureKind::Execution,
                 effects(effect),
-                error.to_string(),
+                format!("{error:#}"),
             )
         })
 }

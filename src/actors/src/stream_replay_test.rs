@@ -390,29 +390,6 @@ async fn incomplete_tool_prevents_dispatch_of_the_entire_batch() {
 }
 
 #[tokio::test]
-async fn non_object_tool_arguments_are_rejected_before_dispatch() {
-    let mut h = harness().await;
-    openai_event(
-        &mut h.state,
-        json!({"type":"response.created","response":{"id":"resp_1"}}),
-    )
-    .await
-    .unwrap();
-    let result = openai_event(&mut h.state, json!({
-        "type":"response.output_item.done","output_index":0,"item":{
-            "type":"function_call","id":"fc_1","call_id":"call_1","name":"echo","arguments":"[1,2]"
-        }
-    })).await;
-    assert!(
-        result
-            .unwrap_err()
-            .to_string()
-            .contains("invalid_tool_arguments")
-    );
-    assert_eq!(h.calls.load(Ordering::SeqCst), 0);
-}
-
-#[tokio::test]
 async fn failed_or_truncated_responses_never_dispatch_tools() {
     for terminal in ["response.failed", "response.incomplete"] {
         let mut h = harness().await;
@@ -448,30 +425,33 @@ async fn failed_or_truncated_responses_never_dispatch_tools() {
 }
 
 #[tokio::test]
-async fn malformed_completed_arguments_return_an_error_without_dispatch() {
-    let mut h = harness().await;
-    openai_event(
-        &mut h.state,
-        json!({"type":"response.created","response":{"id":"resp_1"}}),
-    )
-    .await
-    .unwrap();
-    let result = openai_event(
-        &mut h.state,
-        json!({
-            "type":"response.output_item.done","output_index":0,"item":{
-                "type":"function_call","id":"fc_1","call_id":"call_1","name":"echo","arguments":"{"
-            }
-        }),
-    )
-    .await;
-    assert!(
-        result
-            .unwrap_err()
-            .to_string()
-            .contains("invalid_tool_arguments")
-    );
-    assert_eq!(h.calls.load(Ordering::SeqCst), 0);
+async fn invalid_completed_arguments_return_an_error_without_dispatch() {
+    for arguments in ["{", "[1,2]"] {
+        let mut h = harness().await;
+        openai_event(
+            &mut h.state,
+            json!({"type":"response.created","response":{"id":"resp_1"}}),
+        )
+        .await
+        .unwrap();
+        let result = openai_event(
+            &mut h.state,
+            json!({
+                "type":"response.output_item.done","output_index":0,"item":{
+                    "type":"function_call","id":"fc_1","call_id":"call_1","name":"echo","arguments":arguments
+                }
+            }),
+        )
+        .await;
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("invalid_tool_arguments"),
+            "arguments: {arguments}"
+        );
+        assert_eq!(h.calls.load(Ordering::SeqCst), 0);
+    }
 }
 
 #[tokio::test]

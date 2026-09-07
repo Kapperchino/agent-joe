@@ -1,4 +1,4 @@
-use super::{IsolatedCommand, TemporaryDirectory, toolchain::Toolchain};
+use super::{IsolatedCommand, TemporaryDirectory, cargo_cache::CargoCache, toolchain::Toolchain};
 use crate::workspace::{Access, ProcessWorkspace};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -93,22 +93,12 @@ pub(super) fn prepare(
         for path in workspace.read_only_roots() {
             command.arg("--ro-bind").arg(path).arg(path);
         }
-        let local_cargo = workspace.root().join("target/.joe/cargo");
-        workspace.create_parent_dirs(&local_cargo.join("placeholder"))?;
-        for directory in ["index", "cache"] {
-            let source = toolchain.cargo_home.join("registry").join(directory);
-            if source.exists() {
-                workspace.link_process_cache(
-                    &source.canonicalize()?,
-                    &local_cargo.join("registry").join(directory),
-                )?;
-            }
-        }
+        let cache = CargoCache::new(workspace, &toolchain.cargo_home)?;
         for (key, value) in [
             ("HOME", workspace.root().to_path_buf()),
             ("TMPDIR", temporary.path().to_path_buf()),
-            ("CARGO_TARGET_DIR", workspace.root().join("target")),
-            ("CARGO_HOME", local_cargo),
+            ("CARGO_TARGET_DIR", cache.target),
+            ("CARGO_HOME", cache.home),
             ("RUSTUP_HOME", toolchain.rustup_home),
         ] {
             command.args(["--setenv", key]).arg(value);
