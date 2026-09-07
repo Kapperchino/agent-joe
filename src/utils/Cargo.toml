@@ -3,6 +3,9 @@ name = "utils"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+test-support = []
+
 [dependencies]
 grep = "0.4.1"
 cargo_metadata = "0.23.1"

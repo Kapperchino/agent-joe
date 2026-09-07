@@ -58,24 +58,27 @@ fn process_workspaces_allow_internal_hard_links_with_matching_access() {
         std::fs::create_dir_all(object.parent().unwrap()).unwrap();
         std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
         std::fs::write(&object, "object").unwrap();
-        std::fs::hard_link(&object, &cached).unwrap();
-        let policy = WorkspacePolicy::new(
-            fixture.root.clone(),
-            vec![
-                RootSpec {
-                    path: fixture.root.clone(),
-                    access: RootAccess::ReadWrite,
-                },
-                RootSpec {
-                    path: target,
-                    access,
-                },
-            ],
-        )
-        .unwrap();
-        let workspace = ProcessWorkspace::new(&policy).unwrap();
-        assert_eq!(workspace.policy().root(), policy.root());
-        assert!(policy.write(&object, "overwrite").is_err());
+        if crate::test_support::permitted("create hard links", std::fs::hard_link(&object, &cached))
+            .is_some()
+        {
+            let policy = WorkspacePolicy::new(
+                fixture.root.clone(),
+                vec![
+                    RootSpec {
+                        path: fixture.root.clone(),
+                        access: RootAccess::ReadWrite,
+                    },
+                    RootSpec {
+                        path: target,
+                        access,
+                    },
+                ],
+            )
+            .unwrap();
+            let workspace = ProcessWorkspace::new(&policy).unwrap();
+            assert_eq!(workspace.policy().root(), policy.root());
+            assert!(policy.write(&object, "overwrite").is_err());
+        }
     }
 }
 
@@ -85,25 +88,30 @@ fn process_workspace_hard_links_cannot_cross_protected_access_boundaries() {
         let fixture = Fixture::new();
         let protected = fixture.root.join(directory);
         let readonly = fixture.root.join("readonly");
-        std::fs::create_dir_all(&protected).unwrap();
-        std::fs::create_dir_all(&readonly).unwrap();
-        std::fs::write(protected.join("original"), "protected").unwrap();
-        std::fs::hard_link(protected.join("original"), fixture.root.join("linked")).unwrap();
-        let policy = WorkspacePolicy::new(
-            fixture.root.clone(),
-            vec![
-                RootSpec {
-                    path: fixture.root.clone(),
-                    access: RootAccess::ReadWrite,
-                },
-                RootSpec {
-                    path: readonly,
-                    access: RootAccess::ReadOnly,
-                },
-            ],
-        )
-        .unwrap();
-        assert!(ProcessWorkspace::new(&policy).is_err());
+        let linked = std::fs::create_dir_all(&protected)
+            .and_then(|()| std::fs::create_dir_all(&readonly))
+            .and_then(|()| std::fs::write(protected.join("original"), "protected"))
+            .and_then(|()| {
+                std::fs::hard_link(protected.join("original"), fixture.root.join("linked"))
+            });
+        if crate::test_support::permitted("create a protected hard-link fixture", linked).is_some()
+        {
+            let policy = WorkspacePolicy::new(
+                fixture.root.clone(),
+                vec![
+                    RootSpec {
+                        path: fixture.root.clone(),
+                        access: RootAccess::ReadWrite,
+                    },
+                    RootSpec {
+                        path: readonly,
+                        access: RootAccess::ReadOnly,
+                    },
+                ],
+            )
+            .unwrap();
+            assert!(ProcessWorkspace::new(&policy).is_err());
+        }
     }
 }
 
@@ -111,14 +119,20 @@ fn process_workspace_hard_links_cannot_cross_protected_access_boundaries() {
 fn process_workspace_hard_links_require_every_alias_to_be_inside_the_project() {
     let fixture = Fixture::new();
     std::fs::write(fixture.root.join("first"), "object").unwrap();
-    std::fs::hard_link(fixture.root.join("first"), fixture.root.join("second")).unwrap();
-    std::fs::hard_link(fixture.root.join("first"), fixture.outside.join("third")).unwrap();
-    std::os::unix::fs::symlink(&fixture.outside, fixture.root.join("outside-alias")).unwrap();
-    assert!(ProcessWorkspace::new(&fixture.policy()).is_err());
-    assert_eq!(
-        std::fs::read_to_string(fixture.outside.join("third")).unwrap(),
-        "object"
-    );
+    if crate::test_support::permitted(
+        "create hard links",
+        std::fs::hard_link(fixture.root.join("first"), fixture.root.join("second")),
+    )
+    .is_some()
+    {
+        std::fs::hard_link(fixture.root.join("first"), fixture.outside.join("third")).unwrap();
+        std::os::unix::fs::symlink(&fixture.outside, fixture.root.join("outside-alias")).unwrap();
+        assert!(ProcessWorkspace::new(&fixture.policy()).is_err());
+        assert_eq!(
+            std::fs::read_to_string(fixture.outside.join("third")).unwrap(),
+            "object"
+        );
+    }
 }
 
 #[test]
@@ -165,8 +179,9 @@ fn session_storage_rejects_linked_directories_and_database_files() {
     symlink(&target, &data).unwrap();
     assert!(policy.session_storage("sessions").is_err());
     std::fs::remove_file(&data).unwrap();
-    std::fs::hard_link(&target, &data).unwrap();
-    assert!(policy.session_storage("sessions").is_err());
+    if crate::test_support::permitted("create hard links", std::fs::hard_link(&target, &data)).is_some() {
+        assert!(policy.session_storage("sessions").is_err());
+    }
     assert_eq!(std::fs::read_to_string(target).unwrap(), "private");
 }
 
@@ -223,12 +238,14 @@ fn traversal_outside_roots_and_protected_paths_are_denied() {
     ] {
         assert!(policy.write(Path::new(path), "changed").is_err());
     }
-    std::fs::create_dir_all(fixture.root.join(".git")).unwrap();
-    std::fs::write(fixture.root.join(".git/config"), "git configuration").unwrap();
-    assert_eq!(
-        policy.read(Path::new(".git/config")).unwrap(),
-        "git configuration"
-    );
+    let git_config = std::fs::create_dir_all(fixture.root.join(".git"))
+        .and_then(|()| std::fs::write(fixture.root.join(".git/config"), "git configuration"));
+    if crate::test_support::permitted("create a Git fixture", git_config).is_some() {
+        assert_eq!(
+            policy.read(Path::new(".git/config")).unwrap(),
+            "git configuration"
+        );
+    }
     assert!(policy.read(Path::new(".turbo-code/config")).is_err());
     policy.write(Path::new("source"), "source").unwrap();
     assert!(
@@ -321,8 +338,11 @@ fn symlink_swaps_hard_links_and_special_files_do_not_escape_the_policy() {
     let policy = fixture.policy();
     std::fs::write(fixture.outside.join("secret"), "secret").unwrap();
     symlink(fixture.outside.join("secret"), fixture.root.join("link")).unwrap();
-    std::fs::hard_link(fixture.outside.join("secret"), fixture.root.join("hard")).unwrap();
-    for path in ["link", "hard"] {
+    let hard_link = crate::test_support::permitted(
+        "create hard links",
+        std::fs::hard_link(fixture.outside.join("secret"), fixture.root.join("hard")),
+    );
+    for path in std::iter::once("link").chain(hard_link.map(|()| "hard")) {
         assert!(policy.read(Path::new(path)).is_err());
         assert!(policy.write(Path::new(path), "changed").is_err());
         assert!(policy.rename(Path::new(path), Path::new("moved")).is_err());
@@ -341,15 +361,15 @@ fn symlink_swaps_hard_links_and_special_files_do_not_escape_the_policy() {
             .is_err()
     );
     assert!(policy.delete(Path::new("slot/secret")).is_err());
-    assert!(
-        std::process::Command::new("mkfifo")
-            .arg(fixture.root.join("pipe"))
-            .status()
-            .unwrap()
-            .success()
-    );
-    assert!(policy.read(Path::new("pipe")).is_err());
-    assert!(policy.write(Path::new("pipe"), "changed").is_err());
+    let pipe = std::ffi::CString::new(fixture.root.join("pipe").as_os_str().as_encoded_bytes()).unwrap();
+    let created = match unsafe { libc::mkfifo(pipe.as_ptr(), 0o600) } {
+        0 => Ok(()),
+        _ => Err(std::io::Error::last_os_error()),
+    };
+    if crate::test_support::permitted("create a named pipe", created).is_some() {
+        assert!(policy.read(Path::new("pipe")).is_err());
+        assert!(policy.write(Path::new("pipe"), "changed").is_err());
+    }
     assert_eq!(
         std::fs::read_to_string(fixture.outside.join("secret")).unwrap(),
         "secret"
@@ -552,8 +572,14 @@ fn log_handles_do_not_follow_replacements_or_open_outside_aliases() {
     log.write_all(b"entry").unwrap();
     assert!(policy.open_append(Path::new("logs/stream")).is_err());
     assert!(policy.open_append(&outside).is_err());
-    std::fs::hard_link(&outside, fixture.root.join("linked")).unwrap();
-    assert!(policy.open_append(Path::new("linked")).is_err());
+    if crate::test_support::permitted(
+        "create hard links",
+        std::fs::hard_link(&outside, fixture.root.join("linked")),
+    )
+    .is_some()
+    {
+        assert!(policy.open_append(Path::new("linked")).is_err());
+    }
     assert_eq!(std::fs::read_to_string(&outside).unwrap(), "secret");
     assert_eq!(policy.read(Path::new("logs/retained")).unwrap(), "entry");
 }

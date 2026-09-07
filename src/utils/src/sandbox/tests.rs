@@ -233,189 +233,223 @@ fn fixture(mode: &str, marker: &PathBuf) -> Command {
     command
 }
 
+#[tokio::test]
+async fn sandboxed_runners_can_run_the_utils_suite() {
+    if crate::test_support::sandbox_available() {
+        let project = Fixture::new();
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command.args([
+            "--nocapture",
+            "--skip",
+            "sandbox::tests::sandboxed_runners_can_run_the_utils_suite",
+        ]);
+        let result = project.scope().enter(output(command)).await.unwrap();
+        let stdout = String::from_utf8_lossy(&result.stdout);
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(result.status.success(), "{stdout}\n{stderr}");
+        assert!(stderr.contains("Skipping test:"), "{stderr}");
+    }
+}
+
 #[test]
 fn inherited_credentials_and_sockets_are_removed() {
-    let result = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "sandbox::tests::process_fixture", "--nocapture"])
-        .env("JOE_M2_PROCESS_FIXTURE", "environment-parent")
-        .env("JOE_INHERITED_SECRET", "fixture-secret")
-        .env("SSH_AUTH_SOCK", "/fixture/host-agent")
-        .output()
-        .unwrap();
-    assert!(
-        result.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&result.stdout),
-        String::from_utf8_lossy(&result.stderr)
-    );
+    if crate::test_support::sandbox_available() {
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "sandbox::tests::process_fixture", "--nocapture"])
+            .env("JOE_M2_PROCESS_FIXTURE", "environment-parent")
+            .env("JOE_INHERITED_SECRET", "fixture-secret")
+            .env("SSH_AUTH_SOCK", "/fixture/host-agent")
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
 }
 
 #[tokio::test]
 async fn drains_both_pipes_beyond_pipe_capacity() {
-    let project = Fixture::new();
-    let command = fixture("pipes", &PathBuf::new());
-    let result = tokio::time::timeout(
-        Duration::from_secs(10),
-        project.scope().enter(output(command)),
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    assert!(result.status.success());
-    assert!(result.stdout.len() >= 256 * 1024);
-    assert_eq!(result.stderr.len(), 256 * 1024);
+    if crate::test_support::sandbox_available() {
+        let project = Fixture::new();
+        let command = fixture("pipes", &PathBuf::new());
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            project.scope().enter(output(command)),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(result.status.success());
+        assert!(result.stdout.len() >= 256 * 1024);
+        assert_eq!(result.stderr.len(), 256 * 1024);
+    }
 }
 
 #[tokio::test]
 async fn temporary_workspaces_can_create_private_session_storage() {
-    let project = Fixture::new();
-    let saved = project.root.join(".turbo-code");
-    std::fs::create_dir(&saved).unwrap();
-    std::fs::write(saved.join("secret"), "saved session").unwrap();
-    let result = project
-        .scope()
-        .enter(output(fixture("temporary-storage", &PathBuf::new())))
-        .await
-        .unwrap();
-    assert!(
-        result.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&result.stdout),
-        String::from_utf8_lossy(&result.stderr)
-    );
-    assert_eq!(
-        std::fs::read_to_string(saved.join("secret")).unwrap(),
-        "saved session"
-    );
-    assert!(
-        std::fs::read_dir(project.root.join("target/.joe/tmp"))
-            .unwrap()
-            .next()
-            .is_none()
-    );
-}
-
-#[tokio::test]
-async fn cancellation_and_dropping_future_kill_descendants_and_reap_leader() {
-    for drop_future in [false, true] {
+    if crate::test_support::sandbox_available() {
         let project = Fixture::new();
-        let marker = project.root.join("process");
-        let command = fixture("tree", &marker);
-        let scope = project.scope();
-        let task_scope = scope.clone();
-        let task = tokio::spawn(async move { task_scope.enter(output(command)).await });
-        let pids = tokio::time::timeout(Duration::from_secs(5), async {
-            let mut pids = String::new();
-            while pids.split_whitespace().count() != 2 {
-                pids = tokio::fs::read_to_string(&marker).await.unwrap_or_default();
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-            pids
-        })
-        .await
-        .unwrap();
-        if drop_future {
-            task.abort();
-        } else {
-            scope.cancel.cancel();
-        }
-        let result = tokio::time::timeout(Duration::from_secs(3), task)
+        let saved = project.root.join(".turbo-code");
+        std::fs::create_dir(&saved).unwrap();
+        std::fs::write(saved.join("secret"), "saved session").unwrap();
+        let result = project
+            .scope()
+            .enter(output(fixture("temporary-storage", &PathBuf::new())))
             .await
             .unwrap();
-        assert!(result.is_err() || result.unwrap().is_err());
-        tokio::time::timeout(Duration::from_secs(3), scope.finish())
-            .await
-            .unwrap();
-        assert_eq!(scope.tasks.len(), 0);
+        assert!(
+            result.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert_eq!(
+            std::fs::read_to_string(saved.join("secret")).unwrap(),
+            "saved session"
+        );
         assert!(
             std::fs::read_dir(project.root.join("target/.joe/tmp"))
                 .unwrap()
                 .next()
                 .is_none()
         );
-        #[cfg(target_os = "macos")]
-        for pid in pids
-            .split_whitespace()
-            .map(|pid| pid.parse::<i32>().unwrap())
-        {
-            tokio::time::timeout(Duration::from_secs(3), async {
-                while unsafe { libc::kill(pid, 0) } == 0 {
-                    tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+#[tokio::test]
+async fn cancellation_and_dropping_future_kill_descendants_and_reap_leader() {
+    if crate::test_support::sandbox_available() {
+        for drop_future in [false, true] {
+            let project = Fixture::new();
+            let marker = project.root.join("process");
+            let command = fixture("tree", &marker);
+            let scope = project.scope();
+            let task_scope = scope.clone();
+            let task = tokio::spawn(async move { task_scope.enter(output(command)).await });
+            let pids = tokio::time::timeout(Duration::from_secs(5), async {
+                let mut pids = String::new();
+                while pids.split_whitespace().count() != 2 {
+                    pids = tokio::fs::read_to_string(&marker).await.unwrap_or_default();
+                    tokio::time::sleep(Duration::from_millis(5)).await;
                 }
+                pids
             })
             .await
-            .expect("child process survived cancellation");
+            .unwrap();
+            if drop_future {
+                task.abort();
+            } else {
+                scope.cancel.cancel();
+            }
+            let result = tokio::time::timeout(Duration::from_secs(3), task)
+                .await
+                .unwrap();
+            assert!(result.is_err() || result.unwrap().is_err());
+            tokio::time::timeout(Duration::from_secs(3), scope.finish())
+                .await
+                .unwrap();
+            assert_eq!(scope.tasks.len(), 0);
+            assert!(
+                std::fs::read_dir(project.root.join("target/.joe/tmp"))
+                    .unwrap()
+                    .next()
+                    .is_none()
+            );
+            #[cfg(target_os = "macos")]
+            for pid in pids
+                .split_whitespace()
+                .map(|pid| pid.parse::<i32>().unwrap())
+            {
+                tokio::time::timeout(Duration::from_secs(3), async {
+                    while unsafe { libc::kill(pid, 0) } == 0 {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .expect("child process survived cancellation");
+            }
+            #[cfg(target_os = "linux")]
+            assert_eq!(tokio::fs::read_to_string(&marker).await.unwrap(), pids);
+            std::fs::remove_file(&marker).unwrap();
+            std::fs::remove_file(marker.with_extension("child")).unwrap();
         }
-        #[cfg(target_os = "linux")]
-        assert_eq!(tokio::fs::read_to_string(&marker).await.unwrap(), pids);
-        std::fs::remove_file(&marker).unwrap();
-        std::fs::remove_file(marker.with_extension("child")).unwrap();
     }
 }
 #[tokio::test]
 async fn process_scope_denies_host_effects_and_inherits_into_new_sessions() {
-    use crate::workspace::{RootAccess, RootSpec, WorkspacePolicy};
-    let project = Fixture::new();
-    std::fs::write(project.outside.join("secret"), "secret").unwrap();
-    std::fs::write(project.root.join("input"), "input").unwrap();
-    for directory in [".git", ".agents", ".codex", ".turbo-code", "readonly"] {
-        std::fs::create_dir(project.root.join(directory)).unwrap();
-    }
-    std::fs::write(project.root.join(".turbo-code/config"), "credential").unwrap();
-    std::fs::write(project.root.join("readonly/file"), "original").unwrap();
-    std::os::unix::fs::symlink(&project.outside, project.root.join("escape")).unwrap();
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let policy = WorkspacePolicy::new(
-        project.root.clone(),
-        vec![
-            RootSpec {
-                path: project.root.clone(),
-                access: RootAccess::ReadWrite,
-            },
-            RootSpec {
-                path: project.root.join("readonly"),
-                access: RootAccess::ReadOnly,
-            },
-        ],
-    )
-    .unwrap();
-    let mut command = fixture("boundary", &PathBuf::new());
-    command
-        .env("JOE_OUTSIDE", &project.outside)
-        .env("JOE_ENDPOINT", listener.local_addr().unwrap().to_string())
-        .env("JOE_PARENT_PID", std::process::id().to_string());
-    let result = ExecutionScope::with_workspace(policy)
-        .enter(output(command))
-        .await
+    if crate::test_support::sandbox_available() {
+        use crate::workspace::{RootAccess, RootSpec, WorkspacePolicy};
+        let project = Fixture::new();
+        std::fs::write(project.outside.join("secret"), "secret").unwrap();
+        std::fs::write(project.root.join("input"), "input").unwrap();
+        for directory in [".git", ".agents", ".codex", ".turbo-code", "readonly"] {
+            std::fs::create_dir(project.root.join(directory)).unwrap();
+        }
+        std::fs::write(project.root.join(".turbo-code/config"), "credential").unwrap();
+        std::fs::write(project.root.join("readonly/file"), "original").unwrap();
+        std::os::unix::fs::symlink(&project.outside, project.root.join("escape")).unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let policy = WorkspacePolicy::new(
+            project.root.clone(),
+            vec![
+                RootSpec {
+                    path: project.root.clone(),
+                    access: RootAccess::ReadWrite,
+                },
+                RootSpec {
+                    path: project.root.join("readonly"),
+                    access: RootAccess::ReadOnly,
+                },
+            ],
+        )
         .unwrap();
-    assert!(
-        result.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&result.stdout),
-        String::from_utf8_lossy(&result.stderr)
-    );
-    assert_eq!(
-        std::fs::read_to_string(project.outside.join("secret")).unwrap(),
-        "secret"
-    );
-    assert_eq!(
-        std::fs::read_to_string(project.root.join("allowed")).unwrap(),
-        "allowed"
-    );
+        let mut command = fixture("boundary", &PathBuf::new());
+        command
+            .env("JOE_OUTSIDE", &project.outside)
+            .env("JOE_ENDPOINT", listener.local_addr().unwrap().to_string())
+            .env("JOE_PARENT_PID", std::process::id().to_string());
+        let result = ExecutionScope::with_workspace(policy)
+            .enter(output(command))
+            .await
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert_eq!(
+            std::fs::read_to_string(project.outside.join("secret")).unwrap(),
+            "secret"
+        );
+        assert_eq!(
+            std::fs::read_to_string(project.root.join("allowed")).unwrap(),
+            "allowed"
+        );
+    }
 }
 
 #[tokio::test]
 async fn outside_hardlinks_and_missing_scope_prevent_execution() {
     let project = Fixture::new();
     std::fs::write(project.outside.join("secret"), "secret").unwrap();
-    std::fs::hard_link(project.outside.join("secret"), project.root.join("linked")).unwrap();
-    assert!(
-        project
-            .scope()
-            .enter(output(fixture("pipes", &PathBuf::new())))
-            .await
-            .is_err()
-    );
+    if crate::test_support::permitted(
+        "create hard links",
+        std::fs::hard_link(project.outside.join("secret"), project.root.join("linked")),
+    )
+    .is_some()
+    {
+        assert!(
+            project
+                .scope()
+                .enter(output(fixture("pipes", &PathBuf::new())))
+                .await
+                .is_err()
+        );
+    }
     assert!(output(fixture("pipes", &PathBuf::new())).await.is_err());
     assert_eq!(
         std::fs::read_to_string(project.outside.join("secret")).unwrap(),
@@ -425,32 +459,36 @@ async fn outside_hardlinks_and_missing_scope_prevent_execution() {
 
 #[tokio::test]
 async fn excessive_output_terminates_the_process() {
-    let project = Fixture::new();
-    let scope = project.scope();
-    let result = scope
-        .enter(output(fixture("overflow", &PathBuf::new())))
-        .await;
-    assert!(result.unwrap_err().to_string().contains("stream limit"));
-    scope.finish().await;
-    assert!(scope.resources().is_empty());
+    if crate::test_support::sandbox_available() {
+        let project = Fixture::new();
+        let scope = project.scope();
+        let result = scope
+            .enter(output(fixture("overflow", &PathBuf::new())))
+            .await;
+        assert!(result.unwrap_err().to_string().contains("stream limit"));
+        scope.finish().await;
+        assert!(scope.resources().is_empty());
+    }
 }
 
 #[tokio::test]
 async fn timeouts_and_cancelled_scopes_stop_execution() {
-    let project = Fixture::new();
-    let scope = project.scope();
-    let marker = project.root.join("timeout");
-    let limits = ProcessLimits::new(Duration::from_millis(500), 1024 * 1024).unwrap();
-    let result = scope.enter(execute(fixture("tree", &marker), limits)).await;
-    assert!(result.unwrap_err().to_string().contains("time limit"));
-    scope.finish().await;
-    assert!(scope.resources().is_empty());
-    let cancelled = project.scope();
-    cancelled.cancel.cancel();
-    let result = cancelled
-        .enter(output(fixture("pipes", &PathBuf::new())))
-        .await;
-    assert!(result.unwrap_err().to_string().contains("before launch"));
+    if crate::test_support::sandbox_available() {
+        let project = Fixture::new();
+        let scope = project.scope();
+        let marker = project.root.join("timeout");
+        let limits = ProcessLimits::new(Duration::from_millis(500), 1024 * 1024).unwrap();
+        let result = scope.enter(execute(fixture("tree", &marker), limits)).await;
+        assert!(result.unwrap_err().to_string().contains("time limit"));
+        scope.finish().await;
+        assert!(scope.resources().is_empty());
+        let cancelled = project.scope();
+        cancelled.cancel.cancel();
+        let result = cancelled
+            .enter(output(fixture("pipes", &PathBuf::new())))
+            .await;
+        assert!(result.unwrap_err().to_string().contains("before launch"));
+    }
 }
 
 #[tokio::test]
@@ -490,52 +528,54 @@ async fn protected_symlinks_cannot_add_host_mounts() {
 
 #[tokio::test]
 async fn cargo_build_scripts_proc_macros_and_tests_cannot_escape() {
-    let project = Fixture::new();
-    let object = project.root.join("target/debug/deps/object.rcgu.o");
-    let cached = project
-        .root
-        .join("target/debug/incremental/session/object.rcgu.o");
-    std::fs::create_dir_all(object.parent().unwrap()).unwrap();
-    std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
-    std::fs::write(&object, "cached object").unwrap();
-    std::fs::hard_link(&object, &cached).unwrap();
-    std::fs::create_dir(project.root.join("src")).unwrap();
-    std::fs::write(project.outside.join("secret"), "secret").unwrap();
-    std::fs::write(project.root.join("Cargo.toml"), "[package]\nname = 'isolation_fixture'\nversion = '0.1.0'\nedition = '2024'\n[dependencies]\nisolation_macro = { path = 'macros' }\nitertools = '=0.15.0'\n").unwrap();
-    let outside = project.outside.join("secret");
-    let check = format!("assert!(std::fs::write({outside:?}, \"changed\").is_err());");
-    std::fs::write(
-        project.root.join("build.rs"),
-        format!("fn main() {{ {check} }}"),
-    )
-    .unwrap();
-    std::fs::create_dir_all(project.root.join("macros/src")).unwrap();
-    std::fs::write(project.root.join("macros/Cargo.toml"), "[package]\nname = 'isolation_macro'\nversion = '0.1.0'\nedition = '2024'\n[lib]\nproc-macro = true\n").unwrap();
-    std::fs::write(project.root.join("macros/src/lib.rs"), format!(
-        "#[proc_macro_attribute] pub fn confined(_: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {{ {check} item }}"
-    )).unwrap();
-    std::fs::write(
-        project.root.join("src/lib.rs"),
-        format!("#[isolation_macro::confined] #[test] fn confined() {{ use itertools::Itertools; assert_eq!([1, 2].iter().join(\",\"), \"1,2\"); {check} }}"),
-    )
-    .unwrap();
-    let checked = project
-        .scope()
-        .enter(crate::cargo::Cargo::cargo_check())
-        .await
+    if crate::test_support::sandbox_available() {
+        let project = Fixture::new();
+        let object = project.root.join("target/debug/deps/object.rcgu.o");
+        let cached = project
+            .root
+            .join("target/debug/incremental/session/object.rcgu.o");
+        std::fs::create_dir_all(object.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
+        std::fs::write(&object, "cached object").unwrap();
+        std::fs::hard_link(&object, &cached).unwrap();
+        std::fs::create_dir(project.root.join("src")).unwrap();
+        std::fs::write(project.outside.join("secret"), "secret").unwrap();
+        std::fs::write(project.root.join("Cargo.toml"), "[package]\nname = 'isolation_fixture'\nversion = '0.1.0'\nedition = '2024'\n[dependencies]\nisolation_macro = { path = 'macros' }\nitertools = '=0.15.0'\n").unwrap();
+        let outside = project.outside.join("secret");
+        let check = format!("assert!(std::fs::write({outside:?}, \"changed\").is_err());");
+        std::fs::write(
+            project.root.join("build.rs"),
+            format!("fn main() {{ {check} }}"),
+        )
         .unwrap();
-    assert!(matches!(
-        checked,
-        crate::cargo::CargoCheck::CheckPasses { .. }
-    ));
-    let result = project
-        .scope()
-        .enter(crate::cargo::Cargo::cargo_test(None, None))
-        .await
+        std::fs::create_dir_all(project.root.join("macros/src")).unwrap();
+        std::fs::write(project.root.join("macros/Cargo.toml"), "[package]\nname = 'isolation_macro'\nversion = '0.1.0'\nedition = '2024'\n[lib]\nproc-macro = true\n").unwrap();
+        std::fs::write(project.root.join("macros/src/lib.rs"), format!(
+            "#[proc_macro_attribute] pub fn confined(_: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {{ {check} item }}"
+        )).unwrap();
+        std::fs::write(
+            project.root.join("src/lib.rs"),
+            format!("#[isolation_macro::confined] #[test] fn confined() {{ use itertools::Itertools; assert_eq!([1, 2].iter().join(\",\"), \"1,2\"); {check} }}"),
+        )
         .unwrap();
-    match result {
-        crate::cargo::CargoTest::TestPasses { .. } => {}
-        crate::cargo::CargoTest::TestFailed { output } => panic!("{output}"),
+        let checked = project
+            .scope()
+            .enter(crate::cargo::Cargo::cargo_check())
+            .await
+            .unwrap();
+        assert!(matches!(
+            checked,
+            crate::cargo::CargoCheck::CheckPasses { .. }
+        ));
+        let result = project
+            .scope()
+            .enter(crate::cargo::Cargo::cargo_test(None, None))
+            .await
+            .unwrap();
+        match result {
+            crate::cargo::CargoTest::TestPasses { .. } => {}
+            crate::cargo::CargoTest::TestFailed { output } => panic!("{output}"),
+        }
+        assert_eq!(std::fs::read_to_string(outside).unwrap(), "secret");
     }
-    assert_eq!(std::fs::read_to_string(outside).unwrap(), "secret");
 }

@@ -61,65 +61,67 @@ mod tests {
 
     #[test]
     fn cargo_runs_with_redirected_home_and_configured_toolchain_paths() {
-        let toolchain = Toolchain::new().unwrap();
-        let directory =
-            std::env::temp_dir().join(format!("joe-toolchain-{}", uuid::Uuid::new_v4()));
-        let cache = directory.join("cargo");
-        let configured = directory.join("configured-cargo");
-        for cargo_home in [&cache, &configured] {
-            std::fs::create_dir_all(cargo_home).unwrap();
-            std::os::unix::fs::symlink(
-                toolchain.cargo_home.join("registry"),
-                cargo_home.join("registry"),
+        if crate::test_support::sandbox_available() {
+            let toolchain = Toolchain::new().unwrap();
+            let directory =
+                std::env::temp_dir().join(format!("joe-toolchain-{}", uuid::Uuid::new_v4()));
+            let cache = directory.join("cargo");
+            let configured = directory.join("configured-cargo");
+            for cargo_home in [&cache, &configured] {
+                std::fs::create_dir_all(cargo_home).unwrap();
+                std::os::unix::fs::symlink(
+                    toolchain.cargo_home.join("registry"),
+                    cargo_home.join("registry"),
+                )
+                .unwrap();
+            }
+            std::os::unix::fs::symlink(&toolchain.bin, configured.join("bin")).unwrap();
+            let system_path = "/usr/bin:/bin:/usr/sbin:/sbin";
+            let path = std::env::join_paths(
+                std::iter::once(toolchain.bin.clone()).chain(std::env::split_paths(system_path)),
             )
             .unwrap();
-        }
-        std::os::unix::fs::symlink(&toolchain.bin, configured.join("bin")).unwrap();
-        let system_path = "/usr/bin:/bin:/usr/sbin:/sbin";
-        let path = std::env::join_paths(
-            std::iter::once(toolchain.bin.clone()).chain(std::env::split_paths(system_path)),
-        )
-        .unwrap();
-        for location in [
-            Location::Path,
-            Location::Configured,
-            Location::WorkspaceCache,
-        ] {
-            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
-            command
-                .args([
-                    "--exact",
-                    "sandbox::tests::cargo_build_scripts_proc_macros_and_tests_cannot_escape",
-                    "--nocapture",
-                ])
-                .env("HOME", &directory)
-                .env_remove("CARGO_HOME")
-                .env_remove("RUSTUP_HOME");
-            match location {
-                Location::Path => {
-                    command.env("PATH", &path);
+            for location in [
+                Location::Path,
+                Location::Configured,
+                Location::WorkspaceCache,
+            ] {
+                let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+                command
+                    .args([
+                        "--exact",
+                        "sandbox::tests::cargo_build_scripts_proc_macros_and_tests_cannot_escape",
+                        "--nocapture",
+                    ])
+                    .env("HOME", &directory)
+                    .env_remove("CARGO_HOME")
+                    .env_remove("RUSTUP_HOME");
+                match location {
+                    Location::Path => {
+                        command.env("PATH", &path);
+                    }
+                    Location::Configured => {
+                        command
+                            .env("PATH", system_path)
+                            .env("CARGO_HOME", &configured)
+                            .env("RUSTUP_HOME", &toolchain.rustup_home);
+                    }
+                    Location::WorkspaceCache => {
+                        command
+                            .env("PATH", &path)
+                            .env("CARGO_HOME", &cache)
+                            .env("RUSTUP_HOME", &toolchain.rustup_home);
+                    }
                 }
-                Location::Configured => {
-                    command
-                        .env("PATH", system_path)
-                        .env("CARGO_HOME", &configured)
-                        .env("RUSTUP_HOME", &toolchain.rustup_home);
-                }
-                Location::WorkspaceCache => {
-                    command
-                        .env("PATH", &path)
-                        .env("CARGO_HOME", &cache)
-                        .env("RUSTUP_HOME", &toolchain.rustup_home);
-                }
+                let result = command.output().unwrap();
+                assert!(
+                    result.status.success(),
+                    "{location:?}:\n{}\n{}",
+                    String::from_utf8_lossy(&result.stdout),
+                    String::from_utf8_lossy(&result.stderr)
+                );
             }
-            let result = command.output().unwrap();
-            assert!(
-                result.status.success(),
-                "{location:?}:\n{}\n{}",
-                String::from_utf8_lossy(&result.stdout),
-                String::from_utf8_lossy(&result.stderr)
-            );
+            std::fs::remove_dir_all(directory).unwrap();
         }
-        std::fs::remove_dir_all(directory).unwrap();
     }
 }

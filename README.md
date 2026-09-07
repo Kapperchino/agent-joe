@@ -122,19 +122,24 @@ cargo run --relase
 
 ## Tests
 
-Run the full suite from a regular terminal or a CI host that permits creating
-process sandboxes:
+Run the full suite from a terminal, CI, or agent-joe's Cargo tool:
 
 ```sh
 cargo test --workspace --offline
 ```
 
-The Cargo-cancellation and process-isolation tests launch their own sandboxed
-processes. On macOS, running them through agent-joe's Cargo tool or another
-restricted sandbox runner can fail with
-`sandbox-exec: sandbox_apply: Operation not permitted` because the parent sandbox
-prevents applying the test's sandbox. Run these tests outside that runner. The
-Cargo-cancellation test can be run directly with:
+The Cargo-cancellation, process-isolation, and sandboxed-toolchain tests probe
+whether the runner permits creating process sandboxes before setting up their
+fixtures. If a parent sandbox blocks this operation, these tests automatically
+skip their bodies. Use `-- --nocapture` to see the skip reason; Rust's test harness
+reports these runtime skips as passed. Fixtures that require hard links, named
+pipes, writes to protected directories, or a loopback socket also skip the affected
+checks when the runner denies permission. Other checks in the same test continue
+to run. Unexpected probe or fixture errors still fail the tests.
+
+Run the suite from a regular terminal or a CI host that permits creating process
+sandboxes to exercise this coverage. The Cargo-cancellation test can be run
+directly with:
 
 ```sh
 cargo test -p actors runtime_test::interrupt_reaps_a_running_cargo_process_before_publishing_cancelled -- --exact

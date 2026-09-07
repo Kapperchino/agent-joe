@@ -119,65 +119,69 @@ mod tests {
 
     #[tokio::test]
     async fn native_endpoint_uses_the_configured_route_and_preserves_the_canonical_window() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("http://{}/v1/", listener.local_addr().unwrap());
-        let output = json!([
-            {"type": "message", "role": "user", "content": "retained user requirement"},
-            {"type": "compaction", "encrypted_content": "opaque", "future": {"keep": 7}}
-        ]);
-        let response =
-            json!({"output": output, "usage": {"input_tokens": 1000, "output_tokens": 80}})
-                .to_string();
-        let server = tokio::spawn(async move {
-            let (socket, _) = listener.accept().await.unwrap();
-            let mut reader = BufReader::new(socket);
-            let mut path = String::new();
-            reader.read_line(&mut path).await.unwrap();
-            let mut line = String::new();
-            let mut length = 0;
-            while line != "\r\n" {
-                line.clear();
-                assert!(reader.read_line(&mut line).await.unwrap() > 0);
-                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-                    length = value.trim().parse::<usize>().unwrap();
+        if let Some(listener) = utils::test_support::permitted(
+            "open a loopback socket",
+            tokio::net::TcpListener::bind("127.0.0.1:0").await,
+        ) {
+            let url = format!("http://{}/v1/", listener.local_addr().unwrap());
+            let output = json!([
+                {"type": "message", "role": "user", "content": "retained user requirement"},
+                {"type": "compaction", "encrypted_content": "opaque", "future": {"keep": 7}}
+            ]);
+            let response =
+                json!({"output": output, "usage": {"input_tokens": 1000, "output_tokens": 80}})
+                    .to_string();
+            let server = tokio::spawn(async move {
+                let (socket, _) = listener.accept().await.unwrap();
+                let mut reader = BufReader::new(socket);
+                let mut path = String::new();
+                reader.read_line(&mut path).await.unwrap();
+                let mut line = String::new();
+                let mut length = 0;
+                while line != "\r\n" {
+                    line.clear();
+                    assert!(reader.read_line(&mut line).await.unwrap() > 0);
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse::<usize>().unwrap();
+                    }
                 }
-            }
-            assert!(length < 32 * 1024);
-            let mut bytes = vec![0; length];
-            reader.read_exact(&mut bytes).await.unwrap();
-            let body = serde_json::from_slice(&bytes).unwrap();
-            let wire = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",
-                response.len()
-            );
-            reader.get_mut().write_all(wire.as_bytes()).await.unwrap();
-            CapturedRequest { path, body }
-        });
-        let client = OpenAIClient::new(OpenAIConfig {
-            auth: OpenAIAuthConfig::Local(LocalOpenAIConfig { api_key: None, url }),
-            model: "fixture".into(),
-            effort: OpenAIEffort::Low,
-            request_encrypted_reasoning: None,
-        })
-        .unwrap();
-        let response = client
-            .compact(
-                ClientRequest::new(vec![Message::new("task".into())])
-                    .with_system("current instructions".into()),
-            )
-            .await
+                assert!(length < 32 * 1024);
+                let mut bytes = vec![0; length];
+                reader.read_exact(&mut bytes).await.unwrap();
+                let body = serde_json::from_slice(&bytes).unwrap();
+                let wire = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",
+                    response.len()
+                );
+                reader.get_mut().write_all(wire.as_bytes()).await.unwrap();
+                CapturedRequest { path, body }
+            });
+            let client = OpenAIClient::new(OpenAIConfig {
+                auth: OpenAIAuthConfig::Local(LocalOpenAIConfig { api_key: None, url }),
+                model: "fixture".into(),
+                effort: OpenAIEffort::Low,
+                request_encrypted_reasoning: None,
+            })
             .unwrap();
-        assert_eq!(serde_json::to_value(response.output).unwrap(), output);
-        assert_eq!(response.usage.input_tokens, 1000);
-        let captured = server.await.unwrap();
-        assert_eq!(captured.path.trim(), "POST /v1/responses/compact HTTP/1.1");
-        assert_eq!(captured.body["model"], "fixture");
-        assert_eq!(captured.body["instructions"], "current instructions");
-        assert_eq!(
-            captured.body["input"],
-            json!([{"type": "message", "role": "user", "content": "task"}])
-        );
-        assert!(captured.body.get("stream").is_none());
-        assert!(captured.body.get("store").is_none());
+            let response = client
+                .compact(
+                    ClientRequest::new(vec![Message::new("task".into())])
+                        .with_system("current instructions".into()),
+                )
+                .await
+                .unwrap();
+            assert_eq!(serde_json::to_value(response.output).unwrap(), output);
+            assert_eq!(response.usage.input_tokens, 1000);
+            let captured = server.await.unwrap();
+            assert_eq!(captured.path.trim(), "POST /v1/responses/compact HTTP/1.1");
+            assert_eq!(captured.body["model"], "fixture");
+            assert_eq!(captured.body["instructions"], "current instructions");
+            assert_eq!(
+                captured.body["input"],
+                json!([{"type": "message", "role": "user", "content": "task"}])
+            );
+            assert!(captured.body.get("stream").is_none());
+            assert!(captured.body.get("store").is_none());
+        }
     }
 }

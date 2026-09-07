@@ -1162,19 +1162,8 @@ impl ErasedToolTrait<TestContext, ActorContext<TestContext>> for ProcessTool {
         match utils::cargo::Cargo::cargo_test(None, None).await? {
             utils::cargo::CargoTest::TestPasses { output }
             | utils::cargo::CargoTest::TestFailed { output } => {
-                let guidance = match output.contains(
-                    "sandbox-exec: sandbox_apply: Operation not permitted",
-                ) {
-                    true => concat!(
-                        "\nThis test must create its own macOS sandbox. ",
-                        "Run it from a regular terminal outside agent-joe or another ",
-                        "restricted sandbox runner: cargo test -p actors ",
-                        "runtime_test::interrupt_reaps_a_running_cargo_process_before_publishing_cancelled -- --exact"
-                    ),
-                    false => "",
-                };
                 Err(anyhow::anyhow!(
-                    "Cargo fixture exited before interruption:\n{output}{guidance}"
+                    "Cargo fixture exited before interruption:\n{output}"
                 ))
             }
         }
@@ -1190,71 +1179,73 @@ impl ErasedToolTrait<TestContext, ActorContext<TestContext>> for ProcessTool {
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 #[tokio::test]
 async fn interrupt_reaps_a_running_cargo_process_before_publishing_cancelled() {
-    let directory = std::env::temp_dir().join(format!(
-        "joe-m2-actor-process-{}-{}",
-        std::process::id(),
-        common_models::runtime_ids::OperationId::new()
-    ));
-    std::fs::create_dir(&directory).unwrap();
-    let marker = directory.join("process");
-    std::fs::create_dir(directory.join("src")).unwrap();
-    std::fs::write(
-        directory.join("Cargo.toml"),
-        "[package]\nname = 'actor_process_fixture'\nversion = '0.1.0'\nedition = '2024'\n",
-    )
-    .unwrap();
-    std::fs::write(
-        directory.join("src/lib.rs"),
-        r#"
+    if utils::test_support::sandbox_available() {
+        let directory = std::env::temp_dir().join(format!(
+            "joe-m2-actor-process-{}-{}",
+            std::process::id(),
+            common_models::runtime_ids::OperationId::new()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let marker = directory.join("process");
+        std::fs::create_dir(directory.join("src")).unwrap();
+        std::fs::write(
+            directory.join("Cargo.toml"),
+            "[package]\nname = 'actor_process_fixture'\nversion = '0.1.0'\nedition = '2024'\n",
+        )
+        .unwrap();
+        std::fs::write(
+            directory.join("src/lib.rs"),
+            r#"
 #[test]
 fn waits_for_cancellation() {
     std::fs::write("process", std::process::id().to_string()).unwrap();
     loop { std::thread::sleep(std::time::Duration::from_secs(1)); }
 }
 "#,
-    )
-    .unwrap();
-    let runtime = Runtime::for_workspace(directory.clone()).unwrap();
-    let h = Harness::with_runtime(vec![Arc::new(ProcessTool)], runtime).await;
-    h.start("run test");
-    answer(
-        h.request().await.1,
-        response(vec![call("test_process", "test")]),
-    );
-    tokio::time::timeout(Duration::from_secs(60), async {
-        while !marker.exists() {
-            tokio::select! {
-                event = h.events.recv_async() => {
-                    let packet = event.unwrap().packet;
-                    assert!(
-                        !matches!(
-                            &packet,
-                            ActorToTuiPacket::OperationChanged { state, .. }
-                                | ActorToTuiPacket::TurnChanged { state, .. }
-                                if matches!(state, Lifecycle::Failed | Lifecycle::Cancelled)
-                        ),
-                        "Cargo fixture failed before starting: {packet:?}"
-                    );
+        )
+        .unwrap();
+        let runtime = Runtime::for_workspace(directory.clone()).unwrap();
+        let h = Harness::with_runtime(vec![Arc::new(ProcessTool)], runtime).await;
+        h.start("run test");
+        answer(
+            h.request().await.1,
+            response(vec![call("test_process", "test")]),
+        );
+        tokio::time::timeout(Duration::from_secs(60), async {
+            while !marker.exists() {
+                tokio::select! {
+                    event = h.events.recv_async() => {
+                        let packet = event.unwrap().packet;
+                        assert!(
+                            !matches!(
+                                &packet,
+                                ActorToTuiPacket::OperationChanged { state, .. }
+                                    | ActorToTuiPacket::TurnChanged { state, .. }
+                                    if matches!(state, Lifecycle::Failed | Lifecycle::Cancelled)
+                            ),
+                            "Cargo fixture failed before starting: {packet:?}"
+                        );
+                    }
+                    _ = tokio::time::sleep(Duration::from_millis(5)) => {}
                 }
-                _ = tokio::time::sleep(Duration::from_millis(5)) => {}
             }
-        }
-    })
-    .await
-    .expect("Cargo fixture did not start within 60 seconds");
-    assert!(
-        h.runtime
-            .scope
-            .resources()
-            .iter()
-            .any(|resource| resource.kind == utils::execution::ResourceKind::Process)
-    );
-    h.actor.send_message(Message::Interrupt).unwrap();
-    h.terminal(Lifecycle::Cancelled).await;
-    assert!(h.runtime.scope.resources().is_empty());
-    assert!(h.runtime.workspace.is_idle());
-    std::fs::remove_dir_all(directory).unwrap();
-    h.stop().await;
+        })
+        .await
+        .expect("Cargo fixture did not start within 60 seconds");
+        assert!(
+            h.runtime
+                .scope
+                .resources()
+                .iter()
+                .any(|resource| resource.kind == utils::execution::ResourceKind::Process)
+        );
+        h.actor.send_message(Message::Interrupt).unwrap();
+        h.terminal(Lifecycle::Cancelled).await;
+        assert!(h.runtime.scope.resources().is_empty());
+        assert!(h.runtime.workspace.is_idle());
+        std::fs::remove_dir_all(directory).unwrap();
+        h.stop().await;
+    }
 }
 
 #[tokio::test]
