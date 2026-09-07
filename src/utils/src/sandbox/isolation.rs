@@ -1,4 +1,6 @@
 use crate::workspace::{ProcessWorkspace, WorkspacePolicy};
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use anyhow::Context;
 use tokio::process::Command;
 
 mod temporary;
@@ -20,17 +22,20 @@ pub(super) struct IsolatedCommand {
 impl IsolatedCommand {
     pub(super) fn new(command: Command, workspace: &WorkspacePolicy) -> anyhow::Result<Self> {
         #[cfg(any(target_os = "macos", target_os = "linux"))]
-        let workspace = ProcessWorkspace::new(workspace)?;
+        let workspace =
+            ProcessWorkspace::new(workspace).context("Cannot prepare the process workspace")?;
         #[cfg(any(target_os = "macos", target_os = "linux"))]
-        let temporary = TemporaryDirectory::new(workspace.policy())?;
+        let temporary = TemporaryDirectory::new(workspace.policy())
+            .context("Cannot create the process temporary directory")?;
         #[cfg(target_os = "macos")]
         {
-            let command = macos::prepare(command, &workspace, &temporary)?;
+            let command = macos::prepare(command, &workspace, &temporary)
+                .context("Cannot prepare the macOS sandbox")?;
             Ok(Self { command, temporary })
         }
         #[cfg(target_os = "linux")]
         {
-            linux::prepare(command, &workspace, temporary)
+            linux::prepare(command, &workspace, temporary).context("Cannot prepare the Linux sandbox")
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {

@@ -126,7 +126,16 @@ mod unix {
                         ))
                     }
                 },
-                Err(error) => Err(error.into()),
+                Err(error) => Err(anyhow::Error::from(error).context(format!(
+                    "Cannot launch sandbox executable {} in {}",
+                    prepared.command.as_std().get_program().to_string_lossy(),
+                    prepared
+                        .command
+                        .as_std()
+                        .get_current_dir()
+                        .unwrap_or(std::path::Path::new("."))
+                        .display(),
+                ))),
             }
         }
 

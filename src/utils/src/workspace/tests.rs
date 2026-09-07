@@ -49,6 +49,37 @@ fn file_reads_reject_oversized_content_before_allocating_unbounded_output() {
 }
 
 #[test]
+fn process_workspaces_allow_build_files_to_disappear_during_scan() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let fixture = Fixture::new();
+    let target = fixture.root.join("target");
+    std::fs::create_dir(&target).unwrap();
+    let policy = fixture.policy();
+    let running = AtomicBool::new(true);
+    let results = std::thread::scope(|threads| {
+        threads.spawn(|| {
+            while running.load(Ordering::Relaxed) {
+                let directory = target.join("incremental");
+                std::fs::create_dir(&directory).unwrap();
+                for index in 0..32 {
+                    std::fs::write(directory.join(format!("object-{index}.o")), "object").unwrap();
+                }
+                std::fs::remove_dir_all(directory).unwrap();
+            }
+        });
+        let results = (0..128)
+            .map(|_| ProcessWorkspace::new(&policy).map(|_| ()))
+            .collect::<Vec<_>>();
+        running.store(false, Ordering::Relaxed);
+        results
+    });
+    for result in results {
+        result.unwrap();
+    }
+}
+
+#[test]
 fn process_workspaces_allow_internal_hard_links_with_matching_access() {
     for access in [RootAccess::ReadOnly, RootAccess::ReadWrite] {
         let fixture = Fixture::new();
