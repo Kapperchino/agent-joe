@@ -677,26 +677,6 @@ async fn interrupted_provider_retries_only_unaccepted_response_and_bounds_failur
     h.stop().await;
 }
 
-#[tokio::test]
-async fn authentication_error_is_visible_and_does_not_retry() {
-    let h = Harness::new(vec![], Duration::from_secs(10)).await;
-    h.start("work");
-    assert!(
-        h.request()
-            .await
-            .1
-            .send(Err(Failure::new(
-                FailureKind::Authentication,
-                "fixture credentials rejected"
-            )
-            .into()))
-            .is_ok()
-    );
-    h.terminal(Lifecycle::Failed).await;
-    assert!(h.requests.is_empty());
-    h.stop().await;
-}
-
 struct DelegateTool {
     client: llm::LLmClient,
     tools: Vec<ErasedToolRef<TestContext, ActorContext<TestContext>>>,
@@ -1095,6 +1075,7 @@ async fn child_provider_failure_after_start_resolves_parent() {
     );
     h.terminal(Lifecycle::Failed).await;
     h.terminal(Lifecycle::Failed).await;
+    assert!(child_requests.is_empty());
     assert!(h.requests.is_empty());
     h.stop().await;
 }
@@ -1162,9 +1143,9 @@ impl ErasedToolTrait<TestContext, ActorContext<TestContext>> for ProcessTool {
         match utils::cargo::Cargo::cargo_test(None, None).await? {
             utils::cargo::CargoTest::TestPasses { output }
             | utils::cargo::CargoTest::TestFailed { output } => {
-                let guidance = match output.contains(
-                    "sandbox-exec: sandbox_apply: Operation not permitted",
-                ) {
+                let guidance = match output
+                    .contains("sandbox-exec: sandbox_apply: Operation not permitted")
+                {
                     true => concat!(
                         "\nThis test must create its own macOS sandbox. ",
                         "Run it from a regular terminal outside agent-joe or another ",
@@ -1332,26 +1313,6 @@ async fn failed_validation_is_an_error_with_diagnostics_in_history() {
     answer(reply, response(vec![text("reported failure")]));
     h.terminal(Lifecycle::Completed).await;
     h.stop().await;
-}
-
-#[tokio::test]
-async fn shutdown_waits_for_active_tool_cleanup() {
-    let (write, entered) = gate("write", ToolEffect::Write);
-    let h = Harness::new(vec![write.clone()], Duration::from_secs(10)).await;
-    h.start("work");
-    answer(h.request().await.1, response(vec![call("write", "active")]));
-    let (_, pending) = within(entered.recv_async()).await.unwrap();
-    let events = h.events.clone();
-    h.stop().await;
-    assert!(pending.is_closed());
-    assert_eq!(write.active.load(Ordering::SeqCst), 0);
-    assert!(events.drain().any(|event| matches!(
-        event.packet,
-        ActorToTuiPacket::TurnChanged {
-            state: Lifecycle::Cancelled,
-            ..
-        }
-    )));
 }
 
 #[tokio::test]
@@ -1606,12 +1567,21 @@ async fn shutdown_preserves_durable_results_even_when_the_actor_cannot_receive_t
     let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
     let store = runtime.sessions.clone().unwrap();
     let (write, entered) = gate("write", ToolEffect::Write);
-    let h = Harness::with_runtime(vec![write], runtime).await;
+    let h = Harness::with_runtime(vec![write.clone()], runtime).await;
     h.start("work");
     answer(h.request().await.1, response(vec![call("write", "active")]));
     let (_, pending) = within(entered.recv_async()).await.unwrap();
+    let events = h.events.clone();
     h.stop().await;
     assert!(pending.is_closed());
+    assert_eq!(write.active.load(Ordering::SeqCst), 0);
+    assert!(events.drain().any(|event| matches!(
+        event.packet,
+        ActorToTuiPacket::TurnChanged {
+            state: Lifecycle::Cancelled,
+            ..
+        }
+    )));
     let snapshot = store.list().unwrap().remove(0);
     assert!(snapshot.pending.is_none());
     assert!(

@@ -232,45 +232,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn grep_returns_match_and_context_lines_with_numbers() {
-        workspace_scope()
-            .enter(async {
-                let path = temp_file("alpha\nbravo\nmatch here\ncharlie\ndelta\n");
-
-                let results = Grep::grep("match", vec![path.clone()], 1, 1).await.unwrap();
-
-                assert_eq!(results.len(), 1);
-                assert_eq!(results[0].path, path.to_string_lossy());
-                assert_eq!(
-                    results[0].lines,
-                    vec![
-                        GrepLine {
-                            line_number: Some(2),
-                            line: "bravo".into(),
-                        },
-                        GrepLine {
-                            line_number: Some(3),
-                            line: "match here".into(),
-                        },
-                        GrepLine {
-                            line_number: Some(4),
-                            line: "charlie".into(),
-                        },
-                    ]
-                );
-            })
-            .await;
-    }
-
-    #[tokio::test]
     async fn grep_splits_disjoint_match_groups_per_file() {
         workspace_scope()
             .enter(async {
-                let path = temp_file("alpha\nmatch\ncharlie\n\nomega\nmatch\nzulu\n");
+                let path = temp_file("alpha\nmatch here\ncharlie\n\nomega\nmatch\nzulu\n");
 
                 let results = Grep::grep("match", vec![path.clone()], 1, 1).await.unwrap();
 
                 assert_eq!(results.len(), 2);
+                assert!(
+                    results
+                        .iter()
+                        .all(|group| group.path == path.to_string_lossy())
+                );
                 assert_eq!(
                     results[0].lines,
                     vec![
@@ -280,7 +254,7 @@ mod tests {
                         },
                         GrepLine {
                             line_number: Some(2),
-                            line: "match".into(),
+                            line: "match here".into(),
                         },
                         GrepLine {
                             line_number: Some(3),
@@ -305,6 +279,7 @@ mod tests {
                         },
                     ]
                 );
+                std::fs::remove_file(path).unwrap();
             })
             .await;
     }

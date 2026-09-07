@@ -242,17 +242,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_range_returns_requested_exclusive_range_with_line_numbers() {
+    async fn read_range_returns_exclusive_lines_with_utf8_and_line_numbers() {
         workspace_scope()
             .enter(async {
-                let file_path = write_temp_file("alpha\nbeta\ngamma\ndelta\n");
+                let file_path = write_temp_file("åéî\nbeta\n終わり\ndelta\n");
 
                 let res =
                     ReadFile::read_range(&file_path, Range { start: 2, end: 4 }, &TestContext)
                         .await
                         .unwrap();
 
-                assert_eq!(res, "2: beta\n3: gamma");
+                assert_eq!(res, "2: beta\n3: 終わり");
                 std::fs::remove_file(file_path).unwrap();
             })
             .await;
@@ -270,23 +270,6 @@ mod tests {
                         .unwrap();
 
                 assert_eq!(res, "2: two\n3: three");
-                std::fs::remove_file(file_path).unwrap();
-            })
-            .await;
-    }
-
-    #[tokio::test]
-    async fn read_range_handles_utf8_before_requested_range() {
-        workspace_scope()
-            .enter(async {
-                let file_path = write_temp_file("åéî\nsecond\n終わり\n");
-
-                let res =
-                    ReadFile::read_range(&file_path, Range { start: 2, end: 3 }, &TestContext)
-                        .await
-                        .unwrap();
-
-                assert_eq!(res, "2: second");
                 std::fs::remove_file(file_path).unwrap();
             })
             .await;

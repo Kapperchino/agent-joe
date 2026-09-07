@@ -488,38 +488,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn displays_pretty_update_diff() {
-        workspace_scope()
-            .enter(async {
-                let updated = temp_path("display-update.txt");
-                std::fs::write(&updated, "old\nsame\n").unwrap();
-
-                let patch = format!(
-                    "\
-*** Begin Patch
-*** Update File: {}
-@@
--old
-+new
- same
-*** End Patch",
-                    updated.display(),
-                );
-
-                let display = tool(patch).to_string();
-
-                std::fs::remove_file(&updated).unwrap();
-
-                assert!(display.starts_with("- apply patch: modify `"));
-                assert!(display.contains("\n\n```diff\n"));
-                assert!(display.contains("-old\n+new\n same"));
-                assert!(display.ends_with("```"));
-            })
-            .await;
-    }
-
-    #[tokio::test]
-    async fn applies_custom_patch_file_operations() {
+    async fn previews_and_applies_custom_patch_file_operations() {
         workspace_scope()
             .enter(async {
                 let added = temp_path("added.txt");
@@ -529,7 +498,7 @@ mod tests {
                 let move_to = move_dir.join("move-to.txt");
                 let deleted = temp_path("deleted.txt");
 
-                tokio::fs::write(&updated, "old\n").await.unwrap();
+                tokio::fs::write(&updated, "old\nsame\n").await.unwrap();
                 tokio::fs::write(&move_from, "same\n").await.unwrap();
                 tokio::fs::write(&deleted, "delete\n").await.unwrap();
 
@@ -538,10 +507,12 @@ mod tests {
 *** Begin Patch
 *** Add File: {}
 +created
++second line
 *** Update File: {}
 @@
 -old
 +changed
+ same
 *** Update File: {}
 *** Move to: {}
 *** Delete File: {}
@@ -553,7 +524,13 @@ mod tests {
                     deleted.display(),
                 );
 
-                tool(patch).apply_patch().await.unwrap();
+                let patch = tool(patch);
+                let display = patch.to_string();
+                assert!(display.contains(&format!("modify `{}`", updated.display())));
+                assert!(display.contains("\n\n```diff\n"));
+                assert!(display.contains("-old\n+changed\n same"));
+                assert!(display.ends_with("```"));
+                patch.apply_patch().await.unwrap();
 
                 let added_content = tokio::fs::read_to_string(&added).await.unwrap();
                 let updated_content = tokio::fs::read_to_string(&updated).await.unwrap();
@@ -566,8 +543,8 @@ mod tests {
                 tokio::fs::remove_file(&move_to).await.unwrap();
                 tokio::fs::remove_dir(&move_dir).await.unwrap();
 
-                assert_eq!(added_content, "created");
-                assert_eq!(updated_content, "changed\n");
+                assert_eq!(added_content, "created\nsecond line");
+                assert_eq!(updated_content, "changed\nsame\n");
                 assert_eq!(moved_content, "same\n");
                 assert!(!source_exists);
                 assert!(!deleted_exists);

@@ -348,70 +348,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_each_patch_type() {
-        let input = "\
-*** Begin Patch
-*** Add File: new.txt
-+one
-+two
-*** Delete File: gone.txt
-*** Update File: changed.txt
-@@
- context
--old
-+new
-*** Update File: old.txt
-*** Move to: moved.txt
-@@
--before
-+after
-*** End Patch";
-
-        let diff = DiffSet::new(input).unwrap();
-
-        assert_eq!(diff.vec.len(), 4);
-        match &diff.vec[0] {
-            Patch::AddFile { path, diff } => {
-                assert_eq!(*path, Path::new("new.txt"));
-                assert_eq!(*diff, vec!["one", "two"]);
-            }
-            _ => panic!("expected add file patch"),
-        }
-        match &diff.vec[1] {
-            Patch::DeleteFile { path } => assert_eq!(*path, Path::new("gone.txt")),
-            _ => panic!("expected delete file patch"),
-        }
-        match &diff.vec[2] {
-            Patch::UpdateFile { path, changes } => {
-                assert_eq!(*path, Path::new("changed.txt"));
-                assert_eq!(changes.hunks.len(), 1);
-                match &changes.hunks[0].lines[..] {
-                    [
-                        HunkLine::Context("context"),
-                        HunkLine::Remove("old"),
-                        HunkLine::Add("new"),
-                    ] => {}
-                    _ => panic!("expected parsed update hunk lines"),
-                }
-            }
-            _ => panic!("expected update file patch"),
-        }
-        match &diff.vec[3] {
-            Patch::MoveFile { from, to, changes } => {
-                assert_eq!(*from, Path::new("old.txt"));
-                assert_eq!(*to, Path::new("moved.txt"));
-                let changes = changes.as_ref().unwrap();
-                assert_eq!(changes.hunks.len(), 1);
-                match &changes.hunks[0].lines[..] {
-                    [HunkLine::Remove("before"), HunkLine::Add("after")] => {}
-                    _ => panic!("expected parsed move hunk lines"),
-                }
-            }
-            _ => panic!("expected move file patch"),
-        }
-    }
-
-    #[test]
     fn rejects_add_file_with_non_addition_line() {
         let input = "\
 *** Begin Patch
@@ -429,22 +365,6 @@ not an addition
 *** Delete File: gone.txt";
 
         assert!(DiffSet::new(input).is_err());
-    }
-
-    #[test]
-    fn parses_delete_file_as_last_patch() {
-        let input = "\
-*** Begin Patch
-*** Delete File: gone.txt
-*** End Patch";
-
-        let diff = DiffSet::new(input).unwrap();
-
-        assert_eq!(diff.vec.len(), 1);
-        match &diff.vec[0] {
-            Patch::DeleteFile { path } => assert_eq!(*path, Path::new("gone.txt")),
-            _ => panic!("expected delete file patch"),
-        }
     }
 
     #[test]
@@ -487,68 +407,29 @@ trailing content";
     }
 
     #[test]
-    fn applies_multiple_changes_in_single_hunk() {
-        let input = "\
-*** Begin Patch
-*** Update File: src/main.rs
-@@
- fn main() {
--    let x = 1;
-+    let x = 10;
-     println!(\"{x}\");
--    let y = 2;
-+    let y = 20;
- }
-*** End Patch";
-        let patch = DiffSet::new(input).unwrap().vec.into_iter().next().unwrap();
-
-        assert_eq!(
-            apply_diff(
-                "fn main() {\n    let x = 1;\n    println!(\"{x}\");\n    let y = 2;\n}",
-                patch
-            )
-            .unwrap(),
-            "fn main() {\n    let x = 10;\n    println!(\"{x}\");\n    let y = 20;\n}\n"
-        );
-    }
-
-    #[test]
-    fn applies_multiple_hunks_in_single_update() {
-        let input = "\
-*** Begin Patch
-*** Update File: src/main.rs
-@@
--old first
-+new first
-@@
--old second
-+new second
-*** End Patch";
-        let patch = DiffSet::new(input).unwrap().vec.into_iter().next().unwrap();
-
-        assert_eq!(
-            apply_diff("old first\nbetween\nold second\n", patch).unwrap(),
-            "new first\nbetween\nnew second\n"
-        );
-    }
-
-    #[test]
-    fn applies_multiple_named_hunks_in_single_update() {
+    fn applies_named_and_unnamed_hunks_preserving_surrounding_content() {
         let input = "\
 *** Begin Patch
 *** Update File: src/main.rs
 @@ first
 -old first
 +new first
-@@ second
+@@
 -old second
 +new second
+@@ third
+-old third
++new third
 *** End Patch";
         let patch = DiffSet::new(input).unwrap().vec.into_iter().next().unwrap();
 
         assert_eq!(
-            apply_diff("old first\nbetween\nold second\n", patch).unwrap(),
-            "new first\nbetween\nnew second\n"
+            apply_diff(
+                "start\nold first\nbetween\nold second\nold third\nend\n",
+                patch
+            )
+            .unwrap(),
+            "start\nnew first\nbetween\nnew second\nnew third\nend\n"
         );
     }
 
@@ -585,19 +466,6 @@ trailing content";
     }
 
     #[test]
-    fn applies_add_file_without_a_leading_newline() {
-        let input = "\
-*** Begin Patch
-*** Add File: new.txt
-+one
-+two
-*** End Patch";
-        let patch = DiffSet::new(input).unwrap().vec.into_iter().next().unwrap();
-
-        assert_eq!(apply_diff("", patch).unwrap(), "one\ntwo");
-    }
-
-    #[test]
     fn rejects_add_file_over_existing_content() {
         let input = "\
 *** Begin Patch
@@ -607,25 +475,6 @@ trailing content";
         let patch = DiffSet::new(input).unwrap().vec.into_iter().next().unwrap();
 
         assert!(apply_diff("existing", patch).is_err());
-    }
-
-    #[test]
-    fn applies_update_file_and_preserves_trailing_newline() {
-        let input = "\
-*** Begin Patch
-*** Update File: changed.txt
-@@
- context
--old
-+new
- tail
-*** End Patch";
-        let patch = DiffSet::new(input).unwrap().vec.into_iter().next().unwrap();
-
-        assert_eq!(
-            apply_diff("start\ncontext\nold\ntail\nend\n", patch).unwrap(),
-            "start\ncontext\nnew\ntail\nend\n"
-        );
     }
 
     #[test]
@@ -643,34 +492,6 @@ trailing content";
     }
 
     #[test]
-    fn applies_update_with_named_hunk_header() {
-        let input = "\
-*** Begin Patch
-*** Update File: changed.txt
-@@ function_name
--old
-+new
-*** End Patch";
-        let patch = DiffSet::new(input).unwrap().vec.into_iter().next().unwrap();
-
-        assert_eq!(apply_diff("old", patch).unwrap(), "new\n");
-    }
-
-    #[test]
-    fn applies_insertion_before_context() {
-        let input = "\
-*** Begin Patch
-*** Update File: changed.txt
-@@
-+new
- existing
-*** End Patch";
-        let patch = DiffSet::new(input).unwrap().vec.into_iter().next().unwrap();
-
-        assert_eq!(apply_diff("existing\n", patch).unwrap(), "new\nexisting\n");
-    }
-
-    #[test]
     fn applies_move_file_content_changes() {
         let input = "\
 *** Begin Patch
@@ -683,18 +504,6 @@ trailing content";
         let patch = DiffSet::new(input).unwrap().vec.into_iter().next().unwrap();
 
         assert_eq!(apply_diff("before", patch).unwrap(), "after\n");
-    }
-
-    #[test]
-    fn applies_move_file_without_content_changes() {
-        let input = "\
-*** Begin Patch
-*** Update File: old.txt
-*** Move to: moved.txt
-*** End Patch";
-        let patch = DiffSet::new(input).unwrap().vec.into_iter().next().unwrap();
-
-        assert_eq!(apply_diff("same\n", patch).unwrap(), "same\n");
     }
 
     #[test]

@@ -1317,10 +1317,10 @@ mod tests {
     }
 
     #[test]
-    fn renders_diff_fence_with_add_remove_colors() {
+    fn renders_diff_fence_with_info_string_and_add_remove_colors() {
         let draw_line = DrawLine::new();
         let lines = vec![
-            "```diff".to_string(),
+            "```diff changes.patch".to_string(),
             "diff --git a/file b/file".to_string(),
             "@@".to_string(),
             "-old".to_string(),
@@ -1350,22 +1350,6 @@ mod tests {
             CodeFence::language("language-rust").as_deref(),
             Some("rust")
         );
-    }
-
-    #[test]
-    fn renders_diff_fence_with_extra_info_string() {
-        let draw_line = DrawLine::new();
-        let lines = vec![
-            "```diff changes.patch".to_string(),
-            "-old".to_string(),
-            "+new".to_string(),
-            "```".to_string(),
-        ];
-
-        let rendered = draw_line.render_lines(&lines);
-
-        assert_eq!(rendered[0].spans[0].style.fg, Some(Color::Red));
-        assert_eq!(rendered[1].spans[0].style.fg, Some(Color::Green));
     }
 
     #[test]

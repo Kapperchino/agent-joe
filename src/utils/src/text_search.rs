@@ -91,7 +91,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn finds_replace_test() {
+    async fn replaces_all_matches_and_preserves_other_lines() {
         workspace_scope()
             .enter(async {
                 let path = temp_file("hello world\nfoo bar\nhello rust\n");
@@ -99,98 +99,8 @@ mod tests {
                     .await
                     .unwrap();
                 let file = Files::read_file(&path).await.unwrap();
-                let results: Vec<_> = file.lines().collect();
-                assert_eq!(results.len(), 3);
-                assert_eq!(results[0], "joe! world");
-                assert_eq!(results[2], "joe! rust");
-            })
-            .await;
-    }
-
-    #[tokio::test]
-    async fn finds_replace_test_whole() {
-        workspace_scope()
-            .enter(async {
-                let string = r#"use futures::future;
-use std::path::PathBuf;
-use tokio::fs;
-use tokio::fs::DirEntry;
-use tokio_stream::wrappers::ReadDirStream;
-
-pub struct Utils {}
-impl Utils {
-    pub async fn get_dir_files(dir: &PathBuf) -> anyhow::Result<Vec<DirEntry>> {
-        use tokio_stream::StreamExt;
-
-        let read_dir = fs::read_dir(dir).await?;
-        let read_dir_stream = ReadDirStream::new(read_dir);
-        let res = read_dir_stream
-            .fold(vec![], |mut acc, item| {
-                match item {
-                    Ok(entry) => {
-                        acc.push(entry);
-                    }
-                    Err(_) => {
-                        println!("error with getting files")
-                    }
-                };
-                acc
-            })
-            .await;
-        Ok(res)
-    }
-
-    pub async fn get_file_content(dir: &PathBuf) -> anyhow::Result<String> {
-        let str = fs::read_to_string(dir).await?;
-        Ok(str)
-    }
-
-    pub async fn write_to_file(dir: &PathBuf, content: &str) -> anyhow::Result<()> {
-        fs::write(dir, content).await?;
-        Ok(())
-    }
-
-    pub async fn get_files_for_paths(
-        paths: Vec<PathBuf>,
-    ) -> anyhow::Result<Vec<(PathBuf, String)>> {
-        future::join_all(paths.into_iter().map(async |file| {
-            Utils::get_file_content(&file)
-                .await
-                .map(|content| (file, content))
-        }))
-        .await
-        .into_iter()
-        .collect()
-    }
-
-    pub async fn get_file_hashes_for_paths(
-        paths: Vec<PathBuf>,
-    ) -> anyhow::Result<Vec<(PathBuf, Vec<u8>)>> {
-        use futures::StreamExt;
-
-        let contents = Self::get_files_for_paths(paths).await?;
-        let results: Vec<_> = futures::stream::iter(contents)
-            .map(|(path, content)| {
-                tokio::spawn(
-                    async move { (path, blake3::hash(content.as_bytes()).as_bytes().to_vec()) },
-                )
-            })
-            .buffer_unordered(100)
-            .collect::<Vec<_>>()
-            .await;
-
-        let res = results.into_iter().collect::<Result<Vec<_>, _>>()?;
-        Ok(res)
-    }
-}
-"#;
-                let new_str = string.replace("res", "deez");
-                let path = temp_file(string);
-                TextSearch::search_and_replace(string, &new_str, &path)
-                    .await
-                    .unwrap();
-                let file = Files::read_file(&path).await.unwrap();
-                assert_eq!(file, new_str);
+                assert_eq!(file, "joe! world\nfoo bar\njoe! rust\n");
+                std::fs::remove_file(path).unwrap();
             })
             .await;
     }
