@@ -142,6 +142,13 @@ cargo test -p actors runtime_test::interrupt_reaps_a_running_cargo_process_befor
 
 Linux process-isolation tests require `/usr/bin/bwrap` and host namespace support.
 
+Agent Cargo checks and tests share a persistent build cache at `target/.joe/build`
+across workers and sessions. It is separate from terminal Cargo builds because the
+sandbox uses its own Cargo home and dependency paths; sharing the terminal's build
+directory would invalidate cached artifacts when switching between the two.
+Concurrent agents use Cargo's build lock to reuse completed builds. The first agent
+build populates this cache; later runs rebuild only what Cargo detects has changed.
+
 ## Keybindings
 
 The TUI is similar to claude code and codex with one major difference. Vim bindings are foced upon you.

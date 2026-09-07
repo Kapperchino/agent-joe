@@ -9,6 +9,9 @@ pub(crate) use temporary::TemporaryDirectory;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod toolchain;
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod cargo_cache;
+
 #[cfg(target_os = "linux")]
 mod linux;
 
@@ -50,6 +53,7 @@ impl IsolatedCommand {
 
 #[cfg(target_os = "macos")]
 mod macos {
+    use super::cargo_cache::CargoCache;
     use super::toolchain::Toolchain;
     use super::*;
     use std::ffi::{OsStr, OsString};
@@ -58,27 +62,6 @@ mod macos {
     struct Profile {
         rules: String,
         parameters: Vec<OsString>,
-    }
-
-    struct CargoHome {
-        path: PathBuf,
-    }
-
-    impl CargoHome {
-        fn new(workspace: &WorkspacePolicy, cargo_home: &Path) -> anyhow::Result<Self> {
-            let path = workspace.root().join("target/.joe/cargo");
-            workspace.create_parent_dirs(&path.join("placeholder"))?;
-            for directory in ["index", "cache"] {
-                let source = cargo_home.join("registry").join(directory);
-                if source.exists() {
-                    workspace.link_process_cache(
-                        &source.canonicalize()?,
-                        &path.join("registry").join(directory),
-                    )?;
-                }
-            }
-            Ok(Self { path })
-        }
     }
 
     impl Profile {
@@ -162,7 +145,7 @@ mod macos {
         };
         if executable.is_absolute() && executable.is_file() {
             let profile = Profile::new(workspace, &executable.canonicalize()?, &toolchain, temporary)?;
-            let cargo_home = CargoHome::new(workspace, &toolchain.cargo_home)?;
+            let cache = CargoCache::new(workspace, &toolchain.cargo_home)?;
             let mut isolated = Command::new("/usr/bin/sandbox-exec");
             isolated.env_clear().current_dir(workspace.root());
             for parameter in profile.parameters {
@@ -172,8 +155,8 @@ mod macos {
             for (key, value) in [
                 ("HOME", workspace.root().to_path_buf()),
                 ("TMPDIR", temporary.path().to_path_buf()),
-                ("CARGO_TARGET_DIR", workspace.root().join("target")),
-                ("CARGO_HOME", cargo_home.path),
+                ("CARGO_TARGET_DIR", cache.target),
+                ("CARGO_HOME", cache.home),
                 ("RUSTUP_HOME", toolchain.rustup_home),
             ] {
                 let mut assignment = OsString::from(format!("{key}="));
