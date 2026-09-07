@@ -1,7 +1,7 @@
 use crate::{
     actor::{Dependency, Message},
     actor_state::ActorState,
-    provider_task::{self, ProviderEvent},
+    provider_task::{ProviderEvent, ProviderTarget, ProviderTask},
     session_control::Persistence,
     turn::{HistoryDisposition, Tag},
     turn_machine::{
@@ -90,14 +90,19 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                     self.stream_processor.token_count.clone(),
                 ));
                 match &self.persistence {
-                    Persistence::Ready => provider_task::spawn(
-                        self.actor_ref.clone(),
-                        self.llm.clone(),
-                        self.build_request(),
+                    Persistence::Ready => ProviderTask {
+                        target: ProviderTarget {
+                            actor: self.actor_ref.clone(),
+                            tag: run.tag,
+                        },
+                        client: self.llm.clone(),
+                        timeout: self.dependency.runtime.request_timeout,
+                    }
+                    .spawn(
+                        self.context_input(run.tag.turn),
                         &run,
                         &owner,
                         previous,
-                        self.dependency.runtime.request_timeout,
                     ),
                     Persistence::Failed(failure) => {
                         let _ = self.actor_ref.send_message(Message::Provider {
@@ -177,8 +182,42 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     pub(crate) async fn provider_event(&mut self, tag: Tag, event: ProviderEvent) {
         if let Some(response) = self.turn.provider_response(tag) {
             let update = match event {
+                ProviderEvent::ContextNotice(message) => {
+                    self.reporter.send(ActorToTuiPacket::ContextNotice(message));
+                    ProviderUpdate::Progress(crate::stream_processor::StreamNextStep::Noop)
+                }
+                ProviderEvent::CompactionUsage(usage) => {
+                    self.stream_processor.token_count.input_tokens = self
+                        .stream_processor
+                        .token_count
+                        .input_tokens
+                        .saturating_add(usage.input_tokens);
+                    self.stream_processor.token_count.output_tokens = self
+                        .stream_processor
+                        .token_count
+                        .output_tokens
+                        .saturating_add(usage.output_tokens);
+                    self.persist(crate::session::Event::Usage(
+                        self.stream_processor.token_count.clone(),
+                    ));
+                    self.reporter.send(ActorToTuiPacket::TokensUpdated(
+                        self.stream_processor.token_count.clone(),
+                    ));
+                    ProviderUpdate::Progress(crate::stream_processor::StreamNextStep::Noop)
+                }
+                ProviderEvent::ContextPrepared { update, reply } => {
+                    let result = self.commit_context(update).map(|request| {
+                        self.reporter
+                            .send(ActorToTuiPacket::ContextUpdated(request));
+                    });
+                    let _ = reply.send(result);
+                    ProviderUpdate::Progress(crate::stream_processor::StreamNextStep::Noop)
+                }
+                ProviderEvent::Compacted => {
+                    ProviderUpdate::Finished(Ok(crate::turn::AcceptedResponse::Compacted))
+                }
                 ProviderEvent::Item(item) => {
-                    match self.stream_processor.process_stream_event(item).await {
+                    match response.process(&mut self.stream_processor, item).await {
                         Ok(step) => ProviderUpdate::Progress(step),
                         Err(error) => ProviderUpdate::Finished(Err(provider_input_error(error))),
                     }
@@ -225,8 +264,18 @@ impl<C: Context + Clone + 'static> ActorState<C> {
 
     pub(crate) async fn command(&mut self, command: Command) {
         match command {
-            Command::Sessions | Command::Resume(_) | Command::New => {
+            Command::Sessions | Command::Resume(_) | Command::New | Command::Fork => {
                 self.session_command(command).await
+            }
+            Command::Compact => {
+                match self.turn.is_idle() {
+                    true => {
+                        let follow_up = crate::turn::FollowUp::new(None);
+                        self.compact_turn = Some(follow_up.id);
+                        self.dispatch(SessionEvent::Start(follow_up)).await;
+                    }
+                    false => self.reporter.send(ActorToTuiPacket::CommandResult(Command::Compact, "Interrupt the active turn before compacting manually. Automatic compaction runs between complete tool exchanges.".into())),
+                }
             }
             Command::Clear => {
                 self.dispatch(SessionEvent::Interrupt(HistoryDisposition::Clear))

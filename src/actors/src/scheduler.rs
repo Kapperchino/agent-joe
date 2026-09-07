@@ -146,8 +146,8 @@ impl<C: Context + Clone + 'static> Executor<C> {
             }
             Err(failure) => job.call.failed(failure),
         };
-        let result = match self.record_completion(job.operation, &result) {
-            Ok(()) => result,
+        let result = match self.record_completion(job.operation, result.clone()) {
+            Ok(result) => result,
             Err(failure) => ToolResult {
                 outcome: Err(failure),
                 ..result
@@ -212,14 +212,11 @@ impl<C: Context + Clone + 'static> Executor<C> {
     fn record_completion(
         &self,
         operation: OperationId,
-        result: &ToolResult,
-    ) -> Result<(), ToolFailure> {
+        result: ToolResult,
+    ) -> Result<ToolResult, ToolFailure> {
         match &self.dependency.runtime.session {
             Some(session) => session
-                .record(crate::session::Event::Completed {
-                    operation: session.key(operation),
-                    result: result.clone(),
-                })
+                .complete_tool(session.key(operation), result)
                 .map_err(|error| {
                     ToolFailure::new(
                         ToolFailureKind::Persistence,
@@ -227,7 +224,7 @@ impl<C: Context + Clone + 'static> Executor<C> {
                         format!("Could not record tool completion: {error}"),
                     )
                 }),
-            None => Ok(()),
+            None => Ok(result),
         }
     }
 

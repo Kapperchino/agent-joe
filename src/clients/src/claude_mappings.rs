@@ -25,9 +25,11 @@ impl TryFrom<llm::ContentBlock> for ContentBlock {
     fn try_from(value: llm::ContentBlock) -> anyhow::Result<Self> {
         match value {
             llm::ContentBlock::MessageBlock { text, .. } => Ok(ContentBlock::MessageBlock { text }),
-            llm::ContentBlock::OpenAIReasoning(_) => Err(anyhow::anyhow!(
-                "This history contains OpenAI reasoning state; start a new conversation before using Claude"
-            )),
+            llm::ContentBlock::OpenAIReasoning(_) | llm::ContentBlock::OpenAICompaction(_) => {
+                Err(anyhow::anyhow!(
+                    "This history contains OpenAI reasoning state; start a new conversation before using Claude"
+                ))
+            }
             llm::ContentBlock::ThinkingBlock {
                 thinking,
                 signature,
@@ -125,6 +127,7 @@ impl TryFrom<llm::ClientRequest> for ClientRequest {
                 ttl: "5m".to_string(),
             },
             effort: None,
+            max_output_tokens: value.max_output_tokens,
         })
     }
 }

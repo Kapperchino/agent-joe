@@ -1,6 +1,6 @@
 # Agent Joe implementation plan
 
-Status: M1–M3 are complete. M4 — sessions and context management — is in progress; M5–M10 remain planned.
+Status: M1–M4 are complete. M5–M10 remain planned.
 
 Cover all ten gaps identified in the Codex comparison while keeping Joe a Rust-focused agent with typed tools and no model-controlled shell. Delivery order follows dependencies, so context compaction follows the response format and turn lifecycle work it needs.
 
@@ -22,7 +22,7 @@ Cover all ten gaps identified in the Codex comparison while keeping Joe a Rust-f
 | M1 | Complete | Correct instructions, provider state, and tool-call history | 1: model state | M0 |
 | M2 | Complete | Cancellable turns, tool scheduling, and recoverable errors | 3: runtime reliability | M1 |
 | M3 | Complete | Workspace policy and reusable isolation for Cargo | 4: sandbox | M2 |
-| M4 | In progress | Durable sessions, bounded context, and compaction | 2: context and sessions | M1–M3 |
+| M4 | Complete | Durable sessions, bounded context, and compaction | 2: context and sessions | M1–M3 |
 | M5 | Planned | Full repository discovery and scoped instructions | 5: instructions; 7: discovery | M3–M4 |
 | M6 | Planned | Complete typed Cargo validation and process results | 6: validation | M2–M5 |
 | M7 | Planned | Direct work plus optional, bounded delegation | 8: worker coordination | M4–M6 |
@@ -140,7 +140,7 @@ credentials, network denial, output limits, and timeouts. Changed Rust files pas
 formatting and whitespace checks; existing worker import ordering remains the
 workspace formatting baseline.
 
-**M4 — Sessions and context management**
+**M4 — Sessions and context management — complete**
 
 Primary files: `src/actors/src/actor_state.rs`, client request models, and new session/history modules; commands and TUI session controls.
 
@@ -155,7 +155,7 @@ Primary files: `src/actors/src/actor_state.rs`, client request models, and new s
 
 Validation: resume after restart, abandoned transactions, incompatible schema/provider, crash between write intent and result, fork history isolation, giant test output, forced low context limit, repeated compaction retaining user constraints, and no orphan tool calls/results.
 
-First slice: durable sessions
+Durable session foundation
 
 - Shared simple/worker runtime persists conversation history, native provider items,
   queued user messages, tool batches, intent/results, usage, turn status, and worker
@@ -181,12 +181,11 @@ First slice: durable sessions
   Recovery supplies matched results for every saved call: completed, unexecuted,
   or uncertain. It never launches saved operations. Storage failures stop automatic
   continuation; shutdown retains results committed before actor delivery.
-- The environment currently has a 1 GiB map limit. History and outputs remain
-  inline and unbounded within that limit; map exhaustion fails closed. Artifacts,
-  history forks, context budgeting, compaction, and pending question state remain
-  subsequent slices. No older session format exists to migrate.
+- The environment has a 1 GiB map limit; map exhaustion fails closed. Additive
+  snapshot fields retain compatibility with the original session schema. Resume
+  archives oversized legacy inline outputs without changing exchange boundaries.
 
-Slice validation (2026-09-06): `cargo test --workspace --offline` passes 178 tests
+Durable-session slice validation (2026-09-06): `cargo test --workspace --offline` passes 178 tests
 on macOS ARM64, including process-exit recovery, abandoned transactions, map
 exhaustion, exclusive ownership across processes, schema/provider/workspace checks,
 durable simple/worker turns, picker navigation and cancellation, narrow terminal
@@ -198,7 +197,77 @@ cover temporary storage, semaphore and process identity access, cleanup, and
 denial of aliases to saved project storage.
 Linux and Windows have not been validated for this slice.
 
-Done when a long task can survive compaction and restart without losing requirements or duplicating side effects.
+Completed context and artifact work
+
+- Outputs above 8 KiB become immutable LMDB artifacts in the same transaction as
+  tool completion. UTF-8 previews retain the beginning and final diagnostics;
+  `read_artifact` retrieves pages up to 4096 bytes. Parents can retrieve descendant
+  worker outputs. Forks capture the artifact references available at creation and
+  cannot read later outputs from their source conversation.
+- The LMDB `conversation_artifacts` index uses `session_id:artifact_id` keys for
+  exact membership lookups and prefix queries. Artifact writes update the worker
+  and its ancestors atomically with completion; worker creation and forks seed
+  their inherited references in the same transaction. Existing stores backfill
+  the index once when it is first created. Reads do not deserialize snapshots.
+- File reads stop at 16 MiB, searches at 32 MiB with at most 1000 context lines on
+  either side, and executable output keeps the existing 16 MiB per-stream limit.
+  Full accepted output is retained up to 64 MiB per artifact. Exceeding a hard
+  operation limit fails explicitly; content beyond that limit is not retained.
+- `/fork` copies history, context checkpoints, usage, and pending questions into
+  an independently owned root session. It shares the existing filesystem and
+  refreshes workspace context and current instructions when switching.
+- Requests use a context projection separate from the full saved transcript.
+  Instructions, verbatim user requirements, pending questions, validation/failure
+  evidence, two recent complete exchanges, and response space precede optional
+  workspace context. Calls and results cannot be split at compaction boundaries.
+- Automatic compaction starts at 80% of the input budget; `/compact` invokes the
+  same cancellable workflow while idle. Public OpenAI uses `/responses/compact`.
+  Other routes use a tool-free `CompactionWorker` through `run_worker` to return
+  a bounded summary of completed older exchanges, with explicit opt-in for
+  compatible native endpoints. Native windows retain every returned
+  item and opaque field, including through restart and repeated compaction.
+- Summary streams must complete without tool calls and fit the requested size.
+  The worker shares the normal provider stream processor and cancellation scope;
+  its single-response mode prevents recursive compaction and forwards usage to
+  the parent without adding internal summary text to the transcript or TUI.
+  Worker policy is established during construction. The turn state machine owns
+  response acceptance and retries; provider failures retain their original kinds.
+  Stream and tool-exchange states explicitly track response starts and pending
+  calls. Compaction methods, summaries, plans, and artifact references own their
+  validation; artifact lookup uses the LMDB index directly.
+  A checkpoint commits before the next provider request. Failure, interruption,
+  or storage errors leave the previous context intact and stop continuation with
+  a recovery message. Queued user follow-ups continue after successful compaction.
+- The TUI distinguishes conservative request-context estimates from cumulative
+  provider usage, including reported compaction usage. Runtime flags configure
+  context/response budgets, native compaction selection, and storage namespace
+  separately from credentials. Pending question records and answers persist now;
+  the interactive question tool and planning flow remain M9 work.
+
+M4 validation (2026-09-06): `cargo test --workspace --offline` passes 205 tests on
+macOS ARM64. `cargo check --workspace --offline` passes with existing warnings;
+all 41 changed Rust files pass formatting, and the diff passes whitespace checks.
+New coverage includes artifact transaction rollback, UTF-8 retrieval,
+worker access and fork isolation, legacy output migration, pending questions,
+forced low context budgets, repeated compaction preserving requirements and
+failure evidence, queued input, cancellation, malformed/oversized summaries,
+compaction-worker shutdown and partial usage accounting, partial parallel tool
+results, single-response retry policy, nested-worker artifacts, index migration,
+indexed reads with unavailable snapshots, stale-owner rejection,
+storage failures, native HTTP compaction, and opaque replay after restart.
+Provider checks use local fixtures; live endpoints and Linux/Windows have not
+been validated for this completion slice.
+
+Limits: estimates count serialized UTF-8 bytes and framing rather than using
+provider tokenizers. Protected requirements/evidence that cannot fit cause a
+visible stop instead of being dropped. Codex does not receive an output-token
+limit, although response space is reserved locally. Native state cannot fall back
+to text summaries; an unsupported or failed native route must be retried or
+reconfigured. Context compaction preserves the full transcript and does not free
+LMDB archive space.
+
+Acceptance: long tasks survive compaction and restart with retained requirements,
+matched tool exchanges, and no automatic replay of saved side effects.
 
 **M5 — Repository discovery and instructions**
 
@@ -291,13 +360,11 @@ Validation: lazy skill loading and reference scope, conflicting skill guidance, 
 
 Done when skills and configured integrations work through the same session, lifecycle, and project policy as built-in tools.
 
-**Next implementation slice — M4**
+**Next implementation slice — M5**
 
-Build bounded output artifacts and retrieval on the LMDB session foundation, then
-budget request context and add `/compact` with provider-compatible fallback
-summaries. Add conversation-only `/fork` without implying filesystem isolation.
-Preserve current requirements, recent complete tool exchanges, and failure evidence
-through repeated compaction; distinguish request context size from cumulative usage.
+Build a deterministic, ignore-aware workspace file inventory independent of Rust
+symbol discovery. Add bounded path/text discovery, fresh line information, shared
+watcher updates, and scoped `AGENTS.md` loading with visible provenance.
 
 **Validation and rollout**
 

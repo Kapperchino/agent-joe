@@ -355,6 +355,7 @@ pub struct ClientRequest {
     pub(crate) cache_control: CacheControl,
     pub tools: Vec<Tool>,
     pub effort: Option<ClaudeEffort>,
+    pub max_output_tokens: Option<u32>,
 }
 
 impl ClaudeClient {
@@ -402,11 +403,11 @@ impl ClaudeClient {
     pub async fn chat(&self, req: ClientRequest) -> ClaudeResult<ChatResponse> {
         let inner_req = ChatRequest {
             model: req.model.unwrap_or(self.config.model.clone()),
-            max_tokens: MAX_TOKENS,
+            max_tokens: req.max_output_tokens.unwrap_or(MAX_TOKENS),
             messages: req.messages,
             system: req.system,
             temperature: None,
-            thinking: match req.thinking {
+            thinking: match req.thinking && req.max_output_tokens.unwrap_or(MAX_TOKENS) > 1024 {
                 true => Some(Thinking {
                     thinking_type: ThinkingType::Enabled,
                     budget_tokens: 1024,
@@ -443,11 +444,11 @@ impl ClaudeClient {
         let url = format!("{}/messages", self.base_url);
         let request = ChatRequestStream {
             model: req.model.unwrap_or_else(|| self.config.model.clone()),
-            max_tokens: MAX_TOKENS,
+            max_tokens: req.max_output_tokens.unwrap_or(MAX_TOKENS),
             messages: req.messages,
             system: req.system,
             temperature: None,
-            thinking: if req.thinking {
+            thinking: if req.thinking && req.max_output_tokens.unwrap_or(MAX_TOKENS) > 1024 {
                 Some(Thinking {
                     thinking_type: ThinkingType::Enabled,
                     budget_tokens: 1024,

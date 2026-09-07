@@ -15,36 +15,59 @@ impl TryFrom<llm::ClientRequest> for ClientRequest {
             input: llm_req
                 .messages
                 .into_iter()
-                .flat_map(|x| {
-                    let role = x.role.clone();
-                    x.content.into_iter().map(move |c| (c, role.clone()))
+                .flat_map(|message| {
+                    message
+                        .content
+                        .into_iter()
+                        .map(move |content| input_items(content, message.role.clone()))
                 })
-                .map(|(content, role)| match content {
-                    ContentBlock::MessageBlock { text, phase } => Ok(InputItem::Message {
-                        role: role.into(),
-                        content: text,
-                        phase,
-                    }),
-                    ContentBlock::ThinkingBlock { .. } => Err(anyhow::anyhow!(
-                        "This history contains thinking state incompatible with OpenAI; start a new conversation"
-                    )),
-                    ContentBlock::OpenAIReasoning(item) => Ok(InputItem::Reasoning(item)),
-                    ContentBlock::ToolBlock { tool_id, name, input } => Ok(InputItem::FunctionCall {
-                        id: tool_id.id,
-                        call_id: tool_id.call_id.ok_or_else(|| anyhow::anyhow!("OpenAI tool call is missing its call_id"))?,
-                        name,
-                        arguments: serde_json::to_string(&input)?,
-                    }),
-                    ContentBlock::ToolResult { tool_id, content, .. } => Ok(InputItem::FunctionCallOutput {
-                        call_id: tool_id.call_id.ok_or_else(|| anyhow::anyhow!("OpenAI tool result is missing its call_id"))?,
-                        output: content,
-                    }),
-                })
-                .collect::<anyhow::Result<Vec<_>>>()?,
+                .try_fold(Vec::new(), |mut items, next| {
+                    items.extend(next?);
+                    Ok::<_, anyhow::Error>(items)
+                })?,
+            max_output_tokens: llm_req.max_output_tokens,
             instructions: llm_req.system,
             model: llm_req.model,
             tools: llm_req.tools.into_iter().map(|t| t.into()).collect(),
         })
+    }
+}
+
+fn input_items(content: ContentBlock, role: llm::Role) -> anyhow::Result<Vec<InputItem>> {
+    match content {
+        ContentBlock::MessageBlock { text, phase } => Ok(vec![InputItem::Message {
+            role: role.into(),
+            content: text,
+            phase,
+        }]),
+        ContentBlock::ThinkingBlock { .. } => Err(anyhow::anyhow!(
+            "This history contains thinking state incompatible with OpenAI; start a new conversation"
+        )),
+        ContentBlock::OpenAIReasoning(item) => Ok(vec![InputItem::Reasoning(item)]),
+        ContentBlock::OpenAICompaction(window) => Ok(Vec::from(window)
+            .into_iter()
+            .map(InputItem::Native)
+            .collect()),
+        ContentBlock::ToolBlock {
+            tool_id,
+            name,
+            input,
+        } => Ok(vec![InputItem::FunctionCall {
+            id: tool_id.id,
+            call_id: tool_id
+                .call_id
+                .ok_or_else(|| anyhow::anyhow!("OpenAI tool call is missing its call_id"))?,
+            name,
+            arguments: serde_json::to_string(&input)?,
+        }]),
+        ContentBlock::ToolResult {
+            tool_id, content, ..
+        } => Ok(vec![InputItem::FunctionCallOutput {
+            call_id: tool_id
+                .call_id
+                .ok_or_else(|| anyhow::anyhow!("OpenAI tool result is missing its call_id"))?,
+            output: content,
+        }]),
     }
 }
 
@@ -359,6 +382,30 @@ impl From<tool_defs::ToolProperty> for openai::ToolProperty {
 mod tests {
     use super::*;
     use crate::failure::{Failure, FailureKind};
+
+    #[test]
+    fn native_compaction_replays_the_entire_window_without_altering_opaque_or_retained_items() {
+        let items = serde_json::json!([
+            {"type": "message", "id": "msg-old", "role": "user", "content": [{"type": "input_text", "text": "keep my requirements"}], "future": [1, 2]},
+            {"type": "compaction", "id": "cmp-1", "encrypted_content": "opaque-data", "future": {"a": true}},
+            {"type": "message", "id": "msg-recent", "role": "assistant", "phase": "commentary", "status": "completed", "content": [{"type": "output_text", "text": "retained", "annotations": []}]}
+        ]);
+        let message = llm::Message {
+            role: llm::Role::Assistant,
+            content: vec![ContentBlock::OpenAICompaction(
+                serde_json::from_value(items.clone()).unwrap(),
+            )],
+        };
+        let request: ClientRequest = llm::ClientRequest::new(vec![message.clone()])
+            .with_output_limit(2048)
+            .try_into()
+            .unwrap();
+        assert_eq!(serde_json::to_value(request.input).unwrap(), items);
+        assert_eq!(request.max_output_tokens, Some(2048));
+        assert!(
+            crate::claude::ClientRequest::try_from(llm::ClientRequest::new(vec![message])).is_err()
+        );
+    }
 
     #[test]
     fn incomplete_response_preserves_the_structured_reason() {

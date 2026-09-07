@@ -7,6 +7,8 @@ pub struct ActorToTui {
 }
 #[derive(Debug, Clone)]
 pub enum ActorToTuiPacket {
+    ContextUpdated(RequestContext),
+    ContextNotice(String),
     SessionChanged,
     SessionError(String),
     SessionChoices(Result<Vec<SessionSummary>, String>),
@@ -31,6 +33,13 @@ pub enum ActorToTuiPacket {
     ToolUse(Vec<String>),
     CommandResult(Command, String),
     TokensUpdated(TokenCount),
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RequestContext {
+    pub estimated_tokens: usize,
+    pub ceiling: usize,
+    pub response_reserve: u32,
 }
 
 #[derive(Debug, Clone)]

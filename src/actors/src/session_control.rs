@@ -39,6 +39,7 @@ enum SessionAction<'a> {
     Resume { id: &'a str },
     Current { id: &'a str },
     New,
+    Fork,
 }
 
 impl<'a> SessionAction<'a> {
@@ -49,15 +50,16 @@ impl<'a> SessionAction<'a> {
     ) -> anyhow::Result<Self> {
         match command {
             Command::Sessions => Ok(Self::List),
-            Command::Resume(_) | Command::New if !turn.is_idle() => Err(anyhow::anyhow!(
-                "Interrupt the active turn before switching sessions"
-            )),
+            Command::Resume(_) | Command::New | Command::Fork if !turn.is_idle() => Err(
+                anyhow::anyhow!("Interrupt the active turn before switching sessions"),
+            ),
             Command::Resume(ResumeTarget::Picker) => Ok(Self::Pick),
             Command::Resume(ResumeTarget::Session { id }) if current == Some(id.as_str()) => {
                 Ok(Self::Current { id })
             }
             Command::Resume(ResumeTarget::Session { id }) => Ok(Self::Resume { id }),
             Command::New => Ok(Self::New),
+            Command::Fork => Ok(Self::Fork),
             _ => Err(anyhow::anyhow!("Unsupported session command")),
         }
     }
@@ -70,6 +72,36 @@ enum SessionReply {
 }
 
 impl<C: Context + Clone + 'static> ActorState<C> {
+    pub(crate) fn commit_context(
+        &mut self,
+        update: crate::compactor::ContextUpdate,
+    ) -> Result<common_models::tui_models::RequestContext, Failure> {
+        if let Some(checkpoint) = update.checkpoint {
+            self.context_checkpoint = self.save_checkpoint(checkpoint)?;
+            self.reporter.send(ActorToTuiPacket::ContextNotice(
+                "Context compacted. The saved transcript and full output artifacts remain available.".into(),
+            ));
+        }
+        match &self.persistence {
+            Persistence::Ready => Ok(update.request),
+            Persistence::Failed(failure) => Err(failure.clone()),
+        }
+    }
+
+    fn save_checkpoint(
+        &mut self,
+        checkpoint: crate::context::Checkpoint,
+    ) -> Result<crate::context::Checkpoint, Failure> {
+        self.persist(Event::Compacted {
+            context: checkpoint.clone(),
+            usage: self.stream_processor.token_count.clone(),
+        });
+        match &self.persistence {
+            Persistence::Ready => Ok(checkpoint),
+            Persistence::Failed(failure) => Err(failure.clone()),
+        }
+    }
+
     pub(crate) fn append_history(&mut self, messages: Vec<llm::Message>) {
         let stored = self
             .dependency
@@ -213,6 +245,20 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                         .into(),
                 ))
             }
+            SessionAction::Fork => {
+                let session = self
+                    .dependency
+                    .runtime
+                    .session
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("There is no current session"))?
+                    .fork()?;
+                let id = session.id.clone();
+                self.restore_session(session).await?;
+                Ok(SessionReply::Message(format!(
+                    "Forked conversation into session {id}. Both conversations use the same workspace; filesystem changes are shared."
+                )))
+            }
         }
     }
 
@@ -251,6 +297,9 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                                 .collect::<Vec<_>>()
                                 .join("\n"),
                         ),
+                        (_, llm::ContentBlock::OpenAICompaction(_)) => {
+                            SessionMessage::Thinking("Provider-compacted context".into())
+                        }
                     })
             })
             .collect();
@@ -308,6 +357,9 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         self.cur_context = context;
         self.stream_processor.clear();
         self.stream_processor.token_count = snapshot.usage;
+        self.context_checkpoint = snapshot.context;
+        self.questions = snapshot.questions;
+        self.compact_turn = None;
         self.dependency.runtime.session = Some(session);
         self.persistence = Persistence::Ready;
         self.reporter.send(ActorToTuiPacket::TokensUpdated(

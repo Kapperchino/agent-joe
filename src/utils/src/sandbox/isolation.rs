@@ -4,6 +4,9 @@ use tokio::process::Command;
 mod temporary;
 pub(crate) use temporary::TemporaryDirectory;
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod toolchain;
+
 #[cfg(target_os = "linux")]
 mod linux;
 
@@ -42,8 +45,8 @@ impl IsolatedCommand {
 
 #[cfg(target_os = "macos")]
 mod macos {
+    use super::toolchain::Toolchain;
     use super::*;
-    use anyhow::Context;
     use std::ffi::{OsStr, OsString};
     use std::path::{Path, PathBuf};
 
@@ -57,11 +60,11 @@ mod macos {
     }
 
     impl CargoHome {
-        fn new(workspace: &WorkspacePolicy, home: &Path) -> anyhow::Result<Self> {
+        fn new(workspace: &WorkspacePolicy, cargo_home: &Path) -> anyhow::Result<Self> {
             let path = workspace.root().join("target/.joe/cargo");
             workspace.create_parent_dirs(&path.join("placeholder"))?;
             for directory in ["index", "cache"] {
-                let source = home.join(".cargo/registry").join(directory);
+                let source = cargo_home.join("registry").join(directory);
                 if source.exists() {
                     workspace.link_process_cache(
                         &source.canonicalize()?,
@@ -77,7 +80,7 @@ mod macos {
         fn new(
             workspace: &WorkspacePolicy,
             executable: &Path,
-            home: &Path,
+            toolchain: &Toolchain,
             temporary: &TemporaryDirectory,
         ) -> anyhow::Result<Self> {
             let mut profile = Self {
@@ -101,8 +104,11 @@ mod macos {
                 workspace.root(),
             );
             profile.path("allow", "file-read*", "literal", executable);
-            for relative in [".rustup", ".cargo/bin", ".cargo/registry"] {
-                let path = home.join(relative);
+            for path in [
+                toolchain.rustup_home.clone(),
+                toolchain.bin.clone(),
+                toolchain.cargo_home.join("registry"),
+            ] {
                 if path.exists() {
                     profile.path("allow", "file-read*", "subpath", &path.canonicalize()?);
                 }
@@ -143,17 +149,15 @@ mod macos {
     ) -> anyhow::Result<Command> {
         let workspace = workspace.policy();
         let source = command.as_std();
-        let home = dirs::home_dir()
-            .context("Cannot locate the installed Rust toolchain")?
-            .canonicalize()?;
+        let toolchain = Toolchain::new()?;
         let executable = if source.get_program() == OsStr::new("cargo") {
-            home.join(".cargo/bin/cargo")
+            toolchain.bin.join("cargo")
         } else {
             PathBuf::from(source.get_program())
         };
         if executable.is_absolute() && executable.is_file() {
-            let profile = Profile::new(workspace, &executable.canonicalize()?, &home, temporary)?;
-            let cargo_home = CargoHome::new(workspace, &home)?;
+            let profile = Profile::new(workspace, &executable.canonicalize()?, &toolchain, temporary)?;
+            let cargo_home = CargoHome::new(workspace, &toolchain.cargo_home)?;
             let mut isolated = Command::new("/usr/bin/sandbox-exec");
             isolated.env_clear().current_dir(workspace.root());
             for parameter in profile.parameters {
@@ -165,14 +169,14 @@ mod macos {
                 ("TMPDIR", temporary.path().to_path_buf()),
                 ("CARGO_TARGET_DIR", workspace.root().join("target")),
                 ("CARGO_HOME", cargo_home.path),
-                ("RUSTUP_HOME", home.join(".rustup")),
+                ("RUSTUP_HOME", toolchain.rustup_home),
             ] {
                 let mut assignment = OsString::from(format!("{key}="));
                 assignment.push(value);
                 isolated.arg(assignment);
             }
             let mut path = OsString::from("PATH=");
-            path.push(home.join(".cargo/bin"));
+            path.push(toolchain.bin);
             path.push(":/usr/bin:/bin:/usr/sbin:/sbin");
             isolated
                 .arg(path)

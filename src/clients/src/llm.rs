@@ -21,6 +21,18 @@ pub trait LLmClientTrait {
 }
 
 pub trait StreamProvider: Send + Sync {
+    fn native_compaction(&self) -> bool {
+        false
+    }
+
+    fn compact(
+        &self,
+        _: ClientRequest,
+    ) -> futures::future::BoxFuture<'static, anyhow::Result<crate::compaction::CompactionResponse>>
+    {
+        Box::pin(async { Err(anyhow::anyhow!("Native compaction is unavailable")) })
+    }
+
     fn chat_stream(
         &self,
         request: ClientRequest,
@@ -44,6 +56,33 @@ pub enum LLmClient {
 }
 
 impl LLmClient {
+    pub fn native_compaction(&self) -> bool {
+        match self {
+            Self::Injected(provider) => provider.native_compaction(),
+            Self::OpenApi { config, .. } => match config.get_config() {
+                Config::OpenAI(config) => {
+                    config.get_url().trim_end_matches('/') == "https://api.openai.com/v1"
+                }
+                _ => false,
+            },
+            Self::Claude { .. } => false,
+        }
+    }
+
+    pub async fn compact(
+        &mut self,
+        request: ClientRequest,
+    ) -> anyhow::Result<crate::compaction::CompactionResponse> {
+        self.refresh_config()?;
+        match self {
+            Self::Injected(provider) => provider.compact(request).await,
+            Self::OpenApi { client, .. } => client.compact(request).await,
+            Self::Claude { .. } => Err(anyhow::anyhow!(
+                "Native compaction is unavailable for this provider"
+            )),
+        }
+    }
+
     pub fn session_provider(&self) -> SessionProvider {
         match self.get_config() {
             None => SessionProvider::Injected,
@@ -258,15 +297,22 @@ pub struct StreamUsage {
     pub output_tokens: u32,
 }
 
+#[derive(Clone)]
 pub struct ClientRequest {
     pub messages: Vec<Message>,
     pub thinking: bool,
     pub system: Option<String>,
     pub model: Option<String>,
     pub tools: Vec<ToolDefinition>,
+    pub max_output_tokens: Option<u32>,
 }
 
 impl ClientRequest {
+    pub fn with_output_limit(mut self, tokens: u32) -> Self {
+        self.max_output_tokens = Some(tokens);
+        self
+    }
+
     pub fn with_system(mut self, instructions: String) -> Self {
         self.system = Some(instructions);
         self
@@ -279,6 +325,7 @@ impl ClientRequest {
             system: None,
             model: None,
             tools: vec![],
+            max_output_tokens: None,
         }
     }
 
@@ -289,6 +336,7 @@ impl ClientRequest {
             system: self.system,
             model: self.model,
             tools: self.tools,
+            max_output_tokens: self.max_output_tokens,
         }
     }
 
@@ -299,6 +347,7 @@ impl ClientRequest {
             system: self.system,
             model: Some(model),
             tools: self.tools,
+            max_output_tokens: self.max_output_tokens,
         }
     }
 
@@ -309,6 +358,7 @@ impl ClientRequest {
             system: self.system,
             model: self.model,
             tools,
+            max_output_tokens: self.max_output_tokens,
         }
     }
 }
@@ -396,6 +446,7 @@ pub enum ContentBlock {
         reasoning_id: Option<String>,
     },
     OpenAIReasoning(crate::openai::ReasoningItem),
+    OpenAICompaction(crate::compaction::CompactedWindow),
     ToolBlock {
         tool_id: ToolId,
         name: NonEmptyString,
@@ -459,6 +510,7 @@ impl Display for Message {
                         writeln!(f, "{}", part.text)?;
                     }
                 }
+                ContentBlock::OpenAICompaction(_) => writeln!(f, "[provider-compacted context]")?,
                 ContentBlock::ToolResult {
                     tool_id,
                     content,

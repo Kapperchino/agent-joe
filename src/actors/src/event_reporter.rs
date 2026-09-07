@@ -1,9 +1,12 @@
-use common_models::tui_models::{ActorToTui, ActorToTuiPacket, State};
+use common_models::tui_models::{ActorToTui, ActorToTuiPacket, State, TokenCount};
 use flume::Sender;
 #[derive(Clone)]
-pub struct EventReporter {
-    pub actor_id: u64,
-    pub tui_tx: Sender<ActorToTui>,
+pub enum EventReporter {
+    Interactive {
+        actor_id: u64,
+        tui_tx: Sender<ActorToTui>,
+    },
+    Compaction(crate::provider_task::ProviderTarget),
 }
 
 impl EventReporter {
@@ -16,9 +19,17 @@ impl EventReporter {
     }
 
     pub fn send(&self, item: ActorToTuiPacket) {
-        let _ = self.tui_tx.send(ActorToTui {
-            actor_id: self.actor_id,
-            packet: item,
-        });
+        if let Self::Interactive { actor_id, tui_tx } = self {
+            let _ = tui_tx.send(ActorToTui {
+                actor_id: *actor_id,
+                packet: item,
+            });
+        }
+    }
+
+    pub fn usage(&self, usage: TokenCount) {
+        if let Self::Compaction(target) = self {
+            let _ = target.send(crate::provider_task::ProviderEvent::CompactionUsage(usage));
+        }
     }
 }

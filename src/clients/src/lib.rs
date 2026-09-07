@@ -14,5 +14,6 @@ pub use openai_config::{
     OpenAIKeyConfig, OpenRouterConfig,
 };
 
+pub mod compaction;
 pub mod failure;
 mod sse;

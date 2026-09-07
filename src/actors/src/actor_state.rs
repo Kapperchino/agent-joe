@@ -11,6 +11,10 @@ use std::path::PathBuf;
 use tools::tool_defs::ToolDefinition;
 
 pub struct ActorState<C: Context> {
+    pub(crate) request_mode: crate::context::RequestMode,
+    pub(crate) context_checkpoint: crate::context::Checkpoint,
+    pub(crate) compact_turn: Option<common_models::runtime_ids::TurnId>,
+    pub(crate) questions: Vec<crate::session::PendingQuestion>,
     pub(crate) persistence: crate::session_control::Persistence,
     pub cur_context: C,
     pub(crate) turn: crate::turn_machine::TurnMachine,
@@ -23,14 +27,39 @@ pub struct ActorState<C: Context> {
     pub actor_ref: ActorRef<actor::Message>,
     pub(crate) dependency: Dependency<C>,
 }
+
+pub(crate) enum ActorMode {
+    Conversation,
+    SingleResponse(EventReporter),
+}
+
 impl<C: Context + Clone + 'static> ActorState<C> {
     pub async fn new(
-        mut dependency: Dependency<C>,
+        dependency: Dependency<C>,
         actor_ref: ActorRef<actor::Message>,
         file_actor: Option<ActorRef<file_actor::Message>>,
     ) -> anyhow::Result<Self> {
+        Self::with_mode(dependency, actor_ref, file_actor, ActorMode::Conversation).await
+    }
+
+    pub(crate) async fn with_mode(
+        mut dependency: Dependency<C>,
+        actor_ref: ActorRef<actor::Message>,
+        file_actor: Option<ActorRef<file_actor::Message>>,
+        mode: ActorMode,
+    ) -> anyhow::Result<Self> {
+        if matches!(mode, ActorMode::SingleResponse(_)) {
+            dependency.tools.clear();
+            dependency.runtime.sessions = None;
+            dependency.runtime.session = None;
+        }
         let history = Self::initial_history(&dependency.context).await;
         if let Some(store) = &dependency.runtime.sessions {
+            dependency.tools.push(tools::tool_defs::erased_tool::<
+                crate::tools::read_artifact::ReadArtifact,
+                C,
+                crate::actor::ActorContext<C>,
+            >());
             let parent = dependency
                 .runtime
                 .session
@@ -58,20 +87,31 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             None
         };
 
-        let context = dependency.context;
-        let actor_id = context.get_id();
-
-        let reporter = EventReporter {
-            actor_id,
-            tui_tx: dependency.tui_tx.clone(),
+        let request_mode = match &mode {
+            ActorMode::Conversation => crate::context::RequestMode::Continue,
+            ActorMode::SingleResponse(_) => crate::context::RequestMode::SingleResponse,
+        };
+        let reporter = match mode {
+            ActorMode::Conversation => EventReporter::Interactive {
+                actor_id: dependency.context.get_id(),
+                tui_tx: dependency.tui_tx.clone(),
+            },
+            ActorMode::SingleResponse(reporter) => reporter,
         };
 
         Ok(Self {
+            request_mode,
+            context_checkpoint: Default::default(),
+            compact_turn: None,
+            questions: Vec::new(),
             persistence: crate::session_control::Persistence::Ready,
-            cur_context: context,
+            cur_context: dependency.context,
             history,
             llm: dependency.client,
-            turn: crate::turn_machine::TurnMachine::new(dep_clone.runtime.scope.clone()),
+            turn: crate::turn_machine::TurnMachine::new(
+                dep_clone.runtime.scope.clone(),
+                request_mode,
+            ),
             reporter: reporter.clone(),
             debug_mode: dependency.debug_mode,
             file_actor,
@@ -98,11 +138,31 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             .collect()
     }
 
+    #[cfg(test)]
     pub fn build_request(&self) -> clients::llm::ClientRequest {
         clients::llm::ClientRequest::new(self.history.clone())
             .with_system(self.cur_context.instructions().to_owned())
             .with_tools(self.tool_definitions())
             .with_thinking()
+    }
+
+    pub(crate) fn context_input(
+        &self,
+        turn: common_models::runtime_ids::TurnId,
+    ) -> crate::context::ContextInput {
+        crate::context::ContextInput {
+            history: self.history.clone(),
+            checkpoint: self.context_checkpoint.clone(),
+            questions: self.questions.clone(),
+            instructions: self.cur_context.instructions().to_owned(),
+            tools: self.tool_definitions(),
+            limits: self.dependency.runtime.context_limits,
+            native: self.dependency.runtime.native_compaction,
+            mode: match self.compact_turn == Some(turn) {
+                true => crate::context::RequestMode::Compact,
+                false => self.request_mode,
+            },
+        }
     }
 
     pub async fn clear_history(&mut self) -> anyhow::Result<()> {
@@ -115,6 +175,9 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         }
         self.cur_context = context;
         self.history = history;
+        self.context_checkpoint = Default::default();
+        self.compact_turn = None;
+        self.questions.clear();
         self.persistence = crate::session_control::Persistence::Ready;
         self.stream_processor.token_count = Default::default();
         Ok(())

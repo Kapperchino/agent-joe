@@ -38,6 +38,10 @@ Conversations are saved automatically in a project-local LMDB environment at
   most recently updated first. Use arrow keys to select, Enter to resume, and Esc
   to cancel. Selecting a session restores its transcript without starting a turn.
 - `/resume <id>` restores a conversation while idle. Send a message to continue.
+- `/fork` creates and switches to an independent copy of the current conversation
+  while idle. Both conversations use the same workspace; edits are shared.
+- `/compact` summarizes older context while idle without deleting the transcript.
+  Compaction also runs automatically between complete exchanges as context fills.
 - `/new` starts a fresh conversation while idle.
 - `/clear` cancels active work and starts a fresh conversation. Previous sessions
   remain available; it does not delete saved history or undo workspace changes.
@@ -55,8 +59,50 @@ each owner records its process identity and a unique token. Resume can reclaim
 ownership after that process exits, and stale handles cannot read or update the
 session or release a newer owner's claim.
 Provider credentials and authorization headers are not serialized. The LMDB map
-currently allows 1 GiB; storage errors stop automatic continuation. Context
-budgeting, output artifacts, `/fork`, and `/compact` are still planned.
+allows 1 GiB; storage errors stop automatic continuation. Existing session snapshots
+remain readable. Oversized inline tool outputs from older sessions become artifacts
+when resumed.
+
+Tool outputs larger than 8 KiB are saved as immutable artifacts, with a short
+preview and artifact ID in the conversation. The agent can use `read_artifact`
+to retrieve UTF-8 pages of up to 4096 bytes, following `next_offset`. Parents can
+retrieve their workers' artifacts; forks retain the artifacts available when they
+were created. File reads are limited to 16 MiB, search output to 32 MiB, and process
+output to 16 MiB per stream. Full output within these limits is retained; each
+artifact has a 64 MiB maximum. Search context is limited to 1000 lines on each side.
+
+Request context is separate from the saved transcript. Current instructions,
+verbatim user messages, the two most recent complete exchanges, pending questions,
+and validation/failure evidence take priority over optional workspace context.
+Older exchanges use provider-native compaction on the public OpenAI route, or a
+model-generated summary on other routes. Native windows, including retained and
+opaque items, are replayed intact. Compaction cannot split tool calls from results
+or rerun saved operations. Failed, incomplete, or oversized summaries leave the
+previous context intact; interrupt and clear cancel an in-flight compaction.
+
+The status line separates estimated context for the next request from cumulative
+provider token usage, including compaction. Estimates conservatively count serialized
+UTF-8 bytes plus framing rather than using a model-specific tokenizer. Automatic
+compaction starts at 80% of the input budget after reserving response space. If
+mandatory context cannot fit, the turn stops with recovery instructions instead
+of dropping requirements.
+
+Runtime settings are separate from provider credentials:
+
+| Flag | Default | Purpose |
+| --- | --- | --- |
+| `--context-tokens` | `128000` | Context ceiling; configure it for the selected model |
+| `--response-tokens` | `16000` | Reserved response space; sent as an output limit where the route accepts it |
+| `--native-compaction` | `auto` | `auto` uses native compaction on public OpenAI; `on` opts a compatible route in; `off` uses summaries |
+| `--session-namespace` | `sessions` | Protected storage namespace under `.turbo-code` |
+
+The Codex backend does not receive `max_output_tokens`; response space is still
+reserved locally. Native compaction failures stop continuation and can be retried
+with `/compact`. Opaque native state cannot be converted to a fallback text summary.
+If preserved requirements or recent exchanges exceed the budget, restart with a
+larger context setting supported by your model, or use `/new`. Pending question
+records survive resume, fork, and compaction; interactive question tools are part
+of the planned M9 work.
 
 ## Supported llm providers
 
@@ -73,6 +119,28 @@ budgeting, output artifacts, `/fork`, and `/compact` are still planned.
 ```sh
 cargo run --relase
 ```
+
+## Tests
+
+Run the full suite from a regular terminal or a CI host that permits creating
+process sandboxes:
+
+```sh
+cargo test --workspace --offline
+```
+
+The Cargo-cancellation and process-isolation tests launch their own sandboxed
+processes. On macOS, running them through agent-joe's Cargo tool or another
+restricted sandbox runner can fail with
+`sandbox-exec: sandbox_apply: Operation not permitted` because the parent sandbox
+prevents applying the test's sandbox. Run these tests outside that runner. The
+Cargo-cancellation test can be run directly with:
+
+```sh
+cargo test -p actors runtime_test::interrupt_reaps_a_running_cargo_process_before_publishing_cancelled -- --exact
+```
+
+Linux process-isolation tests require `/usr/bin/bwrap` and host namespace support.
 
 ## Keybindings
 

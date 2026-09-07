@@ -1,11 +1,11 @@
 use crate::{
     runtime::WorkspaceRevision,
-    stream_processor::{ProcessedItem, StreamProcessor},
+    stream_processor::{ProcessedItem, StreamNextStep, StreamProcessor},
     tool_call::ToolCall,
 };
 use clients::{
     failure::{Failure, FailureKind},
-    llm::{ContentBlock, Message, Role},
+    llm::{ContentBlock, Message, Role, StreamEvent},
 };
 use common_models::{
     runtime_ids::{OperationId, TurnId},
@@ -173,28 +173,86 @@ impl ProviderRun {
             tag: Tag::new(turn),
             scope,
             attempt,
-            response: ResponseState::Streaming,
+            response: ResponseState::Awaiting,
         }
     }
 }
 #[derive(Clone, Copy)]
 pub enum ResponseState {
+    Awaiting,
     Streaming,
     Complete,
     ToolUse,
 }
 pub enum AcceptedResponse {
+    Compacted,
     Complete(Message),
     Tools(ToolBatch),
 }
+impl AcceptedResponse {
+    pub fn text_only(self) -> Result<Self, Failure> {
+        match &self {
+            Self::Complete(message)
+                if message.content.iter().all(|content| {
+                    matches!(
+                        content,
+                        ContentBlock::MessageBlock { .. }
+                            | ContentBlock::ThinkingBlock { .. }
+                            | ContentBlock::OpenAIReasoning(_)
+                    )
+                }) =>
+            {
+                Ok(self)
+            }
+            _ => Err(Failure::new(
+                FailureKind::InvalidInput,
+                "Expected a text response without tool or provider content",
+            )),
+        }
+    }
+}
 impl ResponseState {
+    pub fn advance(self, step: StreamNextStep) -> Self {
+        match step {
+            StreamNextStep::Started => Self::Streaming,
+            StreamNextStep::Done | StreamNextStep::Refused => Self::Complete,
+            StreamNextStep::ToolUse => Self::ToolUse,
+            StreamNextStep::Accum | StreamNextStep::Noop => self,
+        }
+    }
+
+    pub async fn process(
+        self,
+        stream: &mut StreamProcessor,
+        item: StreamEvent,
+    ) -> anyhow::Result<StreamNextStep> {
+        match (&self, &item) {
+            (_, StreamEvent::Ping | StreamEvent::Accum | StreamEvent::Error { .. }) => Ok(()),
+            (Self::Awaiting, StreamEvent::MessageStart { .. }) => Ok(()),
+            (Self::Awaiting, _) => Err(anyhow::anyhow!(
+                "Provider sent content before starting its response"
+            )),
+            (Self::Streaming, StreamEvent::MessageStart { .. }) => Err(anyhow::anyhow!(
+                "Provider started a second response in one stream"
+            )),
+            (Self::Streaming, StreamEvent::MessageStop) => Err(anyhow::anyhow!(
+                "Provider stopped before completing its response"
+            )),
+            (Self::Streaming, _) | (_, StreamEvent::MessageStop) => Ok(()),
+            _ => Err(anyhow::anyhow!(
+                "Provider sent content after completing its response"
+            )),
+        }?;
+        stream.process_stream_event(item).await
+    }
+
     pub fn finish(
         self,
         turn: TurnId,
         stream: &mut StreamProcessor,
     ) -> Result<AcceptedResponse, Failure> {
         match self {
-            ResponseState::Streaming => Err(Failure::new(
+            ResponseState::Awaiting | ResponseState::Streaming => Err(Failure::new(
                 FailureKind::Transport,
                 "Provider stream ended without a complete response",
             )),

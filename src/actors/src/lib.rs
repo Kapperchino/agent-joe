@@ -20,6 +20,8 @@ mod scheduler;
 pub mod session;
 mod session_control;
 
+mod compactor;
+pub mod context;
 mod provider_task;
 mod turn;
 mod turn_driver;

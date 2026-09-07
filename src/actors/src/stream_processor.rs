@@ -17,8 +17,10 @@ pub struct StreamProcessor {
 }
 
 pub enum StreamNextStep {
+    Started,
     Accum,
     Done,
+    Refused,
     ToolUse,
     Noop,
 }
@@ -33,6 +35,7 @@ impl StreamNextStep {
     pub fn new(reason: &StopReason, batch: &Batch) -> anyhow::Result<Self> {
         use clients::failure::{Failure, FailureKind};
         match reason {
+            StopReason::Refusal => Ok(StreamNextStep::Refused),
             StopReason::MaxTokens => Err(Failure::new(
                 FailureKind::Truncation,
                 "Provider output reached its token limit; no pending tools were executed",
@@ -60,7 +63,7 @@ impl StreamProcessor {
         match item {
             StreamEvent::MessageStart { .. } => {
                 self.batches.push(Batch::new());
-                Ok(StreamNextStep::Accum)
+                Ok(StreamNextStep::Started)
             }
             StreamEvent::ContentBlockDelta { index, delta } => {
                 self.batches
@@ -75,7 +78,8 @@ impl StreamProcessor {
             } => {
                 self.batches
                     .last_mut()
-                    .map(|batch| batch.put(index, ContentBlock::new(content_block)));
+                    .ok_or_else(|| anyhow!("Content start without a response"))?
+                    .put(index, ContentBlock::new(content_block));
                 Ok(StreamNextStep::Accum)
             }
             StreamEvent::ContentBlockStop { index, id } => {
@@ -115,9 +119,10 @@ impl StreamProcessor {
         match item {
             StreamEvent::MessageStart { message } => {
                 self.change_state(State::StreamStart);
-                self.token_count.input_tokens += message.usage.input_tokens;
-                self.reporter
-                    .send(ActorToTuiPacket::TokensUpdated(self.token_count.clone()));
+                self.record_usage(TokenCount {
+                    input_tokens: message.usage.input_tokens,
+                    output_tokens: 0,
+                });
             }
             StreamEvent::ContentBlockStart {
                 index: _,
@@ -144,11 +149,10 @@ impl StreamProcessor {
                     });
             }
             StreamEvent::MessageDelta { usage, .. } => {
-                self.token_count.output_tokens += usage.output_tokens;
-                self.token_count.input_tokens += usage.input_tokens;
-                let _ = self
-                    .reporter
-                    .send(ActorToTuiPacket::TokensUpdated(self.token_count.clone()));
+                self.record_usage(TokenCount {
+                    input_tokens: usage.input_tokens,
+                    output_tokens: usage.output_tokens,
+                });
             }
             StreamEvent::ContentBlockComplete { content, .. } => {
                 self.change_state(match content {
@@ -167,6 +171,20 @@ impl StreamProcessor {
     pub fn clear(&mut self) {
         self.batches.clear();
         self.cur_state = State::Ready
+    }
+
+    fn record_usage(&mut self, usage: TokenCount) {
+        self.token_count.input_tokens = self
+            .token_count
+            .input_tokens
+            .saturating_add(usage.input_tokens);
+        self.token_count.output_tokens = self
+            .token_count
+            .output_tokens
+            .saturating_add(usage.output_tokens);
+        self.reporter.usage(usage);
+        self.reporter
+            .send(ActorToTuiPacket::TokensUpdated(self.token_count.clone()));
     }
 
     pub fn send_thinking(&self) -> bool {

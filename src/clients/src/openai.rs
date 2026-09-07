@@ -63,6 +63,8 @@ pub enum InputItem {
     },
     #[serde(rename = "reasoning")]
     Reasoning(ReasoningItem),
+    #[serde(untagged)]
+    Native(serde_json::Value),
 }
 
 impl InputItem {
@@ -165,7 +167,10 @@ impl ResponseRequest {
             input: req.input,
             instructions: req.instructions.unwrap_or_default(),
             temperature: None,
-            max_output_tokens: None,
+            max_output_tokens: match config.auth {
+                OpenAIAuthConfig::Codex(_) => None,
+                _ => req.max_output_tokens,
+            },
             tools: req.tools,
             reasoning: Some(config.get_reasoning()),
             parallel_tool_calls: true,
@@ -644,6 +649,7 @@ pub struct ClientRequest {
     pub instructions: Option<String>,
     pub model: Option<String>,
     pub tools: Vec<Tool>,
+    pub max_output_tokens: Option<u32>,
 }
 
 impl ClientRequest {
@@ -653,6 +659,7 @@ impl ClientRequest {
             instructions: None,
             model: None,
             tools: vec![],
+            max_output_tokens: None,
         }
     }
 
@@ -673,6 +680,45 @@ impl ClientRequest {
 }
 
 impl OpenAIClient {
+    pub async fn compact(
+        &self,
+        request: llm::ClientRequest,
+    ) -> anyhow::Result<crate::compaction::CompactionResponse> {
+        let request: ClientRequest = request.try_into()?;
+        let body = crate::compaction::CompactionRequest {
+            model: request.model.unwrap_or_else(|| self.config.model.clone()),
+            input: request.input,
+            instructions: request.instructions.unwrap_or_default(),
+        };
+        let response = self
+            .client
+            .post(format!(
+                "{}/responses/compact",
+                self.config.get_url().trim_end_matches('/')
+            ))
+            .json(&body)
+            .send()
+            .await?;
+        let status = response.status();
+        let mut stream = response.bytes_stream();
+        let mut bytes = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            match bytes.len().saturating_add(chunk.len()) <= 16 * 1024 * 1024 {
+                true => bytes.extend_from_slice(&chunk),
+                false => Err(anyhow!("Compaction response exceeds 16 MiB"))?,
+            }
+        }
+        match status.is_success() {
+            true => Ok(serde_json::from_slice(&bytes)?),
+            false => Err(crate::failure::Failure::http(
+                status.as_u16(),
+                String::from_utf8_lossy(&bytes).into_owned(),
+            )
+            .into()),
+        }
+    }
+
     pub fn new(config: OpenAIConfig) -> anyhow::Result<Self> {
         let headers = match &config.auth {
             OpenAIAuthConfig::APIKey(api) => {

@@ -1,4 +1,5 @@
 use crate::{
+    context::RequestMode,
     runtime::WorkspaceRevision,
     scheduler::ToolEvent,
     stream_processor::StreamNextStep,
@@ -55,6 +56,24 @@ pub(crate) enum SessionEvent {
 pub(crate) enum ProviderUpdate {
     Progress(StreamNextStep),
     Finished(Result<AcceptedResponse, Failure>),
+}
+
+impl ProviderUpdate {
+    fn for_mode(self, mode: RequestMode) -> Self {
+        match (mode, self) {
+            (
+                RequestMode::SingleResponse,
+                Self::Progress(StreamNextStep::ToolUse | StreamNextStep::Refused),
+            ) => Self::Finished(Err(Failure::new(
+                clients::failure::FailureKind::InvalidInput,
+                "Expected a completed text response without tools or refusal",
+            ))),
+            (RequestMode::SingleResponse, Self::Finished(Ok(response))) => {
+                Self::Finished(response.text_only())
+            }
+            (_, update) => update,
+        }
+    }
 }
 
 pub(crate) enum Effect {
@@ -144,6 +163,7 @@ pub(crate) struct TurnMachine {
 }
 
 struct Session {
+    mode: RequestMode,
     state: TurnState,
     queue: VecDeque<FollowUp>,
     role: SessionRole,
@@ -162,9 +182,10 @@ enum ShutdownWork {
 }
 
 impl TurnMachine {
-    pub fn new(scope: ExecutionScope) -> Self {
+    pub fn new(scope: ExecutionScope, mode: RequestMode) -> Self {
         Self {
             state: SessionState::Running(Session {
+                mode,
                 state: TurnState::Idle,
                 queue: VecDeque::new(),
                 role: SessionRole::Interactive,
@@ -256,22 +277,20 @@ impl Session {
                 }),
             },
             SessionEvent::Provider { tag, update } => match std::mem::take(&mut self.state) {
-                TurnState::Provider(mut turn) if turn.phase.tag == tag => match update {
-                    ProviderUpdate::Progress(step) => {
-                        match step {
-                            StreamNextStep::Done => turn.phase.response = ResponseState::Complete,
-                            StreamNextStep::ToolUse => turn.phase.response = ResponseState::ToolUse,
-                            StreamNextStep::Accum | StreamNextStep::Noop => {}
+                TurnState::Provider(mut turn) if turn.phase.tag == tag => {
+                    match update.for_mode(self.mode) {
+                        ProviderUpdate::Progress(step) => {
+                            turn.phase.response = turn.phase.response.advance(step);
+                            self.state = TurnState::Provider(turn);
                         }
-                        self.state = TurnState::Provider(turn);
+                        ProviderUpdate::Finished(Ok(response)) => {
+                            self.accept_response(turn, response, effects);
+                        }
+                        ProviderUpdate::Finished(Err(failure)) => {
+                            self.provider_failed(turn, failure, effects);
+                        }
                     }
-                    ProviderUpdate::Finished(Ok(response)) => {
-                        self.accept_response(turn, response, effects);
-                    }
-                    ProviderUpdate::Finished(Err(failure)) => {
-                        self.provider_failed(turn, failure, effects);
-                    }
-                },
+                }
                 obsolete => self.state = obsolete,
             },
             SessionEvent::Tools {
@@ -351,6 +370,14 @@ impl Session {
             "Provider response received",
         ));
         match response {
+            AcceptedResponse::Compacted => {
+                self.stop(
+                    turn,
+                    TurnOutcome::Completed,
+                    HistoryDisposition::Retain,
+                    effects,
+                );
+            }
             AcceptedResponse::Tools(batch) => {
                 effects.extend([
                     Effect::turn(turn.id, Lifecycle::WaitingForTools, None),
@@ -387,7 +414,8 @@ impl Session {
             Lifecycle::Failed,
             failure.to_string(),
         ));
-        if failure.retryable() && turn.phase.attempt < 2 {
+        if self.mode != RequestMode::SingleResponse && failure.retryable() && turn.phase.attempt < 2
+        {
             let previous = turn.phase.scope.clone();
             let run = ProviderRun::new(turn.id, turn.scope.child(), turn.phase.attempt + 1);
             effects.push(Effect::turn(

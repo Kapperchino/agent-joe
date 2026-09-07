@@ -33,6 +33,22 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn file_reads_reject_oversized_content_before_allocating_unbounded_output() {
+    let fixture = Fixture::new();
+    let path = fixture.root.join("large-file");
+    let file = std::fs::File::create(&path).unwrap();
+    file.set_len(16 * 1024 * 1024 + 1).unwrap();
+    assert!(
+        fixture
+            .policy()
+            .read(&path)
+            .unwrap_err()
+            .to_string()
+            .contains("16 MiB read limit")
+    );
+}
+
+#[test]
 fn process_workspaces_allow_internal_hard_links_with_matching_access() {
     for access in [RootAccess::ReadOnly, RootAccess::ReadWrite] {
         let fixture = Fixture::new();

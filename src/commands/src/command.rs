@@ -14,6 +14,10 @@ mod tests {
     #[test]
     fn session_commands_accept_only_their_expected_arguments() {
         assert_eq!(Command::parse("sessions"), Ok(Command::Sessions));
+        assert_eq!(Command::parse("fork"), Ok(Command::Fork));
+        assert_eq!(Command::parse("compact"), Ok(Command::Compact));
+        assert!(Command::parse("fork workspace").is_err());
+        assert!(Command::parse("compact extra").is_err());
         assert_eq!(
             Command::parse("resume saved-session"),
             Ok(Command::Resume(ResumeTarget::Session {
@@ -45,6 +49,10 @@ pub enum Command {
     New,
     #[strum(message = "lists saved sessions in this project")]
     Sessions,
+    #[strum(message = "forks this conversation in the same workspace")]
+    Fork,
+    #[strum(message = "compacts older context while preserving the saved transcript")]
+    Compact,
     #[strum(message = "opens the saved-session picker; /resume <id> resumes directly")]
     Resume(ResumeTarget),
     #[strum(serialize = "model")]

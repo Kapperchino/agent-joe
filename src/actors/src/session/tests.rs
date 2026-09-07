@@ -61,6 +61,557 @@ fn history() -> Vec<Message> {
     ]
 }
 
+fn save_output(session: &Session, content: &str) -> ToolResult {
+    let mut pending = batch();
+    pending.operations.truncate(1);
+    pending.assistant.content.truncate(1);
+    let operation = pending.operations[0].clone();
+    session.record(Event::Prepared(pending)).unwrap();
+    session
+        .record(Event::Intent {
+            operation: operation.id.clone(),
+            effect: ToolEffect::Read,
+        })
+        .unwrap();
+    let result = session
+        .complete_tool(
+            operation.id.clone(),
+            ToolResult {
+                outcome: Ok(content.into()),
+                ..success(&operation)
+            },
+        )
+        .unwrap();
+    let messages = session.snapshot().unwrap().pending.unwrap().messages();
+    session.record(Event::History(messages.into())).unwrap();
+    result
+}
+
+#[test]
+fn full_artifacts_survive_restart_with_bounded_utf8_pages() {
+    use super::artifacts::{ArtifactRange, INLINE_BYTES};
+    let workspace = Workspace::new();
+    let store = workspace.store();
+    let session = store
+        .create(SessionProvider::Injected, None, history())
+        .unwrap();
+    let content = format!(
+        "start\n{}\nfinal diagnostic",
+        "résumé 終わり\n".repeat(10_000)
+    );
+    let result = save_output(&session, &content);
+    let preview = result.outcome.unwrap();
+    assert!(preview.len() <= INLINE_BYTES);
+    assert!(preview.contains("final diagnostic"));
+    let artifact = session.snapshot().unwrap().artifacts[0].clone();
+    assert!(preview.contains(&artifact.id));
+    let id = session.id.clone();
+    let unrelated = store
+        .create(SessionProvider::Injected, None, history())
+        .unwrap();
+    assert!(
+        unrelated
+            .read_artifact(&artifact.id, ArtifactRange::new(0, 4096).unwrap())
+            .is_err()
+    );
+    drop(unrelated);
+    drop(session);
+    drop(store);
+    let store = workspace.store();
+    let session = workspace
+        .resume(&store, &id, &SessionProvider::Injected)
+        .unwrap();
+    let mut retrieved = String::new();
+    let mut next = Some(0);
+    while let Some(offset) = next {
+        let page = session
+            .read_artifact(&artifact.id, ArtifactRange::new(offset, 4096).unwrap())
+            .unwrap();
+        assert!(page.content.len() <= 4096);
+        next = page.next_offset;
+        retrieved.push_str(&page.content);
+    }
+    assert_eq!(retrieved, content);
+    assert!(ArtifactRange::new(0, 4097).is_err());
+    assert!(
+        session
+            .read_artifact(
+                &artifact.id,
+                ArtifactRange::new(content.len() + 1, 10).unwrap()
+            )
+            .is_err()
+    );
+    assert!(
+        session
+            .read_artifact(&artifact.id, ArtifactRange::new(8, 10).unwrap())
+            .is_err()
+    );
+}
+
+#[test]
+fn artifact_and_completion_abort_together() {
+    let workspace = Workspace::new();
+    let store = workspace.store();
+    let session = store
+        .create(SessionProvider::Injected, None, history())
+        .unwrap();
+    let pending = batch();
+    let operation = pending.operations[0].clone();
+    session.record(Event::Prepared(pending)).unwrap();
+    session
+        .record(Event::Intent {
+            operation: operation.id.clone(),
+            effect: ToolEffect::Write,
+        })
+        .unwrap();
+    let before = serde_json::to_value(session.snapshot().unwrap()).unwrap();
+    let result = ToolResult {
+        outcome: Ok("large output ".repeat(10_000)),
+        ..success(&operation)
+    };
+    assert!(
+        session
+            .complete_tool("unknown operation".into(), result)
+            .is_err()
+    );
+    assert_eq!(
+        serde_json::to_value(session.snapshot().unwrap()).unwrap(),
+        before
+    );
+    let transaction = store.env.read_txn().unwrap();
+    assert_eq!(store.artifacts.len(&transaction).unwrap(), 0);
+    assert!(
+        store
+            .artifact_index
+            .list(&transaction, &session.id)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn original_session_snapshots_resume_and_archive_legacy_inline_outputs() {
+    use super::artifacts::{ArtifactRange, INLINE_BYTES};
+    let workspace = Workspace::new();
+    let store = workspace.store();
+    let session = store
+        .create(SessionProvider::Injected, None, history())
+        .unwrap();
+    let mut pending = batch();
+    pending.operations.truncate(1);
+    pending.assistant.content.truncate(1);
+    let operation = pending.operations[0].clone();
+    let original = "legacy output ".repeat(10_000);
+    session.record(Event::Prepared(pending)).unwrap();
+    session
+        .record(Event::Intent {
+            operation: operation.id.clone(),
+            effect: ToolEffect::Read,
+        })
+        .unwrap();
+    session
+        .record(Event::Completed {
+            operation: operation.id.clone(),
+            result: ToolResult {
+                outcome: Ok(original.clone()),
+                ..success(&operation)
+            },
+        })
+        .unwrap();
+    let mut saved = serde_json::to_value(session.snapshot().unwrap()).unwrap();
+    for field in ["artifacts", "forked_from", "context", "questions"] {
+        saved.as_object_mut().unwrap().remove(field);
+    }
+    let mut transaction = store.env.write_txn().unwrap();
+    store
+        .snapshots
+        .put(
+            &mut transaction,
+            &session.id,
+            &serde_json::to_vec(&saved).unwrap(),
+        )
+        .unwrap();
+    transaction.commit().unwrap();
+    let id = session.id.clone();
+    drop(session);
+    let resumed = workspace
+        .resume(&store, &id, &SessionProvider::Injected)
+        .unwrap();
+    let snapshot = resumed.snapshot().unwrap();
+    assert_eq!(snapshot.context.generation, 0);
+    assert_eq!(snapshot.artifacts.len(), 1);
+    assert!(snapshot.history.last().unwrap().to_string().len() < INLINE_BYTES);
+    let page = resumed
+        .read_artifact(
+            &snapshot.artifacts[0].id,
+            ArtifactRange::new(0, 4096).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(page.content, original[..4096]);
+}
+
+#[test]
+fn worker_artifacts_are_accessible_to_parents_and_snapshot_into_forks() {
+    use super::artifacts::ArtifactRange;
+    let workspace = Workspace::new();
+    let store = workspace.store();
+    let parent = store
+        .create(SessionProvider::Injected, None, history())
+        .unwrap();
+    let worker = store
+        .create(
+            SessionProvider::Injected,
+            Some(parent.id.clone()),
+            history(),
+        )
+        .unwrap();
+    save_output(&worker, &"worker output".repeat(1000));
+    let artifact = worker.snapshot().unwrap().artifacts[0].id.clone();
+    let nested = store
+        .create(
+            SessionProvider::Injected,
+            Some(worker.id.clone()),
+            history(),
+        )
+        .unwrap();
+    save_output(&nested, &"nested output".repeat(1000));
+    let nested_artifact = nested
+        .snapshot()
+        .unwrap()
+        .artifacts
+        .last()
+        .unwrap()
+        .id
+        .clone();
+    let fork = parent.fork().unwrap();
+    for session in [&parent, &worker, &fork] {
+        assert!(
+            session
+                .read_artifact(&nested_artifact, ArtifactRange::new(0, 1024).unwrap())
+                .is_ok()
+        );
+    }
+    assert!(
+        parent
+            .read_artifact(&artifact, ArtifactRange::new(0, 1024).unwrap())
+            .is_ok()
+    );
+    assert!(
+        fork.read_artifact(&artifact, ArtifactRange::new(0, 1024).unwrap())
+            .is_ok()
+    );
+    for session in [&worker, &nested] {
+        save_output(session, &"future output".repeat(1000));
+        let later = session
+            .snapshot()
+            .unwrap()
+            .artifacts
+            .last()
+            .unwrap()
+            .id
+            .clone();
+        assert!(
+            parent
+                .read_artifact(&later, ArtifactRange::new(0, 1024).unwrap())
+                .is_ok()
+        );
+        assert!(
+            fork.read_artifact(&later, ArtifactRange::new(0, 1024).unwrap())
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn artifact_reads_and_forks_use_the_lmdb_index() {
+    use super::artifacts::ArtifactRange;
+    let workspace = Workspace::new();
+    let store = workspace.store();
+    let parent = store
+        .create(SessionProvider::Injected, None, history())
+        .unwrap();
+    let worker = store
+        .create(
+            SessionProvider::Injected,
+            Some(parent.id.clone()),
+            history(),
+        )
+        .unwrap();
+    let unrelated = store
+        .create(SessionProvider::Injected, None, history())
+        .unwrap();
+    let content = "indexed worker output".repeat(1000);
+    save_output(&worker, &content);
+    let artifact = worker.snapshot().unwrap().artifacts[0].clone();
+    invalidate(&store, &worker.id);
+    invalidate(&store, &unrelated.id);
+    let page = parent
+        .read_artifact(&artifact.id, ArtifactRange::new(0, 4096).unwrap())
+        .unwrap();
+    assert_eq!(page.content, content[..4096]);
+    let fork = parent.fork().unwrap();
+    assert_eq!(fork.snapshot().unwrap().artifacts.len(), 1);
+    assert_eq!(
+        fork.read_artifact(&artifact.id, ArtifactRange::new(0, 4096).unwrap())
+            .unwrap()
+            .content,
+        page.content
+    );
+    let next_worker = store
+        .create(
+            SessionProvider::Injected,
+            Some(parent.id.clone()),
+            history(),
+        )
+        .unwrap();
+    assert_eq!(next_worker.snapshot().unwrap().artifacts[0].id, artifact.id);
+    invalidate(&store, &parent.id);
+    assert_eq!(
+        parent
+            .read_artifact(&artifact.id, ArtifactRange::new(0, 4096).unwrap())
+            .unwrap()
+            .content,
+        page.content
+    );
+}
+
+#[test]
+fn existing_stores_build_the_artifact_index_once_and_preserve_fork_boundaries() {
+    use super::artifacts::{ArtifactRange, ArtifactReference};
+    let workspace = Workspace::new();
+    let policy = WorkspacePolicy::workspace(workspace.path.clone()).unwrap();
+    let storage = policy.session_storage("sessions").unwrap();
+    let env = unsafe {
+        EnvOpenOptions::new()
+            .map_size(1024 * 1024 * 1024)
+            .max_dbs(5)
+            .open(storage.path())
+            .unwrap()
+    };
+    let mut transaction = env.write_txn().unwrap();
+    let snapshots: Database<Str, Bytes> = env
+        .create_database(&mut transaction, Some("session_snapshots"))
+        .unwrap();
+    let _: Database<Str, Bytes> = env
+        .create_database(&mut transaction, Some("session_events"))
+        .unwrap();
+    let _: Database<Str, Bytes> = env
+        .create_database(&mut transaction, Some("session_owners"))
+        .unwrap();
+    let artifacts: Database<Str, Bytes> = env
+        .create_database(&mut transaction, Some("session_artifacts"))
+        .unwrap();
+    let first = ArtifactReference {
+        id: "first".into(),
+        bytes: 5,
+    };
+    let later = ArtifactReference {
+        id: "later".into(),
+        bytes: 5,
+    };
+    artifacts
+        .put(&mut transaction, &first.id, b"first")
+        .unwrap();
+    artifacts
+        .put(&mut transaction, &later.id, b"later")
+        .unwrap();
+    let record = |id: &str, parent: Option<&str>, artifacts: Vec<ArtifactReference>| {
+        serde_json::json!({
+            "version": VERSION,
+            "sequence": 1,
+            "id": id,
+            "workspace": storage.workspace_identity(),
+            "provider": SessionProvider::Injected,
+            "parent": parent,
+            "history": history(),
+            "pending": null,
+            "queued": [],
+            "status": Lifecycle::Ready,
+            "usage": TokenCount::default(),
+            "artifacts": artifacts
+        })
+    };
+    for snapshot in [
+        record("root", None, vec![]),
+        record("worker", Some("root"), vec![first.clone()]),
+        record("nested", Some("worker"), vec![first.clone(), later.clone()]),
+        record("fork", None, vec![first.clone()]),
+    ] {
+        snapshots
+            .put(
+                &mut transaction,
+                snapshot["id"].as_str().unwrap(),
+                &serde_json::to_vec(&snapshot).unwrap(),
+            )
+            .unwrap();
+    }
+    transaction.commit().unwrap();
+    drop(env);
+    let store = workspace.store();
+    let root = workspace
+        .resume(&store, "root", &SessionProvider::Injected)
+        .unwrap();
+    let fork = workspace
+        .resume(&store, "fork", &SessionProvider::Injected)
+        .unwrap();
+    assert_eq!(
+        root.read_artifact(&later.id, ArtifactRange::new(0, 5).unwrap())
+            .unwrap()
+            .content,
+        "later"
+    );
+    assert_eq!(
+        fork.read_artifact(&first.id, ArtifactRange::new(0, 5).unwrap())
+            .unwrap()
+            .content,
+        "first"
+    );
+    assert!(
+        fork.read_artifact(&later.id, ArtifactRange::new(0, 5).unwrap())
+            .is_err()
+    );
+    invalidate(&store, "worker");
+    drop(fork);
+    drop(root);
+    drop(store);
+    let store = workspace.store();
+    let transaction = store.env.read_txn().unwrap();
+    assert_eq!(
+        store
+            .artifact_index
+            .list(&transaction, "root")
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        store
+            .artifact_index
+            .list(&transaction, "fork")
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn forkable_snapshot_requires_idle_status_without_pending_or_queued_work() {
+    let workspace = Workspace::new();
+    let store = workspace.store();
+    let session = store
+        .create(SessionProvider::Injected, None, history())
+        .unwrap();
+    let snapshot = session.snapshot().unwrap();
+
+    for (status, idle) in [
+        (Lifecycle::Ready, true),
+        (Lifecycle::Running, false),
+        (Lifecycle::WaitingForTools, false),
+        (Lifecycle::WaitingForInput, true),
+        (Lifecycle::Cancelling, false),
+        (Lifecycle::Completed, true),
+        (Lifecycle::Cancelled, true),
+        (Lifecycle::Failed, true),
+    ] {
+        for pending in [false, true] {
+            for queued in [false, true] {
+                let mut candidate = snapshot.clone();
+                candidate.status = status;
+                candidate.pending = pending.then(batch);
+                if queued {
+                    candidate.queued.push(QueuedInput {
+                        turn: "queued-turn".into(),
+                        prompt: Some("next input".into()),
+                    });
+                }
+                let result = ForkableSnapshot::try_from(candidate.clone());
+                assert_eq!(
+                    result.is_ok(),
+                    idle && !pending && !queued,
+                    "status={status:?}, pending={pending}, queued={queued}"
+                );
+                match result {
+                    Ok(ForkableSnapshot(validated)) => assert_eq!(
+                        serde_json::to_value(validated).unwrap(),
+                        serde_json::to_value(candidate).unwrap()
+                    ),
+                    Err(error) => assert_eq!(
+                        error.to_string(),
+                        "Fork requires an idle session with no pending operations"
+                    ),
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn compacted_sessions_reject_replayed_checkpoints_and_isolate_fork_questions() {
+    use crate::context::{Checkpoint, Memory};
+    let workspace = Workspace::new();
+    let store = workspace.store();
+    let session = store
+        .create(SessionProvider::Injected, None, history())
+        .unwrap();
+    session
+        .record(Event::History(vec![Message::new_assistant(
+            "old response".into(),
+        )]))
+        .unwrap();
+    let question = PendingQuestion {
+        id: "q1".to_owned().try_into().unwrap(),
+        prompt: "Which target?".to_owned().try_into().unwrap(),
+        required: true,
+    };
+    session
+        .record(Event::QuestionAsked(question.clone()))
+        .unwrap();
+    assert!(session.record(Event::QuestionAsked(question)).is_err());
+    let original = session.snapshot().unwrap().history;
+    let checkpoint = Checkpoint::new(
+        &original,
+        original.len(),
+        1,
+        Memory::Summary("Implementation remains pending".into()),
+    )
+    .unwrap();
+    session
+        .record(Event::Compacted {
+            context: checkpoint.clone(),
+            usage: TokenCount::default(),
+        })
+        .unwrap();
+    assert!(
+        session
+            .record(Event::Compacted {
+                context: checkpoint,
+                usage: TokenCount::default()
+            })
+            .is_err()
+    );
+    let id = session.id.clone();
+    drop(session);
+    let session = workspace
+        .resume(&store, &id, &SessionProvider::Injected)
+        .unwrap();
+    let fork = session.fork().unwrap();
+    assert_eq!(
+        fork.snapshot().unwrap().forked_from.as_deref(),
+        Some(session.id.as_str())
+    );
+    fork.record(Event::QuestionAnswered {
+        id: "q1".into(),
+        answer: "binary".into(),
+    })
+    .unwrap();
+    assert!(fork.snapshot().unwrap().questions.is_empty());
+    assert_eq!(session.snapshot().unwrap().questions.len(), 1);
+    assert_eq!(
+        serde_json::to_value(session.snapshot().unwrap().history).unwrap(),
+        serde_json::to_value(original).unwrap()
+    );
+}
+
 fn batch() -> PendingBatch {
     let operations: Vec<_> = ["done", "uncertain", "unstarted"]
         .into_iter()
@@ -611,6 +1162,9 @@ fn stale_handles_cannot_read_write_or_release_a_replacement_owner() {
     let session = store
         .create(SessionProvider::Injected, None, history())
         .unwrap();
+    save_output(&session, &"owned artifact".repeat(1000));
+    let snapshot = session.snapshot().unwrap();
+    let artifact = snapshot.artifacts[0].id.clone();
     let id = session.id.clone();
     let replacement = Owner::new(None, store.storage.new_id()).unwrap();
     let mut transaction = store.env.write_txn().unwrap();
@@ -626,19 +1180,32 @@ fn stale_handles_cannot_read_write_or_release_a_replacement_owner() {
     assert!(session.snapshot().is_err());
     assert!(
         session
+            .read_artifact(&artifact, artifacts::ArtifactRange::new(0, 4096).unwrap())
+            .is_err()
+    );
+    assert!(
+        session
             .record(Event::History(vec![Message::new("stale write".into())]))
             .is_err()
     );
     drop(session);
     let transaction = store.env.read_txn().unwrap();
     assert!(store.owner(&transaction, &id).unwrap() == Some(replacement.clone()));
-    assert_eq!(store.snapshot(&transaction, &id).unwrap().sequence, 1);
+    assert_eq!(
+        store.snapshot(&transaction, &id).unwrap().sequence,
+        snapshot.sequence
+    );
     drop(transaction);
     let current = Session {
         store: store.clone(),
         id: id.clone(),
         owner: replacement,
     };
+    assert!(
+        current
+            .read_artifact(&artifact, artifacts::ArtifactRange::new(0, 4096).unwrap())
+            .is_ok()
+    );
     current
         .record(Event::History(vec![Message::new("current owner".into())]))
         .unwrap();

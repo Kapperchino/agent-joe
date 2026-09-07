@@ -38,6 +38,7 @@ pub struct TUIApp {
     actor_state: State,
     root_busy: bool,
     token_count: TokenCount,
+    request_context: common_models::tui_models::RequestContext,
     debug_mode: bool,
     input_box: InputBoxState,
     message_box: MessageBoxState,
@@ -90,6 +91,7 @@ impl TUIApp {
             actor_state: State::Ready,
             root_busy: false,
             token_count: TokenCount::default(),
+            request_context: Default::default(),
             debug_mode,
             input_box: InputBoxState::new(config),
             message_box: MessageBoxState::new(),
@@ -248,6 +250,14 @@ impl TUIApp {
 
     fn handle_actor_msg(&mut self, msg: ActorToTui) {
         match msg.packet {
+            ActorToTuiPacket::ContextUpdated(context) => {
+                if msg.actor_id == 0 {
+                    self.request_context = context;
+                }
+            }
+            ActorToTuiPacket::ContextNotice(message) => {
+                self.message_box.append(Msg::Message(message))
+            }
             ActorToTuiPacket::SessionChoices(result) if msg.actor_id == 0 => {
                 self.input_box.session_picker.load(result);
             }
@@ -323,6 +333,8 @@ impl TUIApp {
                     Command::Clear
                     | Command::New
                     | Command::Sessions
+                    | Command::Fork
+                    | Command::Compact
                     | Command::Resume(_)
                     | Command::PrintContext => {}
                     Command::ChangeModel(_, _) => {}
@@ -520,6 +532,7 @@ impl TUIApp {
     }
 
     fn clear_messages_and_terminal(&mut self) {
+        self.request_context = Default::default();
         self.message_box.clear();
         self.do_clear_terminal = true;
     }
@@ -538,6 +551,12 @@ impl TUIApp {
             .update_width_height(msg_area.width, msg_area.height);
 
         let token_line = Line::from(vec![
+            Span::raw(format!(
+                " Context ~{}/{} (+{} response) | Total",
+                self.request_context.estimated_tokens,
+                self.request_context.ceiling,
+                self.request_context.response_reserve
+            )),
             Span::styled(
                 " ↑ ",
                 Style::default()

@@ -13,6 +13,8 @@ use tools::{
 };
 use utils::workspace::{PrivateStorage, WorkspacePolicy};
 
+mod artifact_index;
+pub mod artifacts;
 mod ownership;
 use ownership::Owner;
 
@@ -46,6 +48,8 @@ pub struct SessionStore {
     snapshots: Database<Str, Bytes>,
     events: Database<Str, Bytes>,
     owners: Database<Str, Bytes>,
+    artifacts: Database<Str, Bytes>,
+    artifact_index: artifact_index::ArtifactIndex,
     storage: PrivateStorage,
 }
 
@@ -104,6 +108,7 @@ impl ResumableSession {
 
     pub fn resume(self) -> anyhow::Result<Arc<Session>> {
         self.session.record(Event::Recovered)?;
+        self.session.archive_outputs()?;
         Ok(self.session)
     }
 }
@@ -122,7 +127,78 @@ pub(crate) struct Snapshot {
     pub status: Lifecycle,
     pub usage: TokenCount,
     #[serde(default)]
+    pub artifacts: Vec<artifacts::ArtifactReference>,
+    #[serde(default)]
+    pub forked_from: Option<String>,
+    #[serde(default)]
+    pub context: crate::context::Checkpoint,
+    #[serde(default)]
+    pub questions: Vec<PendingQuestion>,
+    #[serde(default)]
     pub updated_at: Option<std::time::SystemTime>,
+}
+
+struct ForkableSnapshot(Snapshot);
+
+impl TryFrom<Snapshot> for ForkableSnapshot {
+    type Error = anyhow::Error;
+
+    fn try_from(snapshot: Snapshot) -> anyhow::Result<Self> {
+        match snapshot.pending.is_none()
+            && snapshot.queued.is_empty()
+            && (snapshot.status.terminal()
+                || matches!(
+                    snapshot.status,
+                    Lifecycle::Ready | Lifecycle::WaitingForInput
+                )) {
+            true => Ok(Self(snapshot)),
+            false => Err(anyhow::anyhow!(
+                "Fork requires an idle session with no pending operations"
+            )),
+        }
+    }
+}
+
+struct CompactionTransition {
+    context: crate::context::Checkpoint,
+    usage: TokenCount,
+}
+
+impl CompactionTransition {
+    fn new(
+        snapshot: &Snapshot,
+        context: &crate::context::Checkpoint,
+        usage: &TokenCount,
+    ) -> anyhow::Result<Self> {
+        let memory = context
+            .memory
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("Compaction requires saved memory"))?;
+        match context.through > snapshot.context.through
+            && snapshot.context.generation.checked_add(1) == Some(context.generation)
+            && snapshot.pending.is_none()
+        {
+            true => Ok(Self {
+                context: crate::context::Checkpoint::new(
+                    &snapshot.history,
+                    context.through,
+                    context.generation,
+                    memory,
+                )?,
+                usage: usage.clone(),
+            }),
+            false => Err(anyhow::anyhow!(
+                "Compaction conflicts with the current session state"
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct PendingQuestion {
+    pub id: tools::tool_defs::NonEmptyString,
+    pub prompt: tools::tool_defs::NonEmptyString,
+    pub required: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -154,9 +230,22 @@ pub(crate) enum OperationState {
 #[derive(Serialize, Deserialize)]
 pub(crate) enum Event {
     Created,
+    Forked {
+        source: String,
+    },
+    Compacted {
+        context: crate::context::Checkpoint,
+        usage: TokenCount,
+    },
+    QuestionAsked(PendingQuestion),
+    QuestionAnswered {
+        id: String,
+        answer: String,
+    },
     Queued(QueuedInput),
     Began(QueuedInput),
     History(Vec<Message>),
+    OutputsArchived(Vec<Message>),
     Prepared(PendingBatch),
     Intent {
         operation: String,
@@ -204,7 +293,7 @@ impl SessionStore {
         let env = unsafe {
             EnvOpenOptions::new()
                 .map_size(1024 * 1024 * 1024)
-                .max_dbs(3)
+                .max_dbs(5)
                 .open(storage.path())
                 .context("Opening the LMDB session environment")?
         };
@@ -212,12 +301,17 @@ impl SessionStore {
         let snapshots = env.create_database(&mut transaction, Some("session_snapshots"))?;
         let events = env.create_database(&mut transaction, Some("session_events"))?;
         let owners = env.create_database(&mut transaction, Some("session_owners"))?;
+        let artifacts = env.create_database(&mut transaction, Some("session_artifacts"))?;
+        let artifact_index =
+            artifact_index::ArtifactIndex::open(&env, &mut transaction, snapshots)?;
         transaction.commit()?;
         Ok(Arc::new(Self {
             env,
             snapshots,
             events,
             owners,
+            artifacts,
+            artifact_index,
             storage,
         }))
     }
@@ -229,7 +323,7 @@ impl SessionStore {
         history: Vec<Message>,
     ) -> anyhow::Result<Arc<Session>> {
         let id = self.storage.new_id();
-        let snapshot = Snapshot {
+        let mut snapshot = Snapshot {
             version: SchemaVersion,
             sequence: 1,
             id: id.clone(),
@@ -241,9 +335,17 @@ impl SessionStore {
             queued: Vec::new(),
             status: Lifecycle::Ready,
             usage: TokenCount::default(),
+            artifacts: Vec::new(),
+            forked_from: None,
+            context: crate::context::Checkpoint::default(),
+            questions: Vec::new(),
             updated_at: Some(std::time::SystemTime::now()),
         };
         let mut transaction = self.env.write_txn()?;
+        if let Some(parent) = &snapshot.parent {
+            self.snapshot(&transaction, parent)?;
+            snapshot.artifacts = self.artifact_index.list(&transaction, parent)?;
+        }
         let owner = self.claim(&mut transaction, &id)?;
         self.write(&mut transaction, &snapshot, Event::Created)?;
         transaction.commit()?;
@@ -315,6 +417,10 @@ impl SessionStore {
         event: Event,
     ) -> anyhow::Result<()> {
         let key = format!("{}:{:020}", snapshot.id, snapshot.sequence);
+        if matches!(event, Event::Created | Event::Forked { .. }) {
+            self.artifact_index
+                .inherit(transaction, &snapshot.id, &snapshot.artifacts)?;
+        }
         let record = Record {
             version: SchemaVersion,
             sequence: snapshot.sequence,
@@ -329,6 +435,33 @@ impl SessionStore {
 }
 
 impl Session {
+    pub fn fork(&self) -> anyhow::Result<Arc<Session>> {
+        let mut transaction = self.store.env.write_txn()?;
+        let ForkableSnapshot(mut snapshot) =
+            ForkableSnapshot::try_from(self.owned_snapshot(&transaction)?)?;
+        snapshot.artifacts = self.store.artifact_index.list(&transaction, &snapshot.id)?;
+        snapshot.id = self.store.storage.new_id();
+        snapshot.sequence = 1;
+        snapshot.parent = None;
+        snapshot.forked_from = Some(self.id.clone());
+        snapshot.status = Lifecycle::Ready;
+        snapshot.updated_at = Some(std::time::SystemTime::now());
+        let owner = self.store.claim(&mut transaction, &snapshot.id)?;
+        self.store.write(
+            &mut transaction,
+            &snapshot,
+            Event::Forked {
+                source: self.id.clone(),
+            },
+        )?;
+        transaction.commit()?;
+        Ok(Arc::new(Session {
+            store: self.store.clone(),
+            id: snapshot.id,
+            owner,
+        }))
+    }
+
     pub fn key(&self, id: impl std::fmt::Display) -> String {
         format!("{}:{id}", self.owner.token)
     }
@@ -346,8 +479,18 @@ impl Session {
     }
 
     pub fn record(&self, event: Event) -> anyhow::Result<()> {
-        let mut transaction = self.store.env.write_txn()?;
-        let mut snapshot = self.owned_snapshot(&transaction)?.transition(&event)?;
+        let transaction = self.store.env.write_txn()?;
+        let snapshot = self.owned_snapshot(&transaction)?;
+        self.commit_event(transaction, snapshot, event)
+    }
+
+    fn commit_event(
+        &self,
+        mut transaction: heed::RwTxn<'_>,
+        snapshot: Snapshot,
+        event: Event,
+    ) -> anyhow::Result<()> {
+        let mut snapshot = snapshot.transition(&event)?;
         snapshot.sequence += 1;
         snapshot.updated_at = Some(std::time::SystemTime::now());
         self.store.write(&mut transaction, &snapshot, event)?;
@@ -422,7 +565,36 @@ impl Snapshot {
 
     fn transition(mut self, event: &Event) -> anyhow::Result<Self> {
         match event {
-            Event::Created => Err(anyhow::anyhow!("Session already exists"))?,
+            Event::Created | Event::Forked { .. } => {
+                Err(anyhow::anyhow!("Session already exists"))?
+            }
+            Event::Compacted { context, usage } => {
+                let transition = CompactionTransition::new(&self, context, usage)?;
+                self.context = transition.context;
+                self.usage = transition.usage;
+            }
+            Event::QuestionAsked(question) => {
+                match self
+                    .questions
+                    .iter()
+                    .any(|pending| pending.id == question.id)
+                {
+                    true => Err(anyhow::anyhow!("Question ID is already pending"))?,
+                    false => self.questions.push(question.clone()),
+                }
+            }
+            Event::QuestionAnswered { id, answer } => {
+                let index = self
+                    .questions
+                    .iter()
+                    .position(|question| question.id.as_ref() == id)
+                    .ok_or_else(|| anyhow::anyhow!("Question {id} is not pending"))?;
+                let question = self.questions.remove(index);
+                self.history.push(Message::new(format!(
+                    "Answer to {}: {answer}",
+                    question.prompt
+                )));
+            }
             Event::Queued(input) => self.queued.push(input.clone()),
             Event::Began(input) => {
                 self.queued.retain(|queued| queued.turn != input.turn);
@@ -433,6 +605,7 @@ impl Snapshot {
                 self.history.extend(messages.clone());
                 self.pending = None;
             }
+            Event::OutputsArchived(messages) => self.history = messages.clone(),
             Event::Prepared(batch) => {
                 self.pending = match self.pending {
                     None => Ok(Some(batch.clone())),

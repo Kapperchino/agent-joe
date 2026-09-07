@@ -54,16 +54,19 @@ impl WorkspaceFile {
         Ok(Self { handle, metadata })
     }
 
-    fn read_text(mut self) -> anyhow::Result<String> {
-        let mut content = String::new();
-        self.handle.read_to_string(&mut content)?;
-        Ok(content)
+    fn read_text(self) -> anyhow::Result<String> {
+        Ok(String::from_utf8(self.read_bytes()?)?)
     }
 
-    fn read_bytes(mut self) -> anyhow::Result<Vec<u8>> {
+    fn read_bytes(self) -> anyhow::Result<Vec<u8>> {
         let mut content = Vec::new();
-        self.handle.read_to_end(&mut content)?;
-        Ok(content)
+        self.handle
+            .take(16 * 1024 * 1024 + 1)
+            .read_to_end(&mut content)?;
+        match content.len() <= 16 * 1024 * 1024 {
+            true => Ok(content),
+            false => Err(anyhow::anyhow!("File exceeds the 16 MiB read limit")),
+        }
     }
 }
 

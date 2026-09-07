@@ -92,12 +92,27 @@ impl Harness {
         runtime: Runtime,
     ) -> Self {
         let (tx, requests) = flume::unbounded();
+        Self::with_client(
+            tools,
+            runtime,
+            llm::LLmClient::Injected(Arc::new(Provider(tx))),
+            requests,
+        )
+        .await
+    }
+
+    async fn with_client(
+        tools: Vec<ErasedToolRef<TestContext, ActorContext<TestContext>>>,
+        runtime: Runtime,
+        client: llm::LLmClient,
+        requests: flume::Receiver<Request>,
+    ) -> Self {
         let (tui_tx, events) = flume::unbounded();
         let (actor, handle) = Actor::spawn(
             None,
             WorkerAdapter::new(FixtureWorker),
             Dependency {
-                client: llm::LLmClient::Injected(Arc::new(Provider(tx))),
+                client,
                 tools,
                 tui_tx,
                 debug_mode: false,
@@ -128,12 +143,12 @@ impl Harness {
     }
     async fn event(&self, predicate: impl Fn(&ActorToTuiPacket) -> bool) -> ActorToTuiPacket {
         within(async {
-            loop {
-                let event = self.events.recv_async().await.unwrap().packet;
-                if predicate(&event) {
-                    break event;
-                }
+            let mut matching = None;
+            while matching.is_none() {
+                let packet = self.events.recv_async().await.unwrap().packet;
+                matching = predicate(&packet).then_some(packet);
             }
+            matching.unwrap()
         })
         .await
     }
@@ -234,6 +249,7 @@ struct GateTool {
 }
 #[derive(Clone, Copy)]
 enum GateOutcome {
+    LargeValidation,
     Success,
     Failure,
     PreparePanic,
@@ -292,9 +308,16 @@ impl ErasedToolTrait<TestContext, ActorContext<TestContext>> for GateTool {
     }
     fn output_to_content_erased(&self, _: &Value, output: &Value) -> anyhow::Result<String> {
         match self.outcome {
+            GateOutcome::LargeValidation => Ok(format!(
+                "test began\n{}\nFAILED: regression in src/lib.rs",
+                "test output 終わり\n".repeat(100_000)
+            )),
             GateOutcome::RenderPanic => panic!("fixture output panic"),
             _ => Ok(output.to_string()),
         }
+    }
+    fn output_is_error_erased(&self, _: &Value) -> anyhow::Result<bool> {
+        Ok(matches!(self.outcome, GateOutcome::LargeValidation))
     }
     fn add_context(&self, _: &Value, _: &mut TestContext, _: &str) -> anyhow::Result<()> {
         match self.outcome {
@@ -304,6 +327,9 @@ impl ErasedToolTrait<TestContext, ActorContext<TestContext>> for GateTool {
         }
     }
 }
+
+#[path = "context_runtime_test.rs"]
+mod context_tests;
 fn gate(
     name: &'static str,
     effect: ToolEffect,
@@ -1133,9 +1159,25 @@ impl ErasedToolTrait<TestContext, ActorContext<TestContext>> for ProcessTool {
         _: &TestContext,
         _: &ActorContext<TestContext>,
     ) -> anyhow::Result<Value> {
-        utils::cargo::Cargo::cargo_test(None, None)
-            .await
-            .map(|result| json!(matches!(result, utils::cargo::CargoTest::TestPasses { .. })))
+        match utils::cargo::Cargo::cargo_test(None, None).await? {
+            utils::cargo::CargoTest::TestPasses { output }
+            | utils::cargo::CargoTest::TestFailed { output } => {
+                let guidance = match output.contains(
+                    "sandbox-exec: sandbox_apply: Operation not permitted",
+                ) {
+                    true => concat!(
+                        "\nThis test must create its own macOS sandbox. ",
+                        "Run it from a regular terminal outside agent-joe or another ",
+                        "restricted sandbox runner: cargo test -p actors ",
+                        "runtime_test::interrupt_reaps_a_running_cargo_process_before_publishing_cancelled -- --exact"
+                    ),
+                    false => "",
+                };
+                Err(anyhow::anyhow!(
+                    "Cargo fixture exited before interruption:\n{output}{guidance}"
+                ))
+            }
+        }
     }
     fn output_to_content_erased(&self, _: &Value, output: &Value) -> anyhow::Result<String> {
         Ok(output.to_string())
@@ -1172,21 +1214,34 @@ fn waits_for_cancellation() {
 "#,
     )
     .unwrap();
-    let mut runtime = Runtime::for_workspace(directory.clone()).unwrap();
-    runtime.tool_timeout = Duration::from_secs(10);
+    let runtime = Runtime::for_workspace(directory.clone()).unwrap();
     let h = Harness::with_runtime(vec![Arc::new(ProcessTool)], runtime).await;
     h.start("run test");
     answer(
         h.request().await.1,
         response(vec![call("test_process", "test")]),
     );
-    tokio::time::timeout(Duration::from_secs(10), async {
+    tokio::time::timeout(Duration::from_secs(60), async {
         while !marker.exists() {
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            tokio::select! {
+                event = h.events.recv_async() => {
+                    let packet = event.unwrap().packet;
+                    assert!(
+                        !matches!(
+                            &packet,
+                            ActorToTuiPacket::OperationChanged { state, .. }
+                                | ActorToTuiPacket::TurnChanged { state, .. }
+                                if matches!(state, Lifecycle::Failed | Lifecycle::Cancelled)
+                        ),
+                        "Cargo fixture failed before starting: {packet:?}"
+                    );
+                }
+                _ = tokio::time::sleep(Duration::from_millis(5)) => {}
+            }
         }
     })
     .await
-    .unwrap();
+    .expect("Cargo fixture did not start within 60 seconds");
     assert!(
         h.runtime
             .scope

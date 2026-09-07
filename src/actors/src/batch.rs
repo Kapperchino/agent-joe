@@ -153,7 +153,9 @@ impl ContentBlock {
             | Self::Complete(MessageContent::ToolBlock { .. }) => ContentKind::Tool,
             Self::Pending(PendingContent::Thinking { .. })
             | Self::Complete(
-                MessageContent::ThinkingBlock { .. } | MessageContent::OpenAIReasoning(_),
+                MessageContent::ThinkingBlock { .. }
+                | MessageContent::OpenAIReasoning(_)
+                | MessageContent::OpenAICompaction(_),
             ) => ContentKind::Thinking,
             Self::Pending(PendingContent::Text(_))
             | Self::Complete(

@@ -1,6 +1,5 @@
-use super::{IsolatedCommand, TemporaryDirectory};
+use super::{IsolatedCommand, TemporaryDirectory, toolchain::Toolchain};
 use crate::workspace::{Access, ProcessWorkspace};
-use anyhow::Context;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
@@ -11,18 +10,10 @@ pub(super) fn prepare(
     temporary: TemporaryDirectory,
 ) -> anyhow::Result<IsolatedCommand> {
     let workspace = workspace.policy();
-    let home = dirs::home_dir().context("Cannot locate the installed Rust toolchain")?;
-    let cargo_home = std::env::var_os("CARGO_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".cargo"))
-        .canonicalize()?;
-    let rustup_home = std::env::var_os("RUSTUP_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".rustup"))
-        .canonicalize()?;
+    let toolchain = Toolchain::new()?;
     let source = source.as_std();
     let executable = if source.get_program() == OsStr::new("cargo") {
-        cargo_home.join("bin/cargo")
+        toolchain.bin.join("cargo")
     } else {
         PathBuf::from(source.get_program())
     };
@@ -64,11 +55,12 @@ pub(super) fn prepare(
             }
         }
         for path in [
-            cargo_home.join("bin"),
-            cargo_home.join("registry"),
-            rustup_home.clone(),
+            toolchain.bin.clone(),
+            toolchain.cargo_home.join("registry"),
+            toolchain.rustup_home.clone(),
         ] {
             if path.exists() {
+                let path = path.canonicalize()?;
                 command.arg("--ro-bind").arg(&path).arg(&path);
             }
         }
@@ -104,7 +96,7 @@ pub(super) fn prepare(
         let local_cargo = workspace.root().join("target/.joe/cargo");
         workspace.create_parent_dirs(&local_cargo.join("placeholder"))?;
         for directory in ["index", "cache"] {
-            let source = cargo_home.join("registry").join(directory);
+            let source = toolchain.cargo_home.join("registry").join(directory);
             if source.exists() {
                 workspace.link_process_cache(
                     &source.canonicalize()?,
@@ -117,11 +109,11 @@ pub(super) fn prepare(
             ("TMPDIR", temporary.path().to_path_buf()),
             ("CARGO_TARGET_DIR", workspace.root().join("target")),
             ("CARGO_HOME", local_cargo),
-            ("RUSTUP_HOME", rustup_home),
+            ("RUSTUP_HOME", toolchain.rustup_home),
         ] {
             command.args(["--setenv", key]).arg(value);
         }
-        let mut path = cargo_home.join("bin").into_os_string();
+        let mut path = toolchain.bin.into_os_string();
         path.push(":/usr/bin:/bin:/usr/sbin:/sbin");
         command.args(["--setenv", "PATH"]).arg(path);
         for (key, value) in [

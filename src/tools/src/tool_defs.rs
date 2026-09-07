@@ -84,7 +84,7 @@ pub trait ToolTrait<C: Context, A>: ToolDefTrait + Display {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub enum ToolDefinition {
     Client {
         name: String,
@@ -240,7 +240,7 @@ pub trait LenientDeserialize: Sized {
     fn deserialize_lenient(s: Value) -> anyhow::Result<Self>;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub enum ToolProperty {
     Value {
         name: String,

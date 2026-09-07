@@ -7,7 +7,10 @@ use common_models::runtime_ids::OperationId;
 use tools::tool_defs::{ToolEffect, ToolId, ToolInvocation};
 
 fn machine() -> TurnMachine {
-    TurnMachine::new(ExecutionScope::default())
+    TurnMachine::new(
+        ExecutionScope::default(),
+        crate::context::RequestMode::Continue,
+    )
 }
 
 fn provider(machine: &TurnMachine) -> &ProviderRun {
@@ -104,6 +107,24 @@ fn launches_provider(effects: &[Effect]) -> bool {
     effects
         .iter()
         .any(|effect| matches!(effect, Effect::LaunchProvider { .. }))
+}
+
+#[test]
+fn single_response_preserves_transport_failures_without_retrying() {
+    let mut machine = TurnMachine::new(ExecutionScope::default(), RequestMode::SingleResponse);
+    let tag = start(&mut machine);
+    let effects = response(
+        &mut machine,
+        tag,
+        Err(Failure::new(FailureKind::Transport, "connection lost")),
+    );
+    assert!(!launches_provider(&effects));
+    let effects = machine.transition(SessionEvent::CleanupFinished(tag.turn));
+    assert!(effects.iter().any(|effect| matches!(effect,
+        Effect::Report(ActorToTuiPacket::TurnChanged {
+            state: Lifecycle::Failed, detail: Some(detail), ..
+        }) if detail == "Transport: connection lost"
+    )));
 }
 
 #[test]

@@ -36,6 +36,14 @@ struct Cli {
     debug: bool,
     #[arg(long)]
     simple: bool,
+    #[arg(long, default_value_t = 128_000)]
+    context_tokens: usize,
+    #[arg(long, default_value_t = 16_000)]
+    response_tokens: u32,
+    #[arg(long, default_value = "auto")]
+    native_compaction: actors::context::NativeCompaction,
+    #[arg(long, default_value = "sessions")]
+    session_namespace: String,
 }
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -128,7 +136,13 @@ async fn get_actor<W: Worker<C = RustContext>>(
     chan: Sender<ActorToTui>,
     config_context: ConfigContext,
 ) -> Result<RunningActor> {
-    let runtime = actors::runtime::Runtime::for_workspace(std::env::current_dir()?)?;
+    let mut runtime = actors::runtime::Runtime::with_session_namespace(
+        std::env::current_dir()?,
+        &cli.session_namespace,
+    )?;
+    runtime.context_limits =
+        actors::context::ContextLimits::new(cli.context_tokens, cli.response_tokens)?;
+    runtime.native_compaction = cli.native_compaction;
     let workspace = runtime.scope.workspace()?;
     let mut context = runtime
         .scope
