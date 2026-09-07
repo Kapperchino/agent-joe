@@ -176,6 +176,18 @@ fn session_storage_is_private_and_inaccessible_to_file_tools() {
         assert!(policy.read(&path).is_err());
         assert!(policy.write(&path, "overwrite").is_err());
     }
+    let data = storage.path().join("data.mdb");
+    std::fs::write(&data, "retained database bytes").unwrap();
+    std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o644)).unwrap();
+    policy.session_storage("test-sessions").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&data).unwrap(),
+        "retained database bytes"
+    );
+    assert_eq!(
+        std::fs::metadata(&data).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
     assert!(policy.session_storage("../outside").is_err());
 }
 

@@ -44,6 +44,8 @@ struct Cli {
     native_compaction: actors::context::NativeCompaction,
     #[arg(long, default_value = "sessions")]
     session_namespace: String,
+    #[arg(long)]
+    instructions_file: Option<std::path::PathBuf>,
 }
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -153,6 +155,13 @@ async fn get_actor<W: Worker<C = RustContext>>(
         ))
         .await
         .context("Failed to initialize project analysis")?;
+    if let Some(path) = cli
+        .instructions_file
+        .clone()
+        .or_else(|| dirs::home_dir().map(|home| home.join(".turbo-code/AGENTS.md")))
+    {
+        context.guidance = context.guidance.with_global(path)?;
+    }
     context.initial_prompt.push_str(
         "\nAll repository operations must remain inside the project. Outside access is denied automatically; do not request permissions or broader access. File tools run through the project filesystem policy. Cargo runs offline inside the project sandbox and fails if isolation is unavailable.",
     );

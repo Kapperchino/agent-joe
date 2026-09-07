@@ -141,7 +141,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     #[cfg(test)]
     pub fn build_request(&self) -> clients::llm::ClientRequest {
         clients::llm::ClientRequest::new(self.history.clone())
-            .with_system(self.cur_context.instructions().to_owned())
+            .with_system(self.cur_context.effective_instructions().unwrap())
             .with_tools(self.tool_definitions())
             .with_thinking()
     }
@@ -149,12 +149,12 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     pub(crate) fn context_input(
         &self,
         turn: common_models::runtime_ids::TurnId,
-    ) -> crate::context::ContextInput {
-        crate::context::ContextInput {
+    ) -> anyhow::Result<crate::context::ContextInput> {
+        Ok(crate::context::ContextInput {
             history: self.history.clone(),
             checkpoint: self.context_checkpoint.clone(),
             questions: self.questions.clone(),
-            instructions: self.cur_context.instructions().to_owned(),
+            instructions: self.cur_context.effective_instructions()?,
             tools: self.tool_definitions(),
             limits: self.dependency.runtime.context_limits,
             native: self.dependency.runtime.native_compaction,
@@ -162,7 +162,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 true => crate::context::RequestMode::Compact,
                 false => self.request_mode,
             },
-        }
+        })
     }
 
     pub async fn clear_history(&mut self) -> anyhow::Result<()> {

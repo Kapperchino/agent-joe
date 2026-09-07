@@ -8,3 +8,6 @@ pub mod utils;
 pub mod execution;
 pub mod sandbox;
 pub mod workspace;
+
+pub mod discovery;
+pub mod inventory;

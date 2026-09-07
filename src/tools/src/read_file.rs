@@ -65,7 +65,7 @@ impl<C: Context, A> ToolTrait<C, A> for ReadFile {
     description = r#"
 Read contents from a specific known text file.
 
-The file/symbol index is already available in context. Do NOT use this tool to discover file structure, imports, functions, structs, or symbols.
+Reads any allowed UTF-8 file directly from disk, including new, non-Rust, and ignored files. Use find_files or grep to discover paths. Directories return a bounded first page; use list_directory for more pages.
 
 Prefer a focused line range when the relevant location is known. Omit `range` only for small files or when full-file context is necessary.
 
@@ -84,7 +84,9 @@ pub struct ReadFile {
 pub struct ReadFileInput {
     #[tool(description = "file path of the file you want to read", required)]
     pub file_path: String,
-    #[tool(description = "range of the lines you want to read, empty to read the entire file")]
+    #[tool(
+        description = "One-based start (inclusive) and end (exclusive). End is clamped to EOF. Omit to read the entire file."
+    )]
     pub range: Option<Range>,
 }
 
@@ -112,14 +114,19 @@ impl Display for ReadFile {
 impl ReadFile {
     pub async fn read_file<C: Context>(&self, cur_context: &C) -> anyhow::Result<String> {
         let path = PathBuf::from(&self.input.file_path);
+        cur_context.discover_instructions(std::slice::from_ref(&path))?;
         match Files::is_directory(&path).await? {
-            true => Files::get_dir_files(&path).await.map(|entries| {
-                entries
-                    .into_iter()
-                    .map(|entry| entry.name.to_string_lossy().into_owned())
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            }),
+            true => {
+                utils::files::operation(move |workspace| {
+                    Ok(serde_json::to_string(&utils::inventory::Listing::read(
+                        workspace,
+                        &path,
+                        0,
+                        utils::inventory::ResultLimit::new(None)?,
+                    )?)?)
+                })
+                .await
+            }
             false => match &self.input.range {
                 Some(range) => Self::read_range(&path, range.clone(), cur_context).await,
                 None => Files::read_file(&path).await.map(|text| {

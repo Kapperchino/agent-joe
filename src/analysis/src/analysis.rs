@@ -27,6 +27,7 @@ pub struct AnalysisSession<'a> {
     analysis: Analysis,
     proj: &'a RustProject,
     work_files: Vec<FileInfo>,
+    _sync: std::sync::MutexGuard<'a, ()>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, Eq, PartialEq, Hash)]
@@ -120,11 +121,17 @@ impl<'a> AnalysisSession<'a> {
         Ok(self.analysis.file_line_index(file)?)
     }
 
-    pub fn new(analysis: Analysis, proj: &'a RustProject, work_files: Vec<FileInfo>) -> Self {
+    pub fn new(
+        analysis: Analysis,
+        proj: &'a RustProject,
+        work_files: Vec<FileInfo>,
+        sync: std::sync::MutexGuard<'a, ()>,
+    ) -> Self {
         Self {
             analysis,
             proj,
             work_files,
+            _sync: sync,
         }
     }
 }

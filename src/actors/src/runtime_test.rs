@@ -1162,9 +1162,9 @@ impl ErasedToolTrait<TestContext, ActorContext<TestContext>> for ProcessTool {
         match utils::cargo::Cargo::cargo_test(None, None).await? {
             utils::cargo::CargoTest::TestPasses { output }
             | utils::cargo::CargoTest::TestFailed { output } => {
-                let guidance = match output.contains(
-                    "sandbox-exec: sandbox_apply: Operation not permitted",
-                ) {
+                let guidance = match output
+                    .contains("sandbox-exec: sandbox_apply: Operation not permitted")
+                {
                     true => concat!(
                         "\nThis test must create its own macOS sandbox. ",
                         "Run it from a regular terminal outside agent-joe or another ",
@@ -1618,3 +1618,6 @@ async fn shutdown_preserves_durable_results_even_when_the_actor_cannot_receive_t
         matches!(&snapshot.history.last().unwrap().content[0], ContentBlock::ToolResult { content, .. } if content.contains("Cancelled"))
     );
 }
+
+#[path = "discovery_runtime_test.rs"]
+mod discovery;

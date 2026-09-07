@@ -104,6 +104,76 @@ larger context setting supported by your model, or use `/new`. Pending question
 records survive resume, fork, and compaction; interactive question tools are part
 of the planned M9 work.
 
+## Repository discovery and instructions
+
+Discovery uses a sorted file inventory independent of Rust symbols. It includes
+manifests, Markdown, CI files, fixtures, empty files, and hidden files. Nested
+`.gitignore` and `.ignore` files apply from the project root downward: deeper
+rules take precedence, `.ignore` takes precedence within a directory, and the
+last matching rule wins. Negation cannot reopen an excluded parent directory.
+Discovery always excludes `.git`, `target`, and protected Joe storage. It does
+not consult ignore files outside the project or user Git configuration. Explicit
+file reads and directory listings can inspect ignored paths when policy allows.
+Symlinks, hard links, special files, and protected storage remain inaccessible.
+
+- `find_files` searches relative filenames/paths, using literal matching by
+  default or regex with `literal: false`.
+- `grep` searches discoverable UTF-8 text, using regex by default or
+  `literal: true`. It returns matching one-based line numbers and optional
+  surrounding lines. Binary and unreadable files are counted as skipped; up to
+  100 skipped files include reasons.
+- Both searches accept `include` and `exclude` as newline-separated path globs.
+  `*` matches within a path component; `**` crosses directories. Excludes win.
+  Results default to 200 and accept a `limit` from 1 to 1000. `truncated` and
+  `truncation` identify omitted results and whether the result or output limit
+  was reached. Narrow the pattern or filters to retrieve other matches.
+- `list_directory` returns sorted pages with `total`, `truncated`, and
+  `next_offset`. Pass that offset for the next page. It shares the 200 default
+  and 1000 maximum. `read_file` on a directory returns the first page.
+- `read_file` reads directly from disk. Ranges use a one-based inclusive `start`
+  and exclusive `end`: `{ "start": 2, "end": 4 }` reads lines 2 and 3.
+  Ends beyond EOF are clamped; invalid or nonexistent starts return structured
+  errors with the requested range and available line count when known.
+  Reading an empty file without a range succeeds. Non-Rust and newly created
+  files need no semantic index. Rust symbol ranges use the same convention.
+
+Search output is bounded to 32 MiB including space reserved for metadata. An
+inventory scan stops explicitly above 250,000 visited entries or 32 MiB of file
+paths; add ignore rules to reduce that inventory. Both modes share watcher
+startup and cleanup. Create, modify, delete, and rename events refresh analysis;
+successful edits refresh it immediately. Discovery and reads consult disk, and
+semantic context refreshes before use, so watcher lag cannot hide new content.
+
+Global guidance comes from `~/.turbo-code/AGENTS.md`; `--instructions-file <path>`
+selects another global file. This is trusted startup configuration, separate
+from credentials, and does not grant file tools access outside the project.
+Missing global guidance is optional. Repository `AGENTS.md` applies to the whole
+project. Nested `AGENTS.md` applies only to its directory and descendants,
+including ignored paths and files that have not been created yet. A symlinked
+project root uses its canonical project boundary.
+
+Explicit user requests and built-in operating policy take precedence over
+`AGENTS.md`. Within that guidance, repository instructions override global
+instructions, and deeper directory instructions override ancestors within their
+scope. `read_file` and `inspect_context` activate applicable nested guidance.
+Every edit checks all affected paths, including both sides of a move. If rules
+are new or changed since the model's last request, the edit fails before writing;
+the next request includes those instructions for review before retrying. Workers
+receive their own instruction-delivery state. Sources are refreshed for each
+request and after resume; saved history cannot restore stale operating guidance.
+New/clear and session switches reset activated nested scopes; subsequent reads
+and edit preflights rediscover the applicable rules.
+Ordinary file contents, web results, and worker reports stay in reference/tool
+messages rather than becoming operating instructions.
+
+`/context` and `inspect_context` show active instruction sources, scope,
+precedence, built-in guidance, and a bounded inventory sample with truncation
+metadata. `inspect_context` accepts an optional `path` to activate its scope.
+Instruction files are limited to 64 KiB each and active guidance to 256 KiB;
+loading errors stop continuation instead of truncating requirements. The normal
+request context no longer repeats a complete symbol map or accumulated worker
+reports. Relevant worker findings must be included in the delegated task.
+
 ## Supported llm providers
 
 | Provider   | Support                                                |
@@ -141,6 +211,7 @@ cargo test -p actors runtime_test::interrupt_reaps_a_running_cargo_process_befor
 ```
 
 Linux process-isolation tests require `/usr/bin/bwrap` and host namespace support.
+Container runners must allow nested mount/PID namespaces and mounting `/proc`.
 
 ## Keybindings
 
@@ -148,4 +219,7 @@ The TUI is similar to claude code and codex with one major difference. Vim bindi
 
 ## Tools
 
-TBD
+Discovery tools are described above. Simple mode also exposes `apply_patch`,
+`cargo_check`, `cargo_test`, and provider-supported web search. Worker mode uses
+focused read, write, and validation workers. All modes retain the fixed project
+policy and have no model-controlled shell.

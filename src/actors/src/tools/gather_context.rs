@@ -32,7 +32,7 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for GatherContext {
         new_context.initial_prompt = ReadWorker::init_prompt(None);
         new_context.task_prompt = Some(input.context.clone());
 
-        let empty_context = RustEmptyContext::new(new_context, true, cur_context.gen_id());
+        let empty_context = RustEmptyContext::new(new_context, cur_context.gen_id());
 
         crate::worker::run_worker(
             ReadWorker::new(),
@@ -69,12 +69,6 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for GatherContext {
 
     fn output_to_content(_input: &Self::Input, output: &Self::Output) -> anyhow::Result<String> {
         Ok(output.res.clone())
-    }
-
-    fn add_context(input: &Self::Input, context: &mut RustContext, addition: &str) {
-        context
-            .stacked_context
-            .push(format!("{}\n{addition}", input.context))
     }
 
     fn effect() -> tools::tool_defs::ToolEffect {

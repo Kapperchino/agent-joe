@@ -18,6 +18,10 @@ itertools = "0.15.0"
 fnv = "1.0.7"
 tokio-util = { version = "0.7", features = ["rt"] }
 libc = "0.2"
+ignore = "0.4"
+globset = "0.4"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.4", features = ["fs"] }

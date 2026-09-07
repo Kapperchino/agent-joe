@@ -18,15 +18,34 @@ impl<C: Context, A> ToolTrait<C, A> for ApplyPatch {
     async fn run(
         input: Self::Input,
         tool_id: ToolId,
-        _cur_context: &C,
+        cur_context: &C,
         _actor_context: &A,
     ) -> anyhow::Result<Self::Output> {
+        let paths = DiffSet::new(&input.patch)?
+            .patches()
+            .iter()
+            .flat_map(|patch| match patch {
+                Patch::AddFile { path, .. }
+                | Patch::DeleteFile { path }
+                | Patch::UpdateFile { path, .. } => vec![path.to_path_buf()],
+                Patch::MoveFile { from, to, .. } => vec![from.to_path_buf(), to.to_path_buf()],
+            })
+            .collect::<Vec<_>>();
+        cur_context.prepare_edit(&paths).map_err(|error| {
+            crate::tool_error::ToolFailure::new(
+                crate::tool_error::ToolFailureKind::InvalidInput,
+                crate::tool_error::ToolEffects::NotStarted,
+                error.to_string(),
+            )
+        })?;
         ApplyPatch {
             input,
             id: String::new(),
         }
         .apply_patch()
         .await?;
+
+        cur_context.refresh_workspace().await?;
 
         Ok(ApplyPatchResult {
             status: "ok".to_string(),

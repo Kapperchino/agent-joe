@@ -76,25 +76,22 @@ impl WorkspacePolicy {
 impl PrivateStorage {
     fn prepare_database_file(&self, filename: &str) -> anyhow::Result<()> {
         let filename = StorageName::new(filename)?;
-        match fs::openat(
+        let flags = OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK;
+        let file = match fs::openat(
             &self.directory,
             filename.0,
-            OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            flags | OFlags::CREATE | OFlags::EXCL,
             Mode::from_raw_mode(0o600),
         ) {
-            Ok(_) | Err(rustix::io::Errno::EXIST) => Ok(()),
-            Err(error) => Err(io_error(error)),
-        }?;
-        let stat =
-            fs::statat(&self.directory, filename.0, AtFlags::SYMLINK_NOFOLLOW).map_err(io_error)?;
-        OrdinaryFileMetadata::new(stat, Path::new(filename.0))?;
-        fs::chmodat(
-            &self.directory,
-            filename.0,
-            Mode::from_raw_mode(0o600),
-            AtFlags::SYMLINK_NOFOLLOW,
-        )
-        .map_err(io_error)
+            Ok(file) => Ok(file),
+            Err(rustix::io::Errno::EXIST) => {
+                fs::openat(&self.directory, filename.0, flags, Mode::empty())
+            }
+            Err(error) => Err(error),
+        }
+        .map_err(io_error)?;
+        OrdinaryFileMetadata::new(fs::fstat(&file).map_err(io_error)?, Path::new(filename.0))?;
+        fs::fchmod(&file, Mode::from_raw_mode(0o600)).map_err(io_error)
     }
 
     pub fn workspace_identity(&self) -> &str {

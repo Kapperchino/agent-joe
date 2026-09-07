@@ -9,6 +9,21 @@ pub trait Context: Send + Sync {
     fn instructions(&self) -> &str {
         ""
     }
+    fn effective_instructions(&self) -> anyhow::Result<String> {
+        Ok(self.instructions().to_owned())
+    }
+    fn discover_instructions(&self, _paths: &[PathBuf]) -> anyhow::Result<()> {
+        Ok(())
+    }
+    fn prepare_edit(&self, _paths: &[PathBuf]) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn refresh_workspace(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn inspect_context(&self) -> anyhow::Result<String> {
+        Ok(self.get_ctx().await)
+    }
     fn initial_task(&self) -> Option<&str> {
         None
     }
