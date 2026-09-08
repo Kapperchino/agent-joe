@@ -8,7 +8,7 @@ use std::{
 };
 use turbo_code_macros::{ToolDef, ToolInput};
 use utils::{
-    git::{DiffTarget, GitOperation, GitRepository, GitResult, Revision},
+    git::{DiffTarget, GitOperation, GitRepository, GitResult, LogLimit, Revision},
     utils::FnvHashMap,
 };
 
@@ -39,16 +39,21 @@ pub struct GitInput {
 impl TryFrom<GitInput> for GitOperation {
     type Error = anyhow::Error;
     fn try_from(input: GitInput) -> anyhow::Result<Self> {
-        let GitInput {
-            operation,
-            path,
-            revision,
-            target,
-            limit,
-        } = input;
-        match (operation.as_str(), path, revision, target, limit) {
-            ("status", None, None, None, None) => Ok(Self::Status),
-            ("diff", path, None, target, None) => {
+        match input {
+            GitInput {
+                operation,
+                path: None,
+                revision: None,
+                target: None,
+                limit: None,
+            } if operation == "status" => Ok(Self::Status),
+            GitInput {
+                operation,
+                path,
+                revision: None,
+                target,
+                limit: None,
+            } if operation == "diff" => {
                 let target = match target.as_deref().unwrap_or("unstaged") {
                     "staged" => Ok(DiffTarget::Staged),
                     "unstaged" => Ok(DiffTarget::Unstaged),
@@ -62,13 +67,25 @@ impl TryFrom<GitInput> for GitOperation {
                     path: path.map(PathBuf::from),
                 })
             }
-            ("show", path, revision, None, None) => Ok(Self::Show {
+            GitInput {
+                operation,
+                path,
+                revision,
+                target: None,
+                limit: None,
+            } if operation == "show" => Ok(Self::Show {
                 revision: Revision::new(revision.as_deref().unwrap_or("HEAD"))?,
                 path: path.map(PathBuf::from),
             }),
-            ("log", None, revision, None, limit) => Ok(Self::Log {
+            GitInput {
+                operation,
+                path: None,
+                revision,
+                target: None,
+                limit,
+            } if operation == "log" => Ok(Self::Log {
                 revision: Revision::new(revision.as_deref().unwrap_or("HEAD"))?,
-                limit: limit.unwrap_or(20),
+                limit: LogLimit::new(limit.unwrap_or(20))?,
             }),
             _ => Err(anyhow::anyhow!(
                 "Invalid Git operation or options for that operation"

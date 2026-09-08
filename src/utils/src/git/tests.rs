@@ -146,7 +146,7 @@ fn git_reports_dirty_index_tree_untracked_rename_delete_and_literal_paths() {
     .unwrap();
     assert!(matches!(shown, GitResult::Show { content, .. } if content == "base\n"));
     assert!(
-        matches!(GitRepository::execute(&fixture.workspace, GitOperation::Log { revision: Revision::new("HEAD").unwrap(), limit: 20 }).unwrap(), GitResult::Log(commits) if commits.len() == 1)
+        matches!(GitRepository::execute(&fixture.workspace, GitOperation::Log { revision: Revision::new("HEAD").unwrap(), limit: LogLimit::new(20).unwrap() }).unwrap(), GitResult::Log(commits) if commits.len() == 1)
     );
     let before = std::fs::read(fixture.root.join(".git/index")).unwrap();
     git.status(&fixture.workspace).unwrap();
@@ -173,6 +173,7 @@ fn revisions_paths_and_external_object_stores_are_guarded() {
         "",
     ] {
         assert!(Revision::new(revision).is_err());
+        assert!(serde_json::from_value::<Revision>(serde_json::json!(revision)).is_err());
     }
     for path in ["../outside", ".git/config", ".turbo-code/secret"] {
         assert!(

@@ -93,6 +93,31 @@ fn stale_reads_preflight_all_files_and_duplicate_paths_do_not_overwrite() {
             .apply(&fixture.workspace, vec![one.clone(), one])
             .is_err()
     );
+    let one = edit("one", "Joe one\n");
+    let mut alias = one.clone();
+    alias.path = fixture.root.join("one");
+    assert!(tracker.apply(&fixture.workspace, vec![one, alias]).is_err());
+    let directory = FileEdit::new(
+        &fixture.workspace,
+        Path::new("new-directory"),
+        FileVersion::Missing,
+        FileVersion::Missing.with_text("ordinary file\n".into()),
+    )
+    .unwrap();
+    let child = FileEdit::new(
+        &fixture.workspace,
+        Path::new("new-directory/child"),
+        FileVersion::Missing,
+        FileVersion::Missing.with_text("child file\n".into()),
+    )
+    .unwrap();
+    assert!(
+        tracker
+            .apply(&fixture.workspace, vec![directory, child])
+            .is_err()
+    );
+    assert!(!fixture.root.join("new-directory").exists());
+    assert!(tracker.snapshot().unwrap().records.is_empty());
     assert!(
         tracker
             .apply(&fixture.workspace, vec![edit("two", "stale replacement\n")])
@@ -340,4 +365,35 @@ fn uncommitted_completion_retains_the_in_flight_path_for_recovery() {
         fixture.workspace.read(Path::new("file")).unwrap(),
         "after\n"
     );
+}
+
+#[test]
+fn restored_edits_require_confirmed_paths_before_undo() {
+    let fixture = Fixture::new();
+    fixture.write("file", "before\n");
+    let tracker = ChangeTracker::default();
+    tracker.start(&fixture.workspace).unwrap();
+    let before = fixture.workspace.file_version(Path::new("file")).unwrap();
+    let edit = FileEdit::new(
+        &fixture.workspace,
+        Path::new("file"),
+        before.clone(),
+        before.with_text("after\n".into()),
+    )
+    .unwrap();
+    let record = tracker.apply(&fixture.workspace, vec![edit]).unwrap();
+    let mut missing_confirmation = tracker.snapshot().unwrap();
+    missing_confirmation.records[0].applied.clear();
+    let mut pending_confirmation = tracker.snapshot().unwrap();
+    pending_confirmation.records[0].in_flight = Some(PathBuf::from("file"));
+    for snapshot in [missing_confirmation, pending_confirmation] {
+        let saved = serde_json::to_vec(&snapshot).unwrap();
+        let restored = ChangeTracker::restored(serde_json::from_slice(&saved).unwrap(), None);
+        assert!(restored.undo(&fixture.workspace, &record.id).is_err());
+        assert_eq!(restored.snapshot().unwrap().records.len(), 1);
+        assert_eq!(
+            fixture.workspace.read(Path::new("file")).unwrap(),
+            "after\n"
+        );
+    }
 }

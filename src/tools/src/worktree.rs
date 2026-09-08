@@ -37,15 +37,20 @@ pub struct WorktreeInput {
 impl TryFrom<WorktreeInput> for WorktreeOperation {
     type Error = anyhow::Error;
     fn try_from(input: WorktreeInput) -> anyhow::Result<Self> {
-        match (
-            input.operation.as_str(),
-            input.id,
-            input.base,
-            input.dirty_source,
-        ) {
-            ("list", None, None, None) => Ok(Self::List),
-            ("create", None, Some(base), dirty) => {
-                let dirty = match dirty.as_deref().unwrap_or("reject") {
+        match input {
+            WorktreeInput {
+                operation,
+                id: None,
+                base: None,
+                dirty_source: None,
+            } if operation == "list" => Ok(Self::List),
+            WorktreeInput {
+                operation,
+                id: None,
+                base: Some(base),
+                dirty_source,
+            } if operation == "create" => {
+                let dirty = match dirty_source.as_deref().unwrap_or("reject") {
                     "reject" => Ok(DirtySource::Reject),
                     "base_only" => Ok(DirtySource::BaseOnly),
                     _ => Err(anyhow::anyhow!(
@@ -57,8 +62,18 @@ impl TryFrom<WorktreeInput> for WorktreeOperation {
                     dirty,
                 })
             }
-            ("integrate", Some(id), None, None) => Ok(Self::Integrate { id }),
-            ("remove", Some(id), None, None) => Ok(Self::Remove { id }),
+            WorktreeInput {
+                operation,
+                id: Some(id),
+                base: None,
+                dirty_source: None,
+            } if operation == "integrate" => Ok(Self::Integrate { id }),
+            WorktreeInput {
+                operation,
+                id: Some(id),
+                base: None,
+                dirty_source: None,
+            } if operation == "remove" => Ok(Self::Remove { id }),
             _ => Err(anyhow::anyhow!("Invalid worktree operation or options")),
         }
     }

@@ -77,6 +77,24 @@ impl FileEdit {
             after,
         })
     }
+
+    fn preflight(
+        self,
+        workspace: &WorkspacePolicy,
+        observed: Option<&FileVersion>,
+    ) -> anyhow::Result<Self> {
+        match observed {
+            Some(observed) if observed != &self.before => Err(anyhow::anyhow!(
+                "Stale file {}; read it again before editing",
+                self.path.display()
+            )),
+            _ if workspace.file_version(&self.path)? != self.before => Err(anyhow::anyhow!(
+                "File changed before patch preflight: {}",
+                self.path.display()
+            )),
+            _ => Ok(self),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,6 +115,135 @@ pub struct EditRecord {
     pub in_flight: Option<PathBuf>,
     pub state: EditState,
     pub undo_of: Option<String>,
+}
+
+enum EditEvent {
+    BeginFile,
+    ConfirmFile,
+    Complete,
+    Fail { message: String },
+    Undo,
+}
+
+impl EditRecord {
+    fn prepared(
+        workspace: &WorkspacePolicy,
+        tracker: &TrackerState,
+        edits: Vec<FileEdit>,
+        undo_of: Option<String>,
+    ) -> anyhow::Result<Self> {
+        let edits = edits
+            .into_iter()
+            .map(|edit| FileEdit::new(workspace, &edit.path, edit.before, edit.after))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let bytes = edits
+            .iter()
+            .map(|edit| edit.before.bytes().len() + edit.after.bytes().len())
+            .sum::<usize>();
+        let paths = edits
+            .iter()
+            .map(|edit| edit.path.as_path())
+            .collect::<BTreeSet<_>>();
+        let overlapping = paths.len() != edits.len()
+            || paths.iter().any(|path| {
+                path.ancestors()
+                    .skip(1)
+                    .any(|parent| paths.contains(parent))
+            });
+        match edits {
+            _ if bytes > SNAPSHOT_LIMIT || edits.is_empty() => Err(anyhow::anyhow!(
+                "An edit must contain files and fit within 64 MiB"
+            )),
+            _ if overlapping => Err(anyhow::anyhow!(
+                "A patch contains duplicate or overlapping paths"
+            )),
+            edits => {
+                let edits = edits
+                    .into_iter()
+                    .map(|edit| {
+                        let observed = match undo_of {
+                            Some(_) => None,
+                            None => tracker.observed_version(&edit.path),
+                        };
+                        edit.preflight(workspace, observed)
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?;
+                Ok(Self {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    edits,
+                    applied: Vec::new(),
+                    in_flight: None,
+                    state: EditState::Prepared,
+                    undo_of,
+                })
+            }
+        }
+    }
+
+    fn fully_confirmed(&self) -> bool {
+        !self.edits.is_empty()
+            && self.in_flight.is_none()
+            && self
+                .applied
+                .iter()
+                .eq(self.edits.iter().map(|edit| &edit.path))
+    }
+
+    fn transition(&mut self, event: EditEvent) -> anyhow::Result<()> {
+        self.state = match (&self.state, event) {
+            (EditState::Prepared | EditState::Applying, EditEvent::BeginFile)
+                if self.in_flight.is_none() =>
+            {
+                let edit = self
+                    .edits
+                    .get(self.applied.len())
+                    .ok_or_else(|| anyhow::anyhow!("No pending file in this edit"))?;
+                self.in_flight = Some(edit.path.clone());
+                EditState::Applying
+            }
+            (EditState::Applying, EditEvent::ConfirmFile) => {
+                let path = self
+                    .in_flight
+                    .take()
+                    .ok_or_else(|| anyhow::anyhow!("No in-flight file to confirm"))?;
+                self.applied.push(path);
+                EditState::Applying
+            }
+            (EditState::Applying, EditEvent::Complete) if self.fully_confirmed() => {
+                EditState::Applied
+            }
+            (EditState::Prepared | EditState::Applying, EditEvent::Fail { message }) => {
+                EditState::Failed { message }
+            }
+            (EditState::Applied, EditEvent::Undo) if self.fully_confirmed() => EditState::Undone,
+            _ => Err(anyhow::anyhow!(
+                "Invalid edit transition from {:?}",
+                self.state
+            ))?,
+        };
+        Ok(())
+    }
+
+    fn undo_edits(&self, workspace: &WorkspacePolicy) -> anyhow::Result<Vec<FileEdit>> {
+        match self.state {
+            EditState::Applied if self.fully_confirmed() => self
+                .edits
+                .iter()
+                .rev()
+                .map(|edit| {
+                    FileEdit::new(
+                        workspace,
+                        &edit.path,
+                        edit.after.clone(),
+                        edit.before.clone(),
+                    )
+                })
+                .collect(),
+            _ => Err(anyhow::anyhow!(
+                "Only fully applied, recorded Joe edits can be undone"
+            )),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -266,77 +413,7 @@ impl ChangeTracker {
             .state
             .lock()
             .map_err(|_| anyhow::anyhow!("Change journal lock poisoned"))?;
-        let mut paths = BTreeSet::new();
-        for edit in &edits {
-            workspace.check(&edit.path, Access::Write)?;
-            match paths.insert(edit.path.clone())
-                && !paths.iter().any(|path| {
-                    path != &edit.path
-                        && (path.starts_with(&edit.path) || edit.path.starts_with(path))
-                }) {
-                true => Ok(()),
-                false => Err(anyhow::anyhow!(
-                    "A patch contains duplicate or overlapping paths: {}",
-                    edit.path.display()
-                )),
-            }?;
-            let observed = state
-                .observed
-                .get(&edit.path)
-                .or_else(|| {
-                    state.snapshot.records.iter().rev().find_map(|record| {
-                        record
-                            .edits
-                            .iter()
-                            .find(|saved| {
-                                saved.path == edit.path && record.applied.contains(&edit.path)
-                            })
-                            .map(|saved| &saved.after)
-                    })
-                })
-                .or_else(|| {
-                    state.snapshot.baseline.as_ref().map(|baseline| {
-                        baseline
-                            .files
-                            .get(&edit.path)
-                            .unwrap_or(&FileVersion::Missing)
-                    })
-                });
-            match observed {
-                Some(observed) if observed != &edit.before && undo_of.is_none() => {
-                    Err(anyhow::anyhow!(
-                        "Stale file {}; read it again before editing",
-                        edit.path.display()
-                    ))
-                }
-                _ => Ok(()),
-            }?;
-            match workspace.file_version(&edit.path)? == edit.before {
-                true => Ok(()),
-                false => Err(anyhow::anyhow!(
-                    "File changed before patch preflight: {}",
-                    edit.path.display()
-                )),
-            }?;
-        }
-        let bytes = edits
-            .iter()
-            .map(|edit| edit.before.bytes().len() + edit.after.bytes().len())
-            .sum::<usize>();
-        match !edits.is_empty() && bytes <= SNAPSHOT_LIMIT {
-            true => Ok(()),
-            false => Err(anyhow::anyhow!(
-                "An edit must contain files and fit within 64 MiB"
-            )),
-        }?;
-        let mut record = EditRecord {
-            id: uuid::Uuid::new_v4().to_string(),
-            edits,
-            applied: Vec::new(),
-            in_flight: None,
-            state: EditState::Prepared,
-            undo_of,
-        };
+        let mut record = EditRecord::prepared(workspace, &state, edits, undo_of)?;
         let mut snapshot = state.snapshot.clone();
         snapshot.records.push(record.clone());
         state.commit(snapshot)?;
@@ -348,24 +425,23 @@ impl ChangeTracker {
         let result = staged.and_then(|staged| {
             staged
                 .into_iter()
-                .zip(record.edits.clone())
-                .try_for_each(|(staged, edit)| {
-                    record.state = EditState::Applying;
-                    record.in_flight = Some(edit.path.clone());
+                .enumerate()
+                .try_for_each(|(index, staged)| {
+                    record.transition(EditEvent::BeginFile)?;
                     state.record(record.clone())?;
-                    staged.apply(workspace, &edit)?;
-                    record.applied.push(edit.path.clone());
-                    record.in_flight = None;
+                    let edit = &record.edits[index];
+                    staged.apply(workspace, edit)?;
                     state.observed.insert(edit.path.clone(), edit.after.clone());
+                    record.transition(EditEvent::ConfirmFile)?;
                     state.record(record.clone())
                 })
         });
-        record.state = match &result {
-            Ok(()) => EditState::Applied,
-            Err(error) => EditState::Failed {
+        record.transition(match &result {
+            Ok(()) => EditEvent::Complete,
+            Err(error) => EditEvent::Fail {
                 message: format!("{error:#}"),
             },
-        };
+        })?;
         state.record(record.clone())?;
         match result {
             Ok(()) => Ok(record),
@@ -384,32 +460,14 @@ impl ChangeTracker {
             .iter()
             .find(|record| record.id == id)
             .ok_or_else(|| anyhow::anyhow!("Unknown Joe edit ID"))?;
-        match matches!(record.state, EditState::Applied) {
-            true => Ok(()),
-            false => Err(anyhow::anyhow!(
-                "Only fully applied, recorded Joe edits can be undone"
-            )),
-        }?;
-        let edits = record
-            .edits
-            .iter()
-            .rev()
-            .map(|edit| {
-                FileEdit::new(
-                    workspace,
-                    &edit.path,
-                    edit.after.clone(),
-                    edit.before.clone(),
-                )
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
+        let edits = record.undo_edits(workspace)?;
         let result = self.apply_record(workspace, edits, Some(id.to_owned()))?;
         let mut state = self
             .state
             .lock()
             .map_err(|_| anyhow::anyhow!("Change journal lock poisoned"))?;
         let mut original = record.clone();
-        original.state = EditState::Undone;
+        original.transition(EditEvent::Undo)?;
         state.record(original)?;
         Ok(result)
     }
@@ -475,15 +533,11 @@ impl ChangeTracker {
                     .records
                     .iter()
                     .any(|record| record.in_flight.as_ref() == Some(&path));
-                let ownership = match (
-                    uncertain,
-                    intended.is_empty(),
-                    &after == joe_after && !external_between_edits,
-                ) {
-                    (true, _, _) => ChangeOwnership::Uncertain,
-                    (false, true, _) => ChangeOwnership::External,
-                    (false, false, true) => ChangeOwnership::Joe,
-                    (false, false, false) => ChangeOwnership::JoeAndExternal,
+                let ownership = match intended.as_slice() {
+                    _ if uncertain => ChangeOwnership::Uncertain,
+                    [] => ChangeOwnership::External,
+                    _ if &after == joe_after && !external_between_edits => ChangeOwnership::Joe,
+                    _ => ChangeOwnership::JoeAndExternal,
                 };
                 let changed = before != after || !intended.is_empty();
                 Ok(changed.then(|| ReviewedFile {
@@ -542,6 +596,26 @@ impl ChangeTracker {
 }
 
 impl TrackerState {
+    fn observed_version(&self, path: &Path) -> Option<&FileVersion> {
+        self.observed
+            .get(path)
+            .or_else(|| {
+                self.snapshot.records.iter().rev().find_map(|record| {
+                    record
+                        .edits
+                        .iter()
+                        .find(|edit| edit.path == path && record.applied.contains(&edit.path))
+                        .map(|edit| &edit.after)
+                })
+            })
+            .or_else(|| {
+                self.snapshot
+                    .baseline
+                    .as_ref()
+                    .map(|baseline| baseline.files.get(path).unwrap_or(&FileVersion::Missing))
+            })
+    }
+
     fn commit(&mut self, snapshot: ChangeSnapshot) -> anyhow::Result<()> {
         match serde_json::to_vec(&snapshot)?.len() <= SNAPSHOT_LIMIT {
             true => Ok(()),

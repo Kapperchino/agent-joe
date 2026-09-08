@@ -398,7 +398,8 @@ M8 implementation (2026-09-08)
 - Patches preflight every operation and content hunk, reject occupied destinations
   and overlapping paths, stage replacements, and recheck each file and directory
   before replacement. Per-path progress identifies partial failures; no multi-file
-  atomicity or automatic replay is implied.
+  atomicity or automatic replay is implied. Edit records own preflight and guarded
+  state transitions; undo requires confirmation of every recorded path.
 - Added aggregate `review_changes`, the TUI `/diff` command, and guarded
   `undo_changes` / `/undo <edit-id>`. Both root modes and write workers receive
   review instructions and tools. Large tool results use existing output artifacts.
@@ -414,8 +415,9 @@ M8 implementation (2026-09-08)
 M8 validation: deterministic Git, journal, patch, session, and fake-provider tests
 cover dirty index/tree, whitespace and literal filenames, renames/deletions,
 untracked files, configured helpers, same-file user edits, partial patch failure,
-restart/fork ownership, both agent modes, worktree conflicts, cleanup, and undo.
-`cargo test --workspace --offline` passes 233 tests on macOS ARM64 and Linux
+restart/fork ownership, incomplete confirmations after restore, both agent modes,
+worktree conflicts, cleanup, and undo.
+`cargo test --workspace --offline` passes 234 tests on macOS ARM64 and Linux
 ARM64, including the confined utils suite. `cargo check --workspace --offline`
 passes on both; `cargo clippy --workspace --all-targets --offline` passes on macOS
 with existing warnings. Changed Rust files pass formatting and whitespace checks.

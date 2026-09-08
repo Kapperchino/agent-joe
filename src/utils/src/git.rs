@@ -8,6 +8,7 @@ pub mod worktrees;
 const OUTPUT_LIMIT: usize = 32 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "String")]
 pub struct Revision(String);
 
 impl Revision {
@@ -25,6 +26,26 @@ impl Revision {
             false => Err(anyhow::anyhow!(
                 "Use a commit ID or a simple reference, optionally followed by ~ or ^ ancestry"
             )),
+        }
+    }
+}
+
+impl TryFrom<String> for Revision {
+    type Error = anyhow::Error;
+
+    fn try_from(value: String) -> anyhow::Result<Self> {
+        Self::new(&value)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LogLimit(usize);
+
+impl LogLimit {
+    pub fn new(value: usize) -> anyhow::Result<Self> {
+        match value {
+            1..=100 => Ok(Self(value)),
+            _ => Err(anyhow::anyhow!("Log limit must be between 1 and 100")),
         }
     }
 }
@@ -49,7 +70,7 @@ pub enum GitOperation {
     },
     Log {
         revision: Revision,
-        limit: usize,
+        limit: LogLimit,
     },
 }
 
@@ -240,15 +261,11 @@ impl GitRepository {
                 })
             }
             GitOperation::Log { revision, limit } => {
-                match (1..=100).contains(&limit) {
-                    true => Ok(()),
-                    false => Err(anyhow::anyhow!("Log limit must be between 1 and 100")),
-                }?;
                 let mut walk = git.repo.revwalk()?;
                 walk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)?;
                 walk.push(git.commit(&revision)?.id())?;
                 let commits = walk
-                    .take(limit)
+                    .take(limit.0)
                     .map(|id| Ok(commit_info(&git.repo.find_commit(id?)?)))
                     .collect::<anyhow::Result<Vec<_>>>()?;
                 match serde_json::to_vec(&commits)?.len() <= OUTPUT_LIMIT {
@@ -367,8 +384,8 @@ impl GitRepository {
                 Ok(StatusEntry {
                     path,
                     previous_path,
-                    index: change_status(status, true),
-                    worktree: change_status(status, false),
+                    index: GitChange::from_status(status, StatusArea::Index),
+                    worktree: GitChange::from_status(status, StatusArea::Worktree),
                     conflicted: status.is_conflicted(),
                 })
             })
@@ -604,28 +621,35 @@ fn commit_info(commit: &git2::Commit<'_>) -> CommitInfo {
     }
 }
 
-fn change_status(status: git2::Status, index: bool) -> GitChange {
-    let changes = match index {
-        true => [
-            (git2::Status::INDEX_NEW, GitChange::Added),
-            (git2::Status::INDEX_DELETED, GitChange::Deleted),
-            (git2::Status::INDEX_RENAMED, GitChange::Renamed),
-            (git2::Status::INDEX_TYPECHANGE, GitChange::TypeChanged),
-            (git2::Status::INDEX_MODIFIED, GitChange::Modified),
-        ],
-        false => [
-            (git2::Status::WT_NEW, GitChange::Untracked),
-            (git2::Status::WT_DELETED, GitChange::Deleted),
-            (git2::Status::WT_RENAMED, GitChange::Renamed),
-            (git2::Status::WT_TYPECHANGE, GitChange::TypeChanged),
-            (git2::Status::WT_MODIFIED, GitChange::Modified),
-        ],
-    };
-    changes
-        .into_iter()
-        .find(|(flag, _)| status.contains(*flag))
-        .map(|(_, label)| label)
-        .unwrap_or(GitChange::Unchanged)
+enum StatusArea {
+    Index,
+    Worktree,
+}
+
+impl GitChange {
+    fn from_status(status: git2::Status, area: StatusArea) -> Self {
+        let changes = match area {
+            StatusArea::Index => [
+                (git2::Status::INDEX_NEW, GitChange::Added),
+                (git2::Status::INDEX_DELETED, GitChange::Deleted),
+                (git2::Status::INDEX_RENAMED, GitChange::Renamed),
+                (git2::Status::INDEX_TYPECHANGE, GitChange::TypeChanged),
+                (git2::Status::INDEX_MODIFIED, GitChange::Modified),
+            ],
+            StatusArea::Worktree => [
+                (git2::Status::WT_NEW, GitChange::Untracked),
+                (git2::Status::WT_DELETED, GitChange::Deleted),
+                (git2::Status::WT_RENAMED, GitChange::Renamed),
+                (git2::Status::WT_TYPECHANGE, GitChange::TypeChanged),
+                (git2::Status::WT_MODIFIED, GitChange::Modified),
+            ],
+        };
+        changes
+            .into_iter()
+            .find(|(flag, _)| status.contains(*flag))
+            .map(|(_, label)| label)
+            .unwrap_or(GitChange::Unchanged)
+    }
 }
 
 #[cfg(test)]
