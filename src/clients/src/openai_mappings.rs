@@ -354,6 +354,7 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
 impl From<tool_defs::ToolProperty> for openai::ToolProperty {
     fn from(value: tool_defs::ToolProperty) -> Self {
         match value {
+            tool_defs::ToolProperty::Schema(schema) => openai::ToolProperty::Schema(schema),
             tool_defs::ToolProperty::Value {
                 name,
                 prop_type,
@@ -382,6 +383,39 @@ impl From<tool_defs::ToolProperty> for openai::ToolProperty {
 mod tests {
     use super::*;
     use crate::failure::{Failure, FailureKind};
+
+    #[test]
+    fn cargo_selection_schemas_survive_both_provider_mappings() {
+        use tools::tool_defs::ToolDefTrait;
+        let properties = tools::cargo_tools::CargoStart::field_properties();
+        for name in ["target", "args", "environment"] {
+            let property = properties[name].clone();
+            let expected = match &property {
+                tools::tool_defs::ToolProperty::Schema(schema) => schema.clone(),
+                _ => panic!("Expected a structured schema"),
+            };
+            let openai: crate::openai::ToolProperty = property.clone().into();
+            let claude: crate::claude::ToolProperty = property.into();
+            assert_eq!(serde_json::to_value(&openai).unwrap(), expected);
+            assert_eq!(serde_json::to_value(&claude).unwrap(), expected);
+            assert_eq!(
+                serde_json::to_value(
+                    serde_json::from_value::<crate::openai::ToolProperty>(expected.clone())
+                        .unwrap()
+                )
+                .unwrap(),
+                expected
+            );
+            assert_eq!(
+                serde_json::to_value(
+                    serde_json::from_value::<crate::claude::ToolProperty>(expected.clone())
+                        .unwrap()
+                )
+                .unwrap(),
+                expected
+            );
+        }
+    }
 
     #[test]
     fn native_compaction_replays_the_entire_window_without_altering_opaque_or_retained_items() {

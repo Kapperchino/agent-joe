@@ -136,6 +136,10 @@ pub(crate) struct Snapshot {
     pub questions: Vec<PendingQuestion>,
     #[serde(default)]
     pub updated_at: Option<std::time::SystemTime>,
+    #[serde(default)]
+    pub processes: std::collections::BTreeMap<String, utils::cargo::CargoResult>,
+    #[serde(default)]
+    process_reports: std::collections::BTreeSet<String>,
 }
 
 struct ForkableSnapshot(Snapshot);
@@ -260,6 +264,7 @@ pub(crate) enum Event {
         state: Lifecycle,
         detail: Option<String>,
     },
+    ProcessCompleted(Box<utils::cargo::CargoResult>),
     Usage(TokenCount),
     Recovered,
 }
@@ -340,6 +345,8 @@ impl SessionStore {
             context: crate::context::Checkpoint::default(),
             questions: Vec::new(),
             updated_at: Some(std::time::SystemTime::now()),
+            processes: Default::default(),
+            process_reports: Default::default(),
         };
         let mut transaction = self.env.write_txn()?;
         if let Some(parent) = &snapshot.parent {
@@ -617,14 +624,40 @@ impl Snapshot {
             }
             Event::Completed { operation, result } => {
                 self.operation(operation)?.complete(result)?;
+                let content = match &result.outcome {
+                    Ok(content) => content,
+                    Err(failure) => &failure.message,
+                };
+                if let Ok(cargo) = serde_json::from_str::<utils::cargo::CargoResult>(content)
+                    && let Some(id) = &cargo.process_id
+                {
+                    self.processes.entry(id.clone()).or_insert(cargo);
+                }
             }
             Event::Status { turn, state, .. } => {
                 self.queued
                     .retain(|queued| !(queued.turn == *turn && state.terminal()));
                 self.status = *state;
             }
+            Event::ProcessCompleted(result) => {
+                let id = result
+                    .process_id
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("Managed result requires a process ID"))?;
+                self.process_reports.remove(id);
+                self.processes.insert(id.clone(), result.as_ref().clone());
+            }
             Event::Usage(usage) => self.usage = usage.clone(),
             Event::Recovered => {
+                for (id, process) in &mut self.processes {
+                    if process.status == utils::process::ProcessStatus::Running {
+                        process.status = utils::process::ProcessStatus::Failed;
+                        process.error = Some("Process completion is unknown after restart; saved IDs cannot be polled, stopped or relaunched".into());
+                    }
+                    if self.process_reports.insert(id.clone()) {
+                        self.history.push(Message::new(format!("Saved managed process evidence; IDs cannot be reused after restart: {}", serde_json::to_string(process)?)));
+                    }
+                }
                 self.history.extend(
                     self.pending
                         .take()
@@ -732,9 +765,9 @@ impl Operation {
             OperationState::Queued => self.call.error_content("Not executed: the session stopped before this tool started."),
             OperationState::Intended { .. } => self.call.error_content("Uncertain operation after restart: completion was not recorded. Inspect the workspace before retrying; do not repeat this operation blindly."),
             OperationState::Completed(result) => ContentBlock::ToolResult {
+                content: result.content(),
                 tool_id: result.id,
                 is_error: result.outcome.is_err().then_some(true),
-                content: result.outcome.unwrap_or_else(|error| error.to_string()),
             },
         }
     }

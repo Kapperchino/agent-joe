@@ -1,6 +1,6 @@
 # Agent Joe implementation plan
 
-Status: M1–M5 are complete. M6–M10 remain planned.
+Status: M1–M6 are complete. M7–M10 remain planned.
 
 Cover all ten gaps identified in the Codex comparison while keeping Joe a Rust-focused agent with typed tools and no model-controlled shell. Delivery order follows dependencies, so context compaction follows the response format and turn lifecycle work it needs.
 
@@ -24,7 +24,7 @@ Cover all ten gaps identified in the Codex comparison while keeping Joe a Rust-f
 | M3 | Complete | Workspace policy and reusable isolation for Cargo | 4: sandbox | M2 |
 | M4 | Complete | Durable sessions, bounded context, and compaction | 2: context and sessions | M1–M3 |
 | M5 | Complete | Full repository discovery and scoped instructions | 5: instructions; 7: discovery | M3–M4 |
-| M6 | Planned | Complete typed Cargo validation and process results | 6: validation | M2–M5 |
+| M6 | Complete | Complete typed Cargo validation and process results | 6: validation | M2–M5 |
 | M7 | Planned | Direct work plus optional, bounded delegation | 8: worker coordination | M4–M6 |
 | M8 | Planned | Git awareness, aggregate review, and change isolation | 9: Git | M3–M7 |
 | M9 | Planned | Plan mode, tracked steps, questions, and steering | 10: collaboration | M4–M8 |
@@ -340,20 +340,68 @@ text search caps output at 32 MiB including metadata. Guidance caps each source
 at 64 KiB and active sources at 256 KiB. Exact behavior and configuration are
 in the README. These limits fail or report truncation explicitly.
 
-**M6 — Typed validation and runnable Rust targets**
+**M6 — Typed validation and runnable Rust targets — complete**
 
-Primary files: `src/utils/src/cargo.rs`, `src/tools/src/cargo_{check,test}.rs`, new Cargo operation tools, and worker prompts.
+Primary files: `src/utils/src/{cargo,process,sandbox,execution}.rs`,
+`src/tools/src/cargo_tools.rs`, scheduler/session integration, and worker prompts.
 
-- Add schema-controlled workspace/package, feature, target, test, example, and binary selection. Validate combinations and treat identifiers as values rather than allowing argument injection.
-- Add formatting/check-format, Clippy, and typed run operations for examples/binaries. Support explicitly allowed program arguments and environment values through the shared policy. Preserve the no-shell constraint.
-- Return command details, exit code, duration, diagnostics, timeout/cancel status, and bounded stdout/stderr with full artifact references. Preserve existing Cargo startup/dependency errors and stderr in the richer result schema.
-- Support long-running Rust targets through managed process IDs, incremental output, polling, and stop operations; keep them in the turn/session process registry.
-- Let workers add focused regression coverage when behavior warrants it. Record requested checks, checks actually executed, failures, and limitations; passing compilation alone is not proof of behavioral correctness.
-- Reuse a validation result only when the relevant workspace revision, command parameters, and environment match. Run targeted checks before broader checks.
+- Cargo requests select a workspace or package, named features, all/default
+  features, build profile, built-in target triple, target kind/name, and test
+  filter. Constructors reject conflicting options, unknown fields, option-like
+  selectors, custom target paths, and oversized inputs before execution. Nested
+  target schemas and array constraints survive both provider mappings.
+- Simple and validation workers use typed check, test, formatting-check, Clippy,
+  binary/example run, start, poll, and stop tools. Simple and write workers can
+  apply formatting. Program arguments remain literal values after `--`.
+  Environment additions permit only `RUST_LOG`, `RUST_BACKTRACE`, `NO_COLOR`, and
+  uppercase `JOE_RUN_*` names. The shared sandbox remains offline with a clean
+  environment and no arbitrary shell operation.
+- Both success and failure return JSON command details, workspace/revision,
+  exit code, elapsed time, compiler diagnostics, process status, and independent
+  stdout/stderr streams. Startup, malformed-manifest, dependency, and stderr-only
+  failures retain their evidence. Cancellation awaits cleanup and preserves
+  captured output; timeout and output-limit results remain explicit.
+- Session transactions retain large streams and diagnostics as full artifacts
+  with bounded previews and typed references. Incremental output uses UTF-8 byte
+  offsets, including split multibyte output. Artifacts retain the complete
+  requested segment. Model-facing failures preserve the structured JSON and
+  provider error marker.
+- Managed IDs belong to the active turn, with at most eight starts per turn.
+  Process tasks and resources survive individual tool cleanup; running targets
+  block edits and other Cargo commands across workers. Stop, interrupt, clear,
+  normal completion, and shutdown cancel and reap owned processes. Completion
+  and output commit to the owning session even without a final poll. Resume
+  reports saved evidence and marks missing completion as unknown; it never
+  reconnects to a saved OS PID or relaunches a process.
+- Workers add focused regression coverage when appropriate, run targeted checks
+  before broader checks, and distinguish requested checks, executed checks,
+  failures, and limitations. Every validation executes afresh (`reused: false`),
+  so changes in workspace content, command parameters, or environment cannot
+  reuse stale validation results. Cargo's build-artifact reuse remains available.
 
-Validation: multi-package workspace; feature-gated regression; Clippy/format failure; invalid argument-like selectors; manifest parse error; stderr-only failure; huge output; timeout; cancellable example server; and exact structured command/result reporting.
+Validation (2026-09-08): `cargo test --workspace --offline` passes 231 tests on
+both macOS ARM64 and Linux ARM64. `cargo check --workspace --offline` passes on
+both; `cargo clippy --workspace --all-targets --offline` passes on macOS with
+existing warnings. Changed Rust files pass formatting and whitespace checks;
+workspace-wide formatting still reports pre-existing differences in sandbox
+files. Linux uses a local container that permits Bubblewrap namespaces. Nested
+sandbox tests recognize Debian's alternate namespace-denial wording without
+weakening production isolation.
 
-Done when Joe can reproduce, fix, and validate representative Rust tasks through typed operations alone.
+Coverage includes multi-package selection, a feature-gated failure/fix/retest,
+format and Clippy failures, selector injection, literal arguments, restricted
+environments, malformed manifests, stderr-only exits, huge output, deadlines,
+UTF-8 polling, process ownership/cleanup, immutable completion evidence, durable
+artifacts and restart recovery.
+Fake-provider turns exercise simple mode and the write/validation worker chain;
+a complete task reproduces a failing Rust test, applies the fix through the patch
+tool, and verifies the same targeted regression. Live-provider task comparisons
+and native Windows remain unverified.
+
+Limits: executable targets still have a five-minute deadline, 16 MiB retained per
+stream, and no network access (including localhost servers). Inputs and command
+metadata are bounded as documented in the README. Deliberately detached process
+termination retains M3's existing boundary. There is no validation-result cache.
 
 **M7 — Worker coordination**
 
@@ -416,11 +464,11 @@ Validation: lazy skill loading and reference scope, conflicting skill guidance, 
 
 Done when skills and configured integrations work through the same session, lifecycle, and project policy as built-in tools.
 
-**Next implementation slice — M6**
+**Next implementation slice — M7**
 
-Extend typed Cargo operations with validated package, feature, and target
-selection, formatting and Clippy checks, and managed example/binary execution.
-Return structured diagnostics and process results through the shared sandbox.
+Add direct work in the root agent and optional bounded delegation, with typed
+worker requests/results, worker registry controls, and explicit ownership for
+concurrent workspace changes.
 
 **Validation and rollout**
 

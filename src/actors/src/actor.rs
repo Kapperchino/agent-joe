@@ -41,6 +41,7 @@ pub enum Message {
     CleanupFinished {
         turn: TurnId,
     },
+    ProcessPersistenceFailed(String),
     Interrupt,
     Clear,
     KYS,
@@ -119,6 +120,12 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
                     }
                     Message::CleanupFinished { turn } => {
                         state.dispatch(SessionEvent::CleanupFinished(turn)).await
+                    }
+                    Message::ProcessPersistenceFailed(error) => {
+                        state.persistence_failed(anyhow::anyhow!(error));
+                        state
+                            .dispatch(SessionEvent::Interrupt(HistoryDisposition::Retain))
+                            .await
                     }
                     Message::Interrupt => {
                         state

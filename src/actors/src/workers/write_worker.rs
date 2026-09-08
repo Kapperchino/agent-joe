@@ -46,6 +46,7 @@ impl Worker for WriteWorker<RustEmptyContext> {
             erased_tool::<ReadFile, Self::C, ActorContext<Self::C>>(),
             erased_tool::<GrepTool, Self::C, ActorContext<Self::C>>(),
             erased_tool::<ApplyPatch, Self::C, ActorContext<Self::C>>(),
+            erased_tool::<tools::cargo_tools::CargoFmt, Self::C, ActorContext<Self::C>>(),
             erased_tool::<ValidateRust, Self::C, ActorContext<Self::C>>(),
         ]
     }

@@ -1402,3 +1402,77 @@ fn crash_fixture() {
         std::process::exit(0);
     }
 }
+
+#[tokio::test]
+async fn cargo_artifacts_preserve_structured_results_and_managed_recovery() {
+    use utils::cargo::{CargoAction, CargoInput, CargoOperation};
+    let workspace = Workspace::new();
+    let runtime = crate::runtime::Runtime::for_workspace(workspace.path.clone()).unwrap();
+    let store = runtime.sessions.clone().unwrap();
+    let session = store
+        .create(SessionProvider::Injected, None, history())
+        .unwrap();
+    let mut result = runtime
+        .scope
+        .enter(
+            CargoOperation::new(CargoAction::Check, CargoInput::default())
+                .unwrap()
+                .execute(),
+        )
+        .await
+        .unwrap();
+    result.stdout.content = "begin\n".to_owned() + &"λ雪".repeat(10_000) + "\nend";
+    result.stdout.next_offset = result.stdout.content.len();
+    result.stderr.content = "stderr diagnostic\n".repeat(1000);
+    result.stderr.next_offset = result.stderr.content.len();
+    result.process_id = Some("process-fixture".into());
+    result.status = utils::process::ProcessStatus::Running;
+    let saved = save_output(&session, &serde_json::to_string(&result).unwrap());
+    let content = saved.outcome.unwrap();
+    assert!(content.len() <= artifacts::INLINE_BYTES);
+    let archived: utils::cargo::CargoResult = serde_json::from_str(&content).unwrap();
+    assert_eq!(archived.command, result.command);
+    assert_eq!(archived.stdout.next_offset, result.stdout.next_offset);
+    assert_eq!(archived.stderr.next_offset, result.stderr.next_offset);
+    let artifact = archived.stdout.artifact.unwrap();
+    let mut offset = 0;
+    let mut restored = String::new();
+    while offset < artifact.bytes {
+        let page = session
+            .read_artifact(
+                &artifact.id,
+                artifacts::ArtifactRange::new(offset, 4096).unwrap(),
+            )
+            .unwrap();
+        offset += page.content.len();
+        restored.push_str(&page.content);
+    }
+    assert_eq!(restored, result.stdout.content);
+    assert_eq!(
+        session.snapshot().unwrap().processes["process-fixture"].status,
+        utils::process::ProcessStatus::Running
+    );
+    let id = session.id.clone();
+    drop(session);
+    let recovered = workspace
+        .resume(&store, &id, &SessionProvider::Injected)
+        .unwrap();
+    let snapshot = recovered.snapshot().unwrap();
+    assert_eq!(
+        snapshot.processes["process-fixture"].status,
+        utils::process::ProcessStatus::Failed
+    );
+    assert!(
+        snapshot
+            .history
+            .iter()
+            .any(|message| message.text().contains("completion is unknown"))
+    );
+    result.status = utils::process::ProcessStatus::Cancelled;
+    recovered.complete_process(result).unwrap();
+    assert_eq!(
+        recovered.snapshot().unwrap().processes["process-fixture"].status,
+        utils::process::ProcessStatus::Cancelled
+    );
+    runtime.scope.finish().await;
+}

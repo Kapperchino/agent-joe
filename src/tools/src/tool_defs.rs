@@ -30,6 +30,7 @@ pub enum ToolEffect {
     Read,
     Write,
     Validate,
+    ProcessControl,
     DelegateRead,
     DelegateWrite,
     DelegateValidate,
@@ -46,6 +47,11 @@ impl ToolEffect {
     }
 }
 
+pub enum CancellationMode {
+    DropFuture,
+    AwaitCompletion,
+}
+
 #[async_trait]
 pub trait ToolTrait<C: Context, A>: ToolDefTrait + Display {
     type Input;
@@ -59,9 +65,17 @@ pub trait ToolTrait<C: Context, A>: ToolDefTrait + Display {
 
     fn display_input(input: &Self::Input) -> String;
 
+    fn prepare_input(input: &Self::Input) -> anyhow::Result<String> {
+        Ok(Self::display_input(input))
+    }
+
     fn req_from_input(input: &Self::Input) -> anyhow::Result<FnvHashMap<String, String>>;
 
     fn output_to_content(input: &Self::Input, output: &Self::Output) -> anyhow::Result<String>;
+
+    fn cancellation_mode() -> CancellationMode {
+        CancellationMode::DropFuture
+    }
 
     fn output_is_error(_output: &Self::Output) -> bool {
         false
@@ -113,6 +127,10 @@ pub trait ErasedToolTrait<C: Context, A>: Send + Sync {
             ToolDefinition::Client { name, .. } => name,
             ToolDefinition::Search { name, .. } => name,
         }
+    }
+
+    fn cancellation_mode(&self) -> CancellationMode {
+        CancellationMode::DropFuture
     }
 
     fn display_erased(&self, input: &Value) -> anyhow::Result<String>;
@@ -179,9 +197,13 @@ where
         T::effect()
     }
 
+    fn cancellation_mode(&self) -> CancellationMode {
+        T::cancellation_mode()
+    }
+
     fn display_erased(&self, input: &Value) -> anyhow::Result<String> {
         let typed_input: T::Input = T::Input::deserialize_lenient(input.clone())?;
-        Ok(T::display_input(&typed_input))
+        T::prepare_input(&typed_input)
     }
 
     fn input_req_erased(&self, input: &Value) -> anyhow::Result<FnvHashMap<String, String>> {
@@ -242,6 +264,7 @@ pub trait LenientDeserialize: Sized {
 
 #[derive(Debug, Clone, Serialize)]
 pub enum ToolProperty {
+    Schema(serde_json::Value),
     Value {
         name: String,
         prop_type: String,
@@ -315,4 +338,19 @@ pub struct ToolResult {
     pub id: ToolId,
     pub invocation: ToolInvocation,
     pub outcome: Result<String, crate::tool_error::ToolFailure>,
+}
+
+impl ToolResult {
+    pub fn content(&self) -> String {
+        match &self.outcome {
+            Ok(content) => content.clone(),
+            Err(failure)
+                if serde_json::from_str::<Value>(&failure.message)
+                    .is_ok_and(|value| value.is_object()) =>
+            {
+                failure.message.clone()
+            }
+            Err(failure) => failure.to_string(),
+        }
+    }
 }

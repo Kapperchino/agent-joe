@@ -275,6 +275,7 @@ fn content_block_to_llm(value: ContentBlock) -> Option<llm::ContentBlock> {
 impl From<tool_defs::ToolProperty> for claude::ToolProperty {
     fn from(value: tool_defs::ToolProperty) -> Self {
         match value {
+            tool_defs::ToolProperty::Schema(schema) => claude::ToolProperty::Schema(schema),
             tool_defs::ToolProperty::Value {
                 name,
                 prop_type,
