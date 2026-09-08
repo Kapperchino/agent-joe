@@ -234,16 +234,23 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         &self,
         scope: utils::execution::ExecutionScope,
     ) -> crate::scheduler::Executor<C> {
-        let mut runtime = self.dependency.runtime.child(scope.clone());
-        runtime.turn_scope = Some(scope);
-        runtime.inherited_constraints.extend(
-            self.history
-                .iter()
-                .skip(1)
-                .filter(|message| matches!(message.role, clients::llm::Role::User))
-                .map(clients::llm::Message::text)
-                .filter(|text| !text.is_empty()),
-        );
+        let runtime = self.dependency.runtime.child(scope.clone());
+        let runtime = crate::runtime::Runtime {
+            turn_scope: Some(scope),
+            inherited_constraints: runtime
+                .inherited_constraints
+                .into_iter()
+                .chain(
+                    self.history
+                        .iter()
+                        .skip(1)
+                        .filter(|message| matches!(message.role, clients::llm::Role::User))
+                        .map(clients::llm::Message::text)
+                        .filter(|text| !text.is_empty()),
+                )
+                .collect(),
+            ..runtime
+        };
         crate::scheduler::Executor {
             dependency: Dependency {
                 runtime,

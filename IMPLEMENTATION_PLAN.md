@@ -241,6 +241,10 @@ registry. `--simple` performs direct work without delegation.
 - Parents must retrieve new reports before completing. Handoffs preserve selected
   context and inherited requirements. Resume marks unfinished workers interrupted
   without replay; forks retain reports/allocations with separate control scopes.
+- Worker lifecycle and report collection use one state machine. Late updates cannot
+  replace finished reports; recovery requires a matching terminal report and marks
+  missing or inconsistent evidence interrupted. Path restrictions enforce their
+  invariants in the restriction constructor.
 
 Code: `src/actors/src/worker_registry.rs`,
 `src/actors/src/worker_registry/*`,
@@ -392,14 +396,14 @@ Latest recorded runs on 2026-09-08:
 | --- | --- | --- |
 | Main after M6/M8 integration | 249 workspace tests; workspace check; all-targets Clippy | 249 workspace tests; workspace check |
 | M7 branch after M6 integration | 249 workspace tests; workspace check; all-targets Clippy | 249 workspace tests; workspace check |
-| Combined M7/M8 | 269 workspace tests; workspace check; all-targets Clippy | 269 workspace tests; workspace check |
+| Combined M7/M8 after standards refactor | 271 workspace tests; workspace check; all-targets Clippy | 271 workspace tests; workspace check |
 
 Commands: `cargo test --workspace --offline`,
 `cargo check --workspace --offline`, and
 `cargo clippy --workspace --all-targets --offline`. The historical 249-test runs
 cover different code states; the combined run exercises the integrated
 implementation. Recorded checks pass
-with existing warnings; all 38 changed Rust files pass formatting and whitespace
+with existing warnings; changed Rust files pass formatting and whitespace
 checks. Workspace-wide formatting has pre-existing differences.
 
 Linux runs use Rust 1.95 Bookworm with rustfmt, Clippy, Bubblewrap, and

@@ -60,11 +60,20 @@ pub struct WorkerView {
 
 impl WorkerView {
     pub(crate) fn recover(&mut self) {
-        if !self.status.terminal() {
-            self.status = WorkerStatus::Interrupted;
-            self.report = Some(WorkerReport {
+        let report = self.recovered_report();
+        self.status = report.status;
+        self.report = Some(report);
+    }
+
+    pub(super) fn recovered_report(&self) -> WorkerReport {
+        match &self.report {
+            Some(report)
+                if self.status.terminal()
+                    && report.status == self.status
+                    && report.worker_id == self.worker_id => report.clone(),
+            _ => WorkerReport {
                 worker_id: self.worker_id.clone(),
-                status: self.status,
+                status: WorkerStatus::Interrupted,
                 findings: "Worker did not commit a final report before restart".into(),
                 changed_files: Vec::new(),
                 possibly_changed_files: Vec::new(),
@@ -76,7 +85,7 @@ impl WorkerView {
                 budget: BudgetUsage::default(),
                 duration_ms: 0,
                 completion_criteria: self.request.completion_criteria.clone(),
-            });
+            },
         }
     }
 }

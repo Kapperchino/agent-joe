@@ -2,10 +2,12 @@ pub mod budget;
 mod launch;
 pub mod report;
 pub mod request;
+mod state;
 
 use budget::WorkerBudget;
 use report::{Evidence, WorkerReport, WorkerStatus, WorkerView};
 use request::WorkerRequest;
+use state::{WorkerState, WorkerUpdate};
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
@@ -31,11 +33,26 @@ struct Allocation {
     tokens: usize,
 }
 
+impl Allocation {
+    fn reserve(&self, active: usize, budget: request::BudgetLimits) -> anyhow::Result<Self> {
+        match active < 4 && self.workers < 32 && self.tokens + budget.tokens() <= 2_000_000 {
+            true => Ok(Self {
+                workers: self.workers + 1,
+                tokens: self.tokens + budget.tokens(),
+            }),
+            false => Err(anyhow::anyhow!(
+                "Worker limit exhausted: at most 4 active workers, 32 starts and 2000000 allocated tokens per session"
+            )),
+        }
+    }
+}
+
 struct Entry {
     owner: String,
+    id: String,
+    request: WorkerRequest,
     scope: ExecutionScope,
-    updates: watch::Sender<WorkerView>,
-    observed: bool,
+    updates: watch::Sender<WorkerState>,
 }
 
 pub struct WorkerExecution {
@@ -82,50 +99,38 @@ impl WorkerRegistry {
         let active = state
             .entries
             .values()
-            .filter(|entry| !entry.updates.borrow().status.terminal())
+            .filter(|entry| !entry.updates.borrow().terminal())
             .count();
-        let allocation = state.allocations.entry(owner.to_owned()).or_default();
-        match active < 4
-            && allocation.workers < 32
-            && allocation.tokens + request.budget.tokens() <= 2_000_000
-        {
-            true => {
-                allocation.workers += 1;
-                allocation.tokens += request.budget.tokens();
-                state.next_id += 1;
-                let epoch = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_nanos();
-                let id = format!("worker-{epoch}-{}", state.next_id);
-                let view = WorkerView {
-                    worker_id: id.clone(),
-                    request: request.clone(),
-                    status: WorkerStatus::Registered,
-                    report: None,
-                };
-                let (updates, _) = watch::channel(view);
-                state.entries.insert(
-                    format!("{owner}/{id}"),
-                    Entry {
-                        owner: owner.to_owned(),
-                        scope,
-                        updates,
-                        observed: false,
-                    },
-                );
-                Ok(Arc::new(WorkerExecution {
-                    id,
-                    budget: Arc::new(WorkerBudget::new(request.budget)),
-                    request,
-                    evidence: Mutex::new(Evidence::default()),
-                    session: Mutex::new(None),
-                }))
-            }
-            false => Err(anyhow::anyhow!(
-                "Worker limit exhausted: at most 4 active workers, 32 starts and 2000000 allocated tokens per session"
-            )),
-        }
+        let allocation = state
+            .allocations
+            .get(owner)
+            .unwrap_or(&Allocation::default())
+            .reserve(active, request.budget)?;
+        state.allocations.insert(owner.to_owned(), allocation);
+        state.next_id += 1;
+        let epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let id = format!("worker-{epoch}-{}", state.next_id);
+        let (updates, _) = watch::channel(WorkerState::Registered);
+        state.entries.insert(
+            format!("{owner}/{id}"),
+            Entry {
+                owner: owner.to_owned(),
+                id: id.clone(),
+                request: request.clone(),
+                scope,
+                updates,
+            },
+        );
+        Ok(Arc::new(WorkerExecution {
+            id,
+            budget: Arc::new(WorkerBudget::new(request.budget)),
+            request,
+            evidence: Mutex::new(Evidence::default()),
+            session: Mutex::new(None),
+        }))
     }
 
     pub(crate) fn restore(&self, owner: &str, workers: BTreeMap<String, WorkerView>) {
@@ -139,18 +144,19 @@ impl WorkerRegistry {
         };
         state.allocations.insert(owner.to_owned(), allocation);
         state.entries.retain(|_, entry| entry.owner != owner);
-        for (id, view) in workers {
-            let (updates, _) = watch::channel(view);
-            state.entries.insert(
-                format!("{owner}/{id}"),
+        state.entries.extend(workers.into_values().map(|view| {
+            let (updates, _) = watch::channel(WorkerState::restored(&view));
+            (
+                format!("{owner}/{}", view.worker_id),
                 Entry {
                     owner: owner.to_owned(),
+                    id: view.worker_id,
+                    request: view.request,
                     scope: ExecutionScope::default(),
                     updates,
-                    observed: true,
                 },
-            );
-        }
+            )
+        }));
     }
 
     pub fn list(&self, owner: &str) -> Vec<WorkerView> {
@@ -160,16 +166,13 @@ impl WorkerRegistry {
             .entries
             .values()
             .filter(|entry| entry.owner == owner)
-            .map(|entry| entry.updates.borrow().clone())
+            .map(Entry::view)
             .collect()
     }
 
     pub fn status(&self, owner: &str, id: &str) -> anyhow::Result<WorkerView> {
-        let mut state = self.state.lock().unwrap();
-        let entry = Self::entry(&mut state, owner, id)?;
-        let view = entry.updates.borrow().clone();
-        entry.observed = view.status.terminal();
-        Ok(view)
+        let state = self.state.lock().unwrap();
+        Ok(Self::entry(&state, owner, id)?.collect())
     }
 
     pub fn collect(&self, owner: &str) -> Vec<WorkerView> {
@@ -177,23 +180,19 @@ impl WorkerRegistry {
             .lock()
             .unwrap()
             .entries
-            .values_mut()
+            .values()
             .filter(|entry| entry.owner == owner)
-            .map(|entry| {
-                let view = entry.updates.borrow().clone();
-                entry.observed = view.status.terminal();
-                view
-            })
+            .map(Entry::collect)
             .collect()
     }
 
     pub async fn wait(&self, owner: &str, id: &str, seconds: u64) -> anyhow::Result<WorkerView> {
         let mut updates = {
-            let mut state = self.state.lock().unwrap();
-            Self::entry(&mut state, owner, id)?.updates.subscribe()
+            let state = self.state.lock().unwrap();
+            Self::entry(&state, owner, id)?.updates.subscribe()
         };
         let _ = tokio::time::timeout(std::time::Duration::from_secs(seconds.min(60)), async {
-            while !updates.borrow_and_update().status.terminal() {
+            while !updates.borrow_and_update().terminal() {
                 updates.changed().await?;
             }
             Ok::<(), anyhow::Error>(())
@@ -203,21 +202,17 @@ impl WorkerRegistry {
     }
 
     pub fn cancel(&self, owner: &str, id: &str) -> anyhow::Result<WorkerView> {
-        let mut state = self.state.lock().unwrap();
-        let entry = Self::entry(&mut state, owner, id)?;
-        if !entry.updates.borrow().status.terminal() {
-            entry
-                .updates
-                .send_modify(|view| view.status = WorkerStatus::Cancelling);
+        let state = self.state.lock().unwrap();
+        let entry = Self::entry(&state, owner, id)?;
+        if entry.update(WorkerUpdate::Cancelled) {
             entry.scope.cancel.cancel();
         }
-        let view = entry.updates.borrow().clone();
-        Ok(view)
+        Ok(entry.view())
     }
 
     pub fn cleanup(&self, owner: &str, id: &str) -> anyhow::Result<WorkerView> {
         let mut state = self.state.lock().unwrap();
-        let view = Self::entry(&mut state, owner, id)?.updates.borrow().clone();
+        let view = Self::entry(&state, owner, id)?.view();
         match view.status.terminal() {
             true => {
                 state.entries.remove(&format!("{owner}/{id}"));
@@ -234,26 +229,22 @@ impl WorkerRegistry {
             .lock()
             .unwrap()
             .entries
-            .iter()
-            .filter(|(_, entry)| entry.owner == owner && !entry.observed)
-            .map(|(_, entry)| {
-                let view = entry.updates.borrow();
+            .values()
+            .filter(|entry| entry.owner == owner && entry.updates.borrow().pending())
+            .map(|entry| {
                 format!(
                     "{}: {:?}; retrieve its report with worker_status",
-                    view.worker_id, view.status
+                    entry.id,
+                    entry.updates.borrow().status()
                 )
             })
             .collect()
     }
 
-    fn entry<'a>(
-        state: &'a mut RegistryState,
-        owner: &str,
-        id: &str,
-    ) -> anyhow::Result<&'a mut Entry> {
+    fn entry<'a>(state: &'a RegistryState, owner: &str, id: &str) -> anyhow::Result<&'a Entry> {
         state
             .entries
-            .get_mut(&format!("{owner}/{id}"))
+            .get(&format!("{owner}/{id}"))
             .filter(|entry| entry.owner == owner)
             .ok_or_else(|| anyhow::anyhow!("Unknown worker {id} in this session"))
     }
@@ -264,12 +255,9 @@ impl WorkerRegistry {
             .lock()
             .unwrap()
             .entries
-            .get_mut(&format!("{owner}/{id}"))
-            && entry.updates.borrow().status == WorkerStatus::Registered
+            .get(&format!("{owner}/{id}"))
         {
-            entry
-                .updates
-                .send_modify(|view| view.status = WorkerStatus::Running);
+            entry.update(WorkerUpdate::Started);
         }
     }
 
@@ -279,13 +267,9 @@ impl WorkerRegistry {
             .lock()
             .unwrap()
             .entries
-            .get_mut(&format!("{owner}/{}", report.worker_id))
-            && !entry.updates.borrow().status.terminal()
+            .get(&format!("{owner}/{}", report.worker_id))
         {
-            entry.updates.send_modify(|view| {
-                view.status = report.status;
-                view.report = Some(report.clone());
-            });
+            entry.update(WorkerUpdate::Finished(Box::new(report)));
         }
     }
 }
@@ -309,6 +293,116 @@ mod tests {
             |_| Some(tools::tool_defs::ToolEffect::Read),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn cancellation_and_late_updates_preserve_reports_until_collection() {
+        let registry = WorkerRegistry::default();
+        let scope = ExecutionScope::default();
+        let worker = registry
+            .register("parent", scope.clone(), request(1024))
+            .unwrap();
+        assert_eq!(
+            registry.status("parent", &worker.id).unwrap().status,
+            WorkerStatus::Registered
+        );
+        assert_eq!(registry.pending("parent").len(), 1);
+        registry.cancel("parent", &worker.id).unwrap();
+        registry.running("parent", &worker.id);
+        assert!(scope.cancel.is_cancelled());
+        assert_eq!(registry.list("parent")[0].status, WorkerStatus::Cancelling);
+        assert!(registry.cleanup("parent", &worker.id).is_err());
+        registry.complete(
+            "parent",
+            worker.report(WorkerOutcome::Cancelled, std::time::Instant::now()),
+        );
+        registry.cancel("parent", &worker.id).unwrap();
+        registry.running("parent", &worker.id);
+        registry.complete(
+            "parent",
+            worker.report(
+                WorkerOutcome::Failed("late failure".into()),
+                std::time::Instant::now(),
+            ),
+        );
+        assert_eq!(registry.list("parent")[0].status, WorkerStatus::Cancelled);
+        assert_eq!(registry.pending("parent").len(), 1);
+        let collected = registry.status("parent", &worker.id).unwrap();
+        assert_eq!(collected.status, WorkerStatus::Cancelled);
+        assert_eq!(
+            collected.report.unwrap().findings,
+            "Worker cancelled after cleanup"
+        );
+        assert!(registry.pending("parent").is_empty());
+        registry.running("parent", &worker.id);
+        registry.complete(
+            "parent",
+            worker.report(
+                WorkerOutcome::Completed("late success".into()),
+                std::time::Instant::now(),
+            ),
+        );
+        assert!(registry.pending("parent").is_empty());
+        assert_eq!(
+            registry.cleanup("parent", &worker.id).unwrap().status,
+            WorkerStatus::Cancelled
+        );
+    }
+
+    #[test]
+    fn recovery_requires_a_matching_terminal_report_and_preserves_completed_evidence() {
+        let registry = WorkerRegistry::default();
+        let worker = registry
+            .register("parent", ExecutionScope::default(), request(1024))
+            .unwrap();
+        let report = worker.report(
+            WorkerOutcome::Completed("Saved evidence".into()),
+            std::time::Instant::now(),
+        );
+        let completed = WorkerView {
+            worker_id: worker.id.clone(),
+            request: worker.request.clone(),
+            status: WorkerStatus::Completed,
+            report: Some(report.clone()),
+        };
+        for mut saved in [
+            WorkerView {
+                report: None,
+                ..completed.clone()
+            },
+            WorkerView {
+                status: WorkerStatus::Running,
+                ..completed.clone()
+            },
+            WorkerView {
+                report: Some(WorkerReport {
+                    worker_id: "another-worker".into(),
+                    ..report
+                }),
+                ..completed.clone()
+            },
+        ] {
+            saved.recover();
+            assert_eq!(saved.status, WorkerStatus::Interrupted);
+            assert_eq!(saved.report.as_ref().unwrap().worker_id, worker.id);
+            assert!(saved.report.as_ref().unwrap().unresolved_issues[0].contains("uncertain"));
+            saved.recover();
+            assert_eq!(saved.status, WorkerStatus::Interrupted);
+        }
+        let encoded = serde_json::to_value(&completed).unwrap();
+        let mut restored: WorkerView = serde_json::from_value(encoded.clone()).unwrap();
+        restored.recover();
+        assert_eq!(serde_json::to_value(&restored).unwrap(), encoded);
+        registry.restore("resumed", BTreeMap::from([(worker.id.clone(), restored)]));
+        assert_eq!(
+            registry.list("resumed")[0]
+                .report
+                .as_ref()
+                .unwrap()
+                .findings,
+            "Saved evidence"
+        );
+        assert!(registry.pending("resumed").is_empty());
     }
 
     #[tokio::test]

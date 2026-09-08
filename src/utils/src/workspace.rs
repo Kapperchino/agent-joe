@@ -32,6 +32,39 @@ struct PathRestriction {
     access: RootAccess,
 }
 
+impl PathRestriction {
+    fn new(
+        policy: &WorkspacePolicy,
+        paths: &[PathBuf],
+        access: RootAccess,
+    ) -> anyhow::Result<Self> {
+        let paths = paths
+            .iter()
+            .map(|path| {
+                policy
+                    .relative_path(path, Access::Read)
+                    .map(|path| policy.base.join(path))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        match paths.is_empty() {
+            true => Err(anyhow::anyhow!("Worker paths cannot be empty")),
+            false => Ok(Self { paths, access }),
+        }
+    }
+
+    fn permits(&self, path: &Path, access: Access) -> bool {
+        (access == Access::Read || matches!(self.access, RootAccess::ReadWrite))
+            && self.paths.iter().any(|allowed| {
+                path.starts_with(allowed) || (access == Access::Read && allowed.starts_with(path))
+            })
+    }
+
+    fn covers(&self, path: &Path, access: Access) -> bool {
+        (access == Access::Read || matches!(self.access, RootAccess::ReadWrite))
+            && self.paths.iter().any(|allowed| allowed == path)
+    }
+}
+
 struct Root {
     path: PathBuf,
     alias: PathBuf,
@@ -86,37 +119,29 @@ impl WorkspacePolicy {
     }
 
     pub fn restricted(&self, paths: &[PathBuf], access: RootAccess) -> anyhow::Result<Self> {
-        let paths = paths
+        let restriction = PathRestriction::new(self, paths, access)?;
+        let roots = self
+            .roots
             .iter()
-            .map(|path| {
-                self.relative_path(path, Access::Read)
-                    .map(|path| self.base.join(path))
+            .map(|root| {
+                Ok(Root {
+                    path: root.path.clone(),
+                    alias: root.alias.clone(),
+                    access: root.access,
+                    directory: root.directory.try_clone()?,
+                })
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
-        match paths.is_empty() {
-            true => Err(anyhow::anyhow!("Worker paths cannot be empty")),
-            false => {
-                let roots = self
-                    .roots
-                    .iter()
-                    .map(|root| {
-                        Ok(Root {
-                            path: root.path.clone(),
-                            alias: root.alias.clone(),
-                            access: root.access,
-                            directory: root.directory.try_clone()?,
-                        })
-                    })
-                    .collect::<anyhow::Result<Vec<_>>>()?;
-                let mut restrictions = self.restrictions.clone();
-                restrictions.push(PathRestriction { paths, access });
-                Ok(Self {
-                    base: self.base.clone(),
-                    roots,
-                    restrictions,
-                })
-            }
-        }
+        Ok(Self {
+            base: self.base.clone(),
+            roots,
+            restrictions: self
+                .restrictions
+                .iter()
+                .cloned()
+                .chain([restriction])
+                .collect(),
+        })
     }
 
     pub fn permits_workspace_execution(&self) -> bool {
@@ -125,10 +150,10 @@ impl WorkspacePolicy {
 
     pub fn permits_workspace_access(&self, access: Access) -> bool {
         self.resolve(&self.base, access).is_ok()
-            && self.restrictions.iter().all(|restriction| {
-                (access == Access::Read || matches!(restriction.access, RootAccess::ReadWrite))
-                    && restriction.paths.iter().any(|path| path == &self.base)
-            })
+            && self
+                .restrictions
+                .iter()
+                .all(|restriction| restriction.covers(&self.base, access))
     }
 
     pub(crate) fn read_only_roots(&self) -> impl Iterator<Item = &Path> {
@@ -197,13 +222,10 @@ impl<'a> ResolvedPath<'a> {
                 policy.base.join(path)
             };
             let absolute: PathBuf = absolute.components().collect();
-            let allowed = policy.restrictions.iter().all(|restriction| {
-                (access == Access::Read || matches!(restriction.access, RootAccess::ReadWrite))
-                    && restriction.paths.iter().any(|path| {
-                        absolute.starts_with(path)
-                            || (access == Access::Read && path.starts_with(&absolute))
-                    })
-            });
+            let allowed = policy
+                .restrictions
+                .iter()
+                .all(|restriction| restriction.permits(&absolute, access));
             match allowed {
                 false => Err(anyhow::anyhow!(
                     "Worker path access denied for {access:?}: {}",

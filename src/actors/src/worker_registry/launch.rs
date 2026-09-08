@@ -73,11 +73,12 @@ impl PreparedWorker {
             WorkerRole::Write => utils::workspace::RootAccess::ReadWrite,
         };
         let scope = parent_scope.restricted_child(&request.allowed_paths, access)?;
+        let workspace = scope.workspace()?;
         let tools = request
             .allowed_tools
             .iter()
             .map(|name| {
-                info.dep
+                let tool = info.dep
                     .tool(name)
                     .filter(|tool| !tool.effect().delegates())
                     .cloned()
@@ -85,25 +86,21 @@ impl PreparedWorker {
                         anyhow::anyhow!(
                             "Tool {name} is not permitted by the parent and registered worker tools"
                         )
-                    })
+                    })?;
+                let access = match name.as_str() {
+                    "cargo" | "worktree" => Some(utils::workspace::Access::Write),
+                    "inspect_context" | "git" | "review_changes" => Some(utils::workspace::Access::Read),
+                    _ if tool.effect() == tools::tool_defs::ToolEffect::Validate => Some(utils::workspace::Access::Write),
+                    _ => None,
+                };
+                match access.is_none_or(|access| workspace.permits_workspace_access(access)) {
+                    true => Ok(tool),
+                    false => Err(anyhow::anyhow!(
+                        "Repository inspection, worktree management and Cargo require whole-project paths; use scoped file tools or ask the root to review and validate"
+                    )),
+                }
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
-        let restricted_inspector = ["inspect_context", "git", "review_changes", "worktree"]
-            .iter()
-            .any(|name| request.allows_tool(name))
-            && !scope
-                .workspace()?
-                .permits_workspace_access(utils::workspace::Access::Read);
-        let restricted_process = tools.iter().any(|tool| {
-            tool.effect() == tools::tool_defs::ToolEffect::Validate
-                || matches!(tool.name().as_str(), "cargo" | "worktree")
-        }) && !scope.workspace()?.permits_workspace_execution();
-        let tools = match restricted_inspector || restricted_process {
-            true => Err(anyhow::anyhow!(
-                "Repository inspection, worktree management and Cargo require whole-project paths; use scoped file tools or ask the root to review and validate"
-            )),
-            false => Ok(tools),
-        }?;
         let context = RustContext {
             initial_prompt: format!(
                 "{}\n\nParent operating instructions:\n{}",
@@ -149,11 +146,12 @@ impl WorkerRegistry {
         let mut prepared = PreparedWorker::new(info, context, &request)?;
         let owner = info.dep.worker_owner();
         let execution = self.register(&owner, prepared.scope.clone(), request)?;
-        let initial = self
-            .list(&owner)
-            .into_iter()
-            .find(|view| view.worker_id == execution.id)
-            .ok_or_else(|| anyhow::anyhow!("Worker registration disappeared"))?;
+        let initial = WorkerView {
+            worker_id: execution.id.clone(),
+            request: execution.request.clone(),
+            status: WorkerStatus::Registered,
+            report: None,
+        };
         let parent_session = info.dep.runtime.session.clone();
         parent_session
             .as_ref()

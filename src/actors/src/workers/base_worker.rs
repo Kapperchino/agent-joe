@@ -40,15 +40,28 @@ impl Worker for BaseWorker<RustContext> {
     }
 
     fn tools() -> Vec<ErasedToolRef<Self::C, ActorContext<Self::C>>> {
-        let mut tools = crate::workers::simple_worker::SimpleWorker::<RustContext>::tools();
-        tools.extend([
-            erased_tool::<GatherContext, Self::C, ActorContext<Self::C>>(),
-            erased_tool::<MakeChanges, Self::C, ActorContext<Self::C>>(),
-            erased_tool::<crate::tools::validate_rust::ValidateRust, Self::C, ActorContext<Self::C>>(),
-            erased_tool::<crate::tools::start_worker::StartWorker, Self::C, ActorContext<Self::C>>(),
-            erased_tool::<crate::tools::worker_status::WorkerStatusTool, Self::C, ActorContext<Self::C>>(),
-        ]);
-        tools
+        crate::workers::simple_worker::SimpleWorker::<RustContext>::tools()
+            .into_iter()
+            .chain([
+                erased_tool::<GatherContext, Self::C, ActorContext<Self::C>>(),
+                erased_tool::<MakeChanges, Self::C, ActorContext<Self::C>>(),
+                erased_tool::<
+                    crate::tools::validate_rust::ValidateRust,
+                    Self::C,
+                    ActorContext<Self::C>,
+                >(),
+                erased_tool::<
+                    crate::tools::start_worker::StartWorker,
+                    Self::C,
+                    ActorContext<Self::C>,
+                >(),
+                erased_tool::<
+                    crate::tools::worker_status::WorkerStatusTool,
+                    Self::C,
+                    ActorContext<Self::C>,
+                >(),
+            ])
+            .collect()
     }
 }
 

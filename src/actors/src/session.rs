@@ -663,11 +663,7 @@ impl Snapshot {
             }
             Event::Usage(usage) => self.usage = usage.clone(),
             Event::Recovered => {
-                for worker in self
-                    .workers
-                    .values_mut()
-                    .filter(|worker| !worker.status.terminal())
-                {
+                for worker in self.workers.values_mut() {
                     worker.recover();
                 }
                 for (id, process) in &mut self.processes {

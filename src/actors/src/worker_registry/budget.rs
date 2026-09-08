@@ -71,10 +71,9 @@ impl WorkerBudget {
         let output = remaining.saturating_sub(input).min(4096) as u32;
         match usage.state {
             BudgetState::Available if usage.requests < self.limits.requests() && output >= 256 => {
-                request.max_output_tokens =
-                    Some(request.max_output_tokens.unwrap_or(output).min(output));
-                usage.reserved_tokens =
-                    charged + input + request.max_output_tokens.unwrap_or(output) as usize;
+                let output = request.max_output_tokens.unwrap_or(output).min(output);
+                request.max_output_tokens = Some(output);
+                usage.reserved_tokens = charged + input + output as usize;
                 usage.requests += 1;
                 Ok(())
             }

@@ -106,8 +106,8 @@ The parent must evaluate reported evidence against the completion criteria.
 
 Interrupt, clear, shutdown and parent turn cleanup cancel owned workers and await
 resource cleanup. Registrations and final reports persist with the parent session.
-Resume exposes saved reports without restarting workers. A missing final report
-becomes an interrupted result with explicitly uncertain effects and checks.
+Resume exposes saved reports without restarting workers. A missing or inconsistent
+final report becomes an interrupted result with explicitly uncertain effects and checks.
 Debug stream files are written by the root; managed workers use their durable
 session journals without writing debug files outside their allowed paths.
 
