@@ -85,3 +85,25 @@ impl WorkspacePolicy {
         ))
     }
 }
+
+pub enum StagedEdit {}
+
+impl StagedEdit {
+    pub fn apply(self, _: &WorkspacePolicy, _: &crate::changes::FileEdit) -> anyhow::Result<()> {
+        match self {}
+    }
+}
+
+impl WorkspacePolicy {
+    pub fn file_version(&self, _: &Path) -> anyhow::Result<crate::changes::FileVersion> {
+        Err(anyhow::anyhow!(
+            "Descriptor-based workspace access is unsupported on this platform"
+        ))
+    }
+
+    pub fn stage_edit(&self, _: &crate::changes::FileEdit) -> anyhow::Result<StagedEdit> {
+        Err(anyhow::anyhow!(
+            "Descriptor-based workspace access is unsupported on this platform"
+        ))
+    }
+}

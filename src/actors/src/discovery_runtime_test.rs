@@ -194,6 +194,20 @@ async fn simple_and_delegated_turns_receive_scoped_rules_before_editing_and_read
         assert!(result_text(&edited).contains("ok"));
         answer(
             reply,
+            response(vec![tool("review_changes", "review-task", json!({}))]),
+        );
+        let (reviewed, reply) = actor.request().await;
+        assert!(result_text(&reviewed).contains("task_diff"));
+        assert!(result_text(&reviewed).contains("docs/new.md"));
+        let snapshots = actor.store.list().unwrap();
+        let root = snapshots
+            .iter()
+            .find(|snapshot| snapshot.parent.is_none())
+            .unwrap();
+        assert!(root.changes.baseline.is_some());
+        assert_eq!(root.changes.records.len(), 1);
+        answer(
+            reply,
             response(vec![tool(
                 "read_file",
                 "read-new",

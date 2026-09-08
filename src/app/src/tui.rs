@@ -336,7 +336,9 @@ impl TUIApp {
                     | Command::Fork
                     | Command::Compact
                     | Command::Resume(_)
-                    | Command::PrintContext => {}
+                    | Command::PrintContext
+                    | Command::Diff
+                    | Command::Undo(_) => {}
                     Command::ChangeModel(_, _) => {}
                 }
             }

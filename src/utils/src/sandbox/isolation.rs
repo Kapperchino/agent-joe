@@ -38,7 +38,8 @@ impl IsolatedCommand {
         }
         #[cfg(target_os = "linux")]
         {
-            linux::prepare(command, &workspace, temporary).context("Cannot prepare the Linux sandbox")
+            linux::prepare(command, &workspace, temporary)
+                .context("Cannot prepare the Linux sandbox")
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
@@ -102,12 +103,17 @@ mod macos {
                 }
             }
             let temporary = profile.parameter(temporary.path());
-            profile.rules.push_str(&format!(r#"(deny file-link)
+            profile.rules.push_str(&format!(
+                r#"(deny file-link)
 (deny file-read* file-write* (require-all
     (regex #"(^|/)[.]([tT][uU][rR][bB][oO]-[cC][oO][dD][eE])(/|$)")
     (require-not (subpath (param "{temporary}")))))
-(deny file-write* (regex #"(^|/)[.]([gG][iI][tT]|[aA][gG][eE][nN][tT][sS]|[cC][oO][dD][eE][xX])(/|$)"))
-"#));
+(deny file-write* (require-all
+    (regex #"(^|/)[.]([gG][iI][tT])(/|$)")
+    (require-not (subpath (param "{temporary}")))))
+(deny file-write* (regex #"(^|/)[.]([aA][gG][eE][nN][tT][sS]|[cC][oO][dD][eE][xX])(/|$)"))
+"#
+            ));
             for root in workspace.read_only_roots() {
                 profile.path("deny", "file-write*", "subpath", root);
             }
@@ -144,7 +150,12 @@ mod macos {
             PathBuf::from(source.get_program())
         };
         if executable.is_absolute() && executable.is_file() {
-            let profile = Profile::new(workspace, &executable.canonicalize()?, &toolchain, temporary)?;
+            let profile = Profile::new(
+                workspace,
+                &executable.canonicalize()?,
+                &toolchain,
+                temporary,
+            )?;
             let cache = CargoCache::new(workspace, &toolchain.cargo_home)?;
             let mut isolated = Command::new("/usr/bin/sandbox-exec");
             isolated.env_clear().current_dir(workspace.root());

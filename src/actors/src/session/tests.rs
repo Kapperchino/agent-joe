@@ -1402,3 +1402,51 @@ fn crash_fixture() {
         std::process::exit(0);
     }
 }
+
+#[test]
+fn task_edits_survive_restart_and_history_forks_do_not_inherit_undo_ownership() {
+    use utils::changes::{ChangeTracker, FileEdit};
+    let workspace = Workspace::new();
+    let policy = WorkspacePolicy::workspace(workspace.path.clone()).unwrap();
+    policy
+        .write(std::path::Path::new("file"), "user baseline\n")
+        .unwrap();
+    let store = workspace.store();
+    let session = store
+        .create(SessionProvider::Injected, None, history())
+        .unwrap();
+    let id = session.id.clone();
+    let tracker = ChangeTracker::restored(Default::default(), Some(session.clone()));
+    tracker.start(&policy).unwrap();
+    let before = policy.file_version(std::path::Path::new("file")).unwrap();
+    let edit = FileEdit::new(
+        &policy,
+        std::path::Path::new("file"),
+        before.clone(),
+        before.with_text("Joe result\n".into()),
+    )
+    .unwrap();
+    let record = tracker.apply(&policy, vec![edit]).unwrap();
+    assert_eq!(session.snapshot().unwrap().changes.records[0].id, record.id);
+    drop(tracker);
+    drop(session);
+    drop(store);
+    let store = workspace.store();
+    let session = workspace
+        .resume(&store, &id, &SessionProvider::Injected)
+        .unwrap();
+    let fork = session.fork().unwrap();
+    assert!(fork.snapshot().unwrap().changes.records.is_empty());
+    assert!(fork.snapshot().unwrap().changes.baseline.is_none());
+    let tracker =
+        ChangeTracker::restored(session.snapshot().unwrap().changes, Some(session.clone()));
+    tracker.undo(&policy, &record.id).unwrap();
+    assert_eq!(
+        policy.read(std::path::Path::new("file")).unwrap(),
+        "user baseline\n"
+    );
+    assert!(matches!(
+        session.snapshot().unwrap().changes.records[0].state,
+        utils::changes::EditState::Undone
+    ));
+}

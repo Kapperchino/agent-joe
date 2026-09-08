@@ -71,6 +71,11 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 history.clone(),
             )?);
         }
+        if let Some(session) = &dependency.runtime.session
+            && session.snapshot()?.parent.is_none()
+        {
+            dependency.runtime.scope.changes = session.change_tracker(Default::default());
+        }
         let dep_clone = dependency.clone();
 
         let stream_log = if dependency.debug_mode {
@@ -178,6 +183,13 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             self.dependency.runtime.session =
                 Some(store.create(self.llm.session_provider(), None, history.clone())?);
         }
+        self.dependency.runtime.scope.changes = self
+            .dependency
+            .runtime
+            .session
+            .as_ref()
+            .map(|session| session.change_tracker(Default::default()))
+            .unwrap_or_default();
         self.cur_context = context;
         self.history = history;
         self.context_checkpoint = Default::default();

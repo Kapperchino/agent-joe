@@ -10,6 +10,7 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 #[derive(Clone, Default)]
 pub struct ExecutionScope {
+    pub changes: Arc<crate::changes::ChangeTracker>,
     pub cancel: CancellationToken,
     pub tasks: TaskTracker,
     resources: Arc<Mutex<BTreeMap<u64, Resource>>>,
@@ -48,6 +49,7 @@ impl ExecutionScope {
             tasks: TaskTracker::new(),
             resources: self.resources.clone(),
             workspace: self.workspace.clone(),
+            changes: self.changes.clone(),
         }
     }
 

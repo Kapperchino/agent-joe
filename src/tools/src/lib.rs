@@ -18,3 +18,8 @@ pub mod list_directory;
 
 #[cfg(test)]
 mod discovery_test;
+
+pub mod git;
+pub mod review_changes;
+pub mod undo_changes;
+pub mod worktree;

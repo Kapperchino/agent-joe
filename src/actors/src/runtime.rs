@@ -63,7 +63,8 @@ impl Runtime {
         })
     }
 
-    pub fn child(&self, scope: ExecutionScope) -> Self {
+    pub fn child(&self, mut scope: ExecutionScope) -> Self {
+        scope.changes = self.scope.changes.clone();
         Self {
             scope,
             ..self.clone()
