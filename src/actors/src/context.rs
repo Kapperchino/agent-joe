@@ -444,9 +444,10 @@ struct EvidenceCall<'a> {
 mod tests;
 
 pub(crate) fn estimated_tokens(request: &ClientRequest) -> anyhow::Result<usize> {
+    let tokenizer = tiktoken_rs::o200k_base_singleton();
     Ok(1024
-        + request.system.as_ref().map(String::len).unwrap_or_default()
-        + serde_json::to_vec(&request.messages)?.len()
-        + serde_json::to_vec(&request.tools)?.len()
+        + tokenizer.count_ordinary(request.system.as_deref().unwrap_or_default())
+        + tokenizer.count_ordinary(&serde_json::to_string(&request.messages)?)
+        + tokenizer.count_ordinary(&serde_json::to_string(&request.tools)?)
         + request.messages.len() * 32)
 }

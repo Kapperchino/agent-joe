@@ -81,11 +81,12 @@ or rerun saved operations. Failed, incomplete, or oversized summaries leave the
 previous context intact; interrupt and clear cancel an in-flight compaction.
 
 The status line separates estimated context for the next request from cumulative
-provider token usage, including compaction. Estimates conservatively count serialized
-UTF-8 bytes plus framing rather than using a model-specific tokenizer. Automatic
-compaction starts at 80% of the input budget after reserving response space. If
-mandatory context cannot fit, the turn stops with recovery instructions instead
-of dropping requirements.
+provider token usage, including compaction. Estimates tokenize instructions,
+messages, and tool definitions with `o200k_base`, plus an allowance for request
+framing. These remain estimates for other provider tokenizers and opaque native
+state. Automatic compaction starts at 80% of the input budget after reserving
+response space. If mandatory context cannot fit, the turn stops with recovery
+instructions instead of dropping requirements.
 
 Runtime settings are separate from provider credentials:
 

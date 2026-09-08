@@ -57,7 +57,7 @@ fn saved_history(store: &Arc<SessionStore>) -> String {
     for index in 0..5 {
         messages.push(llm::Message::new_assistant(format!(
             "Investigation {index}: {}",
-            "inspected source ".repeat(200)
+            "inspected source ".repeat(2000)
         )));
         messages.push(llm::Message::new(format!("Continue requirement {index}")));
     }
@@ -88,6 +88,67 @@ fn summary(reply: oneshot::Sender<anyhow::Result<Events>>) {
         usage.output_tokens = 30;
     }
     answer(reply, events);
+}
+
+#[tokio::test]
+async fn fitting_context_reports_tokens_and_continues_without_repeated_compaction() {
+    let workspace = crate::session::tests::Workspace::new();
+    let runtime = configured_runtime(&workspace);
+    let store = runtime.sessions.clone().unwrap();
+    let history = std::iter::once(llm::Message::new("workspace".into()))
+        .chain((0..5).flat_map(|index| {
+            [
+                llm::Message::new(format!("Inspect file {index}")),
+                llm::Message::new_assistant("inspected source ".repeat(300)),
+            ]
+        }))
+        .collect();
+    let session = store
+        .create(llm::SessionProvider::Injected, None, history)
+        .unwrap();
+    let id = session.id.clone();
+    drop(session);
+    let h = Harness::with_runtime(vec![], runtime).await;
+    resume(&h, &id).await;
+    for _ in 0..3 {
+        h.start("Continue the implementation");
+        let (request, reply) = h.request().await;
+        assert!(
+            request
+                .system
+                .as_deref()
+                .unwrap()
+                .starts_with("Follow the fixture")
+        );
+        let bytes = serde_json::to_vec(&request.messages).unwrap().len();
+        assert!(bytes > h.runtime.context_limits.trigger());
+        let event = h
+            .event(|packet| matches!(packet, ActorToTuiPacket::ContextUpdated(_)))
+            .await;
+        let ActorToTuiPacket::ContextUpdated(context) = event else {
+            panic!("request context expected")
+        };
+        assert_eq!(
+            context.estimated_tokens,
+            estimated_tokens(&request).unwrap()
+        );
+        assert!(context.estimated_tokens < bytes / 2);
+        assert_eq!(context.ceiling, h.runtime.context_limits.ceiling());
+        assert_eq!(
+            context.response_reserve,
+            h.runtime.context_limits.response()
+        );
+        answer(reply, response(vec![text("Implementation in progress")]));
+        h.terminal(Lifecycle::Completed).await;
+    }
+    let snapshot = store
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|snapshot| snapshot.id == id)
+        .unwrap();
+    assert_eq!(snapshot.context.generation, 0);
+    h.stop().await;
 }
 
 #[tokio::test]
@@ -663,7 +724,7 @@ async fn delegated_workers_compact_between_complete_tool_exchanges() {
         answer(
             reply,
             response(vec![
-                text(&"Investigation details ".repeat(150)),
+                text(&"Investigation details ".repeat(1000)),
                 call("read", &format!("read-{index}")),
             ]),
         );

@@ -38,6 +38,25 @@ fn exchange(history: &mut Vec<Message>, id: &str, name: &str, output: &str, is_e
 }
 
 #[test]
+fn token_budget_does_not_treat_text_or_json_bytes_as_tokens() {
+    for text in [
+        "The requested change preserves existing behavior.\n",
+        "fn main() { println!(\"hello world\"); }\n",
+        "こんにちは世界。你好世界。\n",
+    ] {
+        let mut input = input();
+        input.mode = RequestMode::Continue;
+        input.history.push(Message::new(text.repeat(300)));
+        assert!(serde_json::to_vec(&input.history).unwrap().len() > input.limits.trigger());
+        let BudgetPlan::Ready(request) = input.plan().unwrap() else {
+            panic!("text within the token budget should not compact")
+        };
+        assert!(estimated_tokens(&request).unwrap() <= input.limits.trigger());
+        assert_eq!(request.messages.last().unwrap().text(), text.repeat(300));
+    }
+}
+
+#[test]
 fn repeated_compaction_preserves_requirements_questions_evidence_and_recent_pairs() {
     let mut input = input();
     input.history.push(Message::new(
@@ -138,7 +157,7 @@ fn requests_budget_optional_workspace_after_instructions_and_latest_user_input()
             .any(|message| message.text() == "Keep this exact constraint")
     );
     assert!(request.messages[0].text().contains("bytes omitted"));
-    input.instructions = "mandatory instruction ".repeat(1000);
+    input.instructions = "mandatory instruction ".repeat(4000);
     assert!(input.plan().is_err());
 }
 
@@ -181,7 +200,7 @@ fn summary_cannot_discard_irreducible_requirements_or_exceed_the_budget() {
     for _ in 0..4 {
         input
             .history
-            .push(Message::new("mandatory requirement ".repeat(200)));
+            .push(Message::new("mandatory requirement ".repeat(1500)));
         input
             .history
             .push(Message::new_assistant("acknowledged".into()));
