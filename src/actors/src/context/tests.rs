@@ -69,6 +69,13 @@ fn repeated_compaction_preserves_requirements_questions_evidence_and_recent_pair
         "Compiler error E0308 in src/main.rs",
         true,
     );
+    exchange(
+        &mut input.history,
+        "test",
+        "cargo",
+        "Focused regression passed",
+        false,
+    );
     for id in ["one", "two", "three", "four"] {
         exchange(
             &mut input.history,
@@ -100,6 +107,7 @@ fn repeated_compaction_preserves_requirements_questions_evidence_and_recent_pair
         let serialized = serde_json::to_string(&request.messages).unwrap();
         assert!(serialized.contains("Never modify the public API. Keep existing edits."));
         assert!(serialized.contains("Compiler error E0308 in src/main.rs"));
+        assert!(serialized.contains("Focused regression passed"));
         assert!(serialized.contains("Which target?"));
         assert!(serialized.contains("remain pending"));
         assert_eq!(input.checkpoint.generation, generation);

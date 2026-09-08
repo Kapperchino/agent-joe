@@ -1,8 +1,6 @@
 extern crate self as tools;
 
 pub mod apply_patch;
-pub mod cargo_check;
-pub mod cargo_test;
 pub mod grep;
 pub mod insert_after_line;
 pub mod read_file;
@@ -20,3 +18,7 @@ pub mod list_directory;
 mod discovery_test;
 
 pub mod cargo_tools;
+pub mod git;
+pub mod review_changes;
+pub mod undo_changes;
+pub mod worktree;

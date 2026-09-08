@@ -151,7 +151,22 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         }
     }
 
-    pub(crate) fn begin_turn(&mut self, input: FollowUp) {
+    pub(crate) async fn begin_turn(&mut self, input: FollowUp) {
+        let scope = self.dependency.runtime.scope.clone();
+        let changes = scope.changes.clone();
+        let baseline = match (scope.workspace().is_ok(), self.request_mode) {
+            (true, mode) if mode != crate::context::RequestMode::SingleResponse => {
+                scope
+                    .enter(utils::files::operation(move |workspace| {
+                        changes.start(workspace)
+                    }))
+                    .await
+            }
+            _ => Ok(()),
+        };
+        if let Err(error) = baseline {
+            self.persistence_failed(error);
+        }
         if let Some(session) = &self.dependency.runtime.session {
             self.persist(Event::Began(QueuedInput {
                 turn: session.key(input.id),
@@ -364,6 +379,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             .runtime
             .workers
             .restore(&session.id, snapshot.workers);
+        self.dependency.runtime.scope.changes = session.change_tracker(snapshot.changes);
         self.dependency.runtime.session = Some(session);
         self.persistence = Persistence::Ready;
         self.reporter.send(ActorToTuiPacket::TokensUpdated(

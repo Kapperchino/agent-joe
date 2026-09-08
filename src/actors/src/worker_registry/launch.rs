@@ -88,18 +88,19 @@ impl PreparedWorker {
                     })
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
-        let restricted_inspector = request.allows_tool("inspect_context")
-            && !request
-                .allowed_paths
-                .iter()
-                .any(|path| path == std::path::Path::new("."));
+        let restricted_inspector = ["inspect_context", "git", "review_changes", "worktree"]
+            .iter()
+            .any(|name| request.allows_tool(name))
+            && !scope
+                .workspace()?
+                .permits_workspace_access(utils::workspace::Access::Read);
         let restricted_process = tools.iter().any(|tool| {
             tool.effect() == tools::tool_defs::ToolEffect::Validate
-                || tool.name().starts_with("cargo_")
+                || matches!(tool.name().as_str(), "cargo" | "worktree")
         }) && !scope.workspace()?.permits_workspace_execution();
         let tools = match restricted_inspector || restricted_process {
             true => Err(anyhow::anyhow!(
-                "inspect_context and executable validation require whole-project paths; use scoped file tools or ask the root to validate"
+                "Repository inspection, worktree management and Cargo require whole-project paths; use scoped file tools or ask the root to review and validate"
             )),
             false => Ok(tools),
         }?;
@@ -279,6 +280,7 @@ impl WorkerExecution {
             changed_files: evidence.changed_files.iter().cloned().collect(),
             possibly_changed_files: evidence.possibly_changed_files.iter().cloned().collect(),
             validation: evidence.validation.clone(),
+            edits: evidence.edits.clone(),
             processes,
             unresolved_issues: unresolved,
             artifacts,

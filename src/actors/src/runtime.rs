@@ -71,7 +71,8 @@ impl Runtime {
         })
     }
 
-    pub fn child(&self, scope: ExecutionScope) -> Self {
+    pub fn child(&self, mut scope: ExecutionScope) -> Self {
+        scope.changes = self.scope.changes.clone();
         Self {
             scope,
             ..self.clone()
@@ -114,7 +115,7 @@ impl Workspace {
             _ = scope.cancel.cancelled() => Err(ToolFailure::new(ToolFailureKind::Cancelled, ToolEffects::NotStarted, "Cancelled while waiting for the workspace")),
             lease = self.lease(effect) => match matches!(effect, ToolEffect::Write | ToolEffect::Validate)
                 && scope.resources().iter().any(|resource| resource.kind == utils::execution::ResourceKind::Process) {
-                true => Err(ToolFailure::new(ToolFailureKind::Validation, ToolEffects::NotStarted, "Stop the managed target with process_stop before editing or running another Cargo command")),
+                true => Err(ToolFailure::new(ToolFailureKind::Validation, ToolEffects::NotStarted, "Stop the managed target with cargo operation stop before editing or running another Cargo command")),
                 false => Ok(lease),
             },
         }

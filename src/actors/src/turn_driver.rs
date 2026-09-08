@@ -33,7 +33,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     async fn execute(&mut self, effect: Effect) -> EffectOutcome {
         match effect {
             Effect::BeginTurn(input) => {
-                self.begin_turn(input);
+                self.begin_turn(input).await;
                 EffectOutcome::Applied
             }
             Effect::AppendHistory(messages) => {
@@ -288,6 +288,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
 
     pub(crate) async fn command(&mut self, command: Command) {
         match command {
+            Command::Diff | Command::Undo(_) => self.change_command(command).await,
             Command::Sessions | Command::Resume(_) | Command::New | Command::Fork => {
                 self.session_command(command).await
             }

@@ -6,8 +6,6 @@ use analysis::contexts::rust_empty_context::RustEmptyContext;
 use async_trait::async_trait;
 use ractor::{ActorProcessingErr, ActorRef};
 use std::marker::PhantomData;
-use tools::cargo_check::CargoCheck;
-use tools::cargo_test::CargoTest;
 use tools::tool_defs::{ErasedToolRef, erased_tool};
 
 pub struct ValidateWorker<C: Context> {
@@ -37,16 +35,11 @@ impl Worker for ValidateWorker<RustEmptyContext> {
     }
 
     fn tools() -> Vec<ErasedToolRef<Self::C, ActorContext<Self::C>>> {
-        vec![
-            erased_tool::<CargoCheck, Self::C, ActorContext<Self::C>>(),
-            erased_tool::<CargoTest, Self::C, ActorContext<Self::C>>(),
-            erased_tool::<tools::cargo_tools::CargoFmtCheck, Self::C, ActorContext<Self::C>>(),
-            erased_tool::<tools::cargo_tools::CargoClippy, Self::C, ActorContext<Self::C>>(),
-            erased_tool::<tools::cargo_tools::CargoRun, Self::C, ActorContext<Self::C>>(),
-            erased_tool::<tools::cargo_tools::CargoStart, Self::C, ActorContext<Self::C>>(),
-            erased_tool::<tools::cargo_tools::ProcessPoll, Self::C, ActorContext<Self::C>>(),
-            erased_tool::<tools::cargo_tools::ProcessStop, Self::C, ActorContext<Self::C>>(),
-        ]
+        vec![erased_tool::<
+            tools::cargo_tools::Cargo<tools::cargo_tools::ValidationOperations>,
+            Self::C,
+            ActorContext<Self::C>,
+        >()]
     }
 }
 

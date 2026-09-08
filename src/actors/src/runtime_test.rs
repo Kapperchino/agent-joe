@@ -316,7 +316,7 @@ impl ErasedToolTrait<TestContext, ActorContext<TestContext>> for GateTool {
             _ => Ok(output.to_string()),
         }
     }
-    fn output_is_error_erased(&self, _: &Value) -> anyhow::Result<bool> {
+    fn output_is_error_erased(&self, _: &Value, _: &Value) -> anyhow::Result<bool> {
         Ok(matches!(self.outcome, GateOutcome::LargeValidation))
     }
     fn add_context(&self, _: &Value, _: &mut TestContext, _: &str) -> anyhow::Result<()> {
@@ -1272,19 +1272,19 @@ async fn failed_validation_is_an_error_with_diagnostics_in_history() {
             output: &Value,
         ) -> anyhow::Result<String> {
             tools::tool_defs::erased_tool::<
-                tools::cargo_test::CargoTest,
+                tools::cargo_tools::Cargo,
                 TestContext,
                 ActorContext<TestContext>,
             >()
             .output_to_content_erased(input, output)
         }
-        fn output_is_error_erased(&self, output: &Value) -> anyhow::Result<bool> {
+        fn output_is_error_erased(&self, input: &Value, output: &Value) -> anyhow::Result<bool> {
             tools::tool_defs::erased_tool::<
-                tools::cargo_test::CargoTest,
+                tools::cargo_tools::Cargo,
                 TestContext,
                 ActorContext<TestContext>,
             >()
-            .output_is_error_erased(output)
+            .output_is_error_erased(input, output)
         }
         fn add_context(&self, _: &Value, _: &mut TestContext, _: &str) -> anyhow::Result<()> {
             Ok(())
@@ -1300,7 +1300,7 @@ async fn failed_validation_is_an_error_with_diagnostics_in_history() {
                 call_id: None,
             },
             name: "validate".to_owned().try_into().unwrap(),
-            input: Default::default(),
+            input: json!({"operation":"test"}).as_object().unwrap().clone(),
         }]),
     );
     let (request, reply) = h.request().await;
@@ -1604,7 +1604,7 @@ async fn cargo_cancellation_keeps_output_before_turn_cleanup() {
         let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
         let h = Harness::with_runtime(
             vec![tools::tool_defs::erased_tool::<
-                tools::cargo_tools::CargoRun,
+                tools::cargo_tools::Cargo,
                 TestContext,
                 ActorContext<TestContext>,
             >()],
@@ -1619,8 +1619,8 @@ async fn cargo_cancellation_keeps_output_before_turn_cleanup() {
                     id: "run".to_owned().try_into().unwrap(),
                     call_id: None,
                 },
-                name: "cargo_run".to_owned().try_into().unwrap(),
-                input: json!({"target":{"kind":"example","name":"server"}})
+                name: "cargo".to_owned().try_into().unwrap(),
+                input: json!({"operation":"run","target":{"kind":"example","name":"server"}})
                     .as_object()
                     .unwrap()
                     .clone(),

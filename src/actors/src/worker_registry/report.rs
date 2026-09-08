@@ -40,6 +40,8 @@ pub struct WorkerReport {
     pub possibly_changed_files: Vec<String>,
     pub validation: Vec<ToolResult>,
     #[serde(default)]
+    pub edits: Vec<utils::changes::EditSummary>,
+    #[serde(default)]
     pub processes: Vec<utils::cargo::CargoResult>,
     pub unresolved_issues: Vec<String>,
     pub artifacts: Vec<crate::session::artifacts::ArtifactReference>,
@@ -67,6 +69,7 @@ impl WorkerView {
                 changed_files: Vec::new(),
                 possibly_changed_files: Vec::new(),
                 validation: Vec::new(),
+                edits: Vec::new(),
                 processes: Vec::new(),
                 unresolved_issues: vec!["Effects and requested checks are uncertain; inspect the workspace and saved descendant tool artifacts before retrying. Saved workers are never restarted automatically.".into()],
                 artifacts: Vec::new(),
@@ -84,17 +87,40 @@ pub(crate) struct Evidence {
     pub changed_files: BTreeSet<String>,
     pub possibly_changed_files: BTreeSet<String>,
     pub validation: Vec<ToolResult>,
+    pub edits: Vec<utils::changes::EditSummary>,
     pub unresolved: Vec<String>,
 }
 
 impl Evidence {
     pub(crate) fn record(&mut self, effect: ToolEffect, result: &ToolResult) {
+        let edit = result
+            .outcome
+            .as_ref()
+            .ok()
+            .filter(|_| {
+                matches!(
+                    result.invocation.name.as_ref(),
+                    "apply_patch" | "undo_changes"
+                )
+            })
+            .and_then(|content| serde_json::from_str::<serde_json::Value>(content).ok())
+            .map(|output| output.get("edit").cloned().unwrap_or(output))
+            .and_then(|output| serde_json::from_value::<utils::changes::EditSummary>(output).ok());
+        if let Some(edit) = edit {
+            self.changed_files
+                .extend(edit.applied.iter().map(|path| path.display().to_string()));
+            self.possibly_changed_files
+                .extend(edit.in_flight.iter().map(|path| path.display().to_string()));
+            self.edits.push(edit);
+        }
         if matches!(effect, ToolEffect::Validate | ToolEffect::ProcessControl)
-            || result.invocation.name.as_ref().starts_with("cargo_")
+            || result.invocation.name.as_ref() == "cargo"
         {
             self.validation.push(result.clone());
         }
-        if effect == ToolEffect::Write && result.invocation.name.as_ref().starts_with("cargo_") {
+        if effect == ToolEffect::Write
+            && matches!(result.invocation.name.as_ref(), "cargo" | "worktree")
+        {
             self.unresolved.push(format!(
                 "{} may modify workspace files; its changed paths are not enumerated in this report and require review",
                 result.invocation.name

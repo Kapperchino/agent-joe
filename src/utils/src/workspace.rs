@@ -120,10 +120,15 @@ impl WorkspacePolicy {
     }
 
     pub fn permits_workspace_execution(&self) -> bool {
-        self.restrictions.iter().all(|restriction| {
-            matches!(restriction.access, RootAccess::ReadWrite)
-                && restriction.paths.iter().any(|path| path == &self.base)
-        })
+        self.permits_workspace_access(Access::Write)
+    }
+
+    pub fn permits_workspace_access(&self, access: Access) -> bool {
+        self.resolve(&self.base, access).is_ok()
+            && self.restrictions.iter().all(|restriction| {
+                (access == Access::Read || matches!(restriction.access, RootAccess::ReadWrite))
+                    && restriction.paths.iter().any(|path| path == &self.base)
+            })
     }
 
     pub(crate) fn read_only_roots(&self) -> impl Iterator<Item = &Path> {

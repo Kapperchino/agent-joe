@@ -9,6 +9,8 @@ use std::{
 mod storage;
 pub use storage::PrivateStorage;
 
+mod edits;
+
 mod process;
 pub(crate) use process::ProcessWorkspace;
 

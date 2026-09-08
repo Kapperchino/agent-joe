@@ -117,6 +117,8 @@ impl ResumableSession {
 pub(crate) struct Snapshot {
     version: SchemaVersion,
     pub sequence: u64,
+    #[serde(default)]
+    pub changes: utils::changes::ChangeSnapshot,
     pub id: String,
     workspace: String,
     provider: SessionProvider,
@@ -237,6 +239,7 @@ pub(crate) enum OperationState {
 pub(crate) enum Event {
     Worker(Box<crate::worker_registry::report::WorkerView>),
     Created,
+    Changes(utils::changes::ChangeSnapshot),
     Forked {
         source: String,
     },
@@ -334,6 +337,7 @@ impl SessionStore {
         let mut snapshot = Snapshot {
             version: SchemaVersion,
             sequence: 1,
+            changes: Default::default(),
             id: id.clone(),
             workspace: self.storage.workspace_identity().to_owned(),
             provider,
@@ -453,6 +457,7 @@ impl Session {
         snapshot.artifacts = self.store.artifact_index.list(&transaction, &snapshot.id)?;
         snapshot.id = self.store.storage.new_id();
         snapshot.sequence = 1;
+        snapshot.changes = Default::default();
         snapshot.parent = None;
         snapshot.forked_from = Some(self.id.clone());
         snapshot.status = Lifecycle::Ready;
@@ -580,6 +585,7 @@ impl Snapshot {
                 self.workers
                     .insert(worker.worker_id.clone(), worker.as_ref().clone());
             }
+            Event::Changes(changes) => self.changes = changes.clone(),
             Event::Created | Event::Forked { .. } => {
                 Err(anyhow::anyhow!("Session already exists"))?
             }
@@ -790,3 +796,37 @@ impl Operation {
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+impl utils::changes::ChangeStore for Session {
+    fn save(&self, snapshot: &utils::changes::ChangeSnapshot) -> anyhow::Result<()> {
+        self.record(Event::Changes(snapshot.clone()))
+    }
+}
+
+struct SessionChanges {
+    session: std::sync::Weak<Session>,
+}
+
+impl utils::changes::ChangeStore for SessionChanges {
+    fn save(&self, snapshot: &utils::changes::ChangeSnapshot) -> anyhow::Result<()> {
+        let session = self
+            .session
+            .upgrade()
+            .ok_or_else(|| anyhow::anyhow!("The owning task session has closed"))?;
+        utils::changes::ChangeStore::save(session.as_ref(), snapshot)
+    }
+}
+
+impl Session {
+    pub fn change_tracker(
+        self: &Arc<Self>,
+        snapshot: utils::changes::ChangeSnapshot,
+    ) -> Arc<utils::changes::ChangeTracker> {
+        Arc::new(utils::changes::ChangeTracker::restored(
+            snapshot,
+            Some(Arc::new(SessionChanges {
+                session: Arc::downgrade(self),
+            })),
+        ))
+    }
+}

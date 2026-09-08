@@ -179,14 +179,14 @@ impl CargoOperation {
                 && (input.test_name.is_some() || input.exact || input.show_output) =>
             {
                 Err(anyhow!(
-                    "Test filters and harness options require cargo_test"
+                    "Test filters and harness options require the test operation"
                 ))
             }
             _ if input.exact && input.test_name.is_none() => {
                 Err(anyhow!("exact requires test_name"))
             }
             _ if action != CargoAction::Clippy && input.deny_warnings => {
-                Err(anyhow!("deny_warnings requires cargo_clippy"))
+                Err(anyhow!("deny_warnings requires the clippy operation"))
             }
             _ if action != CargoAction::Run && !input.args.is_empty() => {
                 Err(anyhow!("Program arguments require a binary or example run"))

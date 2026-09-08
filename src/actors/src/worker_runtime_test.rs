@@ -125,7 +125,7 @@ async fn root_modes_complete_small_changes_directly_and_simple_has_no_delegation
         assert!(
             tools.contains(&"read_file")
                 && tools.contains(&"apply_patch")
-                && tools.contains(&"cargo_test")
+                && tools.contains(&"cargo")
         );
         assert_eq!(
             tools.contains(&"start_worker"),
@@ -591,13 +591,13 @@ async fn uncollected_worker_reports_prevent_silent_parent_completion() {
 async fn worker_reports_preserve_actual_validation_failure_and_original_parameters() {
     let workspace = crate::session::tests::Workspace::new();
     let actor = RepositoryActor::new(BaseWorker::new(), workspace.path.clone()).await;
-    let started = StartedWorker::new(&actor, worker_input("cargo_test", ".")).await;
+    let started = StartedWorker::new(&actor, worker_input("cargo", ".")).await;
     answer(
         started.child.1,
         response(vec![tool(
-            "cargo_test",
+            "cargo",
             "invalid-selector",
-            json!({"package":"--injected", "test_name":null}),
+            json!({"operation":"test", "package":"--injected", "test_name":null}),
         )]),
     );
     let (child, reply) = actor.request().await;
@@ -617,7 +617,7 @@ async fn worker_reports_preserve_actual_validation_failure_and_original_paramete
     let (parent, reply) = actor.request().await;
     let result = latest_result(&parent);
     let report = &result["workers"][0]["report"];
-    assert_eq!(report["validation"][0]["invocation"]["name"], "cargo_test");
+    assert_eq!(report["validation"][0]["invocation"]["name"], "cargo");
     assert_eq!(
         report["validation"][0]["invocation"]["input"]["package"],
         "--injected"
@@ -645,7 +645,7 @@ async fn scoped_workers_reject_whole_workspace_cargo_tools_before_startup() {
         )))
         .unwrap();
     let (_, mut reply) = actor.request().await;
-    for name in ["cargo_check", "cargo_fmt", "cargo_run", "cargo_start"] {
+    for name in ["cargo", "git", "review_changes", "worktree"] {
         answer(
             reply,
             response(vec![tool(
@@ -676,17 +676,13 @@ async fn worker_cancellation_drains_managed_targets_and_reports_final_process_ev
         .unwrap();
         std::fs::write(workspace.path.join("examples/server.rs"), "fn main() {\n    use std::io::Write;\n    println!(\"worker-ready\");\n    std::io::stdout().flush().unwrap();\n    std::fs::write(\"ready\", \"ready\").unwrap();\n    loop { std::thread::sleep(std::time::Duration::from_millis(50)); }\n}\n").unwrap();
         let actor = RepositoryActor::new(BaseWorker::new(), workspace.path.clone()).await;
-        let started = StartedWorker::new(
-            &actor,
-            worker_input("cargo_start\nprocess_poll\nprocess_stop", "."),
-        )
-        .await;
+        let started = StartedWorker::new(&actor, worker_input("cargo", ".")).await;
         answer(
             started.child.1,
             response(vec![tool(
-                "cargo_start",
+                "cargo",
                 "start-target",
-                json!({"target":{"kind":"example","name":"server"}}),
+                json!({"operation":"start", "target":{"kind":"example","name":"server"}}),
             )]),
         );
         let (child, child_reply) = actor.request().await;
@@ -729,9 +725,110 @@ async fn worker_cancellation_drains_managed_targets_and_reports_final_process_ev
                 .unwrap()
                 .contains("worker-ready")
         );
-        assert_eq!(report["validation"][0]["invocation"]["name"], "cargo_start");
+        assert_eq!(report["validation"][0]["invocation"]["name"], "cargo");
         assert!(child_reply.is_closed());
         completed_root(&actor, reply).await;
         actor.stop().await;
     }
+}
+
+#[tokio::test]
+async fn worker_edits_share_parent_journal_and_exclude_root_undo_and_worktree_writes() {
+    let workspace = crate::session::tests::Workspace::new();
+    std::fs::create_dir(workspace.path.join("assigned")).unwrap();
+    std::fs::write(workspace.path.join("existing.txt"), "user baseline").unwrap();
+    let actor = RepositoryActor::new(BaseWorker::new(), workspace.path.clone()).await;
+    let started = StartedWorker::new(&actor, worker_input("apply_patch", "assigned")).await;
+    answer(
+        started.child.1,
+        response(vec![tool(
+            "apply_patch",
+            "worker-edit",
+            json!({"patch":"*** Begin Patch\n*** Add File: assigned/new.txt\n+worker edit\n*** End Patch"}),
+        )]),
+    );
+    let (child, child_reply) = actor.request().await;
+    let edit_id = latest_result(&child)["edit"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    answer(
+        started.parent.1,
+        response(vec![tool(
+            "undo_changes",
+            "blocked-undo",
+            json!({"edit_id":edit_id}),
+        )]),
+    );
+    let (rejected, reply) = actor.request().await;
+    assert!(result_text(&rejected).contains("worker owns workspace writes"));
+    answer(
+        reply,
+        response(vec![tool(
+            "worktree",
+            "blocked-worktree",
+            json!({"operation":"create", "base":"HEAD"}),
+        )]),
+    );
+    let (rejected, reply) = actor.request().await;
+    assert!(result_text(&rejected).contains("worker owns workspace writes"));
+    answer(
+        child_reply,
+        response(vec![text(
+            "Created the assigned file; parent review remains",
+        )]),
+    );
+    answer(
+        reply,
+        response(vec![tool(
+            "worker_status",
+            "wait",
+            json!({"action":"wait", "worker_id":started.id, "seconds":2}),
+        )]),
+    );
+    let (parent, reply) = actor.request().await;
+    assert_eq!(
+        latest_result(&parent)["workers"][0]["report"]["edits"][0]["id"],
+        edit_id
+    );
+    answer(
+        reply,
+        response(vec![tool("review_changes", "parent-review", json!({}))]),
+    );
+    let (reviewed, reply) = actor.request().await;
+    let review = latest_result(&reviewed);
+    assert_eq!(review["changes"][0]["path"], "assigned/new.txt");
+    assert_eq!(review["changes"][0]["ownership"], "joe");
+    answer(
+        reply,
+        response(vec![tool(
+            "undo_changes",
+            "parent-undo",
+            json!({"edit_id":edit_id}),
+        )]),
+    );
+    let (undone, reply) = actor.request().await;
+    assert_eq!(latest_result(&undone)["undo_of"], edit_id);
+    assert!(!workspace.path.join("assigned/new.txt").exists());
+    assert_eq!(
+        std::fs::read_to_string(workspace.path.join("existing.txt")).unwrap(),
+        "user baseline"
+    );
+    let snapshots = actor.store.list().unwrap();
+    let root = snapshots
+        .iter()
+        .find(|snapshot| snapshot.parent.is_none())
+        .unwrap();
+    assert_eq!(root.changes.records.len(), 2);
+    assert_eq!(root.changes.records[0].id, edit_id);
+    assert!(
+        root.changes
+            .baseline
+            .as_ref()
+            .unwrap()
+            .files
+            .contains_key(std::path::Path::new("existing.txt"))
+    );
+    completed_root(&actor, reply).await;
+    actor.stop().await;
 }
