@@ -629,3 +629,53 @@ fn log_handles_do_not_follow_replacements_or_open_outside_aliases() {
     assert_eq!(std::fs::read_to_string(&outside).unwrap(), "secret");
     assert_eq!(policy.read(Path::new("logs/retained")).unwrap(), "entry");
 }
+
+#[test]
+fn worker_restrictions_intersect_parent_policy_and_preserve_safe_discovery() {
+    let fixture = Fixture::new();
+    let policy = fixture.policy();
+    std::fs::create_dir_all(policy.root().join("allowed")).unwrap();
+    std::fs::create_dir_all(policy.root().join("other")).unwrap();
+    std::fs::write(policy.root().join("allowed/file"), "allowed").unwrap();
+    std::fs::write(policy.root().join("other/file"), "secret").unwrap();
+    std::fs::write(policy.root().join(".gitignore"), "target\n").unwrap();
+    let child = policy
+        .restricted(&[PathBuf::from("allowed")], RootAccess::ReadWrite)
+        .unwrap();
+    assert_eq!(child.read(Path::new("allowed/file")).unwrap(), "allowed");
+    assert!(child.read(Path::new("other/file")).is_err());
+    assert!(child.write(Path::new("other/new"), "denied").is_err());
+    child.write(Path::new("allowed/new"), "new").unwrap();
+    assert!(!child.permits_workspace_execution());
+    let inventory = crate::inventory::Inventory::scan(&child).unwrap();
+    assert_eq!(
+        inventory.files,
+        vec![PathBuf::from("allowed/file"), PathBuf::from("allowed/new")]
+    );
+    assert!(
+        child
+            .restricted(&[PathBuf::from("other")], RootAccess::ReadWrite)
+            .is_err()
+    );
+    let grandchild = child
+        .restricted(&[PathBuf::from(".")], RootAccess::ReadWrite)
+        .unwrap();
+    assert!(grandchild.read(Path::new("other/file")).is_err());
+    assert!(grandchild.write(Path::new("other/new"), "denied").is_err());
+    let readonly = policy
+        .restricted(&[PathBuf::from(".")], RootAccess::ReadOnly)
+        .unwrap();
+    assert!(readonly.write(Path::new("allowed/file"), "denied").is_err());
+    assert!(
+        !readonly
+            .restricted(&[PathBuf::from(".")], RootAccess::ReadWrite)
+            .unwrap()
+            .permits_workspace_execution()
+    );
+    assert!(
+        policy
+            .restricted(&[PathBuf::from("../")], RootAccess::ReadWrite)
+            .is_err()
+    );
+    assert!(policy.restricted(&[], RootAccess::ReadWrite).is_err());
+}

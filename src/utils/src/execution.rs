@@ -57,6 +57,19 @@ impl ExecutionScope {
         }
     }
 
+    pub fn restricted_child(
+        &self,
+        paths: &[std::path::PathBuf],
+        access: crate::workspace::RootAccess,
+    ) -> anyhow::Result<Self> {
+        Ok(Self {
+            workspace: WorkspaceAccess::Configured(Arc::new(
+                self.workspace()?.restricted(paths, access)?,
+            )),
+            ..self.child()
+        })
+    }
+
     pub fn tool_child(&self) -> Self {
         Self {
             process_owner: Some(Arc::new(self.clone())),

@@ -54,12 +54,21 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             dependency.runtime.session = None;
         }
         let history = Self::initial_history(&dependency.context).await;
-        if let Some(store) = &dependency.runtime.sessions {
+        if dependency.runtime.sessions.is_some()
+            && dependency.tool("read_artifact").is_none()
+            && dependency
+                .runtime
+                .worker
+                .as_ref()
+                .is_none_or(|worker| worker.request.allows_tool("read_artifact"))
+        {
             dependency.tools.push(tools::tool_defs::erased_tool::<
                 crate::tools::read_artifact::ReadArtifact,
                 C,
                 crate::actor::ActorContext<C>,
             >());
+        }
+        if let Some(store) = &dependency.runtime.sessions {
             let parent = dependency
                 .runtime
                 .session
@@ -71,6 +80,9 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 history.clone(),
             )?);
         }
+        if let Some(worker) = &dependency.runtime.worker {
+            worker.attach_session(dependency.runtime.session.clone())?;
+        }
         if let Some(session) = &dependency.runtime.session
             && session.snapshot()?.parent.is_none()
         {
@@ -78,7 +90,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         }
         let dep_clone = dependency.clone();
 
-        let stream_log = if dependency.debug_mode {
+        let stream_log = if dependency.debug_mode && dependency.runtime.worker.is_none() {
             let path = PathBuf::from(format!(
                 "./logs/stream_{}.jsonl",
                 std::time::SystemTime::now()
@@ -156,11 +168,21 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         turn: common_models::runtime_ids::TurnId,
         client: &LLmClient,
     ) -> anyhow::Result<crate::context::ContextInput> {
+        let pending = self
+            .dependency
+            .runtime
+            .workers
+            .pending(&self.dependency.worker_owner());
+        let instructions = self.cur_context.effective_instructions()?;
+        let instructions = match pending.is_empty() {
+            true => instructions,
+            false => format!("{instructions}\n{}", pending.join("\n")),
+        };
         Ok(crate::context::ContextInput {
             history: self.history.clone(),
             checkpoint: self.context_checkpoint.clone(),
             questions: self.questions.clone(),
-            instructions: self.cur_context.effective_instructions()?,
+            instructions,
             tools: self.tool_definitions(),
             limits: self
                 .dependency
@@ -212,9 +234,19 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         &self,
         scope: utils::execution::ExecutionScope,
     ) -> crate::scheduler::Executor<C> {
+        let mut runtime = self.dependency.runtime.child(scope.clone());
+        runtime.turn_scope = Some(scope);
+        runtime.inherited_constraints.extend(
+            self.history
+                .iter()
+                .skip(1)
+                .filter(|message| matches!(message.role, clients::llm::Role::User))
+                .map(clients::llm::Message::text)
+                .filter(|text| !text.is_empty()),
+        );
         crate::scheduler::Executor {
             dependency: Dependency {
-                runtime: self.dependency.runtime.child(scope),
+                runtime,
                 ..self.dependency.clone()
             },
             context: self.cur_context.clone(),

@@ -444,3 +444,79 @@ fn replaced_worktree_directories_and_config_includes_cannot_expand_access() {
     let error = GitRepository::required(&fixture.workspace).err().unwrap();
     assert!(error.to_string().contains("includes"));
 }
+
+#[test]
+fn worker_scopes_cannot_read_repository_metadata_or_manage_unallowed_worktrees() {
+    let fixture = Fixture::new();
+    fixture.write("allowed/file", "allowed");
+    fixture.write("secret", "secret");
+    let scoped = fixture
+        .workspace
+        .restricted(
+            &[PathBuf::from("allowed")],
+            crate::workspace::RootAccess::ReadWrite,
+        )
+        .unwrap();
+    assert!(GitRepository::open(&scoped).is_err());
+    let tracker = ChangeTracker::default();
+    tracker.start(&fixture.workspace).unwrap();
+    assert!(tracker.review(&scoped).is_err());
+    let edits = ["allowed/file", "secret"]
+        .iter()
+        .map(|path| {
+            let path = Path::new(path);
+            let before = fixture.workspace.file_version(path).unwrap();
+            crate::changes::FileEdit::new(
+                &fixture.workspace,
+                path,
+                before.clone(),
+                before.with_text("edited".into()),
+            )
+            .unwrap()
+        })
+        .collect();
+    let edit = tracker.apply(&fixture.workspace, edits).unwrap();
+    assert!(tracker.undo(&scoped, &edit.id).is_err());
+    assert_eq!(
+        fixture.workspace.read(Path::new("allowed/file")).unwrap(),
+        "edited"
+    );
+    assert_eq!(
+        fixture.workspace.read(Path::new("secret")).unwrap(),
+        "edited"
+    );
+    assert!(
+        worktrees::ManagedWorktree::execute(&scoped, &tracker, worktrees::WorktreeOperation::List)
+            .is_err()
+    );
+    let readonly = fixture
+        .workspace
+        .restricted(
+            &[PathBuf::from(".")],
+            crate::workspace::RootAccess::ReadOnly,
+        )
+        .unwrap();
+    let readonly_root = WorkspacePolicy::new(
+        fixture.root.clone(),
+        vec![crate::workspace::RootSpec {
+            path: fixture.root.clone(),
+            access: crate::workspace::RootAccess::ReadOnly,
+        }],
+    )
+    .unwrap();
+    for readonly in [readonly, readonly_root] {
+        assert!(GitRepository::open(&readonly).unwrap().is_some());
+        assert!(!readonly.permits_workspace_execution());
+        let error = worktrees::ManagedWorktree::execute(
+            &readonly,
+            &tracker,
+            worktrees::WorktreeOperation::Create {
+                base: Revision::new("HEAD").unwrap(),
+                dirty: worktrees::DirtySource::Reject,
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("whole-project path access"));
+    }
+    assert!(!fixture.root.join(".joe-worktrees").exists());
+}

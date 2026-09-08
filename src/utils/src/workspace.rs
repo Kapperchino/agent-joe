@@ -23,6 +23,13 @@ pub struct RootSpec {
 pub struct WorkspacePolicy {
     base: PathBuf,
     roots: Vec<Root>,
+    restrictions: Vec<PathRestriction>,
+}
+
+#[derive(Clone)]
+struct PathRestriction {
+    paths: Vec<PathBuf>,
+    access: RootAccess,
 }
 
 struct Root {
@@ -58,7 +65,11 @@ impl WorkspacePolicy {
                 .into_iter()
                 .map(|spec| Root::open(spec, &base))
                 .collect::<anyhow::Result<Vec<_>>>()?;
-            Ok(Self { base, roots })
+            Ok(Self {
+                base,
+                roots,
+                restrictions: Vec::new(),
+            })
         }
         #[cfg(not(unix))]
         {
@@ -72,6 +83,52 @@ impl WorkspacePolicy {
 
     pub fn root(&self) -> &Path {
         &self.base
+    }
+
+    pub fn restricted(&self, paths: &[PathBuf], access: RootAccess) -> anyhow::Result<Self> {
+        let paths = paths
+            .iter()
+            .map(|path| {
+                self.relative_path(path, Access::Read)
+                    .map(|path| self.base.join(path))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        match paths.is_empty() {
+            true => Err(anyhow::anyhow!("Worker paths cannot be empty")),
+            false => {
+                let roots = self
+                    .roots
+                    .iter()
+                    .map(|root| {
+                        Ok(Root {
+                            path: root.path.clone(),
+                            alias: root.alias.clone(),
+                            access: root.access,
+                            directory: root.directory.try_clone()?,
+                        })
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?;
+                let mut restrictions = self.restrictions.clone();
+                restrictions.push(PathRestriction { paths, access });
+                Ok(Self {
+                    base: self.base.clone(),
+                    roots,
+                    restrictions,
+                })
+            }
+        }
+    }
+
+    pub fn permits_workspace_execution(&self) -> bool {
+        self.permits_workspace_access(Access::Write)
+    }
+
+    pub fn permits_workspace_access(&self, access: Access) -> bool {
+        self.resolve(&self.base, access).is_ok()
+            && self.restrictions.iter().all(|restriction| {
+                (access == Access::Read || matches!(restriction.access, RootAccess::ReadWrite))
+                    && restriction.paths.iter().any(|path| path == &self.base)
+            })
     }
 
     pub(crate) fn read_only_roots(&self) -> impl Iterator<Item = &Path> {
@@ -140,13 +197,23 @@ impl<'a> ResolvedPath<'a> {
                 policy.base.join(path)
             };
             let absolute: PathBuf = absolute.components().collect();
-            if protected(&absolute, access) {
-                Err(anyhow::anyhow!(
+            let allowed = policy.restrictions.iter().all(|restriction| {
+                (access == Access::Read || matches!(restriction.access, RootAccess::ReadWrite))
+                    && restriction.paths.iter().any(|path| {
+                        absolute.starts_with(path)
+                            || (access == Access::Read && path.starts_with(&absolute))
+                    })
+            });
+            match allowed {
+                false => Err(anyhow::anyhow!(
+                    "Worker path access denied for {access:?}: {}",
+                    absolute.display()
+                )),
+                true if protected(&absolute, access) => Err(anyhow::anyhow!(
                     "Protected workspace path: {}",
                     absolute.display()
-                ))
-            } else {
-                policy
+                )),
+                true => policy
                     .roots
                     .iter()
                     .filter_map(|root| {
@@ -172,7 +239,7 @@ impl<'a> ResolvedPath<'a> {
                             "Workspace access denied for {access:?}: {}",
                             absolute.display()
                         )
-                    })
+                    }),
             }
         }
     }

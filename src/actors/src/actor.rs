@@ -57,6 +57,13 @@ pub struct Dependency<C: Context> {
     pub runtime: crate::runtime::Runtime,
 }
 impl<C: Context> Dependency<C> {
+    pub(crate) fn worker_owner(&self) -> String {
+        self.runtime
+            .session
+            .as_ref()
+            .map(|session| session.id.clone())
+            .unwrap_or_else(|| format!("actor-{}", self.context.get_id()))
+    }
     pub fn tool(&self, name: &str) -> Option<&ErasedToolRef<C, ActorContext<C>>> {
         self.tools.iter().find(|tool| tool.name() == name)
     }

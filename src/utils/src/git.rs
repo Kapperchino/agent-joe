@@ -149,6 +149,12 @@ pub struct GitRepository {
 
 impl GitRepository {
     pub fn open(workspace: &WorkspacePolicy) -> anyhow::Result<Option<Self>> {
+        let workspace = workspace
+            .permits_workspace_access(Access::Read)
+            .then_some(workspace)
+            .ok_or_else(|| {
+                anyhow::anyhow!("Git and aggregate review require whole-project path access")
+            })?;
         initialize()?;
         let dotgit = workspace.root().join(".git");
         match std::fs::symlink_metadata(&dotgit) {

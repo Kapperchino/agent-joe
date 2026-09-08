@@ -129,6 +129,8 @@ pub(crate) struct Snapshot {
     pub status: Lifecycle,
     pub usage: TokenCount,
     #[serde(default)]
+    pub workers: std::collections::BTreeMap<String, crate::worker_registry::report::WorkerView>,
+    #[serde(default)]
     pub artifacts: Vec<artifacts::ArtifactReference>,
     #[serde(default)]
     pub forked_from: Option<String>,
@@ -235,6 +237,7 @@ pub(crate) enum OperationState {
 
 #[derive(Serialize, Deserialize)]
 pub(crate) enum Event {
+    Worker(Box<crate::worker_registry::report::WorkerView>),
     Created,
     Changes(utils::changes::ChangeSnapshot),
     Forked {
@@ -344,6 +347,7 @@ impl SessionStore {
             queued: Vec::new(),
             status: Lifecycle::Ready,
             usage: TokenCount::default(),
+            workers: Default::default(),
             artifacts: Vec::new(),
             forked_from: None,
             context: crate::context::Checkpoint::default(),
@@ -577,6 +581,10 @@ impl Snapshot {
 
     fn transition(mut self, event: &Event) -> anyhow::Result<Self> {
         match event {
+            Event::Worker(worker) => {
+                self.workers
+                    .insert(worker.worker_id.clone(), worker.as_ref().clone());
+            }
             Event::Changes(changes) => self.changes = changes.clone(),
             Event::Created | Event::Forked { .. } => {
                 Err(anyhow::anyhow!("Session already exists"))?
@@ -655,6 +663,13 @@ impl Snapshot {
             }
             Event::Usage(usage) => self.usage = usage.clone(),
             Event::Recovered => {
+                for worker in self
+                    .workers
+                    .values_mut()
+                    .filter(|worker| !worker.status.terminal())
+                {
+                    worker.recover();
+                }
                 for (id, process) in &mut self.processes {
                     if process.status == utils::process::ProcessStatus::Running {
                         process.status = utils::process::ProcessStatus::Failed;

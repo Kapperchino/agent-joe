@@ -42,7 +42,7 @@ fn workers_expose_one_cargo_tool_with_their_allowed_operations() {
 
     let simple = operations(SimpleWorker::<RustContext>::tools());
     let validation = operations(ValidateWorker::<RustEmptyContext>::tools());
-    let formatting = operations(WriteWorker::<RustEmptyContext>::tools());
+    let writing = operations(WriteWorker::<RustEmptyContext>::tools());
     assert_eq!(
         simple,
         json!([
@@ -70,7 +70,7 @@ fn workers_expose_one_cargo_tool_with_their_allowed_operations() {
             "stop"
         ])
     );
-    assert_eq!(formatting, json!(["fmt"]));
+    assert_eq!(writing, simple);
 }
 
 struct RepositoryActor {
@@ -84,6 +84,14 @@ struct RepositoryActor {
 
 impl RepositoryActor {
     async fn new<W: Worker<C = RustContext>>(worker: W, root: std::path::PathBuf) -> Self {
+        Self::configured(worker, root, false).await
+    }
+
+    async fn configured<W: Worker<C = RustContext>>(
+        worker: W,
+        root: std::path::PathBuf,
+        debug_mode: bool,
+    ) -> Self {
         let runtime = Runtime::for_workspace(root.clone()).unwrap();
         let context = runtime
             .scope
@@ -100,7 +108,7 @@ impl RepositoryActor {
                 client: llm::LLmClient::Injected(Arc::new(Provider(tx))),
                 tools: W::tools(),
                 tui_tx,
-                debug_mode: false,
+                debug_mode,
                 context: context.clone(),
                 runtime,
             },
@@ -487,6 +495,9 @@ async fn shared_watcher_handles_create_modify_rename_and_delete_in_both_root_mod
     }
 }
 
+#[path = "worker_runtime_test.rs"]
+mod worker_tests;
+
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 #[tokio::test]
 async fn simple_and_validation_workers_manage_targets_and_archive_completion() {
@@ -520,14 +531,6 @@ async fn simple_and_validation_workers_manage_targets_and_archive_completion() {
                 Mode::Delegated => {
                     answer(
                         reply,
-                        response(vec![tool(
-                            "make_changes",
-                            "delegate-work",
-                            json!({"context":"Exercise a managed example and stop it"}),
-                        )]),
-                    );
-                    answer(
-                        actor.request().await.1,
                         response(vec![tool(
                             "validate_rust",
                             "delegate-validation",
@@ -612,10 +615,6 @@ async fn simple_and_validation_workers_manage_targets_and_archive_completion() {
                 answer(
                     actor.request().await.1,
                     response(vec![text("Validation reported by the validation worker.")]),
-                );
-                answer(
-                    actor.request().await.1,
-                    response(vec![text("Validation reported.")]),
                 );
             }
             actor

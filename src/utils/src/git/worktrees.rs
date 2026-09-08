@@ -54,6 +54,16 @@ impl ManagedWorktree {
         tracker: &ChangeTracker,
         operation: WorktreeOperation,
     ) -> anyhow::Result<Vec<Self>> {
+        let access = match operation {
+            WorktreeOperation::List => Access::Read,
+            _ => Access::Write,
+        };
+        let workspace = workspace
+            .permits_workspace_access(access)
+            .then_some(workspace)
+            .ok_or_else(|| {
+                anyhow::anyhow!("Worktree operations require whole-project path access")
+            })?;
         match operation {
             WorktreeOperation::List => Ok(tracker.snapshot()?.worktrees),
             WorktreeOperation::Create { base, dirty } => {

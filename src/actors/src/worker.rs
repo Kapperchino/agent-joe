@@ -48,6 +48,7 @@ pub async fn run_worker<W: Worker>(
         utils::execution::ResourceKind::Worker,
         "Delegated worker".into(),
     );
+    let (reply, receive) = tokio::sync::oneshot::channel();
     let handle = owner.tasks.spawn(async move {
         let _registration = registration;
         let spawned = Actor::spawn_linked(
@@ -58,7 +59,11 @@ pub async fn run_worker<W: Worker>(
         )
         .await;
         let result = match spawned {
-            Ok((actor, handle)) => RunningWorker { actor, handle }.run(&scope).await,
+            Ok((actor, handle)) => {
+                RunningWorker { actor, handle }
+                    .run(&scope, reply, receive)
+                    .await
+            }
             Err(error) => Err(WorkerFailure::Startup(error.to_string())),
         };
         scope.finish().await;
@@ -80,8 +85,9 @@ impl RunningWorker {
     async fn run(
         mut self,
         scope: &utils::execution::ExecutionScope,
+        tx: tokio::sync::oneshot::Sender<Result<String, WorkerFailure>>,
+        mut rx: tokio::sync::oneshot::Receiver<Result<String, WorkerFailure>>,
     ) -> Result<String, WorkerFailure> {
-        let (tx, mut rx) = tokio::sync::oneshot::channel();
         match self.actor.send_message(Message::RunWorker(tx.into())) {
             Ok(()) => tokio::select! {
                 biased;

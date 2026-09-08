@@ -453,3 +453,38 @@ async fn managed_targets_survive_tool_cleanup_poll_incrementally_and_stop_with_t
         assert!(turn.resources().is_empty());
     }
 }
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[tokio::test]
+async fn restricted_workers_cannot_bypass_paths_through_cargo_execution() {
+    let fixture = Fixture::new();
+    let scope = fixture
+        .scope()
+        .restricted_child(
+            &[std::path::PathBuf::from("member")],
+            crate::workspace::RootAccess::ReadWrite,
+        )
+        .unwrap();
+    let checked = scope
+        .enter(
+            CargoOperation::new(CargoAction::Check, CargoInput::default())
+                .unwrap()
+                .execute(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(checked.status, ProcessStatus::Failed);
+    assert!(checked.error.unwrap().contains("whole workspace"));
+    let started = scope
+        .enter(
+            CargoOperation::new(CargoAction::Run, fixture.example("server"))
+                .unwrap()
+                .start(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(started.status, ProcessStatus::Failed);
+    assert!(started.error.unwrap().contains("whole workspace"));
+    assert!(scope.resources().is_empty());
+    scope.finish().await;
+}

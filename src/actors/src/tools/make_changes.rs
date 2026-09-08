@@ -1,118 +1,89 @@
-use crate::actor::{ActorContext, Dependency};
-use crate::worker::Worker;
-use crate::workers::write_worker::WriteWorker;
-use analysis::contexts::context::Context;
+use crate::{actor::ActorContext, worker_registry::report::WorkerReport};
 use analysis::contexts::rust_context::RustContext;
-use analysis::contexts::rust_empty_context::RustEmptyContext;
-use anyhow::anyhow;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::fmt::{Display, Formatter};
 use tools::tool_defs::{ToolDefTrait, ToolId, ToolTrait, ToolType};
 use turbo_code_macros::{ToolDef, ToolInput};
 use utils::utils::FnvHashMap;
 
-#[async_trait]
-impl ToolTrait<RustContext, ActorContext<RustContext>> for MakeChanges {
-    type Input = MakeChangesInput;
-    type Output = MakeChangesResult;
-
-    async fn run(
-        input: Self::Input,
-        tool_id: ToolId,
-        cur_context: &RustContext,
-        actor_context: &ActorContext<RustContext>,
-    ) -> anyhow::Result<Self::Output> {
-        let info = match actor_context {
-            ActorContext::ActorInfo(info) => Ok(info),
-            _ => Err(anyhow!("wrong actor context")),
-        }?;
-
-        let mut new_context = cur_context.clone();
-        new_context.initial_prompt = WriteWorker::init_prompt(None);
-        new_context.task_prompt = Some(input.context.clone());
-
-        let empty_context = RustEmptyContext::new(new_context, cur_context.gen_id());
-
-        crate::worker::run_worker(
-            WriteWorker::new(),
-            Dependency {
-                client: info.dep.client.clone(),
-                tools: WriteWorker::tools(),
-                tui_tx: info.dep.tui_tx.clone(),
-                debug_mode: info.dep.debug_mode,
-                context: empty_context,
-                runtime: info.dep.runtime.child(info.dep.runtime.scope.child()),
-            },
-            info.actor_ref.clone(),
-        )
-        .await
-        .map_err(|error| error.into_tool_failure().into())
-        .map(|res| MakeChangesResult { res, id: tool_id })
-    }
-
-    fn display_input(input: &Self::Input) -> String {
-        MakeChanges {
-            input: input.clone(),
-            id: String::new(),
-        }
-        .to_string()
-    }
-
-    fn req_from_input(input: &Self::Input) -> anyhow::Result<FnvHashMap<String, String>> {
-        MakeChanges {
-            input: input.clone(),
-            id: String::new(),
-        }
-        .req()
-    }
-
-    fn output_to_content(_input: &Self::Input, output: &Self::Output) -> anyhow::Result<String> {
-        Ok(output.res.clone())
-    }
-
-    fn effect() -> tools::tool_defs::ToolEffect {
-        tools::tool_defs::ToolEffect::DelegateWrite
-    }
-
-    fn tool_type() -> ToolType {
-        ToolType::Client
-    }
-}
-
-#[derive(Default, Serialize, Deserialize, Debug, Clone, ToolDef)]
-#[tool(name = "make_changes", description = "Create an agent to make changes")]
+#[derive(Default, Debug, Clone, Serialize, Deserialize, ToolDef)]
+#[tool(
+    name = "make_changes",
+    description = "Run one bounded worker and await its structured report. Prefer direct tools for small work; start_worker supports explicit tool/path limits and asynchronous coordination."
+)]
 pub struct MakeChanges {
     #[tool(input)]
     pub input: MakeChangesInput,
     pub id: String,
 }
 
-#[derive(Default, Serialize, Deserialize, Debug, Clone, ToolInput)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize, ToolInput)]
 pub struct MakeChangesInput {
-    #[tool(description = "Context to give to the agent", required)]
+    #[tool(
+        description = "A bounded objective, selected context, constraints, completion criteria and requested checks",
+        required
+    )]
     pub context: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MakeChangesResult {
-    pub res: String,
-    pub id: ToolId,
+pub type MakeChangesResult = WorkerReport;
+
+impl std::fmt::Display for MakeChanges {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "- make_changes: {}",
+            self.input
+                .context
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .chars()
+                .take(80)
+                .collect::<String>()
+        )
+    }
 }
 
-impl Display for MakeChanges {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let context = self.input.context.trim();
-        if context.is_empty() {
-            write!(f, "- make changes")
-        } else {
-            let summary = context.lines().next().unwrap_or(context).trim();
-            let summary: String = summary.chars().take(80).collect();
-            if context.chars().count() > 80 {
-                write!(f, "- make changes: `{summary}...`")
-            } else {
-                write!(f, "- make changes: `{summary}`")
-            }
+#[async_trait]
+impl ToolTrait<RustContext, ActorContext<RustContext>> for MakeChanges {
+    type Input = MakeChangesInput;
+    type Output = MakeChangesResult;
+    async fn run(
+        input: Self::Input,
+        _: ToolId,
+        context: &RustContext,
+        actor: &ActorContext<RustContext>,
+    ) -> anyhow::Result<Self::Output> {
+        super::delegated::run(
+            input.context,
+            "find_files\nlist_directory\nread_file\ngrep\napply_patch\ncargo\ngit\nreview_changes\nundo_changes",
+            context,
+            actor,
+        )
+        .await
+    }
+    fn display_input(input: &Self::Input) -> String {
+        Self {
+            input: input.clone(),
+            id: String::new(),
         }
+        .to_string()
+    }
+    fn req_from_input(input: &Self::Input) -> anyhow::Result<FnvHashMap<String, String>> {
+        Self {
+            input: input.clone(),
+            id: String::new(),
+        }
+        .req()
+    }
+    fn output_to_content(_: &Self::Input, output: &Self::Output) -> anyhow::Result<String> {
+        Ok(serde_json::to_string(output)?)
+    }
+    fn effect() -> tools::tool_defs::ToolEffect {
+        tools::tool_defs::ToolEffect::DelegateWrite
+    }
+    fn tool_type() -> ToolType {
+        ToolType::Client
     }
 }

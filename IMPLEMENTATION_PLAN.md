@@ -1,11 +1,7 @@
 # Agent Joe implementation plan
 
-Updated: 2026-09-08. Reviewed against `main` at `23ef268` and
-`codex/m7` at `bafd11e`.
-
-M1–M6 are complete on `main`. M8 is merged with M6; its worker integration is
-pending. M7 is implemented with M6 on `codex/m7` and still needs integration
-with current `main`. M9 and M10 remain planned.
+Updated: 2026-09-08. M1–M8 are complete, including combined M7/M8 integration
+with the consolidated Cargo tool. M9 and M10 remain planned.
 
 Cover the ten gaps identified in the Codex comparison while keeping Joe a
 Rust-focused agent with typed tools and no model-controlled shell.
@@ -42,13 +38,14 @@ Rust-focused agent with typed tools and no model-controlled shell.
 | M4 | Complete on main | Sessions, artifacts, compaction / 2 | M1–M3 |
 | M5 | Complete on main | Discovery and scoped instructions / 5, 7 | M3–M4 |
 | M6 | Complete on main | Typed Cargo validation and managed targets / 6 | M2–M5 |
-| M7 | Implemented on codex/m7; integration pending | Direct work and bounded delegation / 8 | M4–M6; integration with M8 |
-| M8 | Merged on main; M7 integration pending | Git, aggregate review, guarded undo, worktrees / 9 | M3–M6; worker integration with M7 |
+| M7 | Complete | Direct work and bounded delegation / 8 | M4–M6; integration with M8 |
+| M8 | Complete | Git, aggregate review, guarded undo, worktrees / 9 | M3–M6; worker integration with M7 |
 | M9 | Planned; persistence foundations exist | Plan mode, tracked steps, questions, steering / 10 | M4–M8 |
 | M10 | Planned | Skills and controlled MCP integrations / 10 | M3–M5, M9 |
 
-M7 and M8 were developed separately. Their remaining dependency is a combined
-integration check; neither needs to be implemented again from scratch.
+M7 and M8 share worker policy, workspace ownership, the parent change journal,
+and durable session state. Managed worktrees do not enable simultaneous writers
+without explicit routing and ownership.
 
 **Shared architecture**
 
@@ -198,9 +195,9 @@ Code: `src/utils/src/{inventory,discovery,text_search}.rs`,
 **M6 — Typed validation and runnable Rust targets — complete**
 
 - One `cargo` tool selects `check`, `test`, `fmt_check`, `fmt`, `clippy`,
-  `run`, `start`, `poll`, or `stop`. Simple workers support all operations;
-  validation workers exclude `fmt`; write workers expose only `fmt` and delegate
-  validation. Schemas and dispatch enforce these permissions.
+  `run`, `start`, `poll`, or `stop`. Both root modes and write workers support all
+  operations. Managed workers inherit selected tools from their parent; the specialized
+  validation worker excludes `fmt`. Schemas and dispatch enforce tool permissions.
 - Constructors validate workspace/package, features, profile, built-in target
   triple, target kind/name, and test filter selections. Runs require a named
   binary/example. Unknown fields, conflicting selectors, option injection, and
@@ -221,12 +218,10 @@ Code: `src/utils/src/{inventory,discovery,text_search}.rs`,
 Code: `src/utils/src/{cargo,process,sandbox,execution}.rs`,
 `src/tools/src/cargo_tools.rs`, scheduler/session integration, and worker prompts.
 
-**M7 — Worker coordination — implemented on branch; integration pending**
+**M7 — Worker coordination — complete**
 
-Current `main` still uses the older gather-context / make-changes /
-validate-worker chain. Its default root has discovery and Git/review controls but
-delegates file-content reads, edits, and Cargo validation; `--simple` performs direct
-work. The bounded registry below is on `codex/m7` at `bafd11e`.
+Default mode supports direct work and bounded delegation through the shared
+registry. `--simple` performs direct work without delegation.
 
 - The default root shares the simple worker's direct tools and adds asynchronous
   worker start/control tools. Simple mode remains free of delegation.
@@ -240,28 +235,30 @@ work. The bounded registry below is on `codex/m7` at `bafd11e`.
 - Per-worker token, time, request, and tool-call limits combine with session
   allocations. Workers cannot initiate unbudgeted compaction. Full-project
   operations, including Cargo execution, require full-project path access.
-- Typed reports persist edits, uncertain effects, validation parameters/results,
-  artifacts, unresolved issues, and usage. M6 managed-process evidence is retained
+- Typed reports persist patch/undo edit IDs, uncertain effects, validation
+  parameters/results, artifacts, unresolved issues, and usage. M6 managed-process evidence is retained
   after cleanup; formatting/program execution report effects with unknown paths.
 - Parents must retrieve new reports before completing. Handoffs preserve selected
   context and inherited requirements. Resume marks unfinished workers interrupted
   without replay; forks retain reports/allocations with separate control scopes.
 
-Branch code: `src/actors/src/worker_registry.rs`,
+Code: `src/actors/src/worker_registry.rs`,
 `src/actors/src/worker_registry/*`,
 `src/actors/src/tools/{start_worker,worker_status}.rs`, and
 `src/actors/src/workers/task_worker.rs`.
 
-Remaining: integrate the branch with M8's tool exposure, task baselines, edit
-journal, review/undo, worktree policy, session recovery, and scheduler. Follow-ups
-currently start fresh workers; changing an active task requires cancellation and
-cleanup. Managed worktrees do not yet route workers automatically.
+Workers share the parent task baseline and journal. Root review/undo can act on
+recorded worker edits after writer cleanup. Scoped workers cannot access
+repository-wide Git, aggregate review, or worktree management; scoped undo
+preflights every affected path. Cargo evidence uses the actual requested operation.
+Follow-ups start fresh workers; changing an active task requires cancellation and
+cleanup. Managed worktrees do not route workers automatically.
 
 Acceptance: direct completion in both modes plus optional, observable, bounded,
 cancellable delegation that preserves validation evidence and project policy.
 Concurrent writers require explicit ownership or isolated workspaces.
 
-**M8 — Git and complete change review — merged; M7 integration pending**
+**M8 — Git and complete change review — complete**
 
 - Typed in-process Git status/diff/show/log use validated literal paths and
   restricted revisions. Network transports, executable helpers, and external
@@ -301,8 +298,9 @@ paths are unsupported. Git inventory uses `.gitignore` independently of
 discovery-only `.ignore` rules.
 
 Acceptance: Joe can review and explain its complete change while preserving
-existing and concurrent user edits. The implementation passes its current
-integration checks with M6; combined M7/M8 validation remains required.
+existing and concurrent user edits. Combined M6/M7/M8 checks cover worker journal
+attribution, root review and undo, writer conflicts, scoped access, and
+managed-process cleanup.
 
 **Current bounds**
 
@@ -316,8 +314,8 @@ integration checks with M6; combined M7/M8 validation remains required.
 | Session artifacts | Outputs above 8 KiB archived; up to 64 MiB per artifact; retrieval pages up to 4096 bytes |
 | Session storage | 1 GiB LMDB map; exhaustion stops continuation |
 | Git/change review | 32 MiB Git text output; 64 MiB baseline content, serialized journals, or aggregate review |
-| M7 branch workers | Four active; depth one; 32 starts and 2,000,000 allocated tokens per session |
-| M7 branch worker budget | 1024–500,000 tokens; 1–300 seconds; 1–32 provider requests |
+| Workers | Four active; depth one; 32 starts and 2,000,000 allocated tokens per session |
+| Worker budget | 1024–500,000 tokens; 1–300 seconds; 1–32 provider requests |
 
 Hard limits fail explicitly; paginated discovery reports truncation. See the
 [README](README.md) for current Cargo inputs, output fields, Git behavior, and
@@ -381,17 +379,10 @@ denied effects, credential refresh/redaction, and inherited plan-mode policy.
 
 **Next work**
 
-1. Integrate `codex/m7` into current `main`. Reconcile shared actor, scheduler,
-   session, tool, prompt, workspace-policy, and test changes with M6/M8.
-2. Verify combined behavior in both modes: direct edits and optional delegation;
-   worker-scoped Git/review/undo access; parent baseline/journal attribution;
-   writer ownership around patches, Cargo and worktree operations; managed-process
-   cleanup/evidence; and resume/fork without replay or widened access.
+1. Implement M9 using the existing session/question foundations.
+2. Implement M10 in separate skill, MCP transport/policy, and authentication slices.
 3. Retain one writer per shared workspace. Require explicit worktree routing and
-   ownership before allowing simultaneous writers; worktree creation alone does
-   not enable them. Mark M7/M8 complete after combined acceptance checks pass.
-4. Implement M9 using the existing session/question foundations, then M10 in
-   separate skill, MCP transport/policy, and authentication slices.
+   ownership before allowing simultaneous writers; creation alone does not enable them.
 
 **Recorded validation and rollout**
 
@@ -401,17 +392,18 @@ Latest recorded runs on 2026-09-08:
 | --- | --- | --- |
 | Main after M6/M8 integration | 249 workspace tests; workspace check; all-targets Clippy | 249 workspace tests; workspace check |
 | M7 branch after M6 integration | 249 workspace tests; workspace check; all-targets Clippy | 249 workspace tests; workspace check |
-| Combined M7/M8 | Pending | Pending |
+| Combined M7/M8 | 269 workspace tests; workspace check; all-targets Clippy | 269 workspace tests; workspace check |
 
 Commands: `cargo test --workspace --offline`,
 `cargo check --workspace --offline`, and
-`cargo clippy --workspace --all-targets --offline`. These results are carried
-forward from the milestone records; the two 249-test runs cover different code
-states and do not establish combined M7/M8 correctness. Recorded checks pass
-with existing warnings; changed Rust files passed formatting and whitespace
+`cargo clippy --workspace --all-targets --offline`. The historical 249-test runs
+cover different code states; the combined run exercises the integrated
+implementation. Recorded checks pass
+with existing warnings; all 38 changed Rust files pass formatting and whitespace
 checks. Workspace-wide formatting has pre-existing differences.
 
-Linux runs used Rust 1.95 Bookworm with Bubblewrap and nested namespaces enabled.
+Linux runs use Rust 1.95 Bookworm with rustfmt, Clippy, Bubblewrap, and
+nested namespaces enabled.
 Unsupported nested sandbox fixtures may skip; outer isolation tests still run.
 Live provider checks, native Windows, and model/task-performance comparisons
 remain unverified.

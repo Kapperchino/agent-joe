@@ -24,6 +24,12 @@ pub(super) struct IsolatedCommand {
 
 impl IsolatedCommand {
     pub(super) fn new(command: Command, workspace: &WorkspacePolicy) -> anyhow::Result<Self> {
+        let workspace = match workspace.permits_workspace_execution() {
+            true => Ok(workspace),
+            false => Err(anyhow::anyhow!(
+                "Executable operations require worker access to the whole workspace"
+            )),
+        }?;
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         let workspace =
             ProcessWorkspace::new(workspace).context("Cannot prepare the process workspace")?;

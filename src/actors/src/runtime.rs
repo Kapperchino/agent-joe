@@ -22,6 +22,10 @@ impl std::fmt::Display for WorkspaceRevision {
 
 #[derive(Clone)]
 pub struct Runtime {
+    pub workers: Arc<crate::worker_registry::WorkerRegistry>,
+    pub(crate) worker: Option<Arc<crate::worker_registry::WorkerExecution>>,
+    pub(crate) turn_scope: Option<ExecutionScope>,
+    pub(crate) inherited_constraints: Vec<String>,
     pub context_budget: crate::context::ContextBudget,
     pub native_compaction: crate::context::NativeCompaction,
     pub sessions: Option<Arc<crate::session::SessionStore>>,
@@ -34,6 +38,10 @@ pub struct Runtime {
 impl Default for Runtime {
     fn default() -> Self {
         Self {
+            workers: Arc::default(),
+            worker: None,
+            turn_scope: None,
+            inherited_constraints: Vec::new(),
             context_budget: Default::default(),
             native_compaction: Default::default(),
             sessions: None,
@@ -73,6 +81,7 @@ impl Runtime {
 }
 
 pub struct Workspace {
+    pub(crate) writer: Arc<tokio::sync::Mutex<()>>,
     lock: RwLock<()>,
     revision: AtomicU64,
     readers: Semaphore,
@@ -82,6 +91,7 @@ impl Workspace {
     pub fn new(read_limit: usize) -> Self {
         let read_limit = read_limit.max(1);
         Self {
+            writer: Arc::default(),
             lock: RwLock::new(()),
             revision: AtomicU64::new(0),
             readers: Semaphore::new(read_limit),
