@@ -205,6 +205,12 @@ mod unix {
             Err(anyhow::anyhow!("Process cancelled before launch"))
         } else {
             let workspace = scope.workspace()?;
+            match workspace.permits_workspace_execution() {
+                true => Ok(()),
+                false => Err(anyhow::anyhow!(
+                    "Executable operations require worker access to the whole workspace"
+                )),
+            }?;
             let cancel = scope.cancel.child_token();
             let _guard = cancel.clone().drop_guard();
             let command = scope

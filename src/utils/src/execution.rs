@@ -51,6 +51,19 @@ impl ExecutionScope {
         }
     }
 
+    pub fn restricted_child(
+        &self,
+        paths: &[std::path::PathBuf],
+        access: crate::workspace::RootAccess,
+    ) -> anyhow::Result<Self> {
+        Ok(Self {
+            workspace: WorkspaceAccess::Configured(Arc::new(
+                self.workspace()?.restricted(paths, access)?,
+            )),
+            ..self.child()
+        })
+    }
+
     pub fn current() -> Self {
         CURRENT.try_with(Clone::clone).unwrap_or_default()
     }

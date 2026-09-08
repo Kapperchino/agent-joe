@@ -360,6 +360,10 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         self.context_checkpoint = snapshot.context;
         self.questions = snapshot.questions;
         self.compact_turn = None;
+        self.dependency
+            .runtime
+            .workers
+            .restore(&session.id, snapshot.workers);
         self.dependency.runtime.session = Some(session);
         self.persistence = Persistence::Ready;
         self.reporter.send(ActorToTuiPacket::TokensUpdated(

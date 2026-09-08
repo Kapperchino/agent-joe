@@ -113,6 +113,22 @@ impl<C: Context + Clone + 'static> PreparedTool<C> {
 
 impl<C: Context + Clone + 'static> Executor<C> {
     fn prepare(&self, job: ToolJob) -> Result<PreparedTool<C>, ToolFailure> {
+        if let Some(worker) = &self.dependency.runtime.worker {
+            match worker.request.allows_tool(job.call.name.as_ref()) {
+                true => worker.budget.tool_call().map_err(|error| {
+                    ToolFailure::new(
+                        ToolFailureKind::Worker,
+                        ToolEffects::NotStarted,
+                        error.to_string(),
+                    )
+                }),
+                false => Err(ToolFailure::new(
+                    ToolFailureKind::InvalidInput,
+                    ToolEffects::NotStarted,
+                    "Tool is outside the worker's allowed tools",
+                )),
+            }?;
+        }
         self.dependency
             .tool(job.call.name.as_ref())
             .cloned()
@@ -153,6 +169,14 @@ impl<C: Context + Clone + 'static> Executor<C> {
                 ..result
             },
         };
+        if let Some(worker) = &self.dependency.runtime.worker {
+            let effect = self
+                .dependency
+                .tool(job.call.name.as_ref())
+                .map(|tool| tool.effect())
+                .unwrap_or(ToolEffect::Read);
+            worker.record(effect, &result);
+        }
         self.emit(
             tag,
             ToolEvent::Completed {
@@ -170,6 +194,10 @@ impl<C: Context + Clone + 'static> Executor<C> {
     ) -> Result<String, ToolFailure> {
         let scope = self.dependency.runtime.scope.child();
         let _registration = scope.register(ResourceKind::Tool, prepared.job.call.name.to_string());
+        let _writer = match (prepared.effect, &self.dependency.runtime.worker) {
+            (ToolEffect::Write | ToolEffect::Validate, None) => Some(self.dependency.runtime.workspace.writer.clone().try_lock_owned().map_err(|_| ToolFailure::new(ToolFailureKind::InvalidInput, ToolEffects::NotStarted, "A worker owns workspace writes; wait for it to finish before editing or validating"))?),
+            _ => None,
+        };
         let lease = self
             .dependency
             .runtime

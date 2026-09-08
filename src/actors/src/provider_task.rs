@@ -42,6 +42,7 @@ impl ProviderTarget {
 }
 
 pub(crate) struct ProviderTask {
+    pub budget: Option<std::sync::Arc<crate::worker_registry::budget::WorkerBudget>>,
     pub target: ProviderTarget,
     pub client: LLmClient,
     pub timeout: Duration,
@@ -91,6 +92,14 @@ impl ProviderTask {
                 format!("Request context configuration failed: {error}"),
             )
         })?;
+        if self.budget.is_some()
+            && matches!(input.plan(), Ok(crate::context::BudgetPlan::Compact(_)))
+        {
+            Err(Failure::new(
+                FailureKind::ContextOverflow,
+                "Worker context budget exceeded; narrow the task or retrieve its saved evidence",
+            ))?;
+        }
         if attempt > 0 {
             tokio::time::sleep(Duration::from_millis(100 * u64::from(attempt))).await;
         }
@@ -118,9 +127,14 @@ impl ProviderTask {
 
     async fn stream(
         &mut self,
-        request: clients::llm::ClientRequest,
+        mut request: clients::llm::ClientRequest,
         mode: crate::context::RequestMode,
     ) -> Result<(), Failure> {
+        if let Some(budget) = &self.budget {
+            budget
+                .reserve(&mut request)
+                .map_err(|error| Failure::new(FailureKind::Worker, error.to_string()))?;
+        }
         let limit_mib = match mode {
             crate::context::RequestMode::SingleResponse => 16,
             _ => 64,
@@ -134,6 +148,11 @@ impl ProviderTask {
         while matches!(state, PumpState::Streaming) {
             state = match tokio::time::timeout(self.timeout, stream.next()).await {
                 Ok(Some(Ok(event))) => {
+                    if let Some(budget) = &self.budget {
+                        budget.observe(&event).map_err(|error| {
+                            Failure::new(FailureKind::Worker, error.to_string())
+                        })?;
+                    }
                     bytes = bytes.saturating_add(
                         serde_json::to_vec(&event)
                             .map_err(|error| {

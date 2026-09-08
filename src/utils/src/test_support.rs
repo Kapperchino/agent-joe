@@ -65,7 +65,8 @@ impl SandboxAvailability {
             false
                 if stderr.contains("Operation not permitted")
                     || stderr.contains("Permission denied")
-                    || stderr.contains("No permissions to create a new namespace") =>
+                    || stderr.contains("No permissions to create a new namespace")
+                    || stderr.contains("No permissions to create new namespace") =>
             {
                 Ok(Self::Restricted(stderr))
             }
@@ -117,6 +118,7 @@ mod tests {
         for message in [
             "sandbox-exec: sandbox_apply: Operation not permitted",
             "bwrap: Creating new namespace failed: Operation not permitted",
+            "bwrap: No permissions to create new namespace, likely because the kernel does not allow non-privileged user namespaces.",
             "bwrap: setting up uid map: Permission denied",
             "bwrap: No permissions to create a new namespace",
         ] {

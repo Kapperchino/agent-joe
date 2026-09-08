@@ -1,6 +1,6 @@
 # Agent Joe implementation plan
 
-Status: M1–M5 are complete. M6–M10 remain planned.
+Status: M1–M5 are complete. M7 worker coordination is implemented on the current validation foundation; M6 integration remains pending. M8–M10 remain planned.
 
 Cover all ten gaps identified in the Codex comparison while keeping Joe a Rust-focused agent with typed tools and no model-controlled shell. Delivery order follows dependencies, so context compaction follows the response format and turn lifecycle work it needs.
 
@@ -25,7 +25,7 @@ Cover all ten gaps identified in the Codex comparison while keeping Joe a Rust-f
 | M4 | Complete | Durable sessions, bounded context, and compaction | 2: context and sessions | M1–M3 |
 | M5 | Complete | Full repository discovery and scoped instructions | 5: instructions; 7: discovery | M3–M4 |
 | M6 | Planned | Complete typed Cargo validation and process results | 6: validation | M2–M5 |
-| M7 | Planned | Direct work plus optional, bounded delegation | 8: worker coordination | M4–M6 |
+| M7 | Implemented; M6 integration pending | Direct work plus optional, bounded delegation | 8: worker coordination | M4–M6 |
 | M8 | Planned | Git awareness, aggregate review, and change isolation | 9: Git | M3–M7 |
 | M9 | Planned | Plan mode, tracked steps, questions, and steering | 10: collaboration | M4–M8 |
 | M10 | Planned | Skills and controlled MCP integrations | 10: extensibility | M3–M5, M9 |
@@ -369,6 +369,61 @@ Primary files: `src/actors/src/workers/*`, `src/actors/src/tools/{gather_context
 Validation: direct completion of a small change; bounded delegation of independent investigation; registration/completion race; child timeout/failure; cancellation propagation; worker cleanup; budget exhaustion; overlapping write requests; and policy inheritance.
 
 Done when delegation is optional, observable, cancellable, and cannot silently drop validation or widen access.
+
+M7 implementation (2026-09-08)
+
+- Default mode uses the same direct discovery/edit/validation surface as simple
+  mode, plus asynchronous worker start/control tools. Simple mode has no
+  delegation tools. Existing delegation helpers use the shared bounded registry.
+- Requests carry objectives, constraints, selected context, completion criteria,
+  explicit tools/paths, and validated budgets. Dispatch and descriptor-based
+  filesystem policy enforce allowances; workers inherit the parent's current
+  tools and policy and cannot delegate. Full-project operations require full
+  project paths. Independent guidance delivery preserves scoped instructions.
+- Registration and completion channels precede startup. The registry supports
+  listing, status, bounded waits, cancellation, terminal cleanup, and fresh
+  follow-up tasks from selected reports. Four workers and one workspace writer
+  can be active; writer ownership lasts through cleanup and excludes root writes.
+- Per-worker request, token, time and tool-call limits combine with per-session
+  start/token allocations. Requests reserve conservative input/output budgets
+  and record provider-reported usage. Workers cannot initiate unbudgeted
+  compaction; cancellation drains all owned work before releasing ownership.
+  Exhausted budgets reject further requests, provider events, and tool calls.
+  Budget limits validate on construction and deserialization; follow-ups repeat
+  request validation, including the handoff size limit.
+- Typed reports retain observed successful/uncertain edits, validation attempts
+  and original parameters/results, unresolved issues, artifacts, and usage.
+  Registrations and final reports persist atomically as session events/snapshots.
+  Resume never replays saved workers; unfinished reports become explicitly
+  interrupted. Forks retain reports and allocations with separate control scopes.
+- The parent must retrieve every new worker report before completing. Only short
+  outstanding-status reminders enter future requests; handoffs contain selected
+  reports and verbatim inherited parent/user requirements.
+
+M7 validation (2026-09-08): `cargo test --workspace --offline` passes 233 tests
+on macOS ARM64 and Linux ARM64. `cargo check --workspace --offline` passes on
+both platforms; `cargo clippy --workspace --all-targets --offline` passes on macOS
+with existing warnings. Coverage includes direct edits in both root modes,
+concurrent investigations, immediate completion, writer conflicts, scoped file and
+tool denial, inherited constraints, selected follow-ups, timeout/provider/budget
+failure, cancellation cleanup, recovered/forked registry state, failed validation
+parameters, parent retrieval of worker artifacts, bounded follow-up handoffs,
+deserialized budget validation, and terminal budget exhaustion. Debug-mode workers retain
+their path restrictions. All 34 changed Rust files pass formatting and the diff
+passes whitespace checks.
+
+Linux validation used a disposable Rust 1.95 Bookworm container with Bubblewrap
+and namespaces enabled. The PATH-only toolchain fixture uses a link from
+`/usr/local/.rustup` to `/usr/local/rustup`. The shared test probe now recognizes
+Debian Bubblewrap's alternate namespace-denial wording; nested sandbox tests skip
+unsupported nesting while outer isolation tests still run. No production sandbox
+permission was relaxed. Live providers and native Windows remain unverified.
+
+Limits: follow-ups start new bounded workers after completion; active task changes
+require cancellation and cleanup. Simultaneous writers need M8 isolation. M6's
+expanded Cargo/managed-process implementation is absent from this branch's base;
+its integration checks remain required before marking the dependent milestone
+fully complete. Live provider/task-performance comparisons remain unverified.
 
 **M8 — Git and complete change review**
 

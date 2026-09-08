@@ -19,6 +19,14 @@ struct RepositoryActor {
 
 impl RepositoryActor {
     async fn new<W: Worker<C = RustContext>>(worker: W, root: std::path::PathBuf) -> Self {
+        Self::configured(worker, root, false).await
+    }
+
+    async fn configured<W: Worker<C = RustContext>>(
+        worker: W,
+        root: std::path::PathBuf,
+        debug_mode: bool,
+    ) -> Self {
         let runtime = Runtime::for_workspace(root.clone()).unwrap();
         let context = runtime
             .scope
@@ -35,7 +43,7 @@ impl RepositoryActor {
                 client: llm::LLmClient::Injected(Arc::new(Provider(tx))),
                 tools: W::tools(),
                 tui_tx,
-                debug_mode: false,
+                debug_mode,
                 context: context.clone(),
                 runtime,
             },
@@ -407,3 +415,6 @@ async fn shared_watcher_handles_create_modify_rename_and_delete_in_both_root_mod
         actor.stop().await;
     }
 }
+
+#[path = "worker_runtime_test.rs"]
+mod worker_tests;

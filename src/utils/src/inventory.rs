@@ -40,7 +40,11 @@ impl Inventory {
                 )),
             }?;
             for name in [".gitignore", ".ignore"] {
-                if entries.iter().any(|entry| entry.name == name) {
+                if entries.iter().any(|entry| entry.name == name)
+                    && workspace
+                        .check(&directory.path.join(name), Access::Read)
+                        .is_ok()
+                {
                     let path = directory.path.join(name);
                     let mut builder = GitignoreBuilder::new(&directory.path);
                     for line in workspace.read(&path)?.lines() {

@@ -1,6 +1,5 @@
 use crate::actor::{ActorContext, Dependency, IntoActorErr, Message};
 use crate::actor_state::ActorState;
-use crate::tools::validate_rust::ValidateRust;
 use crate::worker::Worker;
 use analysis::contexts::context::Context;
 use analysis::contexts::rust_empty_context::RustEmptyContext;
@@ -46,7 +45,8 @@ impl Worker for WriteWorker<RustEmptyContext> {
             erased_tool::<ReadFile, Self::C, ActorContext<Self::C>>(),
             erased_tool::<GrepTool, Self::C, ActorContext<Self::C>>(),
             erased_tool::<ApplyPatch, Self::C, ActorContext<Self::C>>(),
-            erased_tool::<ValidateRust, Self::C, ActorContext<Self::C>>(),
+            erased_tool::<tools::cargo_check::CargoCheck, Self::C, ActorContext<Self::C>>(),
+            erased_tool::<tools::cargo_test::CargoTest, Self::C, ActorContext<Self::C>>(),
         ]
     }
 }

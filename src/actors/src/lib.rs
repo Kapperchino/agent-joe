@@ -2,6 +2,7 @@ pub mod actor;
 pub mod actor_state;
 pub mod supervisor;
 pub mod worker;
+pub mod worker_registry;
 
 pub mod background_actors;
 mod batch;

@@ -94,6 +94,12 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                         let client = self.llm.snapshot();
                         let input = self.context_input(run.tag.turn, &client);
                         ProviderTask {
+                            budget: self
+                                .dependency
+                                .runtime
+                                .worker
+                                .as_ref()
+                                .map(|worker| worker.budget.clone()),
                             target: ProviderTarget {
                                 actor: self.actor_ref.clone(),
                                 tag: run.tag,
@@ -225,6 +231,25 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 ProviderEvent::Finished(Ok(())) => {
                     ProviderUpdate::Finished(response.finish(tag.turn, &mut self.stream_processor))
                 }
+            };
+            let pending = self
+                .dependency
+                .runtime
+                .workers
+                .pending(&self.dependency.worker_owner());
+            let update = match update {
+                ProviderUpdate::Finished(Ok(crate::turn::AcceptedResponse::Complete(_)))
+                    if !pending.is_empty() =>
+                {
+                    ProviderUpdate::Finished(Err(Failure::new(
+                        FailureKind::Worker,
+                        format!(
+                            "Worker reports have not been collected: {}",
+                            pending.join("; ")
+                        ),
+                    )))
+                }
+                update => update,
             };
             if matches!(update, ProviderUpdate::Finished(_)) {
                 self.persist(crate::session::Event::Usage(
