@@ -42,24 +42,30 @@ The TUI is similar to claude code and codex with one major difference. Vim bindi
 ## Tools
 
 Discovery uses `find_files`, `list_directory`, `grep`, `read_file`, and
-`inspect_context`. Simple mode also exposes `apply_patch`, typed Cargo tools,
+`inspect_context`. Simple mode also exposes `apply_patch`, the typed `cargo` tool,
 and provider-supported web search. Worker mode uses focused read, write, and
 validation workers. All modes retain the fixed project policy and have no
 model-controlled shell.
 
 ### Rust validation and execution
 
-| Tool | Operation |
+The `cargo` tool takes a required `operation` parameter:
+
+| `operation` | Behavior |
 | --- | --- |
-| `cargo_check` | Compile selected Rust targets without running them |
-| `cargo_test` | Run selected tests, optionally with an exact test filter |
-| `cargo_fmt_check` | Check formatting |
-| `cargo_fmt` | Apply formatting; available to simple and write workers |
-| `cargo_clippy` | Run Clippy, optionally denying warnings |
-| `cargo_run` | Run a finite named binary or example |
-| `cargo_start` | Start a managed named binary or example |
-| `process_poll` | Read status and incremental output using a process ID |
-| `process_stop` | Stop the process group, reap its leader, and return output |
+| `check` | Compile selected Rust targets without running them |
+| `test` | Run selected tests, optionally with an exact test filter |
+| `fmt_check` | Check formatting |
+| `fmt` | Apply formatting |
+| `clippy` | Run Clippy, optionally denying warnings |
+| `run` | Run a finite named binary or example |
+| `start` | Start a managed named binary or example |
+| `poll` | Read status and incremental output using a process ID |
+| `stop` | Stop the process group, reap its leader, and return output |
+
+Simple workers support every operation. Validation workers support all except
+`fmt`; write workers support only `fmt` and delegate validation. Each worker's
+schema lists its allowed operations, and disallowed requests fail before execution.
 
 Build commands accept `workspace` or `package`, `features`, `all_features`,
 `no_default_features`, `release`, and a built-in `target_triple`. `target` selects
@@ -72,6 +78,7 @@ A focused regression request looks like:
 
 ```json
 {
+  "operation": "test",
   "package": "my-crate",
   "features": ["regression"],
   "target": { "kind": "test", "name": "integration" },
@@ -80,14 +87,14 @@ A focused regression request looks like:
 }
 ```
 
-`cargo_test` also accepts `show_output`; `cargo_clippy` accepts `deny_warnings`.
+The `test` operation also accepts `show_output`; `clippy` accepts `deny_warnings`.
 `include_warnings` remains accepted for compatibility, and structured diagnostics
 always retain warnings. Start with relevant packages, features and tests before
 broader checks. Workers can add focused regression tests when behavior warrants
 coverage and report requested checks, executed checks, failures and limitations.
 Compilation alone does not establish behavioral correctness.
 
-Run tools accept literal `args` after Cargo's `--`. No shell expansion occurs.
+The `run` and `start` operations accept literal `args` after Cargo's `--`. No shell expansion occurs.
 `environment` contains additions to the clean sandbox environment: only
 `RUST_LOG`, `RUST_BACKTRACE`, `NO_COLOR`, and uppercase `JOE_RUN_*` names are
 allowed. Loader, toolchain, Cargo, home-directory and network settings cannot be

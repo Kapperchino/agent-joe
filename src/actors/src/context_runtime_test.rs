@@ -477,7 +477,7 @@ async fn giant_validation_output_is_bounded_and_retrievable_in_simple_and_worker
         let workspace = crate::session::tests::Workspace::new();
         let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
         let store = runtime.sessions.clone().unwrap();
-        let (mut validation, entered) = gate("cargo_test", ToolEffect::Validate);
+        let (mut validation, entered) = gate("cargo", ToolEffect::Validate);
         Arc::get_mut(&mut validation).unwrap().outcome = GateOutcome::LargeValidation;
         let (delegate, child_requests) = delegate(vec![validation.clone()], false);
         let h = Harness::with_runtime(
@@ -501,7 +501,7 @@ async fn giant_validation_output_is_bounded_and_retrievable_in_simple_and_worker
         };
         answer(
             within(requests.recv_async()).await.unwrap().1,
-            response(vec![call("cargo_test", "large-test")]),
+            response(vec![call("cargo", "large-test")]),
         );
         within(entered.recv_async())
             .await

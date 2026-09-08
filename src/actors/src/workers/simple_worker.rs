@@ -7,8 +7,6 @@ use async_trait::async_trait;
 use ractor::{ActorProcessingErr, ActorRef};
 use std::marker::PhantomData;
 use tools::apply_patch::ApplyPatch;
-use tools::cargo_check::CargoCheck;
-use tools::cargo_test::CargoTest;
 use tools::grep::GrepTool;
 use tools::read_file::ReadFile;
 use tools::tool_defs::{ErasedToolRef, erased_tool};
@@ -50,15 +48,7 @@ impl Worker for SimpleWorker<RustContext> {
             erased_tool::<ReadFile, Self::C, ActorContext<Self::C>>(),
             erased_tool::<GrepTool, Self::C, ActorContext<Self::C>>(),
             erased_tool::<ApplyPatch, Self::C, ActorContext<Self::C>>(),
-            erased_tool::<CargoCheck, Self::C, ActorContext<Self::C>>(),
-            erased_tool::<CargoTest, Self::C, ActorContext<Self::C>>(),
-            erased_tool::<tools::cargo_tools::CargoFmt, Self::C, ActorContext<Self::C>>(),
-            erased_tool::<tools::cargo_tools::CargoFmtCheck, Self::C, ActorContext<Self::C>>(),
-            erased_tool::<tools::cargo_tools::CargoClippy, Self::C, ActorContext<Self::C>>(),
-            erased_tool::<tools::cargo_tools::CargoRun, Self::C, ActorContext<Self::C>>(),
-            erased_tool::<tools::cargo_tools::CargoStart, Self::C, ActorContext<Self::C>>(),
-            erased_tool::<tools::cargo_tools::ProcessPoll, Self::C, ActorContext<Self::C>>(),
-            erased_tool::<tools::cargo_tools::ProcessStop, Self::C, ActorContext<Self::C>>(),
+            erased_tool::<tools::cargo_tools::Cargo, Self::C, ActorContext<Self::C>>(),
             erased_tool::<WebSearch, Self::C, ActorContext<Self::C>>(),
         ]
     }

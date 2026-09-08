@@ -387,8 +387,15 @@ mod tests {
     #[test]
     fn cargo_selection_schemas_survive_both_provider_mappings() {
         use tools::tool_defs::ToolDefTrait;
-        let properties = tools::cargo_tools::CargoStart::field_properties();
-        for name in ["target", "args", "environment"] {
+        let properties = <tools::cargo_tools::Cargo as ToolDefTrait>::field_properties();
+        for name in [
+            "operation",
+            "target",
+            "args",
+            "environment",
+            "process_id",
+            "offsets",
+        ] {
             let property = properties[name].clone();
             let expected = match &property {
                 tools::tool_defs::ToolProperty::Schema(schema) => schema.clone(),

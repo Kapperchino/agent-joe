@@ -90,20 +90,24 @@ impl<C: Context + Clone + 'static> PreparedTool<C> {
         job: ToolJob,
         implementation: ErasedToolRef<C, ActorContext<C>>,
     ) -> Result<Self, ToolFailure> {
+        let input = job.call.input_value();
         implementation
-            .display_erased(&job.call.input_value())
+            .display_erased(&input)
+            .and_then(|display| {
+                let effect = implementation.effect_from_input_erased(&input)?;
+                Ok(Self {
+                    effect,
+                    implementation,
+                    job,
+                    display,
+                })
+            })
             .map_err(|error| {
                 ToolFailure::new(
                     ToolFailureKind::InvalidInput,
                     ToolEffects::NotStarted,
                     error.to_string(),
                 )
-            })
-            .map(|display| Self {
-                effect: implementation.effect(),
-                implementation,
-                job,
-                display,
             })
     }
 
@@ -130,7 +134,7 @@ impl<C: Context + Clone + 'static> PreparedTool<C> {
             .map_err(|error| execution_error(error, self.effect))?;
         match self
             .implementation
-            .output_is_error_erased(output)
+            .output_is_error_erased(input, output)
             .map_err(|error| execution_error(error, self.effect))?
         {
             false => Ok(content),
@@ -345,7 +349,14 @@ impl<C: Context + Clone + 'static> Executor<C> {
         scope: &ExecutionScope,
         result: &CargoResult,
     ) -> anyhow::Result<()> {
-        if prepared.implementation.name() == "cargo_start"
+        if prepared.implementation.name() == "cargo"
+            && prepared
+                .job
+                .call
+                .input
+                .get("operation")
+                .and_then(serde_json::Value::as_str)
+                == Some("start")
             && let Some(id) = result.process_id.clone()
             && let Some(session) = self.dependency.runtime.session.clone()
         {
@@ -402,7 +413,10 @@ impl<C: Context + Clone + 'static> Executor<C> {
     fn concurrent(&self, job: &ToolJob) -> bool {
         self.dependency
             .tool(job.call.name.as_ref())
-            .is_some_and(|tool| tool.effect().concurrent())
+            .is_some_and(|tool| {
+                tool.effect_from_input_erased(&job.call.input_value())
+                    .is_ok_and(|effect| effect.concurrent())
+            })
     }
 
     fn next_group(&self, pending: &mut VecDeque<ToolJob>) -> Option<ToolGroup> {

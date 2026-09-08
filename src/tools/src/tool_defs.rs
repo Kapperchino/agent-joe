@@ -77,7 +77,7 @@ pub trait ToolTrait<C: Context, A>: ToolDefTrait + Display {
         CancellationMode::DropFuture
     }
 
-    fn output_is_error(_output: &Self::Output) -> bool {
+    fn output_is_error(_input: &Self::Input, _output: &Self::Output) -> bool {
         false
     }
 
@@ -95,6 +95,10 @@ pub trait ToolTrait<C: Context, A>: ToolDefTrait + Display {
 
     fn effect() -> ToolEffect {
         ToolEffect::Write
+    }
+
+    fn effect_from_input(_input: &Self::Input) -> ToolEffect {
+        Self::effect()
     }
 }
 
@@ -122,6 +126,10 @@ pub trait ErasedToolTrait<C: Context, A>: Send + Sync {
         ToolEffect::Write
     }
 
+    fn effect_from_input_erased(&self, _input: &Value) -> anyhow::Result<ToolEffect> {
+        Ok(self.effect())
+    }
+
     fn name(&self) -> String {
         match self.definition() {
             ToolDefinition::Client { name, .. } => name,
@@ -147,7 +155,7 @@ pub trait ErasedToolTrait<C: Context, A>: Send + Sync {
 
     fn output_to_content_erased(&self, input: &Value, output: &Value) -> anyhow::Result<String>;
 
-    fn output_is_error_erased(&self, _output: &Value) -> anyhow::Result<bool> {
+    fn output_is_error_erased(&self, _input: &Value, _output: &Value) -> anyhow::Result<bool> {
         Ok(false)
     }
 
@@ -197,6 +205,11 @@ where
         T::effect()
     }
 
+    fn effect_from_input_erased(&self, input: &Value) -> anyhow::Result<ToolEffect> {
+        let input = T::Input::deserialize_lenient(input.clone())?;
+        Ok(T::effect_from_input(&input))
+    }
+
     fn cancellation_mode(&self) -> CancellationMode {
         T::cancellation_mode()
     }
@@ -234,9 +247,10 @@ where
         T::output_to_content(&typed_input, &typed_output)
     }
 
-    fn output_is_error_erased(&self, output: &Value) -> anyhow::Result<bool> {
+    fn output_is_error_erased(&self, input: &Value, output: &Value) -> anyhow::Result<bool> {
+        let input = T::Input::deserialize_lenient(input.clone())?;
         let output: T::Output = serde_json::from_value(output.clone())?;
-        Ok(T::output_is_error(&output))
+        Ok(T::output_is_error(&input, &output))
     }
 
     fn add_context(&self, input: &Value, context: &mut C, addition: &str) -> anyhow::Result<()> {

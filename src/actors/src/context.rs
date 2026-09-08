@@ -437,7 +437,10 @@ fn protected(history: &[Message], through: usize) -> anyhow::Result<Vec<Message>
             } => {
                 if let Some(call) = calls.get(tool_id.id.as_ref())
                     && (*is_error == Some(true)
-                        || matches!(call.name, "cargo_check" | "cargo_test" | "validate_rust"))
+                        || matches!(
+                            call.name,
+                            "cargo" | "cargo_check" | "cargo_test" | "validate_rust"
+                        ))
                 {
                     evidence.push(serde_json::json!({"tool": call.name, "input": call.input, "is_error": is_error, "result": content}));
                 }

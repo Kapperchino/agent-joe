@@ -8,6 +8,71 @@ enum Mode {
     Delegated,
 }
 
+#[test]
+fn workers_expose_one_cargo_tool_with_their_allowed_operations() {
+    use crate::workers::{validate_worker::ValidateWorker, write_worker::WriteWorker};
+    use analysis::contexts::{context::Context, rust_empty_context::RustEmptyContext};
+
+    fn operations<C: Context>(tools: Vec<ErasedToolRef<C, ActorContext<C>>>) -> Value {
+        let cargo = tools
+            .into_iter()
+            .filter(|tool| {
+                let name = tool.name();
+                name.starts_with("cargo") || name.starts_with("process_")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(cargo.len(), 1);
+        match cargo[0].definition() {
+            ToolDefinition::Client {
+                name,
+                properties,
+                required,
+                ..
+            } => {
+                assert_eq!(name, "cargo");
+                assert_eq!(required, ["operation"]);
+                match &properties["operation"] {
+                    tools::tool_defs::ToolProperty::Schema(schema) => schema["enum"].clone(),
+                    _ => panic!("Cargo requires a typed operation schema"),
+                }
+            }
+            _ => panic!("Cargo must be a client tool"),
+        }
+    }
+
+    let simple = operations(SimpleWorker::<RustContext>::tools());
+    let validation = operations(ValidateWorker::<RustEmptyContext>::tools());
+    let formatting = operations(WriteWorker::<RustEmptyContext>::tools());
+    assert_eq!(
+        simple,
+        json!([
+            "check",
+            "test",
+            "fmt",
+            "fmt_check",
+            "clippy",
+            "run",
+            "start",
+            "poll",
+            "stop"
+        ])
+    );
+    assert_eq!(
+        validation,
+        json!([
+            "check",
+            "test",
+            "fmt_check",
+            "clippy",
+            "run",
+            "start",
+            "poll",
+            "stop"
+        ])
+    );
+    assert_eq!(formatting, json!(["fmt"]));
+}
+
 struct RepositoryActor {
     actor: ActorRef<Message>,
     handle: tokio::task::JoinHandle<()>,
@@ -461,9 +526,9 @@ async fn simple_and_validation_workers_manage_targets_and_archive_completion() {
             answer(
                 reply,
                 response(vec![tool(
-                    "cargo_start",
+                    "cargo",
                     "start",
-                    json!({"target":{"kind":"example","name":"server"}}),
+                    json!({"operation":"start","target":{"kind":"example","name":"server"}}),
                 )]),
             );
             let (started, reply) = actor.request().await;
@@ -479,20 +544,32 @@ async fn simple_and_validation_workers_manage_targets_and_archive_completion() {
             .unwrap();
             answer(
                 reply,
-                response(vec![tool("cargo_check", "blocked-check", json!({}))]),
+                response(vec![tool(
+                    "cargo",
+                    "blocked-check",
+                    json!({"operation":"check"}),
+                )]),
             );
             let (blocked, reply) = actor.request().await;
             assert!(result_text(&blocked).contains("Stop the managed target"));
             answer(
                 reply,
-                response(vec![tool("process_poll", "poll", json!({"process_id":id}))]),
+                response(vec![tool(
+                    "cargo",
+                    "poll",
+                    json!({"operation":"poll","process_id":id}),
+                )]),
             );
             let (polled, reply) = actor.request().await;
             let result = latest_cargo(&polled);
             assert!(result.stdout.content.contains("ready"));
             answer(
                 reply,
-                response(vec![tool("process_stop", "stop", json!({"process_id":id}))]),
+                response(vec![tool(
+                    "cargo",
+                    "stop",
+                    json!({"operation":"stop","process_id":id}),
+                )]),
             );
             let (stopped, reply) = actor.request().await;
             assert_eq!(
@@ -502,15 +579,15 @@ async fn simple_and_validation_workers_manage_targets_and_archive_completion() {
             answer(
                 reply,
                 response(vec![tool(
-                    "cargo_check",
+                    "cargo",
                     "check",
-                    json!({"target":{"kind":"example","name":"server"}}),
+                    json!({"operation":"check","target":{"kind":"example","name":"server"}}),
                 )]),
             );
             let (checked, reply) = actor.request().await;
             let result = latest_cargo(&checked);
             assert!(!result.is_error(), "{result:?}");
-            assert!(result.workspace_revision.is_some());
+            assert_eq!(result.workspace_revision, Some(1));
             answer(
                 reply,
                 response(vec![text(
@@ -579,10 +656,10 @@ async fn typed_tools_reproduce_patch_and_verify_a_rust_regression() {
                 "Reproduce and fix the answer regression, preserving its feature gate".into(),
             )))
             .unwrap();
-        let selection = json!({"target":{"kind":"lib"},"features":["regression"],"test_name":"tests::answer","exact":true});
+        let selection = json!({"operation":"test","target":{"kind":"lib"},"features":["regression"],"test_name":"tests::answer","exact":true});
         answer(
             actor.request().await.1,
-            response(vec![tool("cargo_test", "reproduce", selection.clone())]),
+            response(vec![tool("cargo", "reproduce", selection.clone())]),
         );
         let (failed, reply) = actor.request().await;
         let failure = result_text(&failed);
@@ -598,16 +675,31 @@ async fn typed_tools_reproduce_patch_and_verify_a_rust_regression() {
         );
         let (patched, reply) = actor.request().await;
         assert!(result_text(&patched).contains("ok"));
-        answer(
-            reply,
-            response(vec![tool("cargo_test", "verify", selection)]),
-        );
+        answer(reply, response(vec![tool("cargo", "verify", selection)]));
         let (verified, reply) = actor.request().await;
         let result = latest_cargo(&verified);
         assert!(!result.is_error(), "{result:?}");
         assert!(result.stdout.content.contains("1 passed"));
         assert!(!result.reused);
         assert_eq!(result.workspace_revision, Some(1));
+        answer(
+            reply,
+            response(vec![tool("cargo", "format", json!({"operation":"fmt"}))]),
+        );
+        let (formatted, reply) = actor.request().await;
+        assert!(!latest_cargo(&formatted).is_error());
+        answer(
+            reply,
+            response(vec![tool(
+                "cargo",
+                "check-format",
+                json!({"operation":"fmt_check"}),
+            )]),
+        );
+        let (checked, reply) = actor.request().await;
+        let result = latest_cargo(&checked);
+        assert!(!result.is_error());
+        assert_eq!(result.workspace_revision, Some(2));
         answer(
             reply,
             response(vec![text(

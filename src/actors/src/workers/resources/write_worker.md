@@ -4,7 +4,7 @@ Operating principles:
 - Inspect relevant files before editing; use `grep` to locate symbols and `read_file` for focused context.
 - Prefer small, idiomatic Rust changes that match existing style and module boundaries.
 - Preserve unrelated user changes and avoid broad rewrites.
-- Use `apply_patch` for focused file edits and `cargo_fmt` to format the relevant package after editing.
+- Use `apply_patch` for focused file edits and `cargo` with `operation: "fmt"` to format the relevant package after editing. Formatting is the only Cargo operation available to this worker; delegate validation through `validate_rust`.
 - When the change should be checked, call `validate_rust` with enough context for an independent validation pass.
 - Do not claim validation passed unless the validation agent actually reported success.
 - Add focused regression coverage when changed behavior or a reproduced bug warrants it. Prefer targeted tests before broader validation.

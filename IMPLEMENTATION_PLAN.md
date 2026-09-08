@@ -350,9 +350,12 @@ Primary files: `src/utils/src/{cargo,process,sandbox,execution}.rs`,
   filter. Constructors reject conflicting options, unknown fields, option-like
   selectors, custom target paths, and oversized inputs before execution. Nested
   target schemas and array constraints survive both provider mappings.
-- Simple and validation workers use typed check, test, formatting-check, Clippy,
-  binary/example run, start, poll, and stop tools. Simple and write workers can
-  apply formatting. Program arguments remain literal values after `--`.
+- Workers expose one `cargo` tool with a required `operation` parameter selecting
+  check, test, fmt, fmt_check, clippy, run, start, poll, or stop. Simple workers
+  support all operations, validation workers support all except fmt, and write
+  workers support only fmt. Schemas and preparation enforce these permissions.
+  Workspace effects and process completion tracking follow the selected operation.
+  Program arguments remain literal values after `--`.
   Environment additions permit only `RUST_LOG`, `RUST_BACKTRACE`, `NO_COLOR`, and
   uppercase `JOE_RUN_*` names. The shared sandbox remains offline with a clean
   environment and no arbitrary shell operation.
@@ -379,20 +382,24 @@ Primary files: `src/utils/src/{cargo,process,sandbox,execution}.rs`,
   so changes in workspace content, command parameters, or environment cannot
   reuse stale validation results. Cargo's build-artifact reuse remains available.
 
-Validation (2026-09-08): `cargo test --workspace --offline` passes 231 tests on
-both macOS ARM64 and Linux ARM64. `cargo check --workspace --offline` passes on
-both; `cargo clippy --workspace --all-targets --offline` passes on macOS with
-existing warnings. Changed Rust files pass formatting and whitespace checks;
+Validation (2026-09-08): `cargo test --workspace --offline` passes 233 tests on
+macOS ARM64. `cargo check --workspace --offline` and
+`cargo clippy --workspace --all-targets --offline` pass with existing warnings.
+Changed Rust files pass formatting and whitespace checks;
 workspace-wide formatting still reports pre-existing differences in sandbox
-files. Linux uses a local container that permits Bubblewrap namespaces. Nested
-sandbox tests recognize Debian's alternate namespace-denial wording without
-weakening production isolation.
+files. Linux ARM64 passed 231 tests and the workspace compilation check before
+tool consolidation; the unified tool has not been revalidated on Linux. Linux
+testing used a local container that permits Bubblewrap namespaces. Nested sandbox
+tests recognize Debian's alternate namespace-denial wording without weakening
+production isolation.
 
 Coverage includes multi-package selection, a feature-gated failure/fix/retest,
 format and Clippy failures, selector injection, literal arguments, restricted
 environments, malformed manifests, stderr-only exits, huge output, deadlines,
 UTF-8 polling, process ownership/cleanup, immutable completion evidence, durable
-artifacts and restart recovery.
+artifacts and restart recovery. Unified-tool coverage checks operation dispatch,
+worker permissions, workspace revisions, provider schemas and retained compaction
+evidence.
 Fake-provider turns exercise simple mode and the write/validation worker chain;
 a complete task reproduces a failing Rust test, applies the fix through the patch
 tool, and verifies the same targeted regression. Live-provider task comparisons
