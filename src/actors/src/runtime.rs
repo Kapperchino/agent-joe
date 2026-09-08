@@ -22,6 +22,7 @@ impl std::fmt::Display for WorkspaceRevision {
 
 #[derive(Clone)]
 pub struct Runtime {
+    pub(crate) interaction: Arc<crate::interaction_policy::InteractionPolicy>,
     pub workers: Arc<crate::worker_registry::WorkerRegistry>,
     pub(crate) worker: Option<Arc<crate::worker_registry::WorkerExecution>>,
     pub(crate) turn_scope: Option<ExecutionScope>,
@@ -38,6 +39,7 @@ pub struct Runtime {
 impl Default for Runtime {
     fn default() -> Self {
         Self {
+            interaction: Arc::default(),
             workers: Arc::default(),
             worker: None,
             turn_scope: None,
@@ -140,7 +142,8 @@ impl Workspace {
                 _lock: self.lock.write().await,
                 revision: self.revision(),
             },
-            ToolEffect::ProcessControl
+            ToolEffect::Interaction
+            | ToolEffect::ProcessControl
             | ToolEffect::DelegateRead
             | ToolEffect::DelegateWrite
             | ToolEffect::DelegateValidate => WorkspaceLease::Delegated,

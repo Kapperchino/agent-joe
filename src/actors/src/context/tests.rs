@@ -3,6 +3,7 @@ use tools::tool_defs::ToolId;
 
 fn input() -> ContextInput {
     ContextInput {
+        planning: None,
         history: vec![Message::new("workspace".into())],
         checkpoint: Checkpoint::default(),
         questions: vec![],
@@ -86,8 +87,10 @@ fn repeated_compaction_preserves_requirements_questions_evidence_and_recent_pair
         );
     }
     input.questions.push(crate::session::PendingQuestion {
-        id: "target".to_owned().try_into().unwrap(),
-        prompt: "Which target?".to_owned().try_into().unwrap(),
+        choices: Vec::new(),
+        allow_free_text: true,
+        id: "target".into(),
+        prompt: "Which target?".into(),
         required: true,
     });
     for generation in 1..=3 {

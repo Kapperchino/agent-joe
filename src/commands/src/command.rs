@@ -40,11 +40,64 @@ mod tests {
         assert!(Command::parse("clear extra").is_err());
         assert_eq!(Command::parse("context"), Ok(Command::PrintContext));
     }
+
+    #[test]
+    fn interaction_commands_preserve_text_and_require_explicit_answer_types() {
+        assert_eq!(Command::parse("plan"), Ok(Command::Plan));
+        assert_eq!(Command::parse("implement"), Ok(Command::Implement));
+        assert_eq!(Command::parse("questions"), Ok(Command::Questions));
+        assert_eq!(
+            Command::parse("answer target choice lib"),
+            Ok(Command::Answer(QuestionAnswer {
+                id: "target".into(),
+                answer: Answer::Choice {
+                    choice_id: "lib".into()
+                }
+            }))
+        );
+        assert_eq!(
+            Command::parse("answer target text keep  spacing\nand newlines"),
+            Ok(Command::Answer(QuestionAnswer {
+                id: "target".into(),
+                answer: Answer::Text("keep  spacing\nand newlines".into())
+            }))
+        );
+        assert_eq!(
+            Command::parse("steer preserve  the API\nand tests"),
+            Ok(Command::Steer("preserve  the API\nand tests".into()))
+        );
+        for input in [
+            "plan extra",
+            "implement extra",
+            "answer",
+            "answer target",
+            "answer target lib",
+            "answer target choice lib extra",
+            "answer target text",
+            "steer",
+        ] {
+            assert!(Command::parse(input).is_err(), "{input}");
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, EnumString, VariantNames, Clone, EnumMessage)]
 #[strum(serialize_all = "lowercase")]
 pub enum Command {
+    #[strum(message = "enters read-only planning mode; shows the current plan")]
+    Plan,
+    #[strum(message = "returns to implementation mode")]
+    Implement,
+    #[strum(
+        message = "lists pending questions; /answer <id> choice <id> or /answer <id> text <answer>"
+    )]
+    Questions,
+    #[strum(
+        message = "answers a pending question; /answer <id> choice <id> or /answer <id> text <answer>"
+    )]
+    Answer(QuestionAnswer),
+    #[strum(message = "corrects active work after cancellation and cleanup; /steer <correction>")]
+    Steer(String),
     #[strum(message = "reviews the complete task diff, including staged and untracked changes")]
     Diff,
     #[strum(message = "undoes one recorded Joe edit; /undo <edit-id>")]
@@ -78,6 +131,38 @@ pub enum ResumeTarget {
     Session {
         id: String,
     },
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QuestionAnswer {
+    pub id: String,
+    pub answer: Answer,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum Answer {
+    Choice { choice_id: String },
+    Text(String),
+}
+
+impl Default for Answer {
+    fn default() -> Self {
+        Self::Text(String::new())
+    }
+}
+
+impl From<String> for Answer {
+    fn from(text: String) -> Self {
+        Self::Text(text)
+    }
+}
+
+impl From<&str> for Answer {
+    fn from(text: &str) -> Self {
+        Self::Text(text.into())
+    }
 }
 
 impl CommandContext {
@@ -114,6 +199,41 @@ impl Command {
         use std::str::FromStr;
         let words = input.split_whitespace().collect::<Vec<_>>();
         match words.as_slice() {
+            ["steer", _, ..] => Ok(Self::Steer(
+                input
+                    .trim()
+                    .strip_prefix("steer")
+                    .unwrap_or_default()
+                    .trim()
+                    .to_owned(),
+            )),
+            ["steer"] => Err("Use /steer <correction>".into()),
+            ["answer", id, "choice", choice] => Ok(Self::Answer(QuestionAnswer {
+                id: (*id).into(),
+                answer: Answer::Choice {
+                    choice_id: (*choice).into(),
+                },
+            })),
+            ["answer", id, "text", _, ..] => {
+                let answer = input
+                    .trim()
+                    .strip_prefix("answer")
+                    .unwrap_or_default()
+                    .trim_start()
+                    .strip_prefix(id)
+                    .unwrap_or_default()
+                    .trim_start()
+                    .strip_prefix("text")
+                    .unwrap_or_default()
+                    .trim_start();
+                Ok(Self::Answer(QuestionAnswer {
+                    id: (*id).into(),
+                    answer: Answer::Text(answer.into()),
+                }))
+            }
+            ["answer", ..] => {
+                Err("Use /answer <id> choice <choice-id> or /answer <id> text <answer>".into())
+            }
             ["undo", id] => Ok(Self::Undo((*id).to_owned())),
             ["undo"] => Err("Use /undo <recorded-edit-id>".into()),
             ["resume", id] => Ok(Self::Resume(ResumeTarget::Session {

@@ -34,6 +34,8 @@ impl From<SessionEvent> for Event {
 }
 
 pub(crate) enum SessionEvent {
+    QuestionsPending(bool),
+    Steer(FollowUp),
     Start(FollowUp),
     StartWorker(WorkerReply),
     Provider {
@@ -163,6 +165,7 @@ pub(crate) struct TurnMachine {
 }
 
 struct Session {
+    required_question: bool,
     mode: RequestMode,
     state: TurnState,
     queue: VecDeque<FollowUp>,
@@ -185,6 +188,7 @@ impl TurnMachine {
     pub fn new(scope: ExecutionScope, mode: RequestMode) -> Self {
         Self {
             state: SessionState::Running(Session {
+                required_question: false,
                 mode,
                 state: TurnState::Idle,
                 queue: VecDeque::new(),
@@ -237,7 +241,7 @@ impl TurnMachine {
         matches!(
             &self.state,
             SessionState::Running(Session {
-                state: TurnState::Idle,
+                state: TurnState::Idle | TurnState::Waiting(_),
                 ..
             })
         )
@@ -254,18 +258,49 @@ impl TurnMachine {
 impl Session {
     fn transition(&mut self, event: SessionEvent, effects: &mut Vec<Effect>) {
         match event {
-            SessionEvent::Start(follow_up) => {
-                if matches!(self.state, TurnState::Idle) {
-                    self.begin(follow_up, effects);
-                } else {
+            SessionEvent::QuestionsPending(required) => {
+                let previous = self.required_question;
+                self.required_question = required;
+                if previous
+                    && !required
+                    && matches!(self.state, TurnState::Idle | TurnState::Waiting(_))
+                {
+                    self.state = TurnState::Idle;
+                    let input = self
+                        .queue
+                        .pop_front()
+                        .unwrap_or_else(|| FollowUp::new(None));
+                    self.begin(input, effects);
+                }
+            }
+            SessionEvent::Steer(follow_up) => {
+                let id = follow_up.id;
+                self.transition(SessionEvent::Interrupt(HistoryDisposition::Retain), effects);
+                effects.push(Effect::Report(ActorToTuiPacket::InputAccepted {
+                    turn_id: id,
+                    kind: common_models::tui_models::InputKind::Steering,
+                }));
+                self.transition(SessionEvent::Start(follow_up), effects);
+            }
+            SessionEvent::Start(follow_up) => match (&self.state, self.required_question) {
+                (TurnState::Idle, false) => self.begin(follow_up, effects),
+                _ => {
                     let id = follow_up.id;
                     self.queue.push_back(follow_up);
+                    if matches!(self.state, TurnState::Idle) && self.required_question {
+                        self.state = TurnState::Waiting(id);
+                        effects.push(Effect::turn(
+                            id,
+                            Lifecycle::WaitingForInput,
+                            Some("Required question pending; follow-up saved in the queue".into()),
+                        ));
+                    }
                     effects.push(Effect::Report(ActorToTuiPacket::Queued {
                         turn_id: id,
                         position: self.queue.len(),
                     }));
                 }
-            }
+            },
             SessionEvent::StartWorker(reply) => match (&self.state, &self.role) {
                 (TurnState::Idle, SessionRole::Interactive) => {
                     self.role = SessionRole::Worker(reply);
@@ -305,6 +340,9 @@ impl Session {
             }
             SessionEvent::Interrupt(history) => {
                 self.cancel_queue(effects);
+                if matches!(history, HistoryDisposition::Clear) {
+                    self.required_question = false;
+                }
                 match std::mem::take(&mut self.state) {
                     TurnState::Idle => {
                         if matches!(history, HistoryDisposition::Clear) {
@@ -314,10 +352,25 @@ impl Session {
                     TurnState::Provider(turn) => {
                         self.stop(turn, TurnOutcome::Cancelled, history, effects);
                     }
+                    TurnState::Waiting(id) => {
+                        effects.push(Effect::turn(
+                            id,
+                            Lifecycle::Cancelled,
+                            Some(
+                                "Waiting turn cancelled; unanswered questions remain saved".into(),
+                            ),
+                        ));
+                        if matches!(history, HistoryDisposition::Clear) {
+                            effects.push(Effect::ClearHistory);
+                        }
+                    }
                     TurnState::Tools(turn) => {
                         self.stop(turn, TurnOutcome::Cancelled, history, effects);
                     }
                     TurnState::Stopping(mut turn) => {
+                        if matches!(turn.phase.outcome, TurnOutcome::WaitingForInput) {
+                            turn.phase.outcome = TurnOutcome::Cancelled;
+                        }
                         if matches!(history, HistoryDisposition::Clear) {
                             turn.phase.history = history;
                         }
@@ -335,6 +388,10 @@ impl Session {
     fn begin(&mut self, follow_up: FollowUp, effects: &mut Vec<Effect>) {
         let id = follow_up.id;
         effects.push(Effect::BeginTurn(follow_up));
+        effects.push(Effect::Report(ActorToTuiPacket::InputAccepted {
+            turn_id: id,
+            kind: common_models::tui_models::InputKind::Active,
+        }));
         self.launch_provider(Turn::new(id, self.scope.child()), None, effects);
     }
 
@@ -344,18 +401,30 @@ impl Session {
         previous: Option<ExecutionScope>,
         effects: &mut Vec<Effect>,
     ) {
-        effects.extend([
-            Effect::ClearStream,
-            Effect::ChangeState(State::StreamStart),
-            Effect::turn(turn.id, Lifecycle::Running, None),
-            Effect::operation(turn.phase.tag, Lifecycle::Running, "Provider request"),
-            Effect::LaunchProvider {
-                run: turn.phase.clone(),
-                owner: turn.scope.clone(),
-                previous,
-            },
-        ]);
-        self.state = TurnState::Provider(turn);
+        match self.required_question {
+            true => {
+                self.stop(
+                    turn,
+                    TurnOutcome::WaitingForInput,
+                    HistoryDisposition::Retain,
+                    effects,
+                );
+            }
+            false => {
+                effects.extend([
+                    Effect::ClearStream,
+                    Effect::ChangeState(State::StreamStart),
+                    Effect::turn(turn.id, Lifecycle::Running, None),
+                    Effect::operation(turn.phase.tag, Lifecycle::Running, "Provider request"),
+                    Effect::LaunchProvider {
+                        run: turn.phase.clone(),
+                        owner: turn.scope.clone(),
+                        previous,
+                    },
+                ]);
+                self.state = TurnState::Provider(turn);
+            }
+        }
     }
 
     fn accept_response(
@@ -536,7 +605,10 @@ impl Session {
     ) {
         let turn = turn.stopping(outcome, history);
         if matches!(turn.phase.work, CleanupWork::Provider(_))
-            && !matches!(turn.phase.outcome, TurnOutcome::Completed)
+            && matches!(
+                turn.phase.outcome,
+                TurnOutcome::Cancelled | TurnOutcome::Failed(_)
+            )
         {
             effects.push(Effect::PreserveCompletedContent);
         }
@@ -568,6 +640,7 @@ impl Session {
 
     fn finish_turn(&mut self, turn: Turn<Cleanup>, effects: &mut Vec<Effect>) {
         Self::finish_history(&turn, effects);
+        let waiting = matches!(turn.phase.outcome, TurnOutcome::WaitingForInput);
         if matches!(turn.phase.outcome, TurnOutcome::Cancelled) {
             effects.push(Effect::operation(
                 turn.phase.work.tag(),
@@ -587,6 +660,7 @@ impl Session {
         match std::mem::replace(&mut self.role, SessionRole::Interactive) {
             SessionRole::Worker(reply) => {
                 let outcome = match turn.phase.outcome {
+                    TurnOutcome::WaitingForInput => WorkerOutcome::Failed(WorkerFailure::Cancelled),
                     TurnOutcome::Completed => WorkerOutcome::Completed,
                     TurnOutcome::Cancelled => WorkerOutcome::Failed(WorkerFailure::Cancelled),
                     TurnOutcome::Failed(failure) => {
@@ -600,8 +674,21 @@ impl Session {
                 if matches!(turn.phase.history, HistoryDisposition::Clear) {
                     effects.push(Effect::ClearHistory);
                 }
-                if let Some(follow_up) = self.queue.pop_front() {
-                    self.begin(follow_up, effects);
+                match (waiting, self.required_question) {
+                    (true, true) => self.state = TurnState::Waiting(turn.id),
+                    (true, false) => {
+                        let input = self
+                            .queue
+                            .pop_front()
+                            .unwrap_or_else(|| FollowUp::new(None));
+                        self.begin(input, effects);
+                    }
+                    (false, false) => {
+                        if let Some(follow_up) = self.queue.pop_front() {
+                            self.begin(follow_up, effects);
+                        }
+                    }
+                    (false, true) => {}
                 }
             }
         }
@@ -619,7 +706,7 @@ impl Session {
 
     fn shutdown(self, effects: &mut Vec<Effect>) -> Shutdown {
         let work = match self.state {
-            TurnState::Idle => ShutdownWork::Idle,
+            TurnState::Idle | TurnState::Waiting(_) => ShutdownWork::Idle,
             TurnState::Provider(turn) => ShutdownWork::Turn(
                 turn.stopping(TurnOutcome::Cancelled, HistoryDisposition::Retain),
             ),

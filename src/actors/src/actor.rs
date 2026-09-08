@@ -25,6 +25,16 @@ impl<T, E: std::fmt::Display> IntoActorErr<T> for Result<T, E> {
 
 #[derive(Debug)]
 pub enum Message {
+    AskQuestion {
+        question: common_models::interaction::Question,
+        scope: InteractionScope,
+        reply: RpcReplyPort<Result<String, String>>,
+    },
+    UpdatePlan {
+        update: common_models::interaction::PlanUpdate,
+        scope: InteractionScope,
+        reply: RpcReplyPort<Result<String, String>>,
+    },
     StartWork(Option<String>),
     #[cfg(test)]
     Inspect(RpcReplyPort<Vec<clients::llm::Message>>),
@@ -55,6 +65,16 @@ pub struct Dependency<C: Context> {
     pub debug_mode: bool,
     pub context: C,
     pub runtime: crate::runtime::Runtime,
+}
+
+pub struct InteractionScope(pub utils::execution::ExecutionScope);
+
+impl std::fmt::Debug for InteractionScope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InteractionScope")
+            .field("cancelled", &self.0.cancel.is_cancelled())
+            .finish()
+    }
 }
 impl<C: Context> Dependency<C> {
     pub(crate) fn worker_owner(&self) -> String {
@@ -106,6 +126,23 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
         scope
             .enter(async {
                 match message {
+                    Message::AskQuestion {
+                        question,
+                        scope,
+                        reply,
+                    } => {
+                        let result = state.ask_question(question, &scope.0);
+                        state.sync_question_gate().await;
+                        let _ = reply.send(result.map_err(|error| error.to_string()));
+                    }
+                    Message::UpdatePlan {
+                        update,
+                        scope,
+                        reply,
+                    } => {
+                        let result = state.update_plan(update, &scope.0);
+                        let _ = reply.send(result.map_err(|error| error.to_string()));
+                    }
                     Message::StartWork(prompt) => {
                         let follow_up = FollowUp::new(prompt);
                         state.queue_input(&follow_up);

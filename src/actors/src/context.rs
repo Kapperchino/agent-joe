@@ -266,6 +266,7 @@ impl ExchangeState {
 
 #[derive(Clone)]
 pub(crate) struct ContextInput {
+    pub planning: Option<common_models::interaction::Planning>,
     pub history: Vec<Message>,
     pub checkpoint: Checkpoint,
     pub questions: Vec<crate::session::PendingQuestion>,
@@ -355,6 +356,9 @@ impl ContextInput {
 
     pub fn request(&self, checkpoint: &Checkpoint) -> anyhow::Result<ClientRequest> {
         let mut messages = self.prefix(checkpoint, self.history.len())?;
+        if let Some(planning) = &self.planning {
+            messages.insert(0, Message::new(format!("Current planning state (runtime record; evidence source IDs may be cited by update_plan): {}", serde_json::to_string(planning)?)));
+        }
         if !self.questions.is_empty() {
             messages.push(Message::new(format!(
                 "Pending user questions (unanswered): {}",

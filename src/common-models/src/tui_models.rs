@@ -7,6 +7,12 @@ pub struct ActorToTui {
 }
 #[derive(Debug, Clone)]
 pub enum ActorToTuiPacket {
+    ValidationUpdated(ValidationProgress),
+    InteractionUpdated(crate::interaction::InteractionView),
+    InputAccepted {
+        turn_id: TurnId,
+        kind: InputKind,
+    },
     ContextUpdated(RequestContext),
     ContextNotice(String),
     SessionChanged,
@@ -33,6 +39,25 @@ pub enum ActorToTuiPacket {
     ToolUse(Vec<String>),
     CommandResult(Command, String),
     TokensUpdated(TokenCount),
+}
+
+#[derive(Debug, Clone)]
+pub struct ValidationProgress {
+    pub operation: String,
+    pub state: ValidationState,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ValidationState {
+    Passed,
+    Failed,
+    NotRun,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum InputKind {
+    Active,
+    Steering,
 }
 
 #[derive(Debug, Clone, Default)]

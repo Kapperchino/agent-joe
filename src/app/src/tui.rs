@@ -32,6 +32,11 @@ use ratatui::{
 use tracing::error;
 
 pub struct TUIApp {
+    validation: Option<common_models::tui_models::ValidationProgress>,
+    interaction: common_models::interaction::InteractionView,
+    queued: std::collections::HashSet<common_models::runtime_ids::TurnId>,
+    workers: std::collections::BTreeMap<u64, common_models::tui_models::Lifecycle>,
+    progress: String,
     input_mode: InputMode,
     do_quit: bool,
     actor_ref: ActorRef<Message>,
@@ -85,6 +90,11 @@ impl TUIApp {
     ) -> Self {
         let config = config_context.get_config();
         Self {
+            validation: None,
+            interaction: Default::default(),
+            queued: Default::default(),
+            workers: Default::default(),
+            progress: "Ready".into(),
             input_mode: Default::default(),
             do_quit: false,
             actor_ref: actor_ref.clone(),
@@ -250,6 +260,28 @@ impl TUIApp {
 
     fn handle_actor_msg(&mut self, msg: ActorToTui) {
         match msg.packet {
+            ActorToTuiPacket::ValidationUpdated(validation) => self.validation = Some(validation),
+            ActorToTuiPacket::InteractionUpdated(view) => {
+                if msg.actor_id == 0 {
+                    for question in &view.questions {
+                        if !self
+                            .interaction
+                            .questions
+                            .iter()
+                            .any(|previous| previous.id == question.id)
+                        {
+                            self.message_box.append(Msg::Message(question.display()));
+                        }
+                    }
+                    self.interaction = view;
+                }
+            }
+            ActorToTuiPacket::InputAccepted { turn_id, kind } => {
+                if msg.actor_id == 0 {
+                    self.queued.remove(&turn_id);
+                    self.progress = format!("{kind:?} input · turn {turn_id}");
+                }
+            }
             ActorToTuiPacket::ContextUpdated(context) => {
                 if msg.actor_id == 0 {
                     self.request_context = context;
@@ -272,6 +304,9 @@ impl TUIApp {
                 self.message_box.append(Msg::Message(message))
             }
             ActorToTuiPacket::Queued { turn_id, position } => {
+                if msg.actor_id == 0 {
+                    self.queued.insert(turn_id);
+                }
                 self.message_box.append(Msg::Message(format!(
                     "Follow-up {turn_id} queued (position {position})."
                 )));
@@ -283,6 +318,12 @@ impl TUIApp {
             } => {
                 if msg.actor_id == 0 {
                     self.root_busy = !state.terminal();
+                    if state.terminal() {
+                        self.queued.remove(&turn_id);
+                    }
+                    self.progress = format!("{state:?}");
+                } else {
+                    self.workers.insert(msg.actor_id, state);
                 }
                 if state.terminal() || detail.is_some() {
                     self.message_box.append(Msg::Message(format!(
@@ -292,21 +333,26 @@ impl TUIApp {
                 }
             }
             ActorToTuiPacket::OperationChanged { state, detail, .. } => {
+                if msg.actor_id == 0 {
+                    self.progress = format!("{state:?} · {detail}");
+                }
                 if state == common_models::tui_models::Lifecycle::Failed {
                     self.message_box.append(Msg::Message(detail));
                 }
             }
             ActorToTuiPacket::StateChanged(state) => {
-                self.update_actor_state(state);
-                match self.actor_state {
-                    State::ThinkingStart => self.message_box.start_stream_message(false),
-                    State::ThinkingStop => self.message_box.finish_stream_message(false),
-                    State::MessageStart => self.message_box.start_stream_message(true),
-                    State::MessageStop => self.message_box.finish_stream_message(true),
-                    _ => {}
+                if msg.actor_id == 0 {
+                    self.update_actor_state(state);
+                    match self.actor_state {
+                        State::ThinkingStart => self.message_box.start_stream_message(false),
+                        State::ThinkingStop => self.message_box.finish_stream_message(false),
+                        State::MessageStart => self.message_box.start_stream_message(true),
+                        State::MessageStop => self.message_box.finish_stream_message(true),
+                        _ => {}
+                    }
                 }
             }
-            ActorToTuiPacket::Data(data) => match self.actor_state {
+            ActorToTuiPacket::Data(data) if msg.actor_id == 0 => match self.actor_state {
                 State::Ready => {}
                 State::StreamStart => {}
                 State::StreamStop => {}
@@ -318,6 +364,7 @@ impl TUIApp {
                 State::ToolStop => {}
                 State::Stopped => {}
             },
+            ActorToTuiPacket::Data(_) => {}
             ActorToTuiPacket::ToolUse(lines) => {
                 lines.into_iter().for_each(|line| {
                     self.message_box.append(Msg::Tool(line));
@@ -331,6 +378,11 @@ impl TUIApp {
                 match command {
                     Command::Logout => self.kill(),
                     Command::Clear
+                    | Command::Plan
+                    | Command::Implement
+                    | Command::Questions
+                    | Command::Answer(..)
+                    | Command::Steer(_)
                     | Command::New
                     | Command::Sessions
                     | Command::Fork
@@ -343,7 +395,9 @@ impl TUIApp {
                 }
             }
             ActorToTuiPacket::TokensUpdated(token_count) => {
-                self.token_count = token_count;
+                if msg.actor_id == 0 {
+                    self.token_count = token_count;
+                }
             }
         }
     }
@@ -537,17 +591,61 @@ impl TUIApp {
         self.request_context = Default::default();
         self.message_box.clear();
         self.do_clear_terminal = true;
+        self.queued.clear();
+        self.workers.clear();
+        self.progress = "Ready".into();
+        self.validation = None;
     }
 
     #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
     fn draw(&mut self, frame: &mut Frame) {
         let chunks = Layout::vertical([
             Constraint::Min(1),
+            Constraint::Length(1),
             Constraint::Length(self.input_box.get_height(frame.area().width)),
             Constraint::Length(1),
         ]);
 
-        let [msg_area, input_area, token_area] = chunks.areas(frame.area());
+        let [msg_area, progress_area, input_area, token_area] = chunks.areas(frame.area());
+        let completed = self
+            .interaction
+            .planning
+            .plan
+            .steps
+            .iter()
+            .filter(|step| step.state == common_models::interaction::StepState::Completed)
+            .count();
+        let active_workers = self
+            .workers
+            .values()
+            .filter(|state| !state.terminal())
+            .count();
+        let stale = match self.interaction.planning.plan.requirements_revision
+            != self.interaction.planning.requirements_revision
+        {
+            true => " · plan needs review",
+            false => "",
+        };
+        let validation = self
+            .validation
+            .as_ref()
+            .map(|validation| format!("last {} {:?} · ", validation.operation, validation.state))
+            .unwrap_or_default();
+        frame.render_widget(
+            Line::from(format!(
+                " {:?} · plan {}/{}{} · questions {} · queued {} · workers {} · {}{}",
+                self.interaction.planning.mode,
+                completed,
+                self.interaction.planning.plan.steps.len(),
+                stale,
+                self.interaction.questions.len(),
+                self.queued.len(),
+                active_workers,
+                validation,
+                self.progress
+            )),
+            progress_area,
+        );
 
         self.message_box
             .update_width_height(msg_area.width, msg_area.height);

@@ -51,6 +51,7 @@ pub enum TurnState {
     Idle,
     Provider(Turn<ProviderRun>),
     Tools(Turn<ToolBatch>),
+    Waiting(TurnId),
     Stopping(Turn<Cleanup>),
 }
 
@@ -286,6 +287,7 @@ impl ResponseState {
 
 #[derive(Debug, Clone)]
 pub enum TurnOutcome {
+    WaitingForInput,
     Completed,
     Cancelled,
     Failed(Failure),
@@ -293,6 +295,7 @@ pub enum TurnOutcome {
 impl TurnOutcome {
     pub fn lifecycle(&self) -> Lifecycle {
         match self {
+            Self::WaitingForInput => Lifecycle::WaitingForInput,
             Self::Completed => Lifecycle::Completed,
             Self::Cancelled => Lifecycle::Cancelled,
             Self::Failed(_) => Lifecycle::Failed,
@@ -300,6 +303,9 @@ impl TurnOutcome {
     }
     pub fn detail(&self) -> Option<String> {
         match self {
+            Self::WaitingForInput => {
+                Some("Required question pending; use /questions and /answer".into())
+            }
             Self::Completed => None,
             Self::Cancelled => Some("Turn cancelled".into()),
             Self::Failed(failure) => Some(failure.to_string()),

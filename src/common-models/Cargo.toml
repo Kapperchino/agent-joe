@@ -4,5 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1.0"
 commands = { path = "../commands" }
 serde = { version = "1.0", features = ["derive"] }

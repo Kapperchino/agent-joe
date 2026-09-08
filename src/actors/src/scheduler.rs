@@ -238,6 +238,10 @@ impl<C: Context + Clone + 'static> Executor<C> {
         tag: Tag,
     ) -> Result<String, ToolFailure> {
         let scope = self.dependency.runtime.scope.tool_child();
+        self.dependency
+            .runtime
+            .interaction
+            .authorize(prepared.effect)?;
         let _registration = scope.register(ResourceKind::Tool, prepared.job.call.name.to_string());
         let _writer = match (prepared.effect, &self.dependency.runtime.worker) {
             (ToolEffect::Write | ToolEffect::Validate, None) => Some(self.dependency.runtime.workspace.writer.clone().try_lock_owned().map_err(|_| ToolFailure::new(ToolFailureKind::InvalidInput, ToolEffects::NotStarted, "A worker owns workspace writes; wait for it to finish before editing or validating"))?),
@@ -308,6 +312,10 @@ impl<C: Context + Clone + 'static> Executor<C> {
         tag: Tag,
         revision: Option<WorkspaceRevision>,
     ) -> Result<String, ToolFailure> {
+        self.dependency
+            .runtime
+            .interaction
+            .authorize(prepared.effect)?;
         self.record_intent(prepared)?;
         self.emit(
             tag,
@@ -462,7 +470,9 @@ impl<C: Context + Clone + 'static> Executor<C> {
     }
 
     fn schedule(&self, pending: &mut VecDeque<ToolJob>) -> Schedule {
-        match self.dependency.runtime.scope.cancel.is_cancelled() {
+        match self.dependency.runtime.scope.cancel.is_cancelled()
+            || self.dependency.runtime.interaction.waiting()
+        {
             true => Schedule::Stopped,
             false => self
                 .next_group(pending)

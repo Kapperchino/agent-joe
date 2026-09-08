@@ -13,8 +13,9 @@ And this is a fun project to work on.
 
 ## State
 
-Works pretty well currently, still doesn't do as good of a job as codex, I think the main reason being the prompts not
-being as good and not having a plan mode.
+The runtime milestones through M9 include sessions, bounded workers, guarded
+change review, plan mode, tracked steps, and structured user questions. Skills
+and controlled MCP integrations remain planned.
 
 The [implementation plan](IMPLEMENTATION_PLAN.md) covers the runtime, context, validation, and collaboration
 improvements, with dependencies and acceptance criteria.
@@ -38,6 +39,68 @@ cargo run --relase
 ## Keybindings
 
 The TUI is similar to claude code and codex with one major difference. Vim bindings are foced upon you.
+
+## Planning and interaction
+
+Both default and `--simple` modes support the same interaction commands:
+
+| Command | Behavior |
+| --- | --- |
+| `/plan` | Enter read-only planning mode and show saved steps |
+| `/implement` | Return to implementation mode |
+| `/questions` | Show pending questions and their answer commands |
+| `/answer <id> choice <choice-id>` | Submit a listed choice |
+| `/answer <id> text <answer>` | Submit permitted free text, preserving spaces and newlines |
+| `/steer <correction>` | Cancel active work and queued follow-ups, then continue the corrected task after cleanup |
+
+Change modes while idle, or interrupt and await cleanup first. Plan mode permits
+discovery, reads, Git inspection, review, worktree listing, and read workers.
+Dispatch rejects patches, undo, worktree mutations, every Cargo operation, and
+write-worker launches, including follow-ups. Workers inherit the policy. Session
+and plan storage still operates in plan mode; questions cannot change the fixed
+project boundary or grant additional permissions.
+
+The root uses `update_plan` to maintain 1–16 steps with stable IDs, dependencies,
+acceptance criteria, and `pending`, `in_progress`, `completed`, or `blocked`
+states. Only one step can be in progress. Dependencies must be acyclic and
+completed before a dependent step starts. Completion requires a prior in-progress
+state and recorded successful tool or answer evidence, with an explanation;
+blocked steps require a reason. The runtime checks evidence provenance and
+transitions. The model must assess whether that evidence establishes the stated
+acceptance criteria. Failed tools cannot supply successful evidence, and reads
+cannot establish that an unexecuted test passed.
+
+The plan and a bounded catalog of evidence IDs appear in request context outside
+operating instructions. Updates must match both the plan revision and the current
+requirements revision. New user input or an answer marks an existing plan as
+needing review: the model must reconcile it before further edits, Cargo, or final
+completion. Completed steps must be reopened after requirements change. Plans
+survive compaction, resume, and conversation forks.
+
+`request_user_input` asks one question with an unused ID, a prompt, a required
+flag, up to six named choices, and optional free text. At most eight questions
+can be pending, with at most 256 question IDs per session. A required question
+stops new tool dispatch, lets in-flight calls settle, cleans up owned workers and
+processes, and waits for an explicit answer. Calls skipped in that batch are
+recorded as unexecuted and are never replayed. The last required answer resumes
+continuation or the next queued input. Optional questions allow independent work
+and can remain pending after a turn finishes. Question tools do not wait for an
+independent worker's filesystem lease.
+
+Answers arriving during tools are committed immediately and inserted into the
+transcript after the complete tool exchange. Invalid choices, duplicate answers,
+and reused question IDs are rejected. Typing ordinary input never implicitly
+answers a question: input submitted during active work or a required-question
+wait stays in the FIFO follow-up queue. Use `/steer` for corrections to active
+work. Cancellation preserves accepted results and does not roll back completed
+edits. A correction does not answer any still-required question.
+
+Resume restores mode, plan, and pending questions without starting work. `/clear`
+and `/new` start fresh implementation sessions; the previous state remains in
+the archive. The TUI shows mode, plan progress, pending questions, queue size,
+worker count, and the latest validation result. Worker streams do not replace
+the root response. Existing Vim editing, slash commands, and Ctrl-C cancellation
+remain available.
 
 ## Tools
 

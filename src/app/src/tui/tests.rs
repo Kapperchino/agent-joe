@@ -238,3 +238,121 @@ async fn diff_and_guarded_undo_commands_use_the_existing_transcript_flow() {
     assert_eq!(fixture.command().await, Command::Undo("joe-edit".into()));
     fixture.stop().await;
 }
+
+#[tokio::test]
+async fn interaction_commands_questions_and_queue_preserve_vim_and_transcript() {
+    use common_models::interaction::{
+        InteractionView, Planning, Question, QuestionInput, WorkMode,
+    };
+    use common_models::{runtime_ids::TurnId, tui_models::InputKind};
+    let mut fixture = Fixture::new().await;
+    fixture.packet(ActorToTuiPacket::InteractionUpdated(InteractionView {
+        planning: Planning {
+            mode: WorkMode::Plan,
+            ..Default::default()
+        },
+        questions: vec![
+            Question::try_from(QuestionInput {
+                id: "target".into(),
+                prompt: "Which target?".into(),
+                required: true,
+                choices: vec![],
+                allow_free_text: true,
+            })
+            .unwrap(),
+        ],
+    }));
+    let rendered = fixture.render();
+    assert!(rendered.contains("Which target?"));
+    assert!(rendered.contains("Plan · plan 0/0"));
+    assert!(rendered.contains("questions 1"));
+    fixture.key(KeyCode::Char('/'));
+    fixture.app.input_box.paste("answer target text Library");
+    fixture.key(KeyCode::Enter);
+    assert_eq!(
+        fixture.command().await,
+        Command::parse("answer target text Library").unwrap()
+    );
+    assert!(matches!(
+        fixture.app.input_mode,
+        InputMode::HomeMenu(HomeMenu::Normal)
+    ));
+    let queued = TurnId::new();
+    fixture.packet(ActorToTuiPacket::Queued {
+        turn_id: queued,
+        position: 1,
+    });
+    assert!(fixture.render().contains("queued 1"));
+    fixture.packet(ActorToTuiPacket::InputAccepted {
+        turn_id: queued,
+        kind: InputKind::Active,
+    });
+    assert!(fixture.render().contains("queued 0"));
+    fixture.packet(ActorToTuiPacket::TurnChanged {
+        turn_id: queued,
+        state: Lifecycle::WaitingForInput,
+        detail: None,
+    });
+    fixture
+        .app
+        .handle_key_event(&KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+    assert!(matches!(
+        fixture.messages.recv_async().await.unwrap(),
+        Message::Interrupt
+    ));
+    assert!(!fixture.app.do_quit);
+    fixture.key(KeyCode::Char('i'));
+    assert!(matches!(
+        fixture.app.input_mode,
+        InputMode::HomeMenu(HomeMenu::Editing)
+    ));
+    fixture.key(KeyCode::Esc);
+    assert!(matches!(
+        fixture.app.input_mode,
+        InputMode::HomeMenu(HomeMenu::Normal)
+    ));
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn worker_streams_update_progress_without_replacing_the_root_stream() {
+    let mut fixture = Fixture::new().await;
+    fixture.packet(ActorToTuiPacket::StateChanged(State::MessageStart));
+    fixture.packet(ActorToTuiPacket::Data("Root response".into()));
+    fixture.app.handle_actor_msg(ActorToTui {
+        actor_id: 1,
+        packet: ActorToTuiPacket::StateChanged(State::ThinkingStart),
+    });
+    fixture.app.handle_actor_msg(ActorToTui {
+        actor_id: 1,
+        packet: ActorToTuiPacket::Data("Worker private stream".into()),
+    });
+    fixture.app.handle_actor_msg(ActorToTui {
+        actor_id: 1,
+        packet: ActorToTuiPacket::TurnChanged {
+            turn_id: common_models::runtime_ids::TurnId::new(),
+            state: Lifecycle::Running,
+            detail: None,
+        },
+    });
+    fixture.packet(ActorToTuiPacket::Data(" remains intact".into()));
+    fixture.packet(ActorToTuiPacket::StateChanged(State::MessageStop));
+    let rendered = fixture.render();
+    assert!(rendered.contains("Root response remains intact"));
+    assert!(!rendered.contains("Worker private stream"));
+    assert!(rendered.contains("workers 1"));
+    fixture.packet(ActorToTuiPacket::ValidationUpdated(
+        common_models::tui_models::ValidationProgress {
+            operation: "test".into(),
+            state: common_models::tui_models::ValidationState::Passed,
+        },
+    ));
+    fixture.packet(ActorToTuiPacket::OperationChanged {
+        turn_id: common_models::runtime_ids::TurnId::new(),
+        operation_id: common_models::runtime_ids::OperationId::new(),
+        state: Lifecycle::Running,
+        detail: "Provider request".into(),
+    });
+    assert!(fixture.render().contains("last test Passed"));
+    fixture.stop().await;
+}

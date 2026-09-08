@@ -137,6 +137,8 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 EffectOutcome::Applied
             }
             Effect::UpdateContext { tag, result } => {
+                self.record_validation_progress(&result);
+                self.record_plan_evidence(&result);
                 match update_tool_context(&self.dependency, &mut self.cur_context, &result) {
                     Ok(()) => EffectOutcome::Applied,
                     Err(failure) => EffectOutcome::ContextFailed { tag, failure },
@@ -239,6 +241,15 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 .pending(&self.dependency.worker_owner());
             let update = match update {
                 ProviderUpdate::Finished(Ok(crate::turn::AcceptedResponse::Complete(_)))
+                    if self.planning.plan.requirements_revision
+                        != self.planning.requirements_revision =>
+                {
+                    ProviderUpdate::Finished(Err(Failure::new(
+                        FailureKind::InvalidInput,
+                        "Requirements changed; reconcile the saved plan with update_plan before completing the turn",
+                    )))
+                }
+                ProviderUpdate::Finished(Ok(crate::turn::AcceptedResponse::Complete(_)))
                     if !pending.is_empty() =>
                 {
                     ProviderUpdate::Finished(Err(Failure::new(
@@ -257,6 +268,30 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 ));
             }
             self.dispatch(SessionEvent::Provider { tag, update }).await;
+        }
+    }
+
+    fn record_validation_progress(&self, result: &ToolResult) {
+        use common_models::tui_models::{ValidationProgress, ValidationState};
+        if result.invocation.name.as_ref() == "cargo"
+            && let Some(operation @ ("check" | "test" | "clippy" | "fmt_check")) = result
+                .invocation
+                .input
+                .get("operation")
+                .and_then(serde_json::Value::as_str)
+        {
+            let state = match &result.outcome {
+                Ok(_) => ValidationState::Passed,
+                Err(failure) if failure.effects == tools::tool_error::ToolEffects::NotStarted => {
+                    ValidationState::NotRun
+                }
+                Err(_) => ValidationState::Failed,
+            };
+            self.reporter
+                .send(ActorToTuiPacket::ValidationUpdated(ValidationProgress {
+                    operation: operation.into(),
+                    state,
+                }));
         }
     }
 
@@ -288,6 +323,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
 
     pub(crate) async fn command(&mut self, command: Command) {
         match command {
+            Command::Plan | Command::Implement | Command::Questions | Command::Answer(..) | Command::Steer(_) => self.interaction_command(command).await,
             Command::Diff | Command::Undo(_) => self.change_command(command).await,
             Command::Sessions | Command::Resume(_) | Command::New | Command::Fork => {
                 self.session_command(command).await

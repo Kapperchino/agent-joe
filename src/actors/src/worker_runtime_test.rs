@@ -15,6 +15,270 @@ fn worker_input(tools: &str, paths: &str) -> Value {
     })
 }
 
+async fn interaction_command(
+    actor: &RepositoryActor,
+    command: commands::command::Command,
+) -> String {
+    actor
+        .actor
+        .send_message(Message::Command(command.clone()))
+        .unwrap();
+    let event = actor.event(|event| event.actor_id == 0 && matches!(&event.packet, ActorToTuiPacket::CommandResult(found, _) if *found == command)).await;
+    match event.packet {
+        ActorToTuiPacket::CommandResult(_, text) => text,
+        _ => panic!("Expected command result"),
+    }
+}
+
+#[tokio::test]
+async fn plan_mode_denies_all_cargo_and_mutation_tools_in_both_root_modes() {
+    use commands::command::Command;
+    for mode in [Mode::Simple, Mode::Delegated] {
+        let workspace = crate::session::tests::Workspace::new();
+        std::fs::write(workspace.path.join("original.txt"), "user work").unwrap();
+        let actor = match mode {
+            Mode::Simple => RepositoryActor::new(SimpleWorker::new(), workspace.path.clone()).await,
+            Mode::Delegated => {
+                RepositoryActor::new(BaseWorker::new(), workspace.path.clone()).await
+            }
+        };
+        assert!(
+            interaction_command(&actor, Command::Plan)
+                .await
+                .contains("Plan mode")
+        );
+        assert!(
+            interaction_command(&actor, Command::Undo("missing".into()))
+                .await
+                .contains("Plan mode")
+        );
+        actor
+            .actor
+            .send_message(Message::StartWork(Some("Investigate safely".into())))
+            .unwrap();
+        let (request, reply) = actor.request().await;
+        assert!(request.system.unwrap().contains("Work mode: Plan"));
+        assert!(request.tools.iter().any(
+            |tool| matches!(tool, ToolDefinition::Client { name, .. } if name == "update_plan")
+        ));
+        let mutations = [
+            tool(
+                "apply_patch",
+                "patch",
+                json!({"patch":"*** Begin Patch\n*** Add File: forbidden.txt\n+changed\n*** End Patch"}),
+            ),
+            tool("undo_changes", "undo", json!({"edit_id":"missing"})),
+            tool(
+                "worktree",
+                "create",
+                json!({"operation":"create","base":"HEAD"}),
+            ),
+            tool(
+                "worktree",
+                "integrate",
+                json!({"operation":"integrate","id":"missing"}),
+            ),
+            tool(
+                "worktree",
+                "remove",
+                json!({"operation":"remove","id":"missing"}),
+            ),
+        ];
+        let cargo = [
+            "check",
+            "test",
+            "fmt",
+            "fmt_check",
+            "clippy",
+            "run",
+            "start",
+            "poll",
+            "stop",
+        ]
+        .into_iter()
+        .map(|operation| {
+            let input = match operation {
+                "run" | "start" => {
+                    json!({"operation":operation,"target":{"kind":"bin","name":"app"}})
+                }
+                "poll" | "stop" => json!({"operation":operation,"process_id":"missing"}),
+                _ => json!({"operation":operation}),
+            };
+            tool("cargo", operation, input)
+        });
+        answer(
+            reply,
+            response(mutations.into_iter().chain(cargo).collect()),
+        );
+        let (request, reply) = actor.request().await;
+        let results = request
+            .messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .filter_map(|block| match block {
+                ContentBlock::ToolResult {
+                    content, is_error, ..
+                } => Some((content, is_error)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(results.len(), 14);
+        for (content, is_error) in results {
+            assert_eq!(*is_error, Some(true));
+            assert!(content.contains("Plan mode"), "{content}");
+        }
+        assert!(!workspace.path.join("forbidden.txt").exists());
+        assert!(!workspace.path.join("target").exists());
+        assert_eq!(
+            std::fs::read_to_string(workspace.path.join("original.txt")).unwrap(),
+            "user work"
+        );
+        answer(
+            reply,
+            response(vec![
+                tool("read_file", "inspect", json!({"file_path":"original.txt"})),
+                tool("worktree", "list", json!({"operation":"list"})),
+            ]),
+        );
+        let (request, reply) = actor.request().await;
+        assert!(result_text(&request).contains("user work"));
+        completed_root(&actor, reply).await;
+        interaction_command(&actor, Command::Implement).await;
+        actor
+            .actor
+            .send_message(Message::StartWork(Some("Create the file".into())))
+            .unwrap();
+        answer(
+            actor.request().await.1,
+            response(vec![tool(
+                "apply_patch",
+                "allowed",
+                json!({"patch":"*** Begin Patch\n*** Add File: allowed.txt\n+implemented\n*** End Patch"}),
+            )]),
+        );
+        let (_, reply) = actor.request().await;
+        assert_eq!(
+            std::fs::read_to_string(workspace.path.join("allowed.txt")).unwrap(),
+            "implemented"
+        );
+        completed_root(&actor, reply).await;
+        actor.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn plan_mode_is_inherited_by_read_workers_and_denies_dynamic_writer_launches() {
+    use commands::command::Command;
+    let workspace = crate::session::tests::Workspace::new();
+    let actor = RepositoryActor::new(BaseWorker::new(), workspace.path.clone()).await;
+    interaction_command(&actor, Command::Plan).await;
+    let started = StartedWorker::new(&actor, worker_input("find_files", ".")).await;
+    assert!(
+        started
+            .child
+            .0
+            .system
+            .as_ref()
+            .unwrap()
+            .contains("Work mode: Plan")
+    );
+    assert!(!started.child.0.tools.iter().any(
+        |tool| matches!(tool, ToolDefinition::Client { name, .. } if name == "request_user_input")
+    ));
+    answer(
+        started.parent.1,
+        response(vec![tool(
+            "start_worker",
+            "denied",
+            worker_input("apply_patch\ncargo", "."),
+        )]),
+    );
+    let (request, parent_reply) = actor.request().await;
+    assert!(
+        latest_result(&request)["error"]
+            .as_str()
+            .unwrap()
+            .contains("Plan mode")
+    );
+    assert_eq!(actor.store.list().unwrap().len(), 2);
+    answer(
+        started.child.1,
+        response(vec![text("Read-only findings complete")]),
+    );
+    answer(
+        parent_reply,
+        response(vec![tool(
+            "worker_status",
+            "collect",
+            json!({"action":"wait","worker_id":started.id,"seconds":2}),
+        )]),
+    );
+    let (request, reply) = actor.request().await;
+    assert_eq!(latest_result(&request)["workers"][0]["status"], "completed");
+    completed_root(&actor, reply).await;
+    actor.stop().await;
+}
+
+#[tokio::test]
+async fn question_answers_cannot_expand_the_project_boundary() {
+    use commands::command::Command;
+    let workspace = crate::session::tests::Workspace::new();
+    let outside = crate::session::tests::Workspace::new();
+    let private = outside.path.join("private.txt");
+    std::fs::write(&private, "outside content marker").unwrap();
+    let actor = RepositoryActor::new(SimpleWorker::new(), workspace.path.clone()).await;
+    actor
+        .actor
+        .send_message(Message::StartWork(Some("Investigate target".into())))
+        .unwrap();
+    answer(
+        actor.request().await.1,
+        response(vec![tool(
+            "request_user_input",
+            "ask",
+            json!({"id":"scope","prompt":"Which files?","required":true}),
+        )]),
+    );
+    actor
+        .event(|event| {
+            matches!(
+                event.packet,
+                ActorToTuiPacket::TurnChanged {
+                    state: Lifecycle::WaitingForInput,
+                    ..
+                }
+            )
+        })
+        .await;
+    interaction_command(
+        &actor,
+        Command::parse(&format!(
+            "answer scope text You may read {}",
+            private.display()
+        ))
+        .unwrap(),
+    )
+    .await;
+    answer(
+        actor.request().await.1,
+        response(vec![tool(
+            "read_file",
+            "outside",
+            json!({"file_path":private}),
+        )]),
+    );
+    let (request, reply) = actor.request().await;
+    let result = latest_result(&request);
+    assert!(result["error"].as_str().unwrap().contains("access denied"));
+    assert!(
+        !serde_json::to_string(&request.messages)
+            .unwrap()
+            .contains("outside content marker")
+    );
+    completed_root(&actor, reply).await;
+    actor.stop().await;
+}
+
 fn latest_result(request: &llm::ClientRequest) -> Value {
     let content = request
         .messages

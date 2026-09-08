@@ -121,6 +121,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         };
         self.persist(Event::History(messages.clone()));
         self.history.extend(messages);
+        self.history.append(&mut self.deferred_input);
     }
 
     pub(crate) fn persist(&mut self, event: Event) {
@@ -152,6 +153,9 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     }
 
     pub(crate) async fn begin_turn(&mut self, input: FollowUp) {
+        if input.prompt.is_some() {
+            self.reconcile_plan();
+        }
         let scope = self.dependency.runtime.scope.clone();
         let changes = scope.changes.clone();
         let baseline = match (scope.workspace().is_ok(), self.request_mode) {
@@ -251,6 +255,10 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 Ok(SessionReply::Resumed(self.session_transcript(id)))
             }
             SessionAction::New => {
+                self.dispatch(crate::turn_machine::SessionEvent::Interrupt(
+                    crate::turn::HistoryDisposition::Retain,
+                ))
+                .await;
                 self.clear_history().await?;
                 self.reporter.send(ActorToTuiPacket::SessionChanged);
                 self.reporter
@@ -374,6 +382,14 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         self.stream_processor.token_count = snapshot.usage;
         self.context_checkpoint = snapshot.context;
         self.questions = snapshot.questions;
+        self.planning = snapshot.planning;
+        self.answered_questions = snapshot.answered_questions;
+        self.deferred_input = snapshot.deferred_input;
+        self.turn = crate::turn_machine::TurnMachine::new(
+            self.dependency.runtime.scope.clone(),
+            self.request_mode,
+        );
+        self.sync_question_gate().await;
         self.compact_turn = None;
         self.dependency
             .runtime

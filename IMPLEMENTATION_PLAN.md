@@ -1,7 +1,7 @@
 # Agent Joe implementation plan
 
-Updated: 2026-09-08. M1–M8 are complete, including combined M7/M8 integration
-with the consolidated Cargo tool. M9 and M10 remain planned.
+Updated: 2026-09-08. M1–M9 are complete, including combined M7/M8 integration
+with the consolidated Cargo tool and M9 planning/user interaction. M10 remains planned.
 
 Cover the ten gaps identified in the Codex comparison while keeping Joe a
 Rust-focused agent with typed tools and no model-controlled shell.
@@ -40,7 +40,7 @@ Rust-focused agent with typed tools and no model-controlled shell.
 | M6 | Complete on main | Typed Cargo validation and managed targets / 6 | M2–M5 |
 | M7 | Complete | Direct work and bounded delegation / 8 | M4–M6; integration with M8 |
 | M8 | Complete | Git, aggregate review, guarded undo, worktrees / 9 | M3–M6; worker integration with M7 |
-| M9 | Planned; persistence foundations exist | Plan mode, tracked steps, questions, steering / 10 | M4–M8 |
+| M9 | Complete | Plan mode, tracked steps, questions, steering / 10 | M4–M8 |
 | M10 | Planned | Skills and controlled MCP integrations / 10 | M3–M5, M9 |
 
 M7 and M8 share worker policy, workspace ownership, the parent change journal,
@@ -158,7 +158,7 @@ Concurrent hostile host processes are outside the threat model.
   checkpoint commits before continuation; failures preserve the previous context.
 - Runtime flags configure budgets, compaction routing, and storage separately
   from credentials. The TUI separates request-context estimates from cumulative
-  usage. Pending question/answer records persist; their interactive flow is M9.
+  usage. Question/answer records persist; M9 provides their interactive flow.
 
 Code: `src/actors/src/{session,session_control,context,compactor}.rs`,
 `src/actors/src/session/*`, and `src/clients/src/compaction.rs`.
@@ -325,34 +325,55 @@ Hard limits fail explicitly; paginated discovery reports truncation. See the
 [README](README.md) for current Cargo inputs, output fields, Git behavior, and
 worktree operation details.
 
-**M9 — Planning and user interaction — planned**
+**M9 — Planning and user interaction — complete**
 
-Existing foundations: queued follow-ups, cancellation, durable question/answer
-records, context retention, and session controls. Interactive questions and
-`/plan` are not implemented.
+- `/plan` enters read-only planning and `/implement` explicitly restores
+  implementation mode. Mode changes require an idle turn or finished cleanup.
+  Shared dispatch policy denies all Cargo operations, patches, undo, worktree
+  mutations, and dynamically selected write workers. Read workers inherit the
+  mode; worktree listing remains available. Session-only interaction tools do
+  not acquire filesystem leases.
+- `update_plan` persists 1–16 steps with stable IDs, acyclic dependencies,
+  acceptance criteria, pending/in-progress/completed/blocked states, and
+  optimistic revisions. Starting requires completed dependencies; completion
+  requires an in-progress predecessor and recorded successful evidence with
+  explanations. Blocked steps require a reason. The runtime verifies evidence
+  provenance; the model assesses whether it satisfies the acceptance criteria.
+- Plans, mode, and bounded evidence catalogs persist through compaction,
+  resume, and forks. Runtime planning state remains separate from operating
+  instructions. New input and question answers mark an existing plan for
+  reconciliation, blocking edits, Cargo and final completion until updated.
+  Completed steps must be reopened after requirements change.
+- `request_user_input` adds structured questions to the existing session store.
+  `/questions` lists them; `/answer <id> choice <id>` and `/answer <id> text <text>`
+  submit typed answers. Required questions stop new dispatch, settle the current
+  batch, clean up owned work, and wait explicitly. Optional questions permit
+  independent continuation. Answers cannot widen project permissions.
+- Answers during tools commit immediately and enter history after the complete
+  tool exchange. Question resolution and plan reconciliation markers commit
+  atomically. Invalid choices, duplicate answers, reused IDs and implicit answers
+  are rejected. Resume waits for input with pending questions restored; clear/new
+  sessions reset interaction state and preserve the archive.
+- Ordinary active-turn input queues FIFO. `/steer <correction>` cancels the active
+  turn and its queued follow-ups, awaits cleanup, then continues the corrected
+  task. Accepted results survive; uncertain operations are not replayed.
+- The TUI shows mode, plan progress, pending questions, queue size, workers and
+  the last validation outcome. Worker streams cannot overwrite the root stream.
+  Vim editing and transcript behavior remain covered by deterministic tests.
 
-- Add `/plan` and an explicit return to implementation mode. Enforce read-only
-  policy at dispatch across workers and integrations, including Cargo, patch,
-  undo, and worktree mutations.
-- Persist a compact plan with step IDs, dependencies, acceptance criteria, and
-  pending/in-progress/completed/blocked states. Validate transitions against
-  evidence and preserve the plan through compaction/resume.
-- Add a structured question tool with IDs, choices/free text, required/optional
-  status, and typed answers. Independent work can continue while optional
-  questions are pending; required answers remain pending until answered.
-- Questions clarify intent and planning; answers cannot widen the project
-  boundary. Reuse the existing question persistence instead of a second store.
-- Finish steering/queue UI: distinguish active-turn input, queued follow-ups,
-  and cancelled work. Reconcile changed requirements with the current plan.
-- Show worker, progress, and validation state compactly while preserving Vim
-  interaction and transcript behavior.
+Code: `src/common-models/src/interaction.rs`,
+`src/actors/src/{interaction_control,interaction_policy,session,turn_machine}.rs`,
+`src/actors/src/tools/{request_user_input,update_plan}.rs`,
+`src/commands/src/command.rs`, and `src/app/src/tui.rs`.
 
-Code to extend: `src/commands/src/command.rs`, actor session/context state,
-worker prompts, `src/common-models/src/tui_models.rs`, and TUI widgets.
+Limits: eight pending questions, six choices per question, 256 question IDs per
+session, and a 256-entry evidence catalog retaining sources cited by the current
+plan. Workers report questions to their parent; only the root changes the shared
+plan or asks the user. Mode changes never grant filesystem or sandbox permissions.
 
-Acceptance tests: denied writes/processes in plan mode, inherited worker policy,
-required/optional answers, answers arriving during tools, resume with pending
-questions, corrected requirements during a turn, and clear/new-session behavior.
+Acceptance covers both root modes, denied mutations/processes, worker inheritance,
+required/optional questions, answers during tools and cleanup, restart, compaction,
+forks, steering, project boundaries, and clear/new sessions with waiting queues.
 
 **M10 — Skills and MCP — planned**
 
@@ -383,9 +404,8 @@ denied effects, credential refresh/redaction, and inherited plan-mode policy.
 
 **Next work**
 
-1. Implement M9 using the existing session/question foundations.
-2. Implement M10 in separate skill, MCP transport/policy, and authentication slices.
-3. Retain one writer per shared workspace. Require explicit worktree routing and
+1. Implement M10 in separate skill, MCP transport/policy, and authentication slices.
+2. Retain one writer per shared workspace. Require explicit worktree routing and
    ownership before allowing simultaneous writers; creation alone does not enable them.
 
 **Recorded validation and rollout**
@@ -397,6 +417,7 @@ Latest recorded runs on 2026-09-08:
 | Main after M6/M8 integration | 249 workspace tests; workspace check; all-targets Clippy | 249 workspace tests; workspace check |
 | M7 branch after M6 integration | 249 workspace tests; workspace check; all-targets Clippy | 249 workspace tests; workspace check |
 | Combined M7/M8 after standards refactor | 271 workspace tests; workspace check; all-targets Clippy | 271 workspace tests; workspace check |
+| M9 planning and user interaction | 290 workspace tests; workspace check; all-targets Clippy | 290 workspace tests; workspace check; all-targets Clippy |
 
 Commands: `cargo test --workspace --offline`,
 `cargo check --workspace --offline`, and

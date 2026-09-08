@@ -11,6 +11,9 @@ use std::path::PathBuf;
 use tools::tool_defs::ToolDefinition;
 
 pub struct ActorState<C: Context> {
+    pub(crate) planning: common_models::interaction::Planning,
+    pub(crate) answered_questions: std::collections::BTreeSet<String>,
+    pub(crate) deferred_input: Vec<Message>,
     pub(crate) request_mode: crate::context::RequestMode,
     pub(crate) context_checkpoint: crate::context::Checkpoint,
     pub(crate) compact_turn: Option<common_models::runtime_ids::TurnId>,
@@ -54,6 +57,20 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             dependency.runtime.session = None;
         }
         let history = Self::initial_history(&dependency.context).await;
+        if matches!(mode, ActorMode::Conversation) && dependency.runtime.worker.is_none() {
+            dependency.tools.extend([
+                tools::tool_defs::erased_tool::<
+                    crate::tools::request_user_input::RequestUserInput,
+                    C,
+                    crate::actor::ActorContext<C>,
+                >(),
+                tools::tool_defs::erased_tool::<
+                    crate::tools::update_plan::UpdatePlan,
+                    C,
+                    crate::actor::ActorContext<C>,
+                >(),
+            ]);
+        }
         if dependency.runtime.sessions.is_some()
             && dependency.tool("read_artifact").is_none()
             && dependency
@@ -117,6 +134,12 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         };
 
         Ok(Self {
+            planning: common_models::interaction::Planning {
+                mode: dependency.runtime.interaction.mode(),
+                ..Default::default()
+            },
+            answered_questions: Default::default(),
+            deferred_input: Vec::new(),
             request_mode,
             context_checkpoint: Default::default(),
             compact_turn: None,
@@ -174,11 +197,19 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             .workers
             .pending(&self.dependency.worker_owner());
         let instructions = self.cur_context.effective_instructions()?;
+        let instructions = match self.request_mode {
+            crate::context::RequestMode::SingleResponse => instructions,
+            _ => format!("{instructions}\n{}", self.interaction_instructions()),
+        };
         let instructions = match pending.is_empty() {
             true => instructions,
             false => format!("{instructions}\n{}", pending.join("\n")),
         };
         Ok(crate::context::ContextInput {
+            planning: (self.dependency.runtime.worker.is_none()
+                && self.request_mode != crate::context::RequestMode::SingleResponse
+                && (!self.planning.plan.steps.is_empty() || !self.planning.evidence.is_empty()))
+            .then(|| self.planning.clone()),
             history: self.history.clone(),
             checkpoint: self.context_checkpoint.clone(),
             questions: self.questions.clone(),
@@ -217,6 +248,14 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         self.context_checkpoint = Default::default();
         self.compact_turn = None;
         self.questions.clear();
+        self.planning = Default::default();
+        self.answered_questions.clear();
+        self.deferred_input.clear();
+        self.turn = crate::turn_machine::TurnMachine::new(
+            self.dependency.runtime.scope.clone(),
+            self.request_mode,
+        );
+        self.refresh_interaction();
         self.persistence = crate::session_control::Persistence::Ready;
         self.stream_processor.token_count = Default::default();
         Ok(())

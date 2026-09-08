@@ -61,6 +61,71 @@ fn history() -> Vec<Message> {
     ]
 }
 
+#[test]
+fn answering_a_question_atomically_marks_the_saved_plan_for_reconciliation() {
+    use common_models::interaction::{
+        Plan, PlanStep, PlanUpdate, Planning, Question, QuestionInput, StepState,
+    };
+    let workspace = Workspace::new();
+    let store = workspace.store();
+    let session = store
+        .create(SessionProvider::Injected, None, history())
+        .unwrap();
+    let plan = Plan::default()
+        .update(
+            PlanUpdate {
+                revision: 0,
+                requirements_revision: 0,
+                steps: vec![PlanStep {
+                    id: "target".into(),
+                    description: "Inspect target".into(),
+                    dependencies: vec![],
+                    acceptance: "Target inspected".into(),
+                    state: StepState::Pending,
+                    evidence: vec![],
+                    blocked_reason: None,
+                }],
+            },
+            0,
+            &Default::default(),
+        )
+        .unwrap();
+    session
+        .record(Event::Planning(Planning {
+            plan,
+            ..Default::default()
+        }))
+        .unwrap();
+    session
+        .record(Event::QuestionAsked(
+            Question::try_from(QuestionInput {
+                id: "target".into(),
+                prompt: "Which target?".into(),
+                required: true,
+                choices: vec![],
+                allow_free_text: true,
+            })
+            .unwrap(),
+        ))
+        .unwrap();
+    session
+        .record(Event::QuestionAnswered {
+            id: "target".into(),
+            answer: "Library".into(),
+        })
+        .unwrap();
+    let id = session.id.clone();
+    drop(session);
+    let session = workspace
+        .resume(&store, &id, &SessionProvider::Injected)
+        .unwrap();
+    let snapshot = session.snapshot().unwrap();
+    assert!(snapshot.questions.is_empty());
+    assert_eq!(snapshot.planning.requirements_revision, 1);
+    assert_eq!(snapshot.planning.plan.requirements_revision, 0);
+    assert!(snapshot.planning.evidence.contains_key("answer:target"));
+}
+
 fn save_output(session: &Session, content: &str) -> ToolResult {
     let mut pending = batch();
     pending.operations.truncate(1);
@@ -559,8 +624,10 @@ fn compacted_sessions_reject_replayed_checkpoints_and_isolate_fork_questions() {
         )]))
         .unwrap();
     let question = PendingQuestion {
-        id: "q1".to_owned().try_into().unwrap(),
-        prompt: "Which target?".to_owned().try_into().unwrap(),
+        choices: Vec::new(),
+        allow_free_text: true,
+        id: "q1".into(),
+        prompt: "Which target?".into(),
         required: true,
     };
     session

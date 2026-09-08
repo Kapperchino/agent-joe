@@ -139,6 +139,12 @@ pub(crate) struct Snapshot {
     #[serde(default)]
     pub questions: Vec<PendingQuestion>,
     #[serde(default)]
+    pub planning: common_models::interaction::Planning,
+    #[serde(default)]
+    pub answered_questions: std::collections::BTreeSet<String>,
+    #[serde(default)]
+    pub deferred_input: Vec<Message>,
+    #[serde(default)]
     pub updated_at: Option<std::time::SystemTime>,
     #[serde(default)]
     pub processes: std::collections::BTreeMap<String, utils::cargo::CargoResult>,
@@ -202,12 +208,7 @@ impl CompactionTransition {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct PendingQuestion {
-    pub id: tools::tool_defs::NonEmptyString,
-    pub prompt: tools::tool_defs::NonEmptyString,
-    pub required: bool,
-}
+pub(crate) use common_models::interaction::Question as PendingQuestion;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct QueuedInput {
@@ -237,6 +238,7 @@ pub(crate) enum OperationState {
 
 #[derive(Serialize, Deserialize)]
 pub(crate) enum Event {
+    Planning(common_models::interaction::Planning),
     Worker(Box<crate::worker_registry::report::WorkerView>),
     Created,
     Changes(utils::changes::ChangeSnapshot),
@@ -250,7 +252,7 @@ pub(crate) enum Event {
     QuestionAsked(PendingQuestion),
     QuestionAnswered {
         id: String,
-        answer: String,
+        answer: common_models::interaction::Answer,
     },
     Queued(QueuedInput),
     Began(QueuedInput),
@@ -352,6 +354,9 @@ impl SessionStore {
             forked_from: None,
             context: crate::context::Checkpoint::default(),
             questions: Vec::new(),
+            planning: Default::default(),
+            answered_questions: Default::default(),
+            deferred_input: Vec::new(),
             updated_at: Some(std::time::SystemTime::now()),
             processes: Default::default(),
             process_reports: Default::default(),
@@ -581,6 +586,7 @@ impl Snapshot {
 
     fn transition(mut self, event: &Event) -> anyhow::Result<Self> {
         match event {
+            Event::Planning(planning) => self.planning = planning.clone(),
             Event::Worker(worker) => {
                 self.workers
                     .insert(worker.worker_id.clone(), worker.as_ref().clone());
@@ -599,6 +605,7 @@ impl Snapshot {
                     .questions
                     .iter()
                     .any(|pending| pending.id == question.id)
+                    || self.answered_questions.contains(&question.id)
                 {
                     true => Err(anyhow::anyhow!("Question ID is already pending"))?,
                     false => self.questions.push(question.clone()),
@@ -608,13 +615,24 @@ impl Snapshot {
                 let index = self
                     .questions
                     .iter()
-                    .position(|question| question.id.as_ref() == id)
+                    .position(|question| question.id == *id)
                     .ok_or_else(|| anyhow::anyhow!("Question {id} is not pending"))?;
-                let question = self.questions.remove(index);
-                self.history.push(Message::new(format!(
-                    "Answer to {}: {answer}",
+                let question = &self.questions[index];
+                let text = question.answer(answer)?;
+                let message = Message::new(format!(
+                    "Answer to question {id} ({}): {text}",
                     question.prompt
-                )));
+                ));
+                if !self.planning.plan.steps.is_empty() {
+                    self.planning.reconcile()?;
+                }
+                self.planning.record_evidence(format!("answer:{id}"), text);
+                self.questions.remove(index);
+                self.answered_questions.insert(id.clone());
+                match self.pending.is_some() {
+                    true => self.deferred_input.push(message),
+                    false => self.history.push(message),
+                }
             }
             Event::Queued(input) => self.queued.push(input.clone()),
             Event::Began(input) => {
@@ -624,6 +642,7 @@ impl Snapshot {
             }
             Event::History(messages) => {
                 self.history.extend(messages.clone());
+                self.history.append(&mut self.deferred_input);
                 self.pending = None;
             }
             Event::OutputsArchived(messages) => self.history = messages.clone(),
@@ -681,6 +700,7 @@ impl Snapshot {
                         .into_iter()
                         .flat_map(PendingBatch::messages),
                 );
+                self.history.append(&mut self.deferred_input);
                 self.history.extend(
                     self.queued
                         .drain(..)
@@ -692,6 +712,11 @@ impl Snapshot {
                     | Lifecycle::Completed
                     | Lifecycle::Cancelled
                     | Lifecycle::Failed => self.status,
+                    Lifecycle::WaitingForInput
+                        if self.questions.iter().any(|question| question.required) =>
+                    {
+                        Lifecycle::WaitingForInput
+                    }
                     _ => Lifecycle::Cancelled,
                 };
             }

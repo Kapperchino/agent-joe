@@ -23,6 +23,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             Command::Undo(_) => Ok(ToolEffect::Write),
             _ => Ok(ToolEffect::Read),
         }?;
+        runtime.interaction.authorize(effect)?;
         let lease = runtime.workspace.acquire(effect, &scope).await?;
         let changes = scope.changes.clone();
         let command = command.clone();

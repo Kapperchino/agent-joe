@@ -59,6 +59,11 @@ impl PreparedWorker {
         context: &RustContext,
         request: &WorkerRequest,
     ) -> anyhow::Result<Self> {
+        let effect = match request.role {
+            WorkerRole::Read => tools::tool_defs::ToolEffect::DelegateRead,
+            WorkerRole::Write => tools::tool_defs::ToolEffect::DelegateWrite,
+        };
+        info.dep.runtime.interaction.authorize(effect)?;
         let parent_scope = match &info.dep.runtime.worker {
             None => info
                 .dep
@@ -80,7 +85,7 @@ impl PreparedWorker {
             .map(|name| {
                 let tool = info.dep
                     .tool(name)
-                    .filter(|tool| !tool.effect().delegates())
+                    .filter(|tool| !tool.effect().delegates() && !matches!(name.as_str(), "update_plan" | "request_user_input"))
                     .cloned()
                     .ok_or_else(|| {
                         anyhow::anyhow!(

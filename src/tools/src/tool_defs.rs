@@ -27,6 +27,7 @@ pub trait ToolUse {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ToolEffect {
+    Interaction,
     Read,
     Write,
     Validate,
@@ -37,7 +38,7 @@ pub enum ToolEffect {
 }
 impl ToolEffect {
     pub fn concurrent(self) -> bool {
-        matches!(self, Self::Read | Self::DelegateRead)
+        matches!(self, Self::Read | Self::DelegateRead | Self::Interaction)
     }
     pub fn delegates(self) -> bool {
         matches!(

@@ -135,4 +135,10 @@ impl<C: Context, A> ToolTrait<C, A> for Worktree {
     fn tool_type() -> ToolType {
         ToolType::Client
     }
+    fn effect_from_input(input: &Self::Input) -> crate::tool_defs::ToolEffect {
+        match input.operation.as_str() {
+            "list" => crate::tool_defs::ToolEffect::Read,
+            _ => crate::tool_defs::ToolEffect::Write,
+        }
+    }
 }

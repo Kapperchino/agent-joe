@@ -110,6 +110,38 @@ fn launches_provider(effects: &[Effect]) -> bool {
 }
 
 #[test]
+fn required_answer_during_cleanup_continues_once_after_cleanup_and_interrupt_stops_it() {
+    for interrupt in [false, true] {
+        let mut machine = machine();
+        let tag = start(&mut machine);
+        let batch = begin_tools(&mut machine, tag);
+        machine.transition(SessionEvent::QuestionsPending(true));
+        for job in &batch.jobs {
+            complete_tool(&mut machine, batch.tag, job);
+        }
+        let effects = tool(&mut machine, batch.tag, ToolEvent::Finished(Ok(())));
+        assert!(!launches_provider(&effects));
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::Cleanup { .. }))
+        );
+        let effects = machine.transition(SessionEvent::QuestionsPending(false));
+        assert!(!launches_provider(&effects));
+        if interrupt {
+            machine.transition(SessionEvent::Interrupt(HistoryDisposition::Retain));
+        }
+        let effects = machine.transition(SessionEvent::CleanupFinished(tag.turn));
+        assert_eq!(launches_provider(&effects), !interrupt);
+        assert!(
+            machine
+                .transition(SessionEvent::CleanupFinished(tag.turn))
+                .is_empty()
+        );
+    }
+}
+
+#[test]
 fn single_response_preserves_transport_failures_without_retrying() {
     let mut machine = TurnMachine::new(ExecutionScope::default(), RequestMode::SingleResponse);
     let tag = start(&mut machine);

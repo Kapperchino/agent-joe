@@ -330,6 +330,8 @@ impl ErasedToolTrait<TestContext, ActorContext<TestContext>> for GateTool {
 
 #[path = "context_runtime_test.rs"]
 mod context_tests;
+#[path = "interaction_runtime_test.rs"]
+mod interaction_tests;
 fn gate(
     name: &'static str,
     effect: ToolEffect,
@@ -1378,9 +1380,12 @@ async fn durable_session_resumes_after_actor_restart_and_clear_keeps_the_archive
     h.start("continue");
     let (request, reply) = h.request().await;
     assert_eq!(request.messages[0].text(), "workspace revision 1");
-    assert_eq!(
-        request.system.as_deref(),
-        Some("Follow the fixture's operating instructions.")
+    assert!(
+        request
+            .system
+            .as_deref()
+            .unwrap()
+            .starts_with("Follow the fixture's operating instructions.")
     );
     assert!(
         request
