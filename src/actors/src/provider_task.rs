@@ -88,7 +88,7 @@ impl ProviderTask {
         let input = input.map_err(|error| {
             Failure::new(
                 FailureKind::InvalidInput,
-                format!("Instruction loading failed: {error}"),
+                format!("Request context configuration failed: {error}"),
             )
         })?;
         if attempt > 0 {

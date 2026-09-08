@@ -56,6 +56,26 @@ pub enum LLmClient {
 }
 
 impl LLmClient {
+    pub fn snapshot(&self) -> Self {
+        match self {
+            Self::Injected(provider) => Self::Injected(provider.clone()),
+            Self::Claude { client, config } => Self::Claude {
+                client: client.clone(),
+                config: ConfigContext::new(config.get_config()),
+            },
+            Self::OpenApi { client, config } => Self::OpenApi {
+                client: client.clone(),
+                config: ConfigContext::new(config.get_config()),
+            },
+        }
+    }
+
+    pub fn context_window(&self) -> usize {
+        self.get_config()
+            .map(|config| config.context_window())
+            .unwrap_or(crate::models::FALLBACK_CONTEXT_WINDOW)
+    }
+
     pub fn native_compaction(&self) -> bool {
         match self {
             Self::Injected(provider) => provider.native_compaction(),

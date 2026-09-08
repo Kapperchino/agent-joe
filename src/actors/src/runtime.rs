@@ -22,7 +22,7 @@ impl std::fmt::Display for WorkspaceRevision {
 
 #[derive(Clone)]
 pub struct Runtime {
-    pub context_limits: crate::context::ContextLimits,
+    pub context_budget: crate::context::ContextBudget,
     pub native_compaction: crate::context::NativeCompaction,
     pub sessions: Option<Arc<crate::session::SessionStore>>,
     pub(crate) session: Option<Arc<crate::session::Session>>,
@@ -34,7 +34,7 @@ pub struct Runtime {
 impl Default for Runtime {
     fn default() -> Self {
         Self {
-            context_limits: Default::default(),
+            context_budget: Default::default(),
             native_compaction: Default::default(),
             sessions: None,
             session: None,

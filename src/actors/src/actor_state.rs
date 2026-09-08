@@ -149,6 +149,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     pub(crate) fn context_input(
         &self,
         turn: common_models::runtime_ids::TurnId,
+        client: &LLmClient,
     ) -> anyhow::Result<crate::context::ContextInput> {
         Ok(crate::context::ContextInput {
             history: self.history.clone(),
@@ -156,7 +157,11 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             questions: self.questions.clone(),
             instructions: self.cur_context.effective_instructions()?,
             tools: self.tool_definitions(),
-            limits: self.dependency.runtime.context_limits,
+            limits: self
+                .dependency
+                .runtime
+                .context_budget
+                .resolve(client.context_window())?,
             native: self.dependency.runtime.native_compaction,
             mode: match self.compact_turn == Some(turn) {
                 true => crate::context::RequestMode::Compact,

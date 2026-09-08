@@ -12,15 +12,6 @@ pub struct ContextLimits {
     response: u32,
 }
 
-impl Default for ContextLimits {
-    fn default() -> Self {
-        Self {
-            ceiling: 128_000,
-            response: 16_000,
-        }
-    }
-}
-
 impl ContextLimits {
     pub fn new(ceiling: usize, response: u32) -> anyhow::Result<Self> {
         match ceiling >= 4096 && response >= 1024 && (response as usize) < ceiling / 2 {
@@ -45,6 +36,35 @@ impl ContextLimits {
     }
     pub fn summary_bytes(self) -> usize {
         (self.input() / 8).min(8192)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ContextBudget {
+    Model { response: u32 },
+    Fixed(ContextLimits),
+}
+
+impl Default for ContextBudget {
+    fn default() -> Self {
+        Self::Model { response: 16_000 }
+    }
+}
+
+impl ContextBudget {
+    pub fn new(ceiling: Option<usize>, response: u32) -> anyhow::Result<Self> {
+        match ceiling {
+            Some(ceiling) => ContextLimits::new(ceiling, response).map(Self::Fixed),
+            None if response >= 1024 => Ok(Self::Model { response }),
+            None => Err(anyhow::anyhow!("Response reserve must be at least 1024")),
+        }
+    }
+
+    pub fn resolve(self, context_window: usize) -> anyhow::Result<ContextLimits> {
+        match self {
+            Self::Model { response } => ContextLimits::new(context_window, response),
+            Self::Fixed(limits) => Ok(limits),
+        }
     }
 }
 

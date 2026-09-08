@@ -158,6 +158,52 @@ async fn harness() -> Harness {
     }
 }
 
+#[tokio::test]
+async fn context_budget_follows_the_active_model_and_preserves_overrides() {
+    use crate::context::{BudgetPlan, ContextBudget};
+    use clients::config::{Config, ConfigContext};
+    use clients::{ClaudeAuthConfig, ClaudeConfig, ClaudeEffort, ClaudeKeyConfig};
+
+    let mut h = harness().await;
+    let client = |model: &str| {
+        LLmClient::new(ConfigContext::new(Config::Claude(ClaudeConfig {
+            auth: ClaudeAuthConfig::APIKey(ClaudeKeyConfig {
+                api_key: "test-key".into(),
+            }),
+            model: model.into(),
+            effort: ClaudeEffort::High,
+        })))
+        .unwrap()
+    };
+    h.state.history.extend((0..6).flat_map(|_| {
+        [
+            llm::Message::new_assistant("detail ".repeat(35_000)),
+            llm::Message::new("Continue".into()),
+        ]
+    }));
+    let turn = common_models::runtime_ids::TurnId::new();
+    h.state.llm = client("claude-opus-4-7");
+    let large = h.state.context_input(turn, &h.state.llm).unwrap();
+    assert_eq!(large.limits.ceiling(), 1_000_000);
+    assert!(matches!(large.plan().unwrap(), BudgetPlan::Ready(_)));
+
+    h.state.llm = client("claude-haiku-4-5");
+    let small = h.state.context_input(turn, &h.state.llm).unwrap();
+    assert_eq!(small.limits.ceiling(), 200_000);
+    assert!(matches!(small.plan().unwrap(), BudgetPlan::Compact(_)));
+
+    h.state.dependency.runtime.context_budget = ContextBudget::new(Some(1_000_000), 2048).unwrap();
+    let overridden = h.state.context_input(turn, &h.state.llm).unwrap();
+    assert_eq!(overridden.limits.ceiling(), 1_000_000);
+    let BudgetPlan::Ready(request) = overridden.plan().unwrap() else {
+        panic!("The explicit override should allow the full request")
+    };
+    assert_eq!(request.max_output_tokens, Some(2048));
+
+    h.state.dependency.runtime.context_budget = ContextBudget::new(None, 100_000).unwrap();
+    assert!(h.state.context_input(turn, &h.state.llm).is_err());
+}
+
 async fn consume(
     state: &mut ActorState<TestContext>,
     event: llm::StreamEvent,

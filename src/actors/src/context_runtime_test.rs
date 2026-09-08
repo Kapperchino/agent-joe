@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    context::{ContextLimits, estimated_tokens},
+    context::{ContextBudget, ContextLimits, estimated_tokens},
     session::SessionStore,
 };
 use commands::command::{Command, ResumeTarget};
@@ -42,9 +42,13 @@ impl StreamProvider for NativeProvider {
 
 fn configured_runtime(workspace: &crate::session::tests::Workspace) -> Runtime {
     Runtime {
-        context_limits: ContextLimits::new(24_000, 2048).unwrap(),
+        context_budget: ContextBudget::Fixed(configured_limits()),
         ..Runtime::for_workspace(workspace.path.clone()).unwrap()
     }
+}
+
+fn configured_limits() -> ContextLimits {
+    ContextLimits::new(24_000, 2048).unwrap()
 }
 
 fn saved_history(store: &Arc<SessionStore>) -> String {
@@ -121,7 +125,7 @@ async fn fitting_context_reports_tokens_and_continues_without_repeated_compactio
                 .starts_with("Follow the fixture")
         );
         let bytes = serde_json::to_vec(&request.messages).unwrap().len();
-        assert!(bytes > h.runtime.context_limits.trigger());
+        assert!(bytes > configured_limits().trigger());
         let event = h
             .event(|packet| matches!(packet, ActorToTuiPacket::ContextUpdated(_)))
             .await;
@@ -133,11 +137,8 @@ async fn fitting_context_reports_tokens_and_continues_without_repeated_compactio
             estimated_tokens(&request).unwrap()
         );
         assert!(context.estimated_tokens < bytes / 2);
-        assert_eq!(context.ceiling, h.runtime.context_limits.ceiling());
-        assert_eq!(
-            context.response_reserve,
-            h.runtime.context_limits.response()
-        );
+        assert_eq!(context.ceiling, configured_limits().ceiling());
+        assert_eq!(context.response_reserve, configured_limits().response());
         answer(reply, response(vec![text("Implementation in progress")]));
         h.terminal(Lifecycle::Completed).await;
     }
@@ -171,7 +172,7 @@ async fn automatic_compaction_survives_restart_and_forks() {
     assert!(request.system.unwrap().starts_with("Summarize only"));
     summary(reply);
     let (request, reply) = h.request().await;
-    assert!(estimated_tokens(&request).unwrap() <= h.runtime.context_limits.trigger());
+    assert!(estimated_tokens(&request).unwrap() <= configured_limits().trigger());
     let sent = serde_json::to_string(&request.messages).unwrap();
     assert!(sent.contains("Keep public APIs unchanged"));
     assert!(sent.contains("final validation remain pending"));
@@ -682,7 +683,7 @@ async fn oversized_mandatory_context_fails_without_calling_the_provider() {
     let h = Harness::with_runtime(
         vec![],
         Runtime {
-            context_limits: ContextLimits::new(4096, 1024).unwrap(),
+            context_budget: ContextBudget::new(Some(4096), 1024).unwrap(),
             ..Runtime::default()
         },
     )
@@ -720,7 +721,7 @@ async fn delegated_workers_compact_between_complete_tool_exchanges() {
             summary(reply);
             (request, reply) = within(child_requests.recv_async()).await.unwrap();
         }
-        assert!(estimated_tokens(&request).unwrap() <= h.runtime.context_limits.trigger());
+        assert!(estimated_tokens(&request).unwrap() <= configured_limits().trigger());
         answer(
             reply,
             response(vec![

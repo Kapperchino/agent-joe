@@ -36,8 +36,8 @@ struct Cli {
     debug: bool,
     #[arg(long)]
     simple: bool,
-    #[arg(long, default_value_t = 128_000)]
-    context_tokens: usize,
+    #[arg(long, help = "Override the selected model's context window")]
+    context_tokens: Option<usize>,
     #[arg(long, default_value_t = 16_000)]
     response_tokens: u32,
     #[arg(long, default_value = "auto")]
@@ -142,8 +142,11 @@ async fn get_actor<W: Worker<C = RustContext>>(
         std::env::current_dir()?,
         &cli.session_namespace,
     )?;
-    runtime.context_limits =
-        actors::context::ContextLimits::new(cli.context_tokens, cli.response_tokens)?;
+    runtime.context_budget =
+        actors::context::ContextBudget::new(cli.context_tokens, cli.response_tokens)?;
+    runtime
+        .context_budget
+        .resolve(config_context.get_config().context_window())?;
     runtime.native_compaction = cli.native_compaction;
     let workspace = runtime.scope.workspace()?;
     let mut context = runtime

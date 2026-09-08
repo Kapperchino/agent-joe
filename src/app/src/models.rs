@@ -1,6 +1,6 @@
+pub use clients::models::{ClaudeModels, OpenAIModels};
 use clients::{ClaudeEffort, OpenAIEffort};
 use strum::VariantNames;
-use strum_macros::EnumString;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum EffortsSelection {
@@ -49,29 +49,4 @@ impl EffortsSelection {
             }
         }
     }
-}
-#[derive(Debug, PartialEq, EnumString, VariantNames, Clone)]
-pub enum OpenAIModels {
-    #[strum(serialize = "gpt-6-astra")]
-    GPT6_ASTRA,
-    #[strum(serialize = "gpt-5.6-sol")]
-    GPT5_6_SOL,
-    #[strum(serialize = "gpt-5.6-terra")]
-    GPT5_6_TERRA,
-    #[strum(serialize = "gpt-5.6-luna")]
-    GPT5_6_LUNA,
-    #[strum(serialize = "gpt-5.5")]
-    GPT5_5,
-    #[strum(serialize = "gpt-5.4")]
-    GPT5_4,
-}
-
-#[derive(Debug, PartialEq, EnumString, VariantNames, Clone)]
-pub enum ClaudeModels {
-    #[strum(serialize = "claude-opus-4-7")]
-    Opus4_7,
-    #[strum(serialize = "claude-sonnet-4-6")]
-    Sonnet4_6,
-    #[strum(serialize = "claude-haiku-4-5")]
-    Haiku4_5,
 }

@@ -90,20 +90,19 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                     self.stream_processor.token_count.clone(),
                 ));
                 match &self.persistence {
-                    Persistence::Ready => ProviderTask {
-                        target: ProviderTarget {
-                            actor: self.actor_ref.clone(),
-                            tag: run.tag,
-                        },
-                        client: self.llm.clone(),
-                        timeout: self.dependency.runtime.request_timeout,
+                    Persistence::Ready => {
+                        let client = self.llm.snapshot();
+                        let input = self.context_input(run.tag.turn, &client);
+                        ProviderTask {
+                            target: ProviderTarget {
+                                actor: self.actor_ref.clone(),
+                                tag: run.tag,
+                            },
+                            client,
+                            timeout: self.dependency.runtime.request_timeout,
+                        }
+                        .spawn(input, &run, &owner, previous);
                     }
-                    .spawn(
-                        self.context_input(run.tag.turn),
-                        &run,
-                        &owner,
-                        previous,
-                    ),
                     Persistence::Failed(failure) => {
                         let _ = self.actor_ref.send_message(Message::Provider {
                             tag: run.tag,

@@ -1,7 +1,7 @@
 use crate::{
     actor::{ActorContext, Dependency, IntoActorErr, Message},
     actor_state::{ActorMode, ActorState},
-    context::{ContextLimits, Memory, NativeCompaction},
+    context::{ContextBudget, ContextLimits, Memory, NativeCompaction},
     event_reporter::EventReporter,
     provider_task::ProviderTask,
     runtime::Runtime,
@@ -68,7 +68,7 @@ impl CompactionWorker {
                 context: CompactionContext::new(messages, limits),
                 runtime: Runtime {
                     scope: ExecutionScope::current().child(),
-                    context_limits: limits,
+                    context_budget: ContextBudget::Fixed(limits),
                     native_compaction: NativeCompaction::Disabled,
                     request_timeout: task.timeout,
                     ..Runtime::default()
