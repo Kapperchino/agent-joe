@@ -18,3 +18,7 @@ pub mod list_directory;
 mod discovery_test;
 
 pub mod cargo_tools;
+pub mod git;
+pub mod review_changes;
+pub mod undo_changes;
+pub mod worktree;

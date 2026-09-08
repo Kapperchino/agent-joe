@@ -215,3 +215,26 @@ async fn cancellation_empty_results_and_resume_errors_preserve_the_current_conve
     assert!(fixture.render().contains("Keep this conversation"));
     fixture.stop().await;
 }
+
+#[tokio::test]
+async fn diff_and_guarded_undo_commands_use_the_existing_transcript_flow() {
+    let mut fixture = Fixture::new().await;
+    fixture
+        .app
+        .update_input_mode(InputMode::HomeMenu(HomeMenu::InputCommand));
+    fixture.app.input_box.paste("diff");
+    fixture.app.submit_command();
+    assert_eq!(fixture.command().await, Command::Diff);
+    fixture.packet(ActorToTuiPacket::CommandResult(
+        Command::Diff,
+        "Task file.txt\n```diff\n-old content\n+reviewed content\n```".into(),
+    ));
+    assert!(fixture.render().contains("reviewed content"));
+    fixture
+        .app
+        .update_input_mode(InputMode::HomeMenu(HomeMenu::InputCommand));
+    fixture.app.input_box.paste("undo joe-edit");
+    fixture.app.submit_command();
+    assert_eq!(fixture.command().await, Command::Undo("joe-edit".into()));
+    fixture.stop().await;
+}

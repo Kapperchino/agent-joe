@@ -1,6 +1,6 @@
 # Agent Joe implementation plan
 
-Status: M1–M6 are complete. M7–M10 remain planned.
+Status: M1–M6 are complete. M8 is implemented with M6 integration, pending M7 integration. M7 and M9–M10 remain planned.
 
 Cover all ten gaps identified in the Codex comparison while keeping Joe a Rust-focused agent with typed tools and no model-controlled shell. Delivery order follows dependencies, so context compaction follows the response format and turn lifecycle work it needs.
 
@@ -26,7 +26,7 @@ Cover all ten gaps identified in the Codex comparison while keeping Joe a Rust-f
 | M5 | Complete | Full repository discovery and scoped instructions | 5: instructions; 7: discovery | M3–M4 |
 | M6 | Complete | Complete typed Cargo validation and process results | 6: validation | M2–M5 |
 | M7 | Planned | Direct work plus optional, bounded delegation | 8: worker coordination | M4–M6 |
-| M8 | Planned | Git awareness, aggregate review, and change isolation | 9: Git | M3–M7 |
+| M8 | Implemented; dependent integration pending | Git awareness, aggregate review, and change isolation | 9: Git | M3–M7 |
 | M9 | Planned | Plan mode, tracked steps, questions, and steering | 10: collaboration | M4–M8 |
 | M10 | Planned | Skills and controlled MCP integrations | 10: extensibility | M3–M5, M9 |
 
@@ -425,7 +425,7 @@ Validation: direct completion of a small change; bounded delegation of independe
 
 Done when delegation is optional, observable, cancellable, and cannot silently drop validation or widen access.
 
-**M8 — Git and complete change review**
+**M8 — Git and complete change review — implemented; dependent integration pending**
 
 Primary files: new typed Git tools/executor operations, `src/tools/src/apply_patch.rs`, session workspace metadata, and TUI diff views.
 
@@ -439,6 +439,47 @@ Primary files: new typed Git tools/executor operations, `src/tools/src/apply_pat
 Validation: dirty index/tree, same-file user edits, untracked files, filenames with whitespace, rename/delete, patch failure halfway through application, external Git helper configuration, conflicting worktree integration, and guarded undo.
 
 Done when Joe can explain and review its complete change while preserving existing and concurrent user edits.
+
+M8 implementation (2026-09-08)
+
+- Added typed, in-process Git status/diff/show/log tools with literal paths,
+  restricted revision syntax, bounded output, and disabled executable helpers and
+  external configuration. Verified linked-worktree control metadata is read-only;
+  repository metadata mutations stay inside the original project boundary.
+- Added task-start working-file and index-diff baselines, durable LMDB edit records,
+  worker attribution, restart recovery, and independent ownership after a history
+  fork. File reads retain expected versions. Review distinguishes Joe edits from
+  pre-existing changes and observed external changes, including between Joe edits.
+- Patches preflight every operation and content hunk, reject occupied destinations
+  and overlapping paths, stage replacements, and recheck each file and directory
+  before replacement. Per-path progress identifies partial failures; no multi-file
+  atomicity or automatic replay is implied. Edit records own preflight and guarded
+  state transitions; undo requires confirmation of every recorded path.
+- Added aggregate `review_changes`, the TUI `/diff` command, and guarded
+  `undo_changes` / `/undo <edit-id>`. Both root modes and write workers receive
+  review instructions and tools. Large tool results use existing output artifacts.
+- Added managed worktree creation with explicit base/dirty-source handling,
+  conflict-checked file integration, and cleanup that preserves unintegrated files,
+  staged state, branch changes, ignored content, and private session storage.
+  Managed paths can host a separately started Joe instance; M7 controls concurrent
+  writer scheduling. Integration preserves the source index and does not merge
+  commit history.
+- Git test fixtures can initialize repositories inside Cargo's private temporary
+  directory on macOS while existing project metadata remains protected.
+
+M8 validation: deterministic Git, journal, patch, session, and fake-provider tests
+cover dirty index/tree, whitespace and literal filenames, renames/deletions,
+untracked files, configured helpers, same-file user edits, partial patch failure,
+restart/fork ownership, incomplete confirmations after restore, both agent modes,
+worktree conflicts, cleanup, and undo.
+After merging with M6 on `main`, `cargo test --workspace --offline` passes 249 tests on macOS ARM64 and Linux
+ARM64, including the confined utils suite. `cargo check --workspace --offline`
+passes on both; `cargo clippy --workspace --all-targets --offline` passes on macOS
+with existing warnings. Changed Rust files pass formatting and whitespace checks.
+Linux used Rust 1.95 Bookworm with nested namespace support; its test probe now
+recognizes Debian Bubblewrap's alternate permission-denial diagnostic. Native
+Windows and live providers are unverified. M6 is integrated on `main`; M7 remains
+on its separate branch and requires integration before marking the milestone complete.
 
 **M9 — Planning and user interaction**
 

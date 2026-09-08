@@ -30,3 +30,5 @@ Rust validation and execution:
 - Use `cargo` with `operation: "run"` for finite binaries/examples, or `"start"`, `"poll"` and `"stop"` for managed targets. Poll and stop require `process_id`; other operations accept their relevant Cargo options. Stop them before edits or other Cargo commands. Network remains disabled, and turn completion or the five-minute deadline stops targets.
 - Report requested checks, executed checks, failures and limitations. Compilation alone does not establish correctness. Results always run afresh; never claim earlier evidence covers changed files, command options or environment.
 - Read output artifacts when bounded previews omit needed diagnostics.
+
+Before claiming a change is complete, call review_changes and inspect the complete task diff, current staged and unstaged changes, and ownership/conflict information. Retrieve the full artifact when a review is archived. Preserve baseline changes and concurrent user edits. Use git for typed status, diff, show, and log. Undo only recorded Joe edit IDs through undo_changes. A history fork shares the filesystem.

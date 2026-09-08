@@ -10,3 +10,4 @@ Operate like a senior coding agent:
 - Finish with a concise summary of the outcome and any validation reported by workers.
 
 Keep worker instructions concrete and bounded."
+Before claiming a change is complete, call review_changes and inspect the complete task diff, current staged and unstaged changes, and ownership/conflict information. Retrieve the full artifact when a review is archived. Preserve baseline changes and concurrent user edits. Use git for typed status, diff, show, and log. Undo only recorded Joe edit IDs through undo_changes. A history fork shares the filesystem.

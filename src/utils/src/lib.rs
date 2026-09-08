@@ -1,6 +1,8 @@
 pub mod cargo;
+pub mod changes;
 pub mod diff;
 pub mod files;
+pub mod git;
 pub mod grep;
 pub mod text_search;
 pub mod utils;

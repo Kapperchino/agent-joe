@@ -120,7 +120,7 @@ mod tests {
             "bwrap: Creating new namespace failed: Operation not permitted",
             "bwrap: setting up uid map: Permission denied",
             "bwrap: No permissions to create a new namespace",
-            "bwrap: No permissions to create new namespace, likely because the kernel does not allow non-privileged user namespaces",
+            "bwrap: No permissions to create new namespace, likely because the kernel does not allow non-privileged user namespaces.",
         ] {
             assert!(matches!(
                 SandboxAvailability::from_output(output(1, message)).unwrap(),

@@ -38,7 +38,7 @@ impl<C: Context, A> ToolTrait<C, A> for ApplyPatch {
                 error.to_string(),
             )
         })?;
-        ApplyPatch {
+        let edit = ApplyPatch {
             input,
             id: String::new(),
         }
@@ -48,7 +48,8 @@ impl<C: Context, A> ToolTrait<C, A> for ApplyPatch {
         cur_context.refresh_workspace().await?;
 
         Ok(ApplyPatchResult {
-            status: "ok".to_string(),
+            status: "ok".into(),
+            edit: utils::changes::EditSummary::from(&edit),
             id: tool_id,
         })
     }
@@ -70,7 +71,7 @@ impl<C: Context, A> ToolTrait<C, A> for ApplyPatch {
     }
 
     fn output_to_content(_input: &Self::Input, output: &Self::Output) -> anyhow::Result<String> {
-        Ok(output.status.clone())
+        Ok(serde_json::to_string(output)?)
     }
 
     fn tool_type() -> ToolType {
@@ -206,6 +207,7 @@ pub struct ApplyPatchInput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApplyPatchResult {
     pub status: String,
+    pub edit: utils::changes::EditSummary,
     pub id: ToolId,
 }
 
@@ -348,61 +350,100 @@ fn diff_header(prefix: &str, path: Option<&Path>) -> String {
 }
 
 impl ApplyPatch {
-    async fn apply_patch(&self) -> anyhow::Result<()> {
-        let patches = DiffSet::new(&self.input.patch)?.into_patches();
-        let workspace = utils::execution::ExecutionScope::current().workspace()?;
-        for patch in &patches {
-            match patch {
-                Patch::AddFile { path, .. }
-                | Patch::DeleteFile { path }
-                | Patch::UpdateFile { path, .. } => {
-                    workspace.check(path, utils::workspace::Access::Write)?
-                }
-                Patch::MoveFile { from, to, .. } => {
-                    workspace.check(from, utils::workspace::Access::Write)?;
-                    workspace.check(to, utils::workspace::Access::Write)?;
-                }
-            }
-        }
-        for patch in patches {
-            Self::process_patch(patch).await?;
-        }
-        Ok(())
+    async fn apply_patch(&self) -> anyhow::Result<utils::changes::EditRecord> {
+        let patch = self.input.patch.clone();
+        let changes = utils::execution::ExecutionScope::current().changes;
+        utils::files::operation(move |workspace| {
+            let edits = DiffSet::new(&patch)?
+                .into_patches()
+                .into_iter()
+                .map(|patch| prepared_patch(workspace, patch))
+                .collect::<anyhow::Result<Vec<_>>>()?
+                .into_iter()
+                .flatten()
+                .collect();
+            changes.apply(workspace, edits)
+        })
+        .await
     }
+}
 
-    async fn process_patch(patch: Patch<'_>) -> anyhow::Result<()> {
-        match patch {
-            Patch::DeleteFile { path } => Files::delete_file(path).await,
-            Patch::AddFile { path, diff } => {
-                let content = apply_diff("", Patch::AddFile { path, diff })?;
-                Files::write_to_file(path, &content).await
-            }
-            Patch::UpdateFile { path, changes } => {
-                let content = Files::read_file(path).await?;
-                let updated = apply_diff(&content, Patch::UpdateFile { path, changes })?;
-                Files::write_to_file(path, &updated).await
-            }
-            Patch::MoveFile {
-                from,
-                to,
-                changes: None,
-            } => Files::rename_file(from, to).await,
-            Patch::MoveFile {
-                from,
-                to,
-                changes: Some(changes),
-            } => {
-                let content = Files::read_file(from).await?;
-                let updated = apply_diff(
-                    &content,
+fn prepared_patch(
+    workspace: &utils::workspace::WorkspacePolicy,
+    patch: Patch<'_>,
+) -> anyhow::Result<Vec<utils::changes::FileEdit>> {
+    use utils::changes::{FileEdit, FileVersion};
+    match patch {
+        Patch::AddFile { path, diff } => {
+            let before = workspace.file_version(path)?;
+            match before == FileVersion::Missing {
+                true => Ok(()),
+                false => Err(anyhow::anyhow!(
+                    "Add destination already exists: {}",
+                    path.display()
+                )),
+            }?;
+            let after = before.with_text(apply_diff("", Patch::AddFile { path, diff })?);
+            Ok(vec![FileEdit::new(workspace, path, before, after)?])
+        }
+        Patch::DeleteFile { path } => {
+            let before = workspace.file_version(path)?;
+            match before != FileVersion::Missing {
+                true => Ok(()),
+                false => Err(anyhow::anyhow!(
+                    "Delete target is missing: {}",
+                    path.display()
+                )),
+            }?;
+            Ok(vec![FileEdit::new(
+                workspace,
+                path,
+                before,
+                FileVersion::Missing,
+            )?])
+        }
+        Patch::UpdateFile { path, changes } => {
+            let before = workspace.file_version(path)?;
+            let after = before.with_text(apply_diff(
+                before.text()?,
+                Patch::UpdateFile { path, changes },
+            )?);
+            Ok(vec![FileEdit::new(workspace, path, before, after)?])
+        }
+        Patch::MoveFile { from, to, changes } => {
+            let before = workspace.file_version(from)?;
+            let after = match changes {
+                Some(changes) => before.with_text(apply_diff(
+                    before.text()?,
                     Patch::MoveFile {
                         from,
                         to,
                         changes: Some(changes),
                     },
-                )?;
-                Files::rename_file(from, to).await?;
-                Files::write_to_file(to, &updated).await
+                )?),
+                None => {
+                    before.text()?;
+                    before.clone()
+                }
+            };
+            match workspace.relative_path(from, utils::workspace::Access::Write)?
+                == workspace.relative_path(to, utils::workspace::Access::Write)?
+            {
+                true => Ok(vec![FileEdit::new(workspace, from, before, after)?]),
+                false => {
+                    let destination = workspace.file_version(to)?;
+                    match destination == FileVersion::Missing {
+                        true => Ok(()),
+                        false => Err(anyhow::anyhow!(
+                            "Move destination already exists: {}",
+                            to.display()
+                        )),
+                    }?;
+                    Ok(vec![
+                        FileEdit::new(workspace, to, destination, after)?,
+                        FileEdit::new(workspace, from, before, FileVersion::Missing)?,
+                    ])
+                }
             }
         }
     }
@@ -478,6 +519,37 @@ mod tests {
             "stored credential\n"
         );
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn patch_content_and_destinations_are_preflighted_before_any_write() {
+        let root = temp_path("preflight");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("one"), "one\n").unwrap();
+        std::fs::write(root.join("two"), "two\n").unwrap();
+        let scope = utils::execution::ExecutionScope::with_workspace(
+            utils::workspace::WorkspacePolicy::workspace(root.clone()).unwrap(),
+        );
+        scope.enter(async {
+            for second in [
+                "*** Update File: two\n@@\n-missing content\n+unexpected",
+                "*** Add File: two\n+unexpected",
+                "*** Update File: two\n*** Move to: one",
+                "*** Delete File: missing",
+            ] {
+                let patch = tool(format!("*** Begin Patch\n*** Update File: one\n@@\n-one\n+changed\n{second}\n*** End Patch"));
+                assert!(patch.apply_patch().await.is_err());
+                assert_eq!(std::fs::read_to_string(root.join("one")).unwrap(), "one\n");
+                assert_eq!(std::fs::read_to_string(root.join("two")).unwrap(), "two\n");
+            }
+            Files::read_file(Path::new("one")).await.unwrap();
+            std::fs::write(root.join("one"), "user content\n").unwrap();
+            let deletion = tool("*** Begin Patch\n*** Delete File: one\n*** End Patch".into());
+            let _ = deletion.to_string();
+            assert!(deletion.apply_patch().await.is_err());
+            assert_eq!(std::fs::read_to_string(root.join("one")).unwrap(), "user content\n");
+        }).await;
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

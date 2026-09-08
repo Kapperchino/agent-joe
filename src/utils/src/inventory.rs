@@ -17,8 +17,21 @@ struct Directory {
     rules: Vec<Gitignore>,
 }
 
+enum InventoryMode {
+    Discovery,
+    Git,
+}
+
 impl Inventory {
     pub fn scan(workspace: &WorkspacePolicy) -> anyhow::Result<Self> {
+        Self::scan_with(workspace, InventoryMode::Discovery)
+    }
+
+    pub fn scan_git(workspace: &WorkspacePolicy) -> anyhow::Result<Self> {
+        Self::scan_with(workspace, InventoryMode::Git)
+    }
+
+    fn scan_with(workspace: &WorkspacePolicy, mode: InventoryMode) -> anyhow::Result<Self> {
         let mut pending = vec![Directory {
             path: workspace.root().to_path_buf(),
             rules: Vec::new(),
@@ -39,8 +52,17 @@ impl Inventory {
                     "Inventory exceeds {MAX_ENTRIES} entries; add ignore rules"
                 )),
             }?;
-            for name in [".gitignore", ".ignore"] {
-                if entries.iter().any(|entry| entry.name == name) {
+            let ignore_files: &[&str] = match mode {
+                InventoryMode::Discovery => &[".gitignore", ".ignore"],
+                InventoryMode::Git => &[".gitignore"],
+            };
+            if matches!(mode, InventoryMode::Git)
+                && entries.iter().any(|entry| entry.name == ".gitattributes")
+            {
+                workspace.read(&directory.path.join(".gitattributes"))?;
+            }
+            for name in ignore_files {
+                if entries.iter().any(|entry| entry.name == *name) {
                     let path = directory.path.join(name);
                     let mut builder = GitignoreBuilder::new(&directory.path);
                     for line in workspace.read(&path)?.lines() {
@@ -51,9 +73,11 @@ impl Inventory {
             }
             for entry in entries {
                 let kind = workspace.is_directory(&entry.path);
-                let excluded = [".git", ".turbo-code", "target"]
+                let excluded = [".git", ".turbo-code", ".joe-worktrees"]
                     .iter()
-                    .any(|name| entry.name.eq_ignore_ascii_case(name));
+                    .any(|name| entry.name.eq_ignore_ascii_case(name))
+                    || (matches!(mode, InventoryMode::Discovery)
+                        && entry.name.eq_ignore_ascii_case("target"));
                 match kind {
                     Ok(is_directory)
                         if !excluded && workspace.check(&entry.path, Access::Read).is_ok() =>

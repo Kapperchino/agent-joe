@@ -13,6 +13,13 @@ mod tests {
 
     #[test]
     fn session_commands_accept_only_their_expected_arguments() {
+        assert_eq!(Command::parse("diff"), Ok(Command::Diff));
+        assert_eq!(
+            Command::parse("undo joe-edit"),
+            Ok(Command::Undo("joe-edit".into()))
+        );
+        assert!(Command::parse("undo").is_err());
+        assert!(Command::parse("diff extra").is_err());
         assert_eq!(Command::parse("sessions"), Ok(Command::Sessions));
         assert_eq!(Command::parse("fork"), Ok(Command::Fork));
         assert_eq!(Command::parse("compact"), Ok(Command::Compact));
@@ -38,6 +45,10 @@ mod tests {
 #[derive(Debug, PartialEq, EnumString, VariantNames, Clone, EnumMessage)]
 #[strum(serialize_all = "lowercase")]
 pub enum Command {
+    #[strum(message = "reviews the complete task diff, including staged and untracked changes")]
+    Diff,
+    #[strum(message = "undoes one recorded Joe edit; /undo <edit-id>")]
+    Undo(String),
     #[strum(serialize = "context")]
     #[strum(message = "prints out the context")]
     PrintContext,
@@ -103,6 +114,8 @@ impl Command {
         use std::str::FromStr;
         let words = input.split_whitespace().collect::<Vec<_>>();
         match words.as_slice() {
+            ["undo", id] => Ok(Self::Undo((*id).to_owned())),
+            ["undo"] => Err("Use /undo <recorded-edit-id>".into()),
             ["resume", id] => Ok(Self::Resume(ResumeTarget::Session {
                 id: (*id).to_owned(),
             })),
