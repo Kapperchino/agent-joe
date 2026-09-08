@@ -1256,14 +1256,15 @@ async fn failed_validation_is_an_error_with_diagnostics_in_history() {
             _: &TestContext,
             _: &ActorContext<TestContext>,
         ) -> anyhow::Result<Value> {
-            serde_json::to_value(tools::cargo_test::CargoTestToolResult {
-                id,
-                status: "failed".into(),
-                result: tools::cargo_test::CargoTestResult::Failed {
-                    output: "regression assertion failed".into(),
-                },
-            })
-            .map_err(Into::into)
+            let _ = id;
+            Ok(json!({
+                "command": {"program": "cargo", "args": ["test", "--offline"], "environment": {}},
+                "workspace": "/fixture", "status": "exited", "exit_code": 101,
+                "duration_ms": 12, "diagnostics": [],
+                "stdout": {"content": "regression assertion failed", "offset": 0, "next_offset": 27, "artifact": null},
+                "stderr": {"content": "", "offset": 0, "next_offset": 0, "artifact": null},
+                "process_id": null, "error": null, "reused": false, "workspace_revision": null, "diagnostics_artifact": null
+            }))
         }
         fn output_to_content_erased(
             &self,
@@ -1293,7 +1294,14 @@ async fn failed_validation_is_an_error_with_diagnostics_in_history() {
     h.start("validate");
     answer(
         h.request().await.1,
-        response(vec![call("validate", "failure")]),
+        response(vec![ContentBlock::ToolBlock {
+            tool_id: ToolId {
+                id: "failure".to_owned().try_into().unwrap(),
+                call_id: None,
+            },
+            name: "validate".to_owned().try_into().unwrap(),
+            input: Default::default(),
+        }]),
     );
     let (request, reply) = h.request().await;
     assert!(
@@ -1580,3 +1588,68 @@ async fn shutdown_preserves_durable_results_even_when_the_actor_cannot_receive_t
 
 #[path = "discovery_runtime_test.rs"]
 mod discovery;
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[tokio::test]
+async fn cargo_cancellation_keeps_output_before_turn_cleanup() {
+    if utils::test_support::sandbox_available() {
+        let workspace = crate::session::tests::Workspace::new();
+        std::fs::create_dir(workspace.path.join("examples")).unwrap();
+        std::fs::write(
+            workspace.path.join("Cargo.toml"),
+            "[package]\nname = 'cancel_fixture'\nversion = '0.1.0'\nedition = '2024'\n",
+        )
+        .unwrap();
+        std::fs::write(workspace.path.join("examples/server.rs"), "fn main() { use std::io::Write; println!(\"cancellation evidence\"); std::io::stdout().flush().unwrap(); std::fs::write(\"ready\", \"ready\").unwrap(); loop { std::thread::sleep(std::time::Duration::from_millis(50)); } }").unwrap();
+        let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
+        let h = Harness::with_runtime(
+            vec![tools::tool_defs::erased_tool::<
+                tools::cargo_tools::CargoRun,
+                TestContext,
+                ActorContext<TestContext>,
+            >()],
+            runtime,
+        )
+        .await;
+        h.start("Run until interrupted");
+        answer(
+            h.request().await.1,
+            response(vec![ContentBlock::ToolBlock {
+                tool_id: ToolId {
+                    id: "run".to_owned().try_into().unwrap(),
+                    call_id: None,
+                },
+                name: "cargo_run".to_owned().try_into().unwrap(),
+                input: json!({"target":{"kind":"example","name":"server"}})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            }]),
+        );
+        tokio::time::timeout(Duration::from_secs(20), async {
+            while !workspace.path.join("ready").exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        h.actor.send_message(Message::Interrupt).unwrap();
+        h.terminal(Lifecycle::Cancelled).await;
+        let sessions = h.runtime.sessions.as_ref().unwrap().list().unwrap();
+        let result = sessions[0]
+            .history
+            .iter()
+            .flat_map(|message| &message.content)
+            .find_map(|block| match block {
+                ContentBlock::ToolResult { content, .. } => {
+                    serde_json::from_str::<utils::cargo::CargoResult>(content).ok()
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(result.status, utils::process::ProcessStatus::Cancelled);
+        assert!(result.stdout.content.contains("cancellation evidence"));
+        assert!(h.runtime.scope.resources().is_empty());
+        h.stop().await;
+    }
+}

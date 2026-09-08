@@ -100,9 +100,16 @@ impl Session {
             Ok(content) => content,
             Err(failure) => &mut failure.message,
         };
-        if content.len() > INLINE_BYTES {
-            let artifact = self.save_artifact(&mut transaction, &mut snapshot, content)?;
-            *content = artifact.preview(content);
+        match serde_json::from_str::<utils::cargo::CargoResult>(content) {
+            Ok(cargo) => {
+                let cargo = self.archive_cargo(&mut transaction, &mut snapshot, cargo)?;
+                *content = serde_json::to_string(&cargo)?;
+            }
+            Err(_) if content.len() > INLINE_BYTES => {
+                let artifact = self.save_artifact(&mut transaction, &mut snapshot, content)?;
+                *content = artifact.preview(content);
+            }
+            Err(_) => {}
         }
         self.commit_event(
             transaction,
@@ -113,6 +120,39 @@ impl Session {
             },
         )?;
         Ok(result)
+    }
+
+    fn archive_cargo(
+        &self,
+        transaction: &mut heed::RwTxn<'_>,
+        snapshot: &mut Snapshot,
+        mut result: utils::cargo::CargoResult,
+    ) -> anyhow::Result<utils::cargo::CargoResult> {
+        for stream in [&mut result.stdout, &mut result.stderr] {
+            if stream.content.len() > 1024 {
+                let artifact = self.save_artifact(transaction, snapshot, &stream.content)?;
+                stream.artifact = Some(artifact.into());
+                stream.content = preview(&stream.content, 1024);
+            }
+        }
+        let diagnostics = serde_json::to_string(&result.diagnostics)?;
+        if diagnostics.len() > 1024 {
+            let artifact = self.save_artifact(transaction, snapshot, &diagnostics)?;
+            result.diagnostics_artifact = Some(artifact.into());
+            result.diagnostics.clear();
+        }
+        Ok(result)
+    }
+
+    pub(crate) fn complete_process(&self, result: utils::cargo::CargoResult) -> anyhow::Result<()> {
+        let mut transaction = self.store.env.write_txn()?;
+        let mut snapshot = self.owned_snapshot(&transaction)?;
+        let result = self.archive_cargo(&mut transaction, &mut snapshot, result)?;
+        self.commit_event(
+            transaction,
+            snapshot,
+            Event::ProcessCompleted(Box::new(result)),
+        )
     }
 
     pub(super) fn save_artifact(
@@ -164,5 +204,14 @@ impl ArtifactReference {
             self.id,
             self.bytes,
         )
+    }
+}
+
+impl From<ArtifactReference> for utils::cargo::OutputArtifact {
+    fn from(artifact: ArtifactReference) -> Self {
+        Self {
+            id: artifact.id,
+            bytes: artifact.bytes,
+        }
     }
 }

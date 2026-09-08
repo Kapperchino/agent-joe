@@ -13,7 +13,7 @@ use tools::{
 use utils::execution::ExecutionScope;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct WorkspaceRevision(u64);
+pub struct WorkspaceRevision(pub(crate) u64);
 impl std::fmt::Display for WorkspaceRevision {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
@@ -112,7 +112,11 @@ impl Workspace {
         tokio::select! {
             biased;
             _ = scope.cancel.cancelled() => Err(ToolFailure::new(ToolFailureKind::Cancelled, ToolEffects::NotStarted, "Cancelled while waiting for the workspace")),
-            lease = self.lease(effect) => Ok(lease),
+            lease = self.lease(effect) => match matches!(effect, ToolEffect::Write | ToolEffect::Validate)
+                && scope.resources().iter().any(|resource| resource.kind == utils::execution::ResourceKind::Process) {
+                true => Err(ToolFailure::new(ToolFailureKind::Validation, ToolEffects::NotStarted, "Stop the managed target with process_stop before editing or running another Cargo command")),
+                false => Ok(lease),
+            },
         }
     }
 
@@ -135,9 +139,10 @@ impl Workspace {
                 _lock: self.lock.write().await,
                 revision: self.revision(),
             },
-            ToolEffect::DelegateRead | ToolEffect::DelegateWrite | ToolEffect::DelegateValidate => {
-                WorkspaceLease::Delegated
-            }
+            ToolEffect::ProcessControl
+            | ToolEffect::DelegateRead
+            | ToolEffect::DelegateWrite
+            | ToolEffect::DelegateValidate => WorkspaceLease::Delegated,
         }
     }
 

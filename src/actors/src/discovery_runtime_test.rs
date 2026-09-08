@@ -418,3 +418,212 @@ async fn shared_watcher_handles_create_modify_rename_and_delete_in_both_root_mod
 
 #[path = "worker_runtime_test.rs"]
 mod worker_tests;
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[tokio::test]
+async fn simple_and_validation_workers_manage_targets_and_archive_completion() {
+    if utils::test_support::sandbox_available() {
+        for mode in [Mode::Simple, Mode::Delegated] {
+            let workspace = crate::session::tests::Workspace::new();
+            std::fs::create_dir(workspace.path.join("examples")).unwrap();
+            std::fs::write(
+                workspace.path.join("Cargo.toml"),
+                "[package]\nname = 'managed_fixture'\nversion = '0.1.0'\nedition = '2024'\n",
+            )
+            .unwrap();
+            std::fs::write(workspace.path.join("examples/server.rs"), "fn main() {\n    use std::io::Write;\n    println!(\"ready\");\n    std::io::stdout().flush().unwrap();\n    std::fs::write(\"ready\", \"ready\").unwrap();\n    loop { std::thread::sleep(std::time::Duration::from_millis(50)); }\n}\n").unwrap();
+            let actor = match mode {
+                Mode::Simple => {
+                    RepositoryActor::new(SimpleWorker::new(), workspace.path.clone()).await
+                }
+                Mode::Delegated => {
+                    RepositoryActor::new(BaseWorker::new(), workspace.path.clone()).await
+                }
+            };
+            actor
+                .actor
+                .send_message(Message::StartWork(Some(
+                    "Exercise a managed example and stop it".into(),
+                )))
+                .unwrap();
+            let (_, reply) = actor.request().await;
+            let reply = match mode {
+                Mode::Simple => reply,
+                Mode::Delegated => {
+                    answer(
+                        reply,
+                        response(vec![tool(
+                            "validate_rust",
+                            "delegate-validation",
+                            json!({"context":"Exercise a managed example and stop it"}),
+                        )]),
+                    );
+                    actor.request().await.1
+                }
+            };
+            answer(
+                reply,
+                response(vec![tool(
+                    "cargo_start",
+                    "start",
+                    json!({"target":{"kind":"example","name":"server"}}),
+                )]),
+            );
+            let (started, reply) = actor.request().await;
+            let result = latest_cargo(&started);
+            assert_eq!(result.status, utils::process::ProcessStatus::Running);
+            let id = result.process_id.unwrap();
+            tokio::time::timeout(Duration::from_secs(20), async {
+                while !workspace.path.join("ready").exists() {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .unwrap();
+            answer(
+                reply,
+                response(vec![tool("cargo_check", "blocked-check", json!({}))]),
+            );
+            let (blocked, reply) = actor.request().await;
+            assert!(result_text(&blocked).contains("Stop the managed target"));
+            answer(
+                reply,
+                response(vec![tool("process_poll", "poll", json!({"process_id":id}))]),
+            );
+            let (polled, reply) = actor.request().await;
+            let result = latest_cargo(&polled);
+            assert!(result.stdout.content.contains("ready"));
+            answer(
+                reply,
+                response(vec![tool("process_stop", "stop", json!({"process_id":id}))]),
+            );
+            let (stopped, reply) = actor.request().await;
+            assert_eq!(
+                latest_cargo(&stopped).status,
+                utils::process::ProcessStatus::Cancelled
+            );
+            answer(
+                reply,
+                response(vec![tool(
+                    "cargo_check",
+                    "check",
+                    json!({"target":{"kind":"example","name":"server"}}),
+                )]),
+            );
+            let (checked, reply) = actor.request().await;
+            let result = latest_cargo(&checked);
+            assert!(!result.is_error(), "{result:?}");
+            assert!(result.workspace_revision.is_some());
+            answer(
+                reply,
+                response(vec![text(
+                    "Example exercised and stopped; targeted compilation passed.",
+                )]),
+            );
+            if matches!(mode, Mode::Delegated) {
+                answer(
+                    actor.request().await.1,
+                    response(vec![text("Validation reported by the validation worker.")]),
+                );
+            }
+            actor
+                .event(|event| {
+                    event.actor_id == 0
+                        && matches!(
+                            event.packet,
+                            ActorToTuiPacket::TurnChanged {
+                                state: Lifecycle::Completed,
+                                ..
+                            }
+                        )
+                })
+                .await;
+            let sessions = actor.store.list().unwrap();
+            let process = sessions
+                .iter()
+                .find_map(|session| session.processes.get(&id))
+                .unwrap();
+            assert_eq!(process.status, utils::process::ProcessStatus::Cancelled);
+            assert!(process.stdout.content.contains("ready"));
+            actor.stop().await;
+        }
+    }
+}
+
+fn latest_cargo(request: &llm::ClientRequest) -> utils::cargo::CargoResult {
+    request
+        .messages
+        .iter()
+        .rev()
+        .flat_map(|message| message.content.iter().rev())
+        .find_map(|block| match block {
+            ContentBlock::ToolResult { content, .. } => serde_json::from_str(content).ok(),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("No Cargo result: {:?}", request.messages.last()))
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[tokio::test]
+async fn typed_tools_reproduce_patch_and_verify_a_rust_regression() {
+    if utils::test_support::sandbox_available() {
+        let workspace = crate::session::tests::Workspace::new();
+        std::fs::create_dir(workspace.path.join("src")).unwrap();
+        std::fs::write(workspace.path.join("Cargo.toml"), "[package]\nname = 'regression_fixture'\nversion = '0.1.0'\nedition = '2024'\n[features]\nregression = []\n").unwrap();
+        std::fs::write(workspace.path.join("src/lib.rs"), "pub fn answer() -> u32 { 41 }\n#[cfg(all(test, feature = \"regression\"))]\nmod tests {\n    #[test]\n    fn answer() { assert_eq!(super::answer(), 42); }\n}\n").unwrap();
+        let actor = RepositoryActor::new(SimpleWorker::new(), workspace.path.clone()).await;
+        actor
+            .actor
+            .send_message(Message::StartWork(Some(
+                "Reproduce and fix the answer regression, preserving its feature gate".into(),
+            )))
+            .unwrap();
+        let selection = json!({"target":{"kind":"lib"},"features":["regression"],"test_name":"tests::answer","exact":true});
+        answer(
+            actor.request().await.1,
+            response(vec![tool("cargo_test", "reproduce", selection.clone())]),
+        );
+        let (failed, reply) = actor.request().await;
+        let failure = result_text(&failed);
+        assert!(failure.contains("tests::answer"));
+        assert!(failure.contains("FAILED"));
+        answer(
+            reply,
+            response(vec![tool(
+                "apply_patch",
+                "fix",
+                json!({"patch":"*** Begin Patch\n*** Update File: src/lib.rs\n@@\n-pub fn answer() -> u32 { 41 }\n+pub fn answer() -> u32 { 42 }\n*** End Patch"}),
+            )]),
+        );
+        let (patched, reply) = actor.request().await;
+        assert!(result_text(&patched).contains("ok"));
+        answer(
+            reply,
+            response(vec![tool("cargo_test", "verify", selection)]),
+        );
+        let (verified, reply) = actor.request().await;
+        let result = latest_cargo(&verified);
+        assert!(!result.is_error(), "{result:?}");
+        assert!(result.stdout.content.contains("1 passed"));
+        assert!(!result.reused);
+        assert_eq!(result.workspace_revision, Some(1));
+        answer(
+            reply,
+            response(vec![text(
+                "Fixed the answer; the focused feature-gated regression passes.",
+            )]),
+        );
+        actor
+            .event(|event| {
+                matches!(
+                    event.packet,
+                    ActorToTuiPacket::TurnChanged {
+                        state: Lifecycle::Completed,
+                        ..
+                    }
+                )
+            })
+            .await;
+        actor.stop().await;
+    }
+}

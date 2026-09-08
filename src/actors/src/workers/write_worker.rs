@@ -47,6 +47,13 @@ impl Worker for WriteWorker<RustEmptyContext> {
             erased_tool::<ApplyPatch, Self::C, ActorContext<Self::C>>(),
             erased_tool::<tools::cargo_check::CargoCheck, Self::C, ActorContext<Self::C>>(),
             erased_tool::<tools::cargo_test::CargoTest, Self::C, ActorContext<Self::C>>(),
+            erased_tool::<tools::cargo_tools::CargoFmt, Self::C, ActorContext<Self::C>>(),
+            erased_tool::<tools::cargo_tools::CargoFmtCheck, Self::C, ActorContext<Self::C>>(),
+            erased_tool::<tools::cargo_tools::CargoClippy, Self::C, ActorContext<Self::C>>(),
+            erased_tool::<tools::cargo_tools::CargoRun, Self::C, ActorContext<Self::C>>(),
+            erased_tool::<tools::cargo_tools::CargoStart, Self::C, ActorContext<Self::C>>(),
+            erased_tool::<tools::cargo_tools::ProcessPoll, Self::C, ActorContext<Self::C>>(),
+            erased_tool::<tools::cargo_tools::ProcessStop, Self::C, ActorContext<Self::C>>(),
         ]
     }
 }

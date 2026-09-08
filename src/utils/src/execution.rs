@@ -14,6 +14,8 @@ pub struct ExecutionScope {
     pub tasks: TaskTracker,
     resources: Arc<Mutex<BTreeMap<u64, Resource>>>,
     workspace: WorkspaceAccess,
+    pub processes: Arc<crate::process::ProcessRegistry>,
+    process_owner: Option<Arc<ExecutionScope>>,
 }
 
 #[derive(Clone, Default)]
@@ -48,6 +50,8 @@ impl ExecutionScope {
             tasks: TaskTracker::new(),
             resources: self.resources.clone(),
             workspace: self.workspace.clone(),
+            processes: Arc::default(),
+            process_owner: None,
         }
     }
 
@@ -62,6 +66,20 @@ impl ExecutionScope {
             )),
             ..self.child()
         })
+    }
+
+    pub fn tool_child(&self) -> Self {
+        Self {
+            process_owner: Some(Arc::new(self.clone())),
+            ..self.child()
+        }
+    }
+
+    pub fn process_owner(&self) -> Self {
+        self.process_owner
+            .as_deref()
+            .cloned()
+            .unwrap_or_else(|| self.clone())
     }
 
     pub fn current() -> Self {

@@ -632,3 +632,106 @@ async fn worker_reports_preserve_actual_validation_failure_and_original_paramete
     completed_root(&actor, reply).await;
     actor.stop().await;
 }
+
+#[tokio::test]
+async fn scoped_workers_reject_whole_workspace_cargo_tools_before_startup() {
+    let workspace = crate::session::tests::Workspace::new();
+    std::fs::create_dir(workspace.path.join("assigned")).unwrap();
+    let actor = RepositoryActor::new(BaseWorker::new(), workspace.path.clone()).await;
+    actor
+        .actor
+        .send_message(Message::StartWork(Some(
+            "Check scoped worker permissions".into(),
+        )))
+        .unwrap();
+    let (_, mut reply) = actor.request().await;
+    for name in ["cargo_check", "cargo_fmt", "cargo_run", "cargo_start"] {
+        answer(
+            reply,
+            response(vec![tool(
+                "start_worker",
+                name,
+                worker_input(name, "assigned"),
+            )]),
+        );
+        let (rejected, next) = actor.request().await;
+        assert!(result_text(&rejected).contains("require whole-project paths"));
+        reply = next;
+    }
+    completed_root(&actor, reply).await;
+    assert_eq!(actor.store.list().unwrap().len(), 1);
+    actor.stop().await;
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[tokio::test]
+async fn worker_cancellation_drains_managed_targets_and_reports_final_process_evidence() {
+    if utils::test_support::sandbox_available() {
+        let workspace = crate::session::tests::Workspace::new();
+        std::fs::create_dir(workspace.path.join("examples")).unwrap();
+        std::fs::write(
+            workspace.path.join("Cargo.toml"),
+            "[package]\nname = 'worker_process_fixture'\nversion = '0.1.0'\nedition = '2024'\n",
+        )
+        .unwrap();
+        std::fs::write(workspace.path.join("examples/server.rs"), "fn main() {\n    use std::io::Write;\n    println!(\"worker-ready\");\n    std::io::stdout().flush().unwrap();\n    std::fs::write(\"ready\", \"ready\").unwrap();\n    loop { std::thread::sleep(std::time::Duration::from_millis(50)); }\n}\n").unwrap();
+        let actor = RepositoryActor::new(BaseWorker::new(), workspace.path.clone()).await;
+        let started = StartedWorker::new(
+            &actor,
+            worker_input("cargo_start\nprocess_poll\nprocess_stop", "."),
+        )
+        .await;
+        answer(
+            started.child.1,
+            response(vec![tool(
+                "cargo_start",
+                "start-target",
+                json!({"target":{"kind":"example","name":"server"}}),
+            )]),
+        );
+        let (child, child_reply) = actor.request().await;
+        let process = latest_cargo(&child);
+        assert_eq!(process.status, utils::process::ProcessStatus::Running);
+        let process_id = process.process_id.unwrap();
+        tokio::time::timeout(Duration::from_secs(20), async {
+            while !workspace.path.join("ready").exists() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        answer(
+            started.parent.1,
+            response(vec![tool(
+                "worker_status",
+                "cancel-worker",
+                json!({"action":"cancel", "worker_id":started.id}),
+            )]),
+        );
+        let (_, reply) = actor.request().await;
+        answer(
+            reply,
+            response(vec![tool(
+                "worker_status",
+                "wait-worker",
+                json!({"action":"wait", "worker_id":started.id, "seconds":20}),
+            )]),
+        );
+        let (parent, reply) = actor.request().await;
+        let result = latest_result(&parent);
+        let report = &result["workers"][0]["report"];
+        assert_eq!(report["status"], "cancelled");
+        assert_eq!(report["processes"][0]["process_id"], process_id);
+        assert_eq!(report["processes"][0]["status"], "cancelled");
+        assert!(
+            report["processes"][0]["stdout"]["content"]
+                .as_str()
+                .unwrap()
+                .contains("worker-ready")
+        );
+        assert_eq!(report["validation"][0]["invocation"]["name"], "cargo_start");
+        assert!(child_reply.is_closed());
+        completed_root(&actor, reply).await;
+        actor.stop().await;
+    }
+}

@@ -18,3 +18,5 @@ pub mod list_directory;
 
 #[cfg(test)]
 mod discovery_test;
+
+pub mod cargo_tools;

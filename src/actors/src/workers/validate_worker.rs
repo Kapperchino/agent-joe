@@ -8,7 +8,7 @@ use ractor::{ActorProcessingErr, ActorRef};
 use std::marker::PhantomData;
 use tools::cargo_check::CargoCheck;
 use tools::cargo_test::CargoTest;
-use tools::tool_defs::{erased_tool, ErasedToolRef};
+use tools::tool_defs::{ErasedToolRef, erased_tool};
 
 pub struct ValidateWorker<C: Context> {
     _ctx: PhantomData<C>,
@@ -40,6 +40,12 @@ impl Worker for ValidateWorker<RustEmptyContext> {
         vec![
             erased_tool::<CargoCheck, Self::C, ActorContext<Self::C>>(),
             erased_tool::<CargoTest, Self::C, ActorContext<Self::C>>(),
+            erased_tool::<tools::cargo_tools::CargoFmtCheck, Self::C, ActorContext<Self::C>>(),
+            erased_tool::<tools::cargo_tools::CargoClippy, Self::C, ActorContext<Self::C>>(),
+            erased_tool::<tools::cargo_tools::CargoRun, Self::C, ActorContext<Self::C>>(),
+            erased_tool::<tools::cargo_tools::CargoStart, Self::C, ActorContext<Self::C>>(),
+            erased_tool::<tools::cargo_tools::ProcessPoll, Self::C, ActorContext<Self::C>>(),
+            erased_tool::<tools::cargo_tools::ProcessStop, Self::C, ActorContext<Self::C>>(),
         ]
     }
 }

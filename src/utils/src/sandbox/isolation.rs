@@ -24,6 +24,12 @@ pub(super) struct IsolatedCommand {
 
 impl IsolatedCommand {
     pub(super) fn new(command: Command, workspace: &WorkspacePolicy) -> anyhow::Result<Self> {
+        let workspace = match workspace.permits_workspace_execution() {
+            true => Ok(workspace),
+            false => Err(anyhow::anyhow!(
+                "Executable operations require worker access to the whole workspace"
+            )),
+        }?;
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         let workspace =
             ProcessWorkspace::new(workspace).context("Cannot prepare the process workspace")?;
@@ -38,7 +44,8 @@ impl IsolatedCommand {
         }
         #[cfg(target_os = "linux")]
         {
-            linux::prepare(command, &workspace, temporary).context("Cannot prepare the Linux sandbox")
+            linux::prepare(command, &workspace, temporary)
+                .context("Cannot prepare the Linux sandbox")
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
@@ -144,7 +151,12 @@ mod macos {
             PathBuf::from(source.get_program())
         };
         if executable.is_absolute() && executable.is_file() {
-            let profile = Profile::new(workspace, &executable.canonicalize()?, &toolchain, temporary)?;
+            let profile = Profile::new(
+                workspace,
+                &executable.canonicalize()?,
+                &toolchain,
+                temporary,
+            )?;
             let cache = CargoCache::new(workspace, &toolchain.cargo_home)?;
             let mut isolated = Command::new("/usr/bin/sandbox-exec");
             isolated.env_clear().current_dir(workspace.root());

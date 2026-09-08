@@ -93,10 +93,10 @@ impl PreparedWorker {
                 .allowed_paths
                 .iter()
                 .any(|path| path == std::path::Path::new("."));
-        let restricted_process = tools
-            .iter()
-            .any(|tool| tool.effect() == tools::tool_defs::ToolEffect::Validate)
-            && !scope.workspace()?.permits_workspace_execution();
+        let restricted_process = tools.iter().any(|tool| {
+            tool.effect() == tools::tool_defs::ToolEffect::Validate
+                || tool.name().starts_with("cargo_")
+        }) && !scope.workspace()?.permits_workspace_execution();
         let tools = match restricted_inspector || restricted_process {
             true => Err(anyhow::anyhow!(
                 "inspect_context and executable validation require whole-project paths; use scoped file tools or ask the root to validate"
@@ -242,24 +242,36 @@ impl WorkerExecution {
         if self.request.role == WorkerRole::Write && evidence.validation.is_empty() {
             unresolved.push("No validation checks were executed by this worker; the parent must assess the completion criteria and validate changes".into());
         }
-        let artifacts = self
+        let snapshot = self
             .session
             .lock()
             .unwrap()
             .as_ref()
-            .map(|session| session.snapshot().map(|snapshot| snapshot.artifacts))
+            .map(|session| session.snapshot())
             .transpose();
-        let artifacts = match artifacts {
-            Ok(artifacts) => artifacts
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|artifact| !evidence.inherited_artifacts.contains(&artifact.id))
-                .collect(),
+        let snapshot = match snapshot {
+            Ok(snapshot) => snapshot,
             Err(error) => {
-                unresolved.push(format!("Could not retrieve worker artifacts: {error}"));
-                Vec::new()
+                unresolved.push(format!(
+                    "Could not retrieve worker session evidence: {error}"
+                ));
+                None
             }
         };
+        let artifacts = snapshot
+            .as_ref()
+            .map(|snapshot| {
+                snapshot
+                    .artifacts
+                    .iter()
+                    .filter(|artifact| !evidence.inherited_artifacts.contains(&artifact.id))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        let processes = snapshot
+            .map(|snapshot| snapshot.processes.into_values().collect())
+            .unwrap_or_default();
         WorkerReport {
             worker_id: self.id.clone(),
             status,
@@ -267,6 +279,7 @@ impl WorkerExecution {
             changed_files: evidence.changed_files.iter().cloned().collect(),
             possibly_changed_files: evidence.possibly_changed_files.iter().cloned().collect(),
             validation: evidence.validation.clone(),
+            processes,
             unresolved_issues: unresolved,
             artifacts,
             budget,

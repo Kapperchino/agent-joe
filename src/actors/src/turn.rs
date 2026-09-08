@@ -415,7 +415,7 @@ impl ToolBatch {
         let outputs = self.entries.iter().map(|entry| match &entry.state {
             ToolState::Completed(result) => ContentBlock::ToolResult {
                 tool_id: result.id.clone(),
-                content: result.outcome.clone().unwrap_or_else(|failure| failure.to_string()),
+                content: result.content(),
                 is_error: result.outcome.is_err().then_some(true),
             },
             ToolState::Queued => entry.job.call.error_content("Not executed: the turn stopped before this tool started."),

@@ -39,6 +39,8 @@ pub struct WorkerReport {
     pub changed_files: Vec<String>,
     pub possibly_changed_files: Vec<String>,
     pub validation: Vec<ToolResult>,
+    #[serde(default)]
+    pub processes: Vec<utils::cargo::CargoResult>,
     pub unresolved_issues: Vec<String>,
     pub artifacts: Vec<crate::session::artifacts::ArtifactReference>,
     pub budget: BudgetUsage,
@@ -65,6 +67,7 @@ impl WorkerView {
                 changed_files: Vec::new(),
                 possibly_changed_files: Vec::new(),
                 validation: Vec::new(),
+                processes: Vec::new(),
                 unresolved_issues: vec!["Effects and requested checks are uncertain; inspect the workspace and saved descendant tool artifacts before retrying. Saved workers are never restarted automatically.".into()],
                 artifacts: Vec::new(),
                 budget: BudgetUsage::default(),
@@ -86,8 +89,16 @@ pub(crate) struct Evidence {
 
 impl Evidence {
     pub(crate) fn record(&mut self, effect: ToolEffect, result: &ToolResult) {
-        if matches!(effect, ToolEffect::Validate) {
+        if matches!(effect, ToolEffect::Validate | ToolEffect::ProcessControl)
+            || result.invocation.name.as_ref().starts_with("cargo_")
+        {
             self.validation.push(result.clone());
+        }
+        if effect == ToolEffect::Write && result.invocation.name.as_ref().starts_with("cargo_") {
+            self.unresolved.push(format!(
+                "{} may modify workspace files; its changed paths are not enumerated in this report and require review",
+                result.invocation.name
+            ));
         }
         if let Err(failure) = &result.outcome {
             self.unresolved
