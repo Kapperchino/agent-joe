@@ -317,6 +317,7 @@ pub struct ToolSchema {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(untagged)]
 pub enum ToolProperty {
+    Schema(serde_json::Value),
     Value {
         #[serde(skip)]
         name: String,

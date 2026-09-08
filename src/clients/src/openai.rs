@@ -116,6 +116,7 @@ pub struct FunctionParameters {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ToolProperty {
+    Schema(serde_json::Value),
     Value {
         #[serde(skip)]
         name: String,

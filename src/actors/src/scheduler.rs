@@ -9,10 +9,14 @@ use futures::{FutureExt, StreamExt};
 use ractor::ActorRef;
 use std::{collections::VecDeque, panic::AssertUnwindSafe};
 use tools::{
-    tool_defs::{ErasedToolRef, ToolEffect, ToolInvocation, ToolResult},
+    tool_defs::{CancellationMode, ErasedToolRef, ToolEffect, ToolInvocation, ToolResult},
     tool_error::{ToolEffects, ToolFailure, ToolFailureKind},
 };
-use utils::execution::{ExecutionScope, ResourceKind};
+use utils::{
+    cargo::{CargoResult, ProcessAction},
+    execution::{ExecutionScope, ResourceKind},
+    process::ProcessStatus,
+};
 
 #[derive(Debug)]
 pub enum ToolEvent {
@@ -51,6 +55,34 @@ enum ToolGroup {
 enum Schedule {
     Run(ToolGroup),
     Stopped,
+}
+
+enum InvocationState {
+    Completed(anyhow::Result<serde_json::Value>),
+    Interrupted(Interruption),
+}
+
+#[derive(Clone, Copy)]
+enum Interruption {
+    Cancelled,
+    TimedOut,
+}
+
+impl Interruption {
+    fn failure(self, effect: ToolEffect) -> ToolFailure {
+        match self {
+            Self::Cancelled => ToolFailure::new(
+                ToolFailureKind::Cancelled,
+                effects(effect),
+                "Tool cancelled",
+            ),
+            Self::TimedOut => ToolFailure::new(
+                ToolFailureKind::Timeout,
+                effects(effect),
+                "Tool deadline exceeded",
+            ),
+        }
+    }
 }
 
 impl<C: Context + Clone + 'static> PreparedTool<C> {
@@ -102,11 +134,20 @@ impl<C: Context + Clone + 'static> PreparedTool<C> {
             .map_err(|error| execution_error(error, self.effect))?
         {
             false => Ok(content),
-            true => Err(ToolFailure::new(
-                ToolFailureKind::Validation,
-                ToolEffects::NoWorkspaceChange,
-                content,
-            )),
+            true => {
+                let kind = match serde_json::from_value::<CargoResult>(output.clone())
+                    .map(|result| result.status)
+                {
+                    Ok(ProcessStatus::TimedOut) => ToolFailureKind::Timeout,
+                    Ok(ProcessStatus::Cancelled) => ToolFailureKind::Cancelled,
+                    _ => ToolFailureKind::Validation,
+                };
+                Err(ToolFailure::new(
+                    kind,
+                    ToolEffects::NoWorkspaceChange,
+                    content,
+                ))
+            }
         }
     }
 }
@@ -168,7 +209,7 @@ impl<C: Context + Clone + 'static> Executor<C> {
         prepared: &PreparedTool<C>,
         tag: Tag,
     ) -> Result<String, ToolFailure> {
-        let scope = self.dependency.runtime.scope.child();
+        let scope = self.dependency.runtime.scope.tool_child();
         let _registration = scope.register(ResourceKind::Tool, prepared.job.call.name.to_string());
         let lease = self
             .dependency
@@ -260,14 +301,80 @@ impl<C: Context + Clone + 'static> Executor<C> {
             &self.context,
             &context,
         ));
-        let output = tokio::select! {
+        tokio::pin!(run);
+        let state = tokio::select! {
             biased;
-            _ = scope.cancel.cancelled() => Err(ToolFailure::new(ToolFailureKind::Cancelled, effects(prepared.effect), "Tool cancelled")),
-            result = tokio::time::timeout(runtime.tool_timeout, run) => result
-                .map_err(|_| ToolFailure::new(ToolFailureKind::Timeout, effects(prepared.effect), "Tool deadline exceeded"))
-                .and_then(|result| result.map_err(|error| execution_error(error, prepared.effect))),
+            _ = scope.cancel.cancelled() => InvocationState::Interrupted(Interruption::Cancelled),
+            _ = tokio::time::sleep(runtime.tool_timeout) => InvocationState::Interrupted(Interruption::TimedOut),
+            result = &mut run => InvocationState::Completed(result),
         };
-        output.and_then(|output| prepared.content(&input, &output))
+        let interruption = match &state {
+            InvocationState::Completed(_) => None,
+            InvocationState::Interrupted(reason) => Some(*reason),
+        };
+        let output = match state {
+            InvocationState::Completed(output) => output,
+            InvocationState::Interrupted(reason) => {
+                scope.cancel.cancel();
+                match prepared.implementation.cancellation_mode() {
+                    CancellationMode::AwaitCompletion => run.await,
+                    CancellationMode::DropFuture => Err(reason.failure(prepared.effect).into()),
+                }
+            }
+        }
+        .map_err(|error| execution_error(error, prepared.effect))?;
+        let output = match serde_json::from_value::<CargoResult>(output.clone()) {
+            Ok(mut result) => {
+                if matches!(interruption, Some(Interruption::TimedOut)) {
+                    result.status = ProcessStatus::TimedOut;
+                }
+                result.workspace_revision = revision.map(|revision| revision.0);
+                self.observe_process(prepared, scope, &result)
+                    .map_err(|error| execution_error(error, prepared.effect))?;
+                serde_json::to_value(result)
+                    .map_err(|error| execution_error(error.into(), prepared.effect))?
+            }
+            Err(_) => output,
+        };
+        prepared.content(&input, &output)
+    }
+
+    fn observe_process(
+        &self,
+        prepared: &PreparedTool<C>,
+        scope: &ExecutionScope,
+        result: &CargoResult,
+    ) -> anyhow::Result<()> {
+        if prepared.implementation.name() == "cargo_start"
+            && let Some(id) = result.process_id.clone()
+            && let Some(session) = self.dependency.runtime.session.clone()
+        {
+            let owner = scope.process_owner();
+            let process = owner.processes.get(&id)?;
+            let actor = self.actor.clone();
+            let revision = result.workspace_revision;
+            owner.tasks.clone().spawn(async move {
+                process.wait().await;
+                let completion = owner
+                    .enter(CargoResult::control(
+                        &id,
+                        Default::default(),
+                        ProcessAction::Poll,
+                    ))
+                    .await
+                    .and_then(|mut result| {
+                        result.workspace_revision = revision;
+                        session.complete_process(result)
+                    });
+                if let Err(error) = completion {
+                    owner.cancel.cancel();
+                    let _ = actor.send_message(Message::ProcessPersistenceFailed(format!(
+                        "Could not record managed process completion: {error:#}"
+                    )));
+                }
+            });
+        }
+        Ok(())
     }
 
     pub fn spawn(self, jobs: Vec<ToolJob>, tag: Tag) {
@@ -366,7 +473,9 @@ impl<C: Context + Clone + 'static> Executor<C> {
 
 fn effects(effect: ToolEffect) -> ToolEffects {
     match effect {
-        ToolEffect::Write | ToolEffect::DelegateWrite => ToolEffects::MayHaveChanged,
+        ToolEffect::Write | ToolEffect::ProcessControl | ToolEffect::DelegateWrite => {
+            ToolEffects::MayHaveChanged
+        }
         _ => ToolEffects::NoWorkspaceChange,
     }
 }
