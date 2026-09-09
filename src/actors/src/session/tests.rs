@@ -120,10 +120,13 @@ fn answering_a_question_atomically_marks_the_saved_plan_for_reconciliation() {
         .resume(&store, &id, &SessionProvider::Injected)
         .unwrap();
     let snapshot = session.snapshot().unwrap();
-    assert!(snapshot.questions.is_empty());
+    assert!(snapshot.questions.pending().is_empty());
     assert_eq!(snapshot.planning.requirements_revision, 1);
     assert_eq!(snapshot.planning.plan.requirements_revision, 0);
     assert!(snapshot.planning.evidence.contains_key("answer:target"));
+    let saved = serde_json::to_value(&snapshot).unwrap();
+    assert_eq!(saved["questions"], serde_json::json!([]));
+    assert_eq!(saved["answered_questions"], serde_json::json!(["target"]));
 }
 
 fn save_output(session: &Session, content: &str) -> ToolResult {
@@ -284,7 +287,15 @@ fn original_session_snapshots_resume_and_archive_legacy_inline_outputs() {
         })
         .unwrap();
     let mut saved = serde_json::to_value(session.snapshot().unwrap()).unwrap();
-    for field in ["artifacts", "forked_from", "context", "questions"] {
+    for field in [
+        "artifacts",
+        "forked_from",
+        "context",
+        "questions",
+        "answered_questions",
+        "planning",
+        "deferred_input",
+    ] {
         saved.as_object_mut().unwrap().remove(field);
     }
     let mut transaction = store.env.write_txn().unwrap();
@@ -671,8 +682,8 @@ fn compacted_sessions_reject_replayed_checkpoints_and_isolate_fork_questions() {
         answer: "binary".into(),
     })
     .unwrap();
-    assert!(fork.snapshot().unwrap().questions.is_empty());
-    assert_eq!(session.snapshot().unwrap().questions.len(), 1);
+    assert!(fork.snapshot().unwrap().questions.pending().is_empty());
+    assert_eq!(session.snapshot().unwrap().questions.pending().len(), 1);
     assert_eq!(
         serde_json::to_value(session.snapshot().unwrap().history).unwrap(),
         serde_json::to_value(original).unwrap()

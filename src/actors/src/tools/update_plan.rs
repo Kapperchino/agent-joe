@@ -12,7 +12,9 @@ pub struct UpdatePlan;
 
 #[derive(Clone, serde::Deserialize)]
 #[serde(transparent)]
-pub struct Input(PlanUpdate);
+pub struct Input {
+    update: PlanUpdate,
+}
 
 impl LenientDeserialize for Input {
     fn deserialize_lenient(value: Value) -> anyhow::Result<Self> {
@@ -75,8 +77,10 @@ impl<C: Context> ToolTrait<C, ActorContext<C>> for UpdatePlan {
         let (reply, receive) = tokio::sync::oneshot::channel();
         info.actor_ref
             .send_message(Message::UpdatePlan {
-                update: input.0,
-                scope: crate::actor::InteractionScope(info.dep.runtime.scope.clone()),
+                update: input.update,
+                scope: crate::actor::InteractionScope {
+                    execution: info.dep.runtime.scope.clone(),
+                },
                 reply: reply.into(),
             })
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;

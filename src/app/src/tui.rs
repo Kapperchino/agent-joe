@@ -36,7 +36,7 @@ pub struct TUIApp {
     interaction: common_models::interaction::InteractionView,
     queued: std::collections::HashSet<common_models::runtime_ids::TurnId>,
     workers: std::collections::BTreeMap<u64, common_models::tui_models::Lifecycle>,
-    progress: String,
+    progress: Progress,
     input_mode: InputMode,
     do_quit: bool,
     actor_ref: ActorRef<Message>,
@@ -50,6 +50,30 @@ pub struct TUIApp {
     do_clear_terminal: bool,
     config_context: ConfigContext,
     cursor_style: Option<SetCursorStyle>,
+}
+
+enum Progress {
+    Ready,
+    Input {
+        turn_id: common_models::runtime_ids::TurnId,
+        kind: common_models::tui_models::InputKind,
+    },
+    Turn(common_models::tui_models::Lifecycle),
+    Operation {
+        state: common_models::tui_models::Lifecycle,
+        detail: String,
+    },
+}
+
+impl std::fmt::Display for Progress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ready => write!(f, "Ready"),
+            Self::Input { turn_id, kind } => write!(f, "{kind:?} input · turn {turn_id}"),
+            Self::Turn(state) => write!(f, "{state:?}"),
+            Self::Operation { state, detail } => write!(f, "{state:?} · {detail}"),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -94,7 +118,7 @@ impl TUIApp {
             interaction: Default::default(),
             queued: Default::default(),
             workers: Default::default(),
-            progress: "Ready".into(),
+            progress: Progress::Ready,
             input_mode: Default::default(),
             do_quit: false,
             actor_ref: actor_ref.clone(),
@@ -261,31 +285,26 @@ impl TUIApp {
     fn handle_actor_msg(&mut self, msg: ActorToTui) {
         match msg.packet {
             ActorToTuiPacket::ValidationUpdated(validation) => self.validation = Some(validation),
-            ActorToTuiPacket::InteractionUpdated(view) => {
-                if msg.actor_id == 0 {
-                    for question in &view.questions {
-                        if !self
+            ActorToTuiPacket::InteractionUpdated(view) if msg.actor_id == 0 => {
+                view.questions
+                    .iter()
+                    .filter(|question| {
+                        !self
                             .interaction
                             .questions
                             .iter()
                             .any(|previous| previous.id == question.id)
-                        {
-                            self.message_box.append(Msg::Message(question.display()));
-                        }
-                    }
-                    self.interaction = view;
-                }
+                    })
+                    .map(|question| Msg::Message(question.display()))
+                    .for_each(|message| self.message_box.append(message));
+                self.interaction = view;
             }
-            ActorToTuiPacket::InputAccepted { turn_id, kind } => {
-                if msg.actor_id == 0 {
-                    self.queued.remove(&turn_id);
-                    self.progress = format!("{kind:?} input · turn {turn_id}");
-                }
+            ActorToTuiPacket::InputAccepted { turn_id, kind } if msg.actor_id == 0 => {
+                self.queued.remove(&turn_id);
+                self.progress = Progress::Input { turn_id, kind };
             }
-            ActorToTuiPacket::ContextUpdated(context) => {
-                if msg.actor_id == 0 {
-                    self.request_context = context;
-                }
+            ActorToTuiPacket::ContextUpdated(context) if msg.actor_id == 0 => {
+                self.request_context = context;
             }
             ActorToTuiPacket::ContextNotice(message) => {
                 self.message_box.append(Msg::Message(message))
@@ -298,7 +317,6 @@ impl TUIApp {
                     self.restore_transcript(transcript);
                 }
             }
-            ActorToTuiPacket::SessionChoices(_) | ActorToTuiPacket::SessionResumed(_) => {}
             ActorToTuiPacket::SessionChanged => self.clear_messages_and_terminal(),
             ActorToTuiPacket::SessionError(message) => {
                 self.message_box.append(Msg::Message(message))
@@ -316,14 +334,16 @@ impl TUIApp {
                 state,
                 detail,
             } => {
-                if msg.actor_id == 0 {
-                    self.root_busy = !state.terminal();
-                    if state.terminal() {
-                        self.queued.remove(&turn_id);
+                match msg.actor_id {
+                    0 => {
+                        self.root_busy = !state.terminal();
+                        self.queued
+                            .retain(|queued| *queued != turn_id || !state.terminal());
+                        self.progress = Progress::Turn(state);
                     }
-                    self.progress = format!("{state:?}");
-                } else {
-                    self.workers.insert(msg.actor_id, state);
+                    worker => {
+                        self.workers.insert(worker, state);
+                    }
                 }
                 if state.terminal() || detail.is_some() {
                     self.message_box.append(Msg::Message(format!(
@@ -334,22 +354,23 @@ impl TUIApp {
             }
             ActorToTuiPacket::OperationChanged { state, detail, .. } => {
                 if msg.actor_id == 0 {
-                    self.progress = format!("{state:?} · {detail}");
+                    self.progress = Progress::Operation {
+                        state,
+                        detail: detail.clone(),
+                    };
                 }
                 if state == common_models::tui_models::Lifecycle::Failed {
                     self.message_box.append(Msg::Message(detail));
                 }
             }
-            ActorToTuiPacket::StateChanged(state) => {
-                if msg.actor_id == 0 {
-                    self.update_actor_state(state);
-                    match self.actor_state {
-                        State::ThinkingStart => self.message_box.start_stream_message(false),
-                        State::ThinkingStop => self.message_box.finish_stream_message(false),
-                        State::MessageStart => self.message_box.start_stream_message(true),
-                        State::MessageStop => self.message_box.finish_stream_message(true),
-                        _ => {}
-                    }
+            ActorToTuiPacket::StateChanged(state) if msg.actor_id == 0 => {
+                self.update_actor_state(state);
+                match self.actor_state {
+                    State::ThinkingStart => self.message_box.start_stream_message(false),
+                    State::ThinkingStop => self.message_box.finish_stream_message(false),
+                    State::MessageStart => self.message_box.start_stream_message(true),
+                    State::MessageStop => self.message_box.finish_stream_message(true),
+                    _ => {}
                 }
             }
             ActorToTuiPacket::Data(data) if msg.actor_id == 0 => match self.actor_state {
@@ -364,7 +385,6 @@ impl TUIApp {
                 State::ToolStop => {}
                 State::Stopped => {}
             },
-            ActorToTuiPacket::Data(_) => {}
             ActorToTuiPacket::ToolUse(lines) => {
                 lines.into_iter().for_each(|line| {
                     self.message_box.append(Msg::Tool(line));
@@ -394,11 +414,17 @@ impl TUIApp {
                     Command::ChangeModel(_, _) => {}
                 }
             }
-            ActorToTuiPacket::TokensUpdated(token_count) => {
-                if msg.actor_id == 0 {
-                    self.token_count = token_count;
-                }
+            ActorToTuiPacket::TokensUpdated(token_count) if msg.actor_id == 0 => {
+                self.token_count = token_count;
             }
+            ActorToTuiPacket::InteractionUpdated(_)
+            | ActorToTuiPacket::InputAccepted { .. }
+            | ActorToTuiPacket::ContextUpdated(_)
+            | ActorToTuiPacket::StateChanged(_)
+            | ActorToTuiPacket::TokensUpdated(_)
+            | ActorToTuiPacket::SessionChoices(_)
+            | ActorToTuiPacket::SessionResumed(_)
+            | ActorToTuiPacket::Data(_) => {}
         }
     }
 
@@ -593,7 +619,7 @@ impl TUIApp {
         self.do_clear_terminal = true;
         self.queued.clear();
         self.workers.clear();
-        self.progress = "Ready".into();
+        self.progress = Progress::Ready;
         self.validation = None;
     }
 
@@ -620,11 +646,9 @@ impl TUIApp {
             .values()
             .filter(|state| !state.terminal())
             .count();
-        let stale = match self.interaction.planning.plan.requirements_revision
-            != self.interaction.planning.requirements_revision
-        {
-            true => " · plan needs review",
-            false => "",
+        let stale = match self.interaction.planning.review() {
+            common_models::interaction::PlanReview::Required => " · plan needs review",
+            common_models::interaction::PlanReview::Current => "",
         };
         let validation = self
             .validation

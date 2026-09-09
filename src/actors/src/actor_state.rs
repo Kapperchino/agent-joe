@@ -12,12 +12,11 @@ use tools::tool_defs::ToolDefinition;
 
 pub struct ActorState<C: Context> {
     pub(crate) planning: common_models::interaction::Planning,
-    pub(crate) answered_questions: std::collections::BTreeSet<String>,
     pub(crate) deferred_input: Vec<Message>,
     pub(crate) request_mode: crate::context::RequestMode,
     pub(crate) context_checkpoint: crate::context::Checkpoint,
     pub(crate) compact_turn: Option<common_models::runtime_ids::TurnId>,
-    pub(crate) questions: Vec<crate::session::PendingQuestion>,
+    pub(crate) questions: common_models::interaction::Questions,
     pub(crate) persistence: crate::session_control::Persistence,
     pub cur_context: C,
     pub(crate) turn: crate::turn_machine::TurnMachine,
@@ -138,12 +137,11 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 mode: dependency.runtime.interaction.mode(),
                 ..Default::default()
             },
-            answered_questions: Default::default(),
             deferred_input: Vec::new(),
             request_mode,
             context_checkpoint: Default::default(),
             compact_turn: None,
-            questions: Vec::new(),
+            questions: Default::default(),
             persistence: crate::session_control::Persistence::Ready,
             cur_context: dependency.context,
             history,
@@ -212,7 +210,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             .then(|| self.planning.clone()),
             history: self.history.clone(),
             checkpoint: self.context_checkpoint.clone(),
-            questions: self.questions.clone(),
+            questions: self.questions.pending().to_vec(),
             instructions,
             tools: self.tool_definitions(),
             limits: self
@@ -247,9 +245,8 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         self.history = history;
         self.context_checkpoint = Default::default();
         self.compact_turn = None;
-        self.questions.clear();
+        self.questions = Default::default();
         self.planning = Default::default();
-        self.answered_questions.clear();
         self.deferred_input.clear();
         self.turn = crate::turn_machine::TurnMachine::new(
             self.dependency.runtime.scope.clone(),

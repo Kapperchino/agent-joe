@@ -136,12 +136,10 @@ pub(crate) struct Snapshot {
     pub forked_from: Option<String>,
     #[serde(default)]
     pub context: crate::context::Checkpoint,
-    #[serde(default)]
-    pub questions: Vec<PendingQuestion>,
+    #[serde(flatten)]
+    pub questions: common_models::interaction::Questions,
     #[serde(default)]
     pub planning: common_models::interaction::Planning,
-    #[serde(default)]
-    pub answered_questions: std::collections::BTreeSet<String>,
     #[serde(default)]
     pub deferred_input: Vec<Message>,
     #[serde(default)]
@@ -353,9 +351,8 @@ impl SessionStore {
             artifacts: Vec::new(),
             forked_from: None,
             context: crate::context::Checkpoint::default(),
-            questions: Vec::new(),
+            questions: Default::default(),
             planning: Default::default(),
-            answered_questions: Default::default(),
             deferred_input: Vec::new(),
             updated_at: Some(std::time::SystemTime::now()),
             processes: Default::default(),
@@ -600,38 +597,14 @@ impl Snapshot {
                 self.context = transition.context;
                 self.usage = transition.usage;
             }
-            Event::QuestionAsked(question) => {
-                match self
-                    .questions
-                    .iter()
-                    .any(|pending| pending.id == question.id)
-                    || self.answered_questions.contains(&question.id)
-                {
-                    true => Err(anyhow::anyhow!("Question ID is already pending"))?,
-                    false => self.questions.push(question.clone()),
-                }
-            }
+            Event::QuestionAsked(question) => self.questions.ask(question.clone())?,
             Event::QuestionAnswered { id, answer } => {
-                let index = self
-                    .questions
-                    .iter()
-                    .position(|question| question.id == *id)
-                    .ok_or_else(|| anyhow::anyhow!("Question {id} is not pending"))?;
-                let question = &self.questions[index];
-                let text = question.answer(answer)?;
-                let message = Message::new(format!(
-                    "Answer to question {id} ({}): {text}",
-                    question.prompt
-                ));
-                if !self.planning.plan.steps.is_empty() {
-                    self.planning.reconcile()?;
-                }
-                self.planning.record_evidence(format!("answer:{id}"), text);
-                self.questions.remove(index);
-                self.answered_questions.insert(id.clone());
-                match self.pending.is_some() {
-                    true => self.deferred_input.push(message),
-                    false => self.history.push(message),
+                let answered = self.questions.answer(id, answer)?;
+                self.planning = self.planning.with_answer(&answered)?;
+                let message = Message::new(answered.to_string());
+                match &self.pending {
+                    Some(_) => self.deferred_input.push(message),
+                    None => self.history.push(message),
                 }
             }
             Event::Queued(input) => self.queued.push(input.clone()),
@@ -713,7 +686,8 @@ impl Snapshot {
                     | Lifecycle::Cancelled
                     | Lifecycle::Failed => self.status,
                     Lifecycle::WaitingForInput
-                        if self.questions.iter().any(|question| question.required) =>
+                        if self.questions.gate()
+                            == common_models::interaction::QuestionGate::Required =>
                     {
                         Lifecycle::WaitingForInput
                     }

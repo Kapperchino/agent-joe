@@ -360,8 +360,13 @@ worktree operation details.
 - The TUI shows mode, plan progress, pending questions, queue size, workers and
   the last validation outcome. Worker streams cannot overwrite the root stream.
   Vim editing and transcript behavior remain covered by deterministic tests.
+- Question transitions and limits share one domain type across live state and
+  session replay. Question gates, plan review, and UI progress use enums.
+  Plan graph construction checks dependencies and evidence; step transitions
+  check state changes. Saved question fields remain compatible with prior sessions.
 
 Code: `src/common-models/src/interaction.rs`,
+`src/common-models/src/interaction/{plan,question}.rs`,
 `src/actors/src/{interaction_control,interaction_policy,session,turn_machine}.rs`,
 `src/actors/src/tools/{request_user_input,update_plan}.rs`,
 `src/commands/src/command.rs`, and `src/app/src/tui.rs`.
@@ -418,6 +423,7 @@ Latest recorded runs on 2026-09-08:
 | M7 branch after M6 integration | 249 workspace tests; workspace check; all-targets Clippy | 249 workspace tests; workspace check |
 | Combined M7/M8 after standards refactor | 271 workspace tests; workspace check; all-targets Clippy | 271 workspace tests; workspace check |
 | M9 planning and user interaction | 290 workspace tests; workspace check; all-targets Clippy | 290 workspace tests; workspace check; all-targets Clippy |
+| M9 after standards refactor | 291 workspace tests; workspace check; all-targets Clippy | Not rerun: Docker daemon did not respond |
 
 Commands: `cargo test --workspace --offline`,
 `cargo check --workspace --offline`, and

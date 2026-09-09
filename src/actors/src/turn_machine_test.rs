@@ -115,7 +115,9 @@ fn required_answer_during_cleanup_continues_once_after_cleanup_and_interrupt_sto
         let mut machine = machine();
         let tag = start(&mut machine);
         let batch = begin_tools(&mut machine, tag);
-        machine.transition(SessionEvent::QuestionsPending(true));
+        machine.transition(SessionEvent::QuestionsChanged(
+            common_models::interaction::QuestionGate::Required,
+        ));
         for job in &batch.jobs {
             complete_tool(&mut machine, batch.tag, job);
         }
@@ -126,7 +128,9 @@ fn required_answer_during_cleanup_continues_once_after_cleanup_and_interrupt_sto
                 .iter()
                 .any(|effect| matches!(effect, Effect::Cleanup { .. }))
         );
-        let effects = machine.transition(SessionEvent::QuestionsPending(false));
+        let effects = machine.transition(SessionEvent::QuestionsChanged(
+            common_models::interaction::QuestionGate::Open,
+        ));
         assert!(!launches_provider(&effects));
         if interrupt {
             machine.transition(SessionEvent::Interrupt(HistoryDisposition::Retain));

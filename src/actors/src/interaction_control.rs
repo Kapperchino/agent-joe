@@ -5,7 +5,7 @@ use crate::{
 use analysis::contexts::context::Context;
 use commands::command::Command;
 use common_models::{
-    interaction::{Answer, InteractionView, PlanUpdate, Question, WorkMode},
+    interaction::{Answer, InteractionView, PlanUpdate, Planning, Question, WorkMode},
     tui_models::ActorToTuiPacket,
 };
 use utils::execution::ExecutionScope;
@@ -23,122 +23,58 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             self.dependency.runtime.interaction.mode()
         )
     }
-    fn interaction_ready(&self, scope: &ExecutionScope) -> anyhow::Result<()> {
-        match (
-            &self.persistence,
-            scope.cancel.is_cancelled(),
-            &self.dependency.runtime.worker,
-        ) {
-            (Persistence::Ready, false, None) => Ok(()),
-            (Persistence::Failed(failure), _, _) => Err(anyhow::anyhow!(failure.to_string())),
-            (_, true, _) => Err(anyhow::anyhow!("Interaction cancelled")),
-            (_, _, Some(_)) => Err(anyhow::anyhow!(
-                "Only the root can change the plan or ask the user; report questions to the parent"
-            )),
-        }
-    }
-
     pub(crate) fn refresh_interaction(&self) {
         if self.dependency.runtime.worker.is_none() {
-            self.dependency.runtime.interaction.set(
-                self.planning.mode,
-                self.questions.iter().any(|question| question.required),
-                self.planning.plan.requirements_revision != self.planning.requirements_revision,
-            );
+            self.dependency
+                .runtime
+                .interaction
+                .set(&self.planning, &self.questions);
             self.reporter
                 .send(ActorToTuiPacket::InteractionUpdated(InteractionView {
                     planning: self.planning.clone(),
-                    questions: self.questions.clone(),
+                    questions: self.questions.pending().to_vec(),
                 }));
         }
     }
 
     pub(crate) async fn sync_question_gate(&mut self) {
         self.refresh_interaction();
-        self.dispatch(SessionEvent::QuestionsPending(
-            self.questions.iter().any(|question| question.required),
-        ))
-        .await;
+        self.dispatch(SessionEvent::QuestionsChanged(self.questions.gate()))
+            .await;
     }
 
     fn interaction_content(&self) -> anyhow::Result<String> {
         Ok(serde_json::to_string(&serde_json::json!({
             "planning": self.planning,
-            "pending_questions": self.questions,
+            "pending_questions": self.questions.pending(),
         }))?)
     }
 
     fn commit_interaction(&mut self, event: Event) -> anyhow::Result<()> {
-        match &self.persistence {
-            Persistence::Ready => Ok(()),
-            Persistence::Failed(failure) => Err(anyhow::anyhow!(failure.to_string())),
-        }?;
-        self.persist(event);
+        if matches!(self.persistence, Persistence::Ready) {
+            self.persist(event);
+        }
         match &self.persistence {
             Persistence::Ready => Ok(()),
             Persistence::Failed(failure) => Err(anyhow::anyhow!(failure.to_string())),
         }
     }
 
-    pub(crate) fn ask_question(
-        &mut self,
-        question: Question,
-        scope: &ExecutionScope,
-    ) -> anyhow::Result<String> {
-        self.interaction_ready(scope)?;
-        match self.questions.len() < 8
-            && self.answered_questions.len() + self.questions.len() < 256
-            && !self
-                .questions
-                .iter()
-                .any(|pending| pending.id == question.id)
-            && !self.answered_questions.contains(&question.id)
-        {
-            true => Ok(()),
-            false => Err(anyhow::anyhow!(
-                "Question IDs must be unused; at most eight questions may be pending and 256 may be answered per session"
-            )),
-        }?;
-        self.commit_interaction(Event::QuestionAsked(question.clone()))?;
-        self.questions.push(question);
-        self.refresh_interaction();
-        self.interaction_content()
-    }
-
-    pub(crate) fn update_plan(
-        &mut self,
-        update: PlanUpdate,
-        scope: &ExecutionScope,
-    ) -> anyhow::Result<String> {
-        self.interaction_ready(scope)?;
-        let plan = self.planning.plan.update(
-            update,
-            self.planning.requirements_revision,
-            &self.planning.evidence,
-        )?;
-        let planning = common_models::interaction::Planning {
-            plan,
-            ..self.planning.clone()
-        };
+    fn save_planning(&mut self, planning: Planning) -> anyhow::Result<()> {
         self.commit_interaction(Event::Planning(planning.clone()))?;
         self.planning = planning;
         self.refresh_interaction();
-        self.interaction_content()
+        Ok(())
     }
 
     pub(crate) fn reconcile_plan(&mut self) {
-        if !self.planning.plan.steps.is_empty() {
-            let mut planning = self.planning.clone();
-            match planning
-                .reconcile()
-                .and_then(|()| self.commit_interaction(Event::Planning(planning.clone())))
-            {
-                Ok(()) => {
-                    self.planning = planning;
-                    self.refresh_interaction();
-                }
-                Err(error) => self.persistence_failed(error),
-            }
+        if !self.planning.plan.steps.is_empty()
+            && let Err(error) = self
+                .planning
+                .requirements_changed()
+                .and_then(|planning| self.save_planning(planning))
+        {
+            self.persistence_failed(error);
         }
     }
 
@@ -162,10 +98,11 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         let result = match &command {
             Command::Plan => self.set_work_mode(WorkMode::Plan),
             Command::Implement => self.set_work_mode(WorkMode::Implement),
-            Command::Questions => Ok(match self.questions.is_empty() {
+            Command::Questions => Ok(match self.questions.pending().is_empty() {
                 true => "No pending questions.".into(),
                 false => self
                     .questions
+                    .pending()
                     .iter()
                     .map(Question::display)
                     .collect::<Vec<_>>()
@@ -195,19 +132,16 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     }
 
     fn set_work_mode(&mut self, mode: WorkMode) -> anyhow::Result<String> {
-        match self.turn.is_idle() {
-            true => Ok(()),
+        let planning = match self.turn.is_idle() {
+            true => Ok(Planning {
+                mode,
+                ..self.planning.clone()
+            }),
             false => Err(anyhow::anyhow!(
                 "Interrupt the active turn before changing modes; cleanup must finish before the new policy applies"
             )),
         }?;
-        let planning = common_models::interaction::Planning {
-            mode,
-            ..self.planning.clone()
-        };
-        self.commit_interaction(Event::Planning(planning.clone()))?;
-        self.planning = planning;
-        self.refresh_interaction();
+        self.save_planning(planning)?;
         let mode = match mode {
             WorkMode::Plan => {
                 "Plan mode: read-only investigation. Use /implement to return to implementation."
@@ -231,30 +165,65 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     }
 
     fn answer_question(&mut self, id: &str, answer: Answer) -> anyhow::Result<String> {
-        let question = self
-            .questions
-            .iter()
-            .find(|question| question.id == id)
-            .ok_or_else(|| anyhow::anyhow!("Question {id} is not pending"))?;
-        let text = question.answer(&answer)?;
-        let message = clients::llm::Message::new(format!(
-            "Answer to question {id} ({}): {text}",
-            question.prompt
-        ));
+        let mut questions = self.questions.clone();
+        let answered = questions.answer(id, &answer)?;
+        let planning = self.planning.with_answer(&answered)?;
         self.commit_interaction(Event::QuestionAnswered {
             id: id.into(),
             answer,
         })?;
-        self.questions.retain(|question| question.id != id);
-        self.answered_questions.insert(id.into());
-        match self.turn.batch().is_some() {
-            true => self.deferred_input.push(message),
-            false => self.history.push(message),
+        self.questions = questions;
+        self.planning = planning;
+        let message = clients::llm::Message::new(answered.to_string());
+        match self.turn.batch() {
+            Some(_) => self.deferred_input.push(message),
+            None => self.history.push(message),
         }
-        self.planning.record_evidence(format!("answer:{id}"), text);
-        self.reconcile_plan();
-        self.commit_interaction(Event::Planning(self.planning.clone()))?;
         self.refresh_interaction();
         Ok(format!("Answered question {id}."))
+    }
+}
+
+pub(crate) struct Interaction<'a, C: Context> {
+    state: &'a mut ActorState<C>,
+}
+
+impl<'a, C: Context + Clone + 'static> Interaction<'a, C> {
+    pub fn new(state: &'a mut ActorState<C>, scope: &ExecutionScope) -> anyhow::Result<Self> {
+        match (
+            &state.persistence,
+            scope.cancel.is_cancelled(),
+            &state.dependency.runtime.worker,
+        ) {
+            (Persistence::Ready, false, None) => Ok(Self { state }),
+            (Persistence::Failed(failure), _, _) => Err(anyhow::anyhow!(failure.to_string())),
+            (_, true, _) => Err(anyhow::anyhow!("Interaction cancelled")),
+            (_, _, Some(_)) => Err(anyhow::anyhow!(
+                "Only the root can change the plan or ask the user; report questions to the parent"
+            )),
+        }
+    }
+
+    pub fn ask(self, question: Question) -> anyhow::Result<String> {
+        let mut questions = self.state.questions.clone();
+        questions.ask(question.clone())?;
+        self.state
+            .commit_interaction(Event::QuestionAsked(question))?;
+        self.state.questions = questions;
+        self.state.refresh_interaction();
+        self.state.interaction_content()
+    }
+
+    pub fn update_plan(self, update: PlanUpdate) -> anyhow::Result<String> {
+        let plan = self.state.planning.plan.update(
+            update,
+            self.state.planning.requirements_revision,
+            &self.state.planning.evidence,
+        )?;
+        self.state.save_planning(Planning {
+            plan,
+            ..self.state.planning.clone()
+        })?;
+        self.state.interaction_content()
     }
 }

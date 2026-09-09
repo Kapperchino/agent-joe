@@ -241,8 +241,8 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 .pending(&self.dependency.worker_owner());
             let update = match update {
                 ProviderUpdate::Finished(Ok(crate::turn::AcceptedResponse::Complete(_)))
-                    if self.planning.plan.requirements_revision
-                        != self.planning.requirements_revision =>
+                    if self.planning.review()
+                        == common_models::interaction::PlanReview::Required =>
                 {
                     ProviderUpdate::Finished(Err(Failure::new(
                         FailureKind::InvalidInput,

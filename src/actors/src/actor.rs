@@ -67,12 +67,14 @@ pub struct Dependency<C: Context> {
     pub runtime: crate::runtime::Runtime,
 }
 
-pub struct InteractionScope(pub utils::execution::ExecutionScope);
+pub struct InteractionScope {
+    pub execution: utils::execution::ExecutionScope,
+}
 
 impl std::fmt::Debug for InteractionScope {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("InteractionScope")
-            .field("cancelled", &self.0.cancel.is_cancelled())
+            .field("cancelled", &self.execution.cancel.is_cancelled())
             .finish()
     }
 }
@@ -131,7 +133,9 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
                         scope,
                         reply,
                     } => {
-                        let result = state.ask_question(question, &scope.0);
+                        let result =
+                            crate::interaction_control::Interaction::new(state, &scope.execution)
+                                .and_then(|interaction| interaction.ask(question));
                         state.sync_question_gate().await;
                         let _ = reply.send(result.map_err(|error| error.to_string()));
                     }
@@ -140,7 +144,9 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
                         scope,
                         reply,
                     } => {
-                        let result = state.update_plan(update, &scope.0);
+                        let result =
+                            crate::interaction_control::Interaction::new(state, &scope.execution)
+                                .and_then(|interaction| interaction.update_plan(update));
                         let _ = reply.send(result.map_err(|error| error.to_string()));
                     }
                     Message::StartWork(prompt) => {

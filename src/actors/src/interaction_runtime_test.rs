@@ -127,6 +127,82 @@ async fn a_new_prompt_cannot_implicitly_answer_a_required_question() {
 }
 
 #[test]
+fn question_state_preserves_saved_ids_and_enforces_pending_and_session_limits() {
+    use common_models::interaction::{Answer, Question, QuestionGate, Questions};
+    let question: Question = serde_json::from_value(json!({
+        "id":"target", "prompt":"Which target?", "required":true
+    }))
+    .unwrap();
+    let saved = json!({"questions":[question], "answered_questions":["previous"]});
+    let mut questions: Questions = serde_json::from_value(saved.clone()).unwrap();
+    assert_eq!(
+        serde_json::to_value(&questions).unwrap(),
+        json!({
+            "questions":[question], "answered_questions":["previous"]
+        })
+    );
+    assert_eq!(questions.gate(), QuestionGate::Required);
+    assert!(questions.ask(question.clone()).is_err());
+    assert!(
+        questions
+            .answer("target", &Answer::Text(" ".into()))
+            .is_err()
+    );
+    assert_eq!(questions.pending().len(), 1);
+    let answered = questions
+        .answer("target", &Answer::Text("Library".into()))
+        .unwrap();
+    assert_eq!(answered.text, "Library");
+    assert_eq!(questions.gate(), QuestionGate::Open);
+    assert!(questions.ask(question.clone()).is_err());
+    assert!(
+        questions
+            .ask(Question {
+                id: "previous".into(),
+                ..question.clone()
+            })
+            .is_err()
+    );
+    assert!(
+        questions
+            .answer("target", &Answer::Text("Binary".into()))
+            .is_err()
+    );
+
+    let mut questions = Questions::default();
+    (0..8).for_each(|index| {
+        questions
+            .ask(Question {
+                id: format!("q{index}"),
+                ..question.clone()
+            })
+            .unwrap();
+    });
+    assert!(questions.ask(question.clone()).is_err());
+    (0..8).for_each(|index| {
+        questions
+            .answer(&format!("q{index}"), &Answer::Text("Library".into()))
+            .unwrap();
+    });
+    (8..256).for_each(|index| {
+        let id = format!("q{index}");
+        questions
+            .ask(Question {
+                id: id.clone(),
+                ..question.clone()
+            })
+            .unwrap();
+        questions
+            .answer(&id, &Answer::Text("Library".into()))
+            .unwrap();
+    });
+    let mut restored: Questions =
+        serde_json::from_value(serde_json::to_value(&questions).unwrap()).unwrap();
+    assert!(restored.pending().is_empty());
+    assert!(restored.ask(question).is_err());
+}
+
+#[test]
 fn plan_transitions_require_dependencies_real_evidence_and_reconciliation() {
     use common_models::interaction::PlanEvidence;
     let evidence = [("tool:read".into(), "read_file".into())].into();
@@ -169,6 +245,32 @@ fn plan_transitions_require_dependencies_real_evidence_and_reconciliation() {
     assert!(plan.update(input.clone(), 1, &evidence).is_err());
     input.steps[0].blocked_reason = Some("Waiting for target selection".into());
     assert!(plan.update(input, 1, &evidence).is_ok());
+
+    let chain = (0..16)
+        .rev()
+        .map(|index| PlanStep {
+            dependencies: match index {
+                0 => vec![],
+                _ => vec![format!("step{}", index - 1)],
+            },
+            ..step(&format!("step{index}"))
+        })
+        .collect();
+    let input = PlanUpdate {
+        revision: 0,
+        requirements_revision: 0,
+        steps: chain,
+    };
+    assert!(Plan::default().update(input.clone(), 0, &evidence).is_ok());
+    let mut cycle = input.clone();
+    cycle.steps[15].dependencies.push("step15".into());
+    assert!(Plan::default().update(cycle, 0, &evidence).is_err());
+    let mut duplicate = input.clone();
+    duplicate.steps[15].id = "step15".into();
+    assert!(Plan::default().update(duplicate, 0, &evidence).is_err());
+    let mut unknown = input;
+    unknown.steps[15].dependencies.push("missing".into());
+    assert!(Plan::default().update(unknown, 0, &evidence).is_err());
 }
 
 #[tokio::test]
@@ -233,7 +335,7 @@ async fn answers_during_tools_preserve_complete_exchanges_and_durable_order() {
         )
         .await;
         let snapshot = store.list().unwrap().into_iter().next().unwrap();
-        assert!(snapshot.questions.is_empty());
+        assert!(snapshot.questions.pending().is_empty());
         assert_eq!(snapshot.deferred_input.len(), 1);
         assert!(snapshot.pending.is_some());
         release.send(()).unwrap();
@@ -524,7 +626,7 @@ async fn tracked_plan_uses_observed_evidence_and_survives_compaction_and_fork() 
     assert_eq!(snapshots.len(), 2);
     for snapshot in snapshots {
         assert_eq!(snapshot.planning.plan, saved.planning.plan);
-        assert_eq!(snapshot.questions.len(), 1);
+        assert_eq!(snapshot.questions.pending().len(), 1);
         assert_eq!(snapshot.context.generation, 1);
     }
     h.stop().await;
@@ -590,12 +692,12 @@ async fn clear_and_new_cancel_waiting_queues_and_archive_unanswered_questions() 
         .list()
         .unwrap()
         .into_iter()
-        .filter(|snapshot| !snapshot.questions.is_empty())
+        .filter(|snapshot| !snapshot.questions.pending().is_empty())
         .collect::<Vec<_>>();
     assert_eq!(archived.len(), 2);
     for snapshot in archived {
         assert!(snapshot.queued.is_empty());
-        assert!(snapshot.questions[0].required);
+        assert!(snapshot.questions.pending()[0].required);
         assert_eq!(snapshot.status, Lifecycle::Cancelled);
     }
     h.stop().await;

@@ -383,7 +383,6 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         self.context_checkpoint = snapshot.context;
         self.questions = snapshot.questions;
         self.planning = snapshot.planning;
-        self.answered_questions = snapshot.answered_questions;
         self.deferred_input = snapshot.deferred_input;
         self.turn = crate::turn_machine::TurnMachine::new(
             self.dependency.runtime.scope.clone(),

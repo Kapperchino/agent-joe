@@ -12,7 +12,9 @@ pub struct RequestUserInput;
 
 #[derive(Clone, serde::Deserialize)]
 #[serde(transparent)]
-pub struct Input(Question);
+pub struct Input {
+    question: Question,
+}
 
 impl LenientDeserialize for Input {
     fn deserialize_lenient(value: Value) -> anyhow::Result<Self> {
@@ -72,8 +74,10 @@ impl<C: Context> ToolTrait<C, ActorContext<C>> for RequestUserInput {
         let (reply, receive) = tokio::sync::oneshot::channel();
         info.actor_ref
             .send_message(Message::AskQuestion {
-                question: input.0,
-                scope: crate::actor::InteractionScope(info.dep.runtime.scope.clone()),
+                question: input.question,
+                scope: crate::actor::InteractionScope {
+                    execution: info.dep.runtime.scope.clone(),
+                },
                 reply: reply.into(),
             })
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;

@@ -11,6 +11,7 @@ use crate::{
 };
 use clients::{failure::Failure, llm};
 use common_models::{
+    interaction::QuestionGate,
     runtime_ids::TurnId,
     tui_models::{ActorToTuiPacket, Lifecycle, State},
 };
@@ -34,7 +35,7 @@ impl From<SessionEvent> for Event {
 }
 
 pub(crate) enum SessionEvent {
-    QuestionsPending(bool),
+    QuestionsChanged(QuestionGate),
     Steer(FollowUp),
     Start(FollowUp),
     StartWorker(WorkerReply),
@@ -165,7 +166,7 @@ pub(crate) struct TurnMachine {
 }
 
 struct Session {
-    required_question: bool,
+    questions: QuestionGate,
     mode: RequestMode,
     state: TurnState,
     queue: VecDeque<FollowUp>,
@@ -188,7 +189,7 @@ impl TurnMachine {
     pub fn new(scope: ExecutionScope, mode: RequestMode) -> Self {
         Self {
             state: SessionState::Running(Session {
-                required_question: false,
+                questions: QuestionGate::Open,
                 mode,
                 state: TurnState::Idle,
                 queue: VecDeque::new(),
@@ -258,19 +259,21 @@ impl TurnMachine {
 impl Session {
     fn transition(&mut self, event: SessionEvent, effects: &mut Vec<Effect>) {
         match event {
-            SessionEvent::QuestionsPending(required) => {
-                let previous = self.required_question;
-                self.required_question = required;
-                if previous
-                    && !required
-                    && matches!(self.state, TurnState::Idle | TurnState::Waiting(_))
-                {
-                    self.state = TurnState::Idle;
-                    let input = self
-                        .queue
-                        .pop_front()
-                        .unwrap_or_else(|| FollowUp::new(None));
-                    self.begin(input, effects);
+            SessionEvent::QuestionsChanged(questions) => {
+                let previous = std::mem::replace(&mut self.questions, questions);
+                match (&self.state, previous, questions) {
+                    (
+                        TurnState::Idle | TurnState::Waiting(_),
+                        QuestionGate::Required,
+                        QuestionGate::Open,
+                    ) => {
+                        let input = self
+                            .queue
+                            .pop_front()
+                            .unwrap_or_else(|| FollowUp::new(None));
+                        self.begin(input, effects);
+                    }
+                    _ => {}
                 }
             }
             SessionEvent::Steer(follow_up) => {
@@ -282,12 +285,15 @@ impl Session {
                 }));
                 self.transition(SessionEvent::Start(follow_up), effects);
             }
-            SessionEvent::Start(follow_up) => match (&self.state, self.required_question) {
-                (TurnState::Idle, false) => self.begin(follow_up, effects),
+            SessionEvent::Start(follow_up) => match (&self.state, self.questions) {
+                (TurnState::Idle, QuestionGate::Open) => self.begin(follow_up, effects),
                 _ => {
                     let id = follow_up.id;
                     self.queue.push_back(follow_up);
-                    if matches!(self.state, TurnState::Idle) && self.required_question {
+                    if matches!(
+                        (&self.state, self.questions),
+                        (TurnState::Idle, QuestionGate::Required)
+                    ) {
                         self.state = TurnState::Waiting(id);
                         effects.push(Effect::turn(
                             id,
@@ -341,7 +347,7 @@ impl Session {
             SessionEvent::Interrupt(history) => {
                 self.cancel_queue(effects);
                 if matches!(history, HistoryDisposition::Clear) {
-                    self.required_question = false;
+                    self.questions = QuestionGate::Open;
                 }
                 match std::mem::take(&mut self.state) {
                     TurnState::Idle => {
@@ -401,8 +407,8 @@ impl Session {
         previous: Option<ExecutionScope>,
         effects: &mut Vec<Effect>,
     ) {
-        match self.required_question {
-            true => {
+        match self.questions {
+            QuestionGate::Required => {
                 self.stop(
                     turn,
                     TurnOutcome::WaitingForInput,
@@ -410,7 +416,7 @@ impl Session {
                     effects,
                 );
             }
-            false => {
+            QuestionGate::Open => {
                 effects.extend([
                     Effect::ClearStream,
                     Effect::ChangeState(State::StreamStart),
@@ -640,7 +646,6 @@ impl Session {
 
     fn finish_turn(&mut self, turn: Turn<Cleanup>, effects: &mut Vec<Effect>) {
         Self::finish_history(&turn, effects);
-        let waiting = matches!(turn.phase.outcome, TurnOutcome::WaitingForInput);
         if matches!(turn.phase.outcome, TurnOutcome::Cancelled) {
             effects.push(Effect::operation(
                 turn.phase.work.tag(),
@@ -670,38 +675,38 @@ impl Session {
                 effects.push(Effect::ReplyWorker { reply, outcome });
                 effects.push(Effect::StopActor);
             }
-            SessionRole::Interactive => {
-                if matches!(turn.phase.history, HistoryDisposition::Clear) {
-                    effects.push(Effect::ClearHistory);
-                }
-                match (waiting, self.required_question) {
-                    (true, true) => self.state = TurnState::Waiting(turn.id),
-                    (true, false) => {
-                        let input = self
-                            .queue
-                            .pop_front()
-                            .unwrap_or_else(|| FollowUp::new(None));
-                        self.begin(input, effects);
-                    }
-                    (false, false) => {
-                        if let Some(follow_up) = self.queue.pop_front() {
-                            self.begin(follow_up, effects);
-                        }
-                    }
-                    (false, true) => {}
-                }
+            SessionRole::Interactive => self.finish_interactive(turn, effects),
+        }
+    }
+
+    fn finish_interactive(&mut self, turn: Turn<Cleanup>, effects: &mut Vec<Effect>) {
+        if matches!(turn.phase.history, HistoryDisposition::Clear) {
+            effects.push(Effect::ClearHistory);
+        }
+        let queued = match self.questions {
+            QuestionGate::Open => self.queue.pop_front(),
+            QuestionGate::Required => None,
+        };
+        match (turn.phase.outcome, self.questions, queued) {
+            (TurnOutcome::WaitingForInput, QuestionGate::Required, _) => {
+                self.state = TurnState::Waiting(turn.id);
             }
+            (_, _, Some(input)) => self.begin(input, effects),
+            (TurnOutcome::WaitingForInput, QuestionGate::Open, None) => {
+                self.begin(FollowUp::new(None), effects);
+            }
+            (_, _, None) => {}
         }
     }
 
     fn cancel_queue(&mut self, effects: &mut Vec<Effect>) {
-        for follow_up in self.queue.drain(..) {
-            effects.push(Effect::turn(
+        effects.extend(self.queue.drain(..).map(|follow_up| {
+            Effect::turn(
                 follow_up.id,
                 Lifecycle::Cancelled,
                 Some("Queued follow-up cancelled".into()),
-            ));
-        }
+            )
+        }));
     }
 
     fn shutdown(self, effects: &mut Vec<Effect>) -> Shutdown {
