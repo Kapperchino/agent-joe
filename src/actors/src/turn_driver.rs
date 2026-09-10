@@ -33,6 +33,10 @@ impl<C: Context + Clone + 'static> ActorState<C> {
 
     async fn execute(&mut self, effect: Effect) -> EffectOutcome {
         match effect {
+            Effect::QueueInput(input) => {
+                self.queue_input(&input);
+                EffectOutcome::Applied
+            }
             Effect::BeginTurn(input) => {
                 self.begin_turn(input).await;
                 EffectOutcome::Applied

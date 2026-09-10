@@ -119,7 +119,6 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 let follow_up = FollowUp::new(Some(format!(
                     "Updated requirements for the current task: {text}"
                 )));
-                self.queue_input(&follow_up);
                 self.dispatch(SessionEvent::Steer(follow_up)).await;
                 Ok("Correction accepted. Active work and queued follow-ups are cancelled; the corrected task continues after cleanup.".into())
             }

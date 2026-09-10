@@ -460,13 +460,14 @@ fn shutdown_waits_for_resources_before_publishing_cancellation_or_resolving_work
     assert!(effects.iter().any(|effect| matches!(effect,
         Effect::Report(ActorToTuiPacket::TurnChanged { turn_id, state: Lifecycle::Cancelled, .. }) if *turn_id == tag.turn
     )));
-    assert!(matches!(
-        effects.last(),
-        Some(Effect::ReplyWorker {
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::ReplyWorker {
             outcome: WorkerOutcome::Failed(WorkerFailure::Stopped),
             ..
-        })
-    ));
+        }
+    )));
+    assert!(matches!(effects.last(), Some(Effect::StopActor)));
     assert!(!launches_provider(&effects));
     assert!(matches!(machine.state, SessionState::Stopped));
     assert!(machine.provider_response(tag).is_none());
@@ -487,7 +488,10 @@ fn idle_shutdown_drains_the_session_and_stays_stopped() {
         effects.as_slice(),
         [Effect::Shutdown(ShutdownScope::Session)]
     ));
-    assert!(machine.feedback(EffectOutcome::ShutdownFinished).is_empty());
+    assert!(matches!(
+        machine.feedback(EffectOutcome::ShutdownFinished).as_slice(),
+        [Effect::StopActor]
+    ));
     assert!(matches!(machine.state, SessionState::Stopped));
     assert!(machine.feedback(EffectOutcome::Applied).is_empty());
     assert!(machine.transition(Event::Shutdown).is_empty());
@@ -497,4 +501,190 @@ fn idle_shutdown_drains_the_session_and_stays_stopped() {
             .is_empty()
     );
     assert!(matches!(machine.state, SessionState::Stopped));
+}
+
+#[test]
+fn accepted_inputs_are_persisted_before_starting_or_queueing() {
+    let mut machine = machine();
+    let input = FollowUp::new(Some("first".into()));
+    let id = input.id;
+    let effects = machine.transition(SessionEvent::Start(input));
+    assert!(matches!(&effects[0], Effect::QueueInput(input) if input.id == id));
+    assert!(matches!(&effects[1], Effect::BeginTurn(input) if input.id == id));
+    let queued = FollowUp::new(Some("next".into()));
+    let id = queued.id;
+    let effects = machine.transition(SessionEvent::Start(queued));
+    assert!(
+        matches!(effects.as_slice(), [Effect::QueueInput(input), Effect::Report(ActorToTuiPacket::Queued { .. })] if input.id == id)
+    );
+    machine.transition(Event::StopRequested);
+    assert!(
+        machine
+            .transition(SessionEvent::Start(FollowUp::new(Some("rejected".into()))))
+            .is_empty()
+    );
+    assert!(
+        machine
+            .transition(SessionEvent::Steer(FollowUp::new(Some(
+                "rejected correction".into()
+            ))))
+            .is_empty()
+    );
+}
+
+#[test]
+fn graceful_stop_accepts_final_tool_results_without_restarting_work() {
+    let mut machine = machine();
+    let initial = start(&mut machine);
+    let ToolBatchFixture { tag, jobs } = begin_tools(&mut machine, initial);
+    let queued = FollowUp::new(Some("queued".into()));
+    let queued_id = queued.id;
+    machine.transition(SessionEvent::Start(queued));
+    let effects = machine.transition(Event::StopRequested);
+    assert!(matches!(machine.state, SessionState::Closing(_)));
+    assert!(!machine.is_idle());
+    assert!(machine.batch().is_some());
+    assert!(effects.iter().any(|effect| matches!(effect,
+        Effect::Report(ActorToTuiPacket::TurnChanged { turn_id, state: Lifecycle::Cancelled, .. }) if *turn_id == queued_id
+    )));
+    assert!(matches!(effects.last(), Some(Effect::Cleanup { turn, .. }) if *turn == initial.turn));
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::Shutdown(_) | Effect::StopActor))
+    );
+    assert!(machine.transition(Event::StopRequested).is_empty());
+    assert!(machine.transition(Event::ShutdownFinished).is_empty());
+    assert!(
+        machine
+            .transition(SessionEvent::CleanupFinished(TurnId::new()))
+            .is_empty()
+    );
+    assert!(
+        machine
+            .transition(SessionEvent::QuestionsChanged(QuestionGate::Open))
+            .is_empty()
+    );
+    let wrong_tag = Tag::new(initial.turn);
+    assert!(complete_tool(&mut machine, wrong_tag, &jobs[0]).is_empty());
+    let effects = complete_tool(&mut machine, tag, &jobs[0]);
+    assert_eq!(
+        effects
+            .iter()
+            .filter(|effect| matches!(effect, Effect::UpdateContext { .. }))
+            .count(),
+        1
+    );
+    assert!(complete_tool(&mut machine, tag, &jobs[0]).is_empty());
+    assert!(
+        machine
+            .feedback(EffectOutcome::ContextFailed {
+                tag,
+                failure: Failure::new(FailureKind::Tool, "context failed"),
+            })
+            .is_empty()
+    );
+    assert!(tool(&mut machine, tag, ToolEvent::Finished(Ok(()))).is_empty());
+    let effects = machine.transition(SessionEvent::CleanupFinished(initial.turn));
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::Shutdown(ShutdownScope::Turn(_))]
+    ));
+    let effects = machine.feedback(EffectOutcome::ShutdownFinished);
+    let messages = effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::AppendHistory(messages) => Some(messages),
+            _ => None,
+        })
+        .unwrap();
+    assert!(
+        matches!(&messages[1].content[0], llm::ContentBlock::ToolResult { content, is_error: None, .. } if content == "read result")
+    );
+    assert!(effects.iter().any(|effect| matches!(effect,
+        Effect::Report(ActorToTuiPacket::TurnChanged { turn_id, state: Lifecycle::Cancelled, .. }) if *turn_id == initial.turn
+    )));
+    assert!(matches!(effects.last(), Some(Effect::StopActor)));
+    assert!(!launches_provider(&effects));
+    assert!(
+        machine
+            .transition(SessionEvent::CleanupFinished(initial.turn))
+            .is_empty()
+    );
+    assert!(matches!(machine.state, SessionState::Stopped));
+}
+
+#[test]
+fn graceful_worker_stop_resolves_after_cleanup_with_a_forced_stop_fallback() {
+    for forced in [false, true] {
+        let mut machine = machine();
+        let (reply, _receive) = tokio::sync::oneshot::channel();
+        machine.transition(SessionEvent::StartWorker(reply.into()));
+        let tag = provider(&machine).tag;
+        let effects = machine.transition(Event::StopRequested);
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::PreserveCompletedContent))
+        );
+        assert!(
+            !effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::ReplyWorker { .. } | Effect::StopActor))
+        );
+        assert!(machine.provider_response(tag).is_none());
+        assert!(response(&mut machine, tag, Ok(complete_response())).is_empty());
+        let (reply, _receive) = tokio::sync::oneshot::channel();
+        let rejected = machine.transition(SessionEvent::StartWorker(reply.into()));
+        assert!(matches!(
+            rejected.as_slice(),
+            [Effect::ReplyWorker {
+                outcome: WorkerOutcome::Failed(WorkerFailure::Stopped),
+                ..
+            }]
+        ));
+        let effects = match forced {
+            true => machine.transition(Event::Shutdown),
+            false => machine.transition(SessionEvent::CleanupFinished(tag.turn)),
+        };
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::Shutdown(ShutdownScope::Turn(_))]
+        ));
+        let effects = machine.feedback(EffectOutcome::ShutdownFinished);
+        assert!(matches!(
+            &effects[effects.len() - 2],
+            Effect::ReplyWorker {
+                outcome: WorkerOutcome::Failed(WorkerFailure::Stopped),
+                ..
+            }
+        ));
+        assert!(matches!(effects.last(), Some(Effect::StopActor)));
+        assert!(matches!(machine.state, SessionState::Stopped));
+    }
+}
+
+#[test]
+fn graceful_stop_reuses_pending_cleanup_and_stops_idle_sessions() {
+    let mut machine = machine();
+    let effects = machine.transition(Event::StopRequested);
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::Shutdown(ShutdownScope::Session)]
+    ));
+    assert!(matches!(
+        machine.feedback(EffectOutcome::ShutdownFinished).as_slice(),
+        [Effect::StopActor]
+    ));
+    let mut machine = TurnMachine::new(ExecutionScope::default(), RequestMode::Continue);
+    let tag = start(&mut machine);
+    machine.transition(SessionEvent::Interrupt(HistoryDisposition::Retain));
+    assert!(machine.transition(Event::StopRequested).is_empty());
+    assert!(matches!(machine.state, SessionState::Closing(_)));
+    assert!(matches!(
+        machine
+            .transition(SessionEvent::CleanupFinished(tag.turn))
+            .as_slice(),
+        [Effect::Shutdown(ShutdownScope::Turn(_))]
+    ));
 }

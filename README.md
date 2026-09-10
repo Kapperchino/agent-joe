@@ -17,6 +17,18 @@ The runtime milestones through M9 include sessions, bounded workers, guarded
 change review, plan mode, tracked steps, and structured user questions. Skills
 and controlled MCP integrations remain planned.
 
+## Actor and turn runtime
+
+Each worker actor owns a turn state machine. The actor mailbox serializes input,
+provider events, tool results, and cleanup notifications; the turn machine decides
+which transitions and effects are accepted. The turn driver executes those effects
+without moving turn ownership into background tasks.
+
+An explicit actor stop follows the same lifecycle: cancel queued work, clean up the
+active turn while still receiving final tool results, drain the session, then stop
+the actor. New turns are not accepted or persisted once closing begins. Direct
+actor stops retain a post-stop cleanup fallback when mailbox delivery is unavailable.
+
 ## Supported llm providers
 
 | Provider   | Support                                                |

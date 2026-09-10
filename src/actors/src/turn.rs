@@ -32,6 +32,7 @@ impl Tag {
     }
 }
 
+#[derive(Clone)]
 pub struct FollowUp {
     pub id: TurnId,
     pub prompt: Option<String>,

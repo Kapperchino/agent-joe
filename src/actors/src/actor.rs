@@ -150,9 +150,9 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
                         let _ = reply.send(result.map_err(|error| error.to_string()));
                     }
                     Message::StartWork(prompt) => {
-                        let follow_up = FollowUp::new(prompt);
-                        state.queue_input(&follow_up);
-                        state.dispatch(SessionEvent::Start(follow_up)).await
+                        state
+                            .dispatch(SessionEvent::Start(FollowUp::new(prompt)))
+                            .await
                     }
                     Message::RunWorker(reply) => {
                         state.dispatch(SessionEvent::StartWorker(reply)).await
@@ -188,7 +188,7 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
                             .await
                     }
                     Message::Command(command) => state.command(command).await,
-                    Message::KYS => state.actor_ref.stop(None),
+                    Message::KYS => state.dispatch(Event::StopRequested).await,
                     #[cfg(test)]
                     Message::Inspect(reply) => {
                         let _ = reply.send(state.visible_history());

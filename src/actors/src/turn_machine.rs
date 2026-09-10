@@ -24,6 +24,7 @@ type WorkerReply = RpcReplyPort<Result<String, WorkerFailure>>;
 
 pub(crate) enum Event {
     Session(SessionEvent),
+    StopRequested,
     Shutdown,
     ShutdownFinished,
 }
@@ -80,6 +81,7 @@ impl ProviderUpdate {
 }
 
 pub(crate) enum Effect {
+    QueueInput(FollowUp),
     BeginTurn(FollowUp),
     AppendHistory(Vec<llm::Message>),
     ClearHistory,
@@ -156,6 +158,7 @@ enum SessionRole {
 #[derive(Default)]
 enum SessionState {
     Running(Session),
+    Closing(Session),
     ShuttingDown(Shutdown),
     #[default]
     Stopped,
@@ -216,12 +219,44 @@ impl TurnMachine {
                 session.transition(event, &mut effects);
                 SessionState::Running(session)
             }
-            (SessionState::Running(session), Event::Shutdown) => {
+            (SessionState::Running(mut session), Event::StopRequested) => {
+                session.transition(
+                    SessionEvent::Interrupt(HistoryDisposition::Retain),
+                    &mut effects,
+                );
+                match session.state {
+                    TurnState::Stopping(_) => SessionState::Closing(session),
+                    _ => SessionState::ShuttingDown(session.shutdown(&mut effects)),
+                }
+            }
+            (
+                SessionState::Closing(mut session),
+                Event::Session(
+                    event @ (SessionEvent::Tools { .. } | SessionEvent::ContextFailed { .. }),
+                ),
+            ) => {
+                session.transition(event, &mut effects);
+                SessionState::Closing(session)
+            }
+            (SessionState::Closing(session), Event::Session(SessionEvent::CleanupFinished(id)))
+                if matches!(&session.state, TurnState::Stopping(turn) if turn.id == id) =>
+            {
+                SessionState::ShuttingDown(session.shutdown(&mut effects))
+            }
+            (SessionState::Running(session) | SessionState::Closing(session), Event::Shutdown) => {
                 SessionState::ShuttingDown(session.shutdown(&mut effects))
             }
             (SessionState::ShuttingDown(shutdown), Event::ShutdownFinished) => {
                 shutdown.finish(&mut effects);
+                effects.push(Effect::StopActor);
                 SessionState::Stopped
+            }
+            (state, Event::Session(SessionEvent::StartWorker(reply))) => {
+                effects.push(Effect::ReplyWorker {
+                    reply,
+                    outcome: WorkerOutcome::Failed(WorkerFailure::Stopped),
+                });
+                state
             }
             (state, _) => state,
         };
@@ -250,7 +285,9 @@ impl TurnMachine {
 
     pub fn batch(&self) -> Option<&crate::turn::ToolBatch> {
         match &self.state {
-            SessionState::Running(session) => session.state.batch(),
+            SessionState::Running(session) | SessionState::Closing(session) => {
+                session.state.batch()
+            }
             SessionState::ShuttingDown(_) | SessionState::Stopped => None,
         }
     }
@@ -285,28 +322,34 @@ impl Session {
                 }));
                 self.transition(SessionEvent::Start(follow_up), effects);
             }
-            SessionEvent::Start(follow_up) => match (&self.state, self.questions) {
-                (TurnState::Idle, QuestionGate::Open) => self.begin(follow_up, effects),
-                _ => {
-                    let id = follow_up.id;
-                    self.queue.push_back(follow_up);
-                    if matches!(
-                        (&self.state, self.questions),
-                        (TurnState::Idle, QuestionGate::Required)
-                    ) {
-                        self.state = TurnState::Waiting(id);
-                        effects.push(Effect::turn(
-                            id,
-                            Lifecycle::WaitingForInput,
-                            Some("Required question pending; follow-up saved in the queue".into()),
-                        ));
+            SessionEvent::Start(follow_up) => {
+                effects.push(Effect::QueueInput(follow_up.clone()));
+                match (&self.state, self.questions) {
+                    (TurnState::Idle, QuestionGate::Open) => self.begin(follow_up, effects),
+                    _ => {
+                        let id = follow_up.id;
+                        self.queue.push_back(follow_up);
+                        if matches!(
+                            (&self.state, self.questions),
+                            (TurnState::Idle, QuestionGate::Required)
+                        ) {
+                            self.state = TurnState::Waiting(id);
+                            effects.push(Effect::turn(
+                                id,
+                                Lifecycle::WaitingForInput,
+                                Some(
+                                    "Required question pending; follow-up saved in the queue"
+                                        .into(),
+                                ),
+                            ));
+                        }
+                        effects.push(Effect::Report(ActorToTuiPacket::Queued {
+                            turn_id: id,
+                            position: self.queue.len(),
+                        }));
                     }
-                    effects.push(Effect::Report(ActorToTuiPacket::Queued {
-                        turn_id: id,
-                        position: self.queue.len(),
-                    }));
                 }
-            },
+            }
             SessionEvent::StartWorker(reply) => match (&self.state, &self.role) {
                 (TurnState::Idle, SessionRole::Interactive) => {
                     self.role = SessionRole::Worker(reply);

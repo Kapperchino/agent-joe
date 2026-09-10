@@ -25,7 +25,9 @@ use std::{
     time::Duration,
 };
 use tokio::sync::oneshot;
-use tools::tool_defs::{ErasedToolRef, ErasedToolTrait, ToolDefinition, ToolEffect, ToolId};
+use tools::tool_defs::{
+    CancellationMode, ErasedToolRef, ErasedToolTrait, ToolDefinition, ToolEffect, ToolId,
+};
 use utils::utils::FnvHashMap;
 
 type Events = BoxStream<'static, anyhow::Result<StreamEvent>>;
@@ -251,6 +253,7 @@ struct GateTool {
 enum GateOutcome {
     LargeValidation,
     Success,
+    AwaitCompletion,
     Failure,
     PreparePanic,
     RunPanic,
@@ -276,6 +279,12 @@ impl ErasedToolTrait<TestContext, ActorContext<TestContext>> for GateTool {
     }
     fn effect(&self) -> ToolEffect {
         self.effect
+    }
+    fn cancellation_mode(&self) -> CancellationMode {
+        match self.outcome {
+            GateOutcome::AwaitCompletion => CancellationMode::AwaitCompletion,
+            _ => CancellationMode::DropFuture,
+        }
     }
     fn display_erased(&self, _: &Value) -> anyhow::Result<String> {
         match self.outcome {
@@ -1589,6 +1598,128 @@ async fn shutdown_preserves_durable_results_even_when_the_actor_cannot_receive_t
     assert!(
         matches!(&snapshot.history.last().unwrap().content[0], ContentBlock::ToolResult { content, .. } if content.contains("Cancelled"))
     );
+}
+
+#[tokio::test]
+async fn graceful_actor_stop_drains_turn_events_and_rejects_followups() {
+    let workspace = crate::session::tests::Workspace::new();
+    let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
+    let store = runtime.sessions.clone().unwrap();
+    let (mut write, entered) = gate("write", ToolEffect::Write);
+    Arc::get_mut(&mut write).unwrap().outcome = GateOutcome::AwaitCompletion;
+    let mut h = Harness::with_runtime(vec![write.clone()], runtime).await;
+    h.start("work");
+    answer(
+        h.request().await.1,
+        response(vec![call("write", "active"), call("write", "never")]),
+    );
+    let (_, pending) = within(entered.recv_async()).await.unwrap();
+    h.start("queued before stop");
+    h.event(|event| matches!(event, ActorToTuiPacket::Queued { .. }))
+        .await;
+    h.actor.send_message(Message::KYS).unwrap();
+    h.event(|event| {
+        matches!(
+            event,
+            ActorToTuiPacket::TurnChanged {
+                state: Lifecycle::Cancelling,
+                ..
+            }
+        )
+    })
+    .await;
+    h.actor.send_message(Message::KYS).unwrap();
+    h.start("rejected while closing");
+    let history = h.history().await;
+    assert!(
+        history
+            .iter()
+            .all(|message| !message.text().contains("rejected while closing"))
+    );
+    assert_eq!(write.active.load(Ordering::SeqCst), 1);
+    assert!(!h.handle.as_ref().unwrap().is_finished());
+    assert!(h.requests.is_empty());
+    pending.send(()).unwrap();
+    h.event(|event| matches!(event, ActorToTuiPacket::OperationChanged { state: Lifecycle::Completed, detail, .. } if detail == "write")).await;
+    h.terminal(Lifecycle::Cancelled).await;
+    within(h.handle.take().unwrap()).await.unwrap();
+    assert_eq!(write.active.load(Ordering::SeqCst), 0);
+    assert_eq!(h.runtime.scope.tasks.len(), 0);
+    assert!(h.runtime.scope.resources().is_empty());
+    assert!(entered.is_empty());
+    assert!(h.requests.is_empty());
+    let snapshot = store.list().unwrap().remove(0);
+    assert!(snapshot.pending.is_none());
+    assert!(snapshot.queued.is_empty());
+    assert!(
+        snapshot
+            .history
+            .iter()
+            .all(|message| !message.text().contains("rejected while closing"))
+    );
+    let outputs = &snapshot.history.last().unwrap().content;
+    assert!(
+        matches!(&outputs[0], ContentBlock::ToolResult { content, is_error: None, .. } if content.contains("active"))
+    );
+    assert!(
+        matches!(&outputs[1], ContentBlock::ToolResult { content, is_error: Some(true), .. } if content.contains("Not executed"))
+    );
+    assert!(!h.events.drain().any(|event| matches!(event.packet, ActorToTuiPacket::TurnChanged { state, .. } if state.terminal())));
+}
+
+#[tokio::test]
+async fn graceful_actor_stop_preserves_completed_provider_content() {
+    let workspace = crate::session::tests::Workspace::new();
+    let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
+    let store = runtime.sessions.clone().unwrap();
+    let mut h = Harness::with_runtime(vec![], runtime).await;
+    h.start("work");
+    let (_, reply) = h.request().await;
+    let packet = h
+        .event(|event| {
+            matches!(
+                event,
+                ActorToTuiPacket::OperationChanged {
+                    state: Lifecycle::Running,
+                    ..
+                }
+            )
+        })
+        .await;
+    let tag = match packet {
+        ActorToTuiPacket::OperationChanged {
+            turn_id,
+            operation_id,
+            ..
+        } => Tag {
+            turn: turn_id,
+            operation: operation_id,
+        },
+        _ => panic!("expected provider operation"),
+    };
+    for item in response(vec![text("completed content before stop")])
+        .into_iter()
+        .take(2)
+    {
+        h.actor
+            .send_message(Message::Provider {
+                tag,
+                event: ProviderEvent::Item(item),
+            })
+            .unwrap();
+    }
+    h.actor.send_message(Message::KYS).unwrap();
+    h.terminal(Lifecycle::Cancelled).await;
+    within(h.handle.take().unwrap()).await.unwrap();
+    assert!(reply.is_closed());
+    assert_eq!(h.runtime.scope.tasks.len(), 0);
+    assert!(h.runtime.scope.resources().is_empty());
+    let snapshot = store.list().unwrap().remove(0);
+    assert_eq!(
+        snapshot.history.last().unwrap().text(),
+        "completed content before stop"
+    );
+    assert!(h.requests.is_empty());
 }
 
 #[path = "discovery_runtime_test.rs"]
