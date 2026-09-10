@@ -50,10 +50,10 @@ impl Platform {
         }
     }
 
-    pub fn library(self) -> &'static str {
+    pub fn firmware(self) -> &'static str {
         match self {
-            Self::Linux { .. } => "libkrun.so.1",
-            Self::MacOs => "libkrun.1.dylib",
+            Self::Linux { .. } => "libkrunfw.so.5",
+            Self::MacOs => "libkrunfw.5.dylib",
         }
     }
 }

@@ -8,7 +8,7 @@ use std::{
 
 pub(super) struct Runtime {
     pub rootfs: PathBuf,
-    pub library: PathBuf,
+    pub firmware: PathBuf,
     pub helper: PathBuf,
 }
 
@@ -18,7 +18,7 @@ impl Runtime {
         check: &dyn Fn() -> anyhow::Result<()>,
     ) -> anyhow::Result<Self> {
         let installation = super::bootstrap::Installation::new(workspace, check)?;
-        let filename = Platform::current()?.library();
+        let filename = Platform::current()?.firmware();
         Self::from_paths(
             installation.rootfs,
             installation.native.join("lib").join(filename),
@@ -29,17 +29,17 @@ impl Runtime {
 
     fn from_paths(
         rootfs: PathBuf,
-        library: PathBuf,
+        firmware: PathBuf,
         helper: PathBuf,
         workspace: &Path,
     ) -> anyhow::Result<Self> {
         let runtime = Self {
             rootfs,
-            library,
+            firmware,
             helper,
         };
         Platform::current()?;
-        let valid = runtime.library.is_file()
+        let valid = runtime.firmware.is_file()
             && runtime.helper.is_file()
             && runtime.helper.metadata()?.permissions().mode() & 0o111 != 0
             && runtime.rootfs.join("usr/local/cargo/bin/cargo").is_file()
@@ -62,9 +62,9 @@ impl Runtime {
     pub(super) fn read_only_paths(&self) -> anyhow::Result<Vec<&Path>> {
         Ok(vec![
             &self.rootfs,
-            self.library
+            self.firmware
                 .parent()
-                .context("libkrun must have a library directory")?,
+                .context("Sandbox firmware must have a directory")?,
             &self.helper,
         ])
     }
@@ -90,7 +90,7 @@ impl Runtime {
         std::fs::create_dir(temporary.path().join("guest"))?;
         std::fs::write(temporary.path().join("command"), guest.script())?;
         let configuration = super::super::protocol::Configuration {
-            library: self.library.clone(),
+            firmware: self.firmware.clone(),
             rootfs: self.rootfs.clone(),
             workspace: workspace.root().into(),
             temporary_name: temporary.id(),
@@ -201,7 +201,7 @@ mod tests {
             std::fs::create_dir(&directory).unwrap();
             let directory = directory.canonicalize().unwrap();
             let rootfs = directory.join("runtime/rootfs");
-            let library = directory.join("runtime/lib/libkrun");
+            let firmware = directory.join("runtime/lib/libkrunfw");
             let helper = directory.join("runtime/bin/joe-sandbox");
             let project = directory.join("project");
             for path in [
@@ -212,10 +212,14 @@ mod tests {
             ] {
                 std::fs::create_dir_all(rootfs.join(path)).unwrap();
             }
-            std::fs::create_dir_all(library.parent().unwrap()).unwrap();
+            std::fs::create_dir_all(firmware.parent().unwrap()).unwrap();
             std::fs::create_dir_all(helper.parent().unwrap()).unwrap();
             std::fs::create_dir(&project).unwrap();
-            for path in [&library, &helper, &rootfs.join("usr/local/cargo/bin/cargo")] {
+            for path in [
+                &firmware,
+                &helper,
+                &rootfs.join("usr/local/cargo/bin/cargo"),
+            ] {
                 std::fs::write(path, "fixture").unwrap();
             }
             std::fs::write(
@@ -224,7 +228,7 @@ mod tests {
             )
             .unwrap();
             std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700)).unwrap();
-            let runtime = Runtime::from_paths(rootfs, library, helper, &project).unwrap();
+            let runtime = Runtime::from_paths(rootfs, firmware, helper, &project).unwrap();
             Self {
                 directory,
                 runtime,
@@ -246,7 +250,7 @@ mod tests {
         assert!(
             Runtime::from_paths(
                 runtime.rootfs.clone(),
-                runtime.library.clone(),
+                runtime.firmware.clone(),
                 runtime.helper.clone(),
                 &fixture.directory
             )
@@ -256,7 +260,7 @@ mod tests {
         assert!(
             Runtime::from_paths(
                 runtime.rootfs.clone(),
-                runtime.library.clone(),
+                runtime.firmware.clone(),
                 runtime.helper.clone(),
                 fixture.workspace.root()
             )

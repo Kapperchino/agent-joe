@@ -435,11 +435,13 @@ implementation. Recorded checks pass
 with existing warnings; changed Rust files pass formatting and whitespace
 checks. Workspace-wide formatting has pre-existing differences.
 
-Libkrun worktree validation on 2026-09-09: 95 utility tests, two launcher tests,
+Libkrun crate integration validation on 2026-09-09: 95 utility tests, three launcher tests,
 and workspace compilation pass on Apple Silicon macOS. First use with an empty
 cache and no host Cargo on `PATH`, including changed dependencies, also passes.
-The native runtime rebuilds from pinned sources. The Linux ARM64 seccomp module
-compiles; the bundled Linux Bubblewrap builds and runs inside the guest.
+The launcher uses the pinned `libkrun` crate directly and passes strict Clippy.
+Native preparation supplies the crate's init and ARM firmware build inputs.
+The launcher compiles for Linux ARM64; the bundled Linux Bubblewrap was also
+built and run inside the guest during the preceding sandbox migration.
 Full Linux KVM execution remains untested. Strict utility Clippy checks report
 existing warnings in diff, text search and workspace process code.
 

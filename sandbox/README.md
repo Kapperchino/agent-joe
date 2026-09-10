@@ -1,5 +1,6 @@
-Joe prepares its sandbox automatically. The application bundles libkrun 1.18.0,
-libkrunfw 5.5.0 and its launcher. On first use it downloads the pinned Rust 1.95
+Joe prepares its sandbox automatically. Its launcher depends directly on the
+pinned `libkrun` 1.18.0 crate, imported as `krun`, and the application bundles
+libkrunfw 5.5.0. On first use it downloads the pinned Rust 1.95
 Linux guest, installs rustfmt and Clippy, prepares crates.io dependencies,
 and signs the launcher on macOS. Cargo resolves missing lockfiles and changed
 dependencies inside the guest, preserving existing dependency versions. Subsequent commands reuse the private cache.
@@ -31,8 +32,10 @@ Bubblewrap on Linux. The host policies expose runtime libraries; build tools
 run inside the guest. Virtualization and the host's isolation facilities must
 be permitted by the operating system; unavailable isolation fails closed.
 
-The Cargo build automatically compiles and bundles the native components for
-its host platform. This build fetches pinned upstream sources and uses the
-normal Rust and C build toolchains. Application users need no compiler or
-separately installed sandbox helper. The native launcher has its own small
-Cargo package and shares Joe's protocol and libkrun implementation.
+The Cargo build automatically compiles and bundles the launcher and firmware for
+its host platform. Cargo resolves the VMM through the launcher's lockfile. Joe
+prepares the crate's Linux init executable and ARM firmware build inputs, and
+loads the bundled libkrunfw before creating a VM. This build fetches pinned upstream sources and
+uses the normal Rust and C build toolchains. Application users need no compiler
+or separately installed sandbox helper. The launcher shares Joe's protocol and
+sandbox configuration code across Linux and macOS.

@@ -61,14 +61,16 @@ impl NativeBuild {
     ) -> anyhow::Result<PathBuf> {
         let native = installation.prepare(
             &format!(
-                "native-1.18.0-fw5.5.0-bwrap0.11.0-{}-v2",
+                "launcher-components-1.18.0-fw5.5.0-bwrap0.11.0-{}-v2",
                 self.target.triple
             ),
-            |staging| self.compile_runtime(staging, installation, downloads),
+            |staging| self.prepare_components(staging, installation, downloads),
         )?;
         run(self
             .cargo(&self.output.join("launcher-target"))
-            .current_dir(self.repository.join("sandbox/launcher")))?;
+            .current_dir(self.repository.join("sandbox/launcher"))
+            .env("KRUN_INIT_BINARY_PATH", native.join("joe-init"))
+            .env("KRUN_EDK2_BINARY_PATH", native.join("KRUN_EFI.silent.fd")))?;
         let archive = self.output.join("sandbox-native.tar.gz");
         let writer = flate2::write::GzEncoder::new(
             fs::File::create(&archive)?,
@@ -104,14 +106,14 @@ impl NativeBuild {
         command
     }
 
-    fn compile_runtime(
+    fn prepare_components(
         &self,
         staging: &Path,
         installation: &Installation,
         downloads: &Downloads<'_>,
     ) -> anyhow::Result<()> {
         eprintln!(
-            "Joe is building its bundled libkrun runtime for {}",
+            "Joe is preparing its sandbox launcher components for {}",
             self.target.triple
         );
         let artifact = Artifact::new(
@@ -124,7 +126,7 @@ impl NativeBuild {
         let source = build.join("libkrun-1.18.0");
         let library = staging.join("lib");
         fs::create_dir(&library)?;
-        let init = build.join("joe-init");
+        let init = staging.join("joe-init");
         run(self
             .init_compiler(installation, downloads)?
             .args(["-O2", "-static", "-Wl,-strip-debug"])
@@ -132,23 +134,12 @@ impl NativeBuild {
             .arg(source.join("init/dhcp.c"))
             .arg("-o")
             .arg(&init))?;
-        let target_directory = build.join("target");
-        run(self
-            .cargo(&target_directory)
-            .current_dir(&source)
-            .args(["-p", "libkrun", "--lib"])
-            .env("KRUN_INIT_BINARY_PATH", init))?;
-        let filename = match self.target.platform {
-            Platform::MacOs => "libkrun.dylib",
-            Platform::Linux { .. } => "libkrun.so",
-        };
-        fs::copy(
-            target_directory
-                .join(&self.target.triple)
-                .join("release")
-                .join(filename),
-            library.join(self.target.platform.library()),
-        )?;
+        if let Architecture::Arm64 = self.target.platform.architecture() {
+            fs::copy(
+                source.join("edk2/KRUN_EFI.silent.fd"),
+                staging.join("KRUN_EFI.silent.fd"),
+            )?;
+        }
         self.compile_firmware(&build, &library, downloads)?;
         if let Platform::Linux { .. } = self.target.platform {
             build_bubblewrap(downloads, &build, &staging.join("bwrap"))?;
@@ -219,6 +210,7 @@ impl NativeBuild {
         let archive = downloads.get(&artifact, None)?;
         let source = build.join("firmware");
         downloads.unpack(&archive, &source)?;
+        let destination = library.join(self.target.platform.firmware());
         match self.target.platform {
             Platform::MacOs => run(Command::new("cc")
                 .args([
@@ -228,13 +220,13 @@ impl NativeBuild {
                     "-Wl,-install_name,libkrunfw.5.dylib",
                     "-o",
                 ])
-                .arg(library.join("libkrunfw.5.dylib"))
+                .arg(destination)
                 .arg(source.join("libkrunfw/kernel.c"))),
             Platform::Linux { .. } => {
                 fs::copy(
                     find_file(&source, "libkrunfw.so.5")?
                         .context("Missing native sandbox firmware")?,
-                    library.join("libkrunfw.so.5"),
+                    destination,
                 )?;
                 Ok(())
             }

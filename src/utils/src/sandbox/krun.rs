@@ -11,43 +11,32 @@ struct Filesystem {
     read_only: bool,
 }
 
-struct KrunContext<'a> {
+struct KrunContext {
     id: u32,
-    library: &'a libloading::Library,
 }
 
-impl<'a> KrunContext<'a> {
-    fn new(library: &'a libloading::Library) -> anyhow::Result<Self> {
-        let create = unsafe { library.get::<unsafe extern "C" fn() -> i32>(b"krun_create_ctx\0")? };
-        let id = result("krun_create_ctx", unsafe { create() })? as u32;
-        Ok(Self { id, library })
+impl KrunContext {
+    fn new() -> anyhow::Result<Self> {
+        let id = result("krun_create_ctx", krun::krun_create_ctx())? as u32;
+        Ok(Self { id })
     }
 
     fn configure(&self, configuration: Configuration) -> anyhow::Result<()> {
-        let library = self.library;
-        let vm = unsafe {
-            library.get::<unsafe extern "C" fn(u32, u8, u32) -> i32>(b"krun_set_vm_config\0")?
-        };
-        result("krun_set_vm_config", unsafe { vm(self.id, 2, 4096) })?;
-        self.call(b"krun_disable_implicit_vsock\0")?;
-        self.call(b"krun_disable_implicit_console\0")?;
-        let console = unsafe {
-            library.get::<unsafe extern "C" fn(u32, i32, i32, i32) -> i32>(
-                b"krun_add_virtio_console_default\0",
-            )?
-        };
+        result(
+            "krun_set_vm_config",
+            krun::krun_set_vm_config(self.id, 2, 4096),
+        )?;
+        result(
+            "krun_disable_implicit_vsock",
+            krun::krun_disable_implicit_vsock(self.id),
+        )?;
+        result(
+            "krun_disable_implicit_console",
+            krun::krun_disable_implicit_console(self.id),
+        )?;
         result("krun_add_virtio_console_default", unsafe {
-            console(self.id, 0, 1, 2)
+            krun::krun_add_virtio_console_default(self.id, 0, 1, 2)
         })?;
-        let filesystem = unsafe {
-            library.get::<unsafe extern "C" fn(
-                u32,
-                *const libc::c_char,
-                *const libc::c_char,
-                u64,
-                bool,
-            ) -> i32>(b"krun_add_virtiofs3\0")?
-        };
         for mount in [
             Filesystem {
                 tag: c"/dev/root",
@@ -62,7 +51,7 @@ impl<'a> KrunContext<'a> {
         ] {
             let path = CString::new(mount.path.as_os_str().as_encoded_bytes())?;
             result("krun_add_virtiofs3", unsafe {
-                filesystem(
+                krun::krun_add_virtiofs3(
                     self.id,
                     mount.tag.as_ptr(),
                     path.as_ptr(),
@@ -77,16 +66,8 @@ impl<'a> KrunContext<'a> {
         ];
         let arguments = pointers(&arguments);
         let environment = pointers(&[]);
-        let exec = unsafe {
-            library.get::<unsafe extern "C" fn(
-                u32,
-                *const libc::c_char,
-                *const *const libc::c_char,
-                *const *const libc::c_char,
-            ) -> i32>(b"krun_set_exec\0")?
-        };
         result("krun_set_exec", unsafe {
-            exec(
+            krun::krun_set_exec(
                 self.id,
                 c"/bin/sh".as_ptr(),
                 arguments.as_ptr(),
@@ -96,17 +77,17 @@ impl<'a> KrunContext<'a> {
         Ok(())
     }
 
-    fn call(&self, name: &[u8]) -> anyhow::Result<i32> {
-        let function = unsafe { self.library.get::<unsafe extern "C" fn(u32) -> i32>(name)? };
-        result(std::str::from_utf8(name)?.trim_end_matches('\0'), unsafe {
-            function(self.id)
-        })
+    fn start(&self) -> anyhow::Result<()> {
+        result("krun_start_enter", krun::krun_start_enter(self.id))?;
+        Err(anyhow::anyhow!(
+            "libkrun returned without entering the guest"
+        ))
     }
 }
 
-impl Drop for KrunContext<'_> {
+impl Drop for KrunContext {
     fn drop(&mut self) {
-        let _ = self.call(b"krun_free_ctx\0");
+        krun::krun_free_ctx(self.id);
     }
 }
 
@@ -138,25 +119,11 @@ pub(super) fn run() -> anyhow::Result<()> {
             "joe-sandbox requires one internal JSON configuration"
         )),
     }?;
-    #[cfg(target_os = "macos")]
-    let firmware_name = "libkrunfw.5.dylib";
-    #[cfg(target_os = "linux")]
-    let firmware_name = "libkrunfw.so.5";
-    let firmware = configuration
-        .library
-        .parent()
-        .context("libkrun requires a library directory")?
-        .join(firmware_name);
-    let _firmware = unsafe { libloading::Library::new(firmware) }
+    let _firmware = unsafe { libloading::Library::new(&configuration.firmware) }
         .context("Cannot load Joe's bundled libkrun firmware")?;
-    let library = unsafe { libloading::Library::new(&configuration.library) }
-        .context("Cannot load libkrun 1.18.x and its libkrunfw dependency")?;
-    let context = KrunContext::new(&library)?;
+    let context = KrunContext::new()?;
     context.configure(configuration)?;
-    context.call(b"krun_start_enter\0")?;
-    Err(anyhow::anyhow!(
-        "libkrun returned without entering the guest"
-    ))
+    context.start()
 }
 
 #[cfg(test)]
@@ -164,66 +131,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn library_failures_prevent_boot_and_release_the_context() {
-        let directory = std::env::temp_dir().join(format!("joe-krun-api-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir(&directory).unwrap();
-        let source = directory.join("fixture.c");
-        let library_path = directory.join("fixture.so");
-        std::fs::write(&source, include_str!("krun_fixture.c")).unwrap();
-        let compiled = std::process::Command::new("cc")
-            .args(["-shared", "-fPIC"])
-            .arg(&source)
-            .arg("-o")
-            .arg(&library_path)
-            .output()
-            .unwrap();
+    fn dropping_a_context_releases_it_in_the_crate() {
+        let context = KrunContext::new().unwrap();
+        let id = context.id;
+        assert_eq!(krun::krun_set_vm_config(id, 2, 4096), 0);
+        drop(context);
+        assert_eq!(krun::krun_set_vm_config(id, 2, 4096), -libc::ENOENT);
+    }
+
+    #[test]
+    fn crate_errors_retain_the_operation_and_cause() {
+        let context = KrunContext::new().unwrap();
+        let error = result(
+            "krun_set_vm_config",
+            krun::krun_set_vm_config(context.id, 0, 4096),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("krun_set_vm_config"));
         assert!(
-            compiled.status.success(),
-            "{}",
-            String::from_utf8_lossy(&compiled.stderr)
+            error
+                .to_string()
+                .contains(&std::io::Error::from_raw_os_error(libc::EINVAL).to_string())
         );
-        let library = unsafe { libloading::Library::new(&library_path).unwrap() };
-        let fault = unsafe {
-            library
-                .get::<unsafe extern "C" fn(i32)>(b"joe_fault\0")
-                .unwrap()
-        };
-        let state = unsafe {
-            library
-                .get::<unsafe extern "C" fn(i32) -> i32>(b"joe_state\0")
-                .unwrap()
-        };
-        for failure in 0..=7 {
-            unsafe { fault(failure) };
-            let context = KrunContext::new(&library).unwrap();
-            let result = context.configure(Configuration {
-                library: library_path.clone(),
-                rootfs: "/rootfs".into(),
-                workspace: "/project".into(),
-                temporary_name: uuid::Uuid::nil(),
-            });
-            match failure {
-                0 => {
-                    result.unwrap();
-                    assert!(
-                        context
-                            .call(b"krun_start_enter\0")
-                            .unwrap_err()
-                            .to_string()
-                            .contains("krun_start_enter")
-                    );
-                    assert_eq!(unsafe { state(1) }, 1);
-                }
-                _ => {
-                    assert!(result.is_err());
-                    assert_eq!(unsafe { state(1) }, 0);
-                }
-            }
-            drop(context);
-            assert_eq!(unsafe { state(2) }, 1);
-            assert_eq!(unsafe { state(3) }, 0);
-        }
-        drop(library);
-        std::fs::remove_dir_all(directory).unwrap();
     }
 }
