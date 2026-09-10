@@ -293,6 +293,34 @@ pub enum ToolProperty {
     },
 }
 
+impl ToolProperty {
+    pub fn into_schema(self) -> Value {
+        match self {
+            Self::Schema(schema) => schema,
+            Self::Value {
+                prop_type,
+                description,
+                ..
+            } => serde_json::json!({
+                "type": prop_type,
+                "description": description,
+            }),
+            Self::Object {
+                prop_type,
+                description,
+                properties,
+                ..
+            } => serde_json::json!({
+                "type": prop_type,
+                "description": description,
+                "properties": properties.into_iter()
+                    .map(|(name, property)| (name, property.into_schema()))
+                    .collect::<serde_json::Map<_, _>>(),
+            }),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, Eq, PartialEq, Hash, ToolInput)]
 pub struct Range {
     #[tool(description = "Start line (inclusive)", required)]

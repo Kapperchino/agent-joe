@@ -1,4 +1,4 @@
-use crate::tool_defs::{ToolDefTrait, ToolId, ToolTrait, ToolType};
+use crate::tool_defs::{NonEmptyString, ToolDefTrait, ToolEffect, ToolId, ToolTrait, ToolType};
 use analysis::contexts::context::Context;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -23,65 +23,76 @@ pub struct Worktree {
 }
 
 #[derive(Default, Serialize, Deserialize, Debug, Clone, ToolInput)]
-pub struct WorktreeInput {
-    #[tool(description = "create, list, integrate, or remove", required)]
-    pub operation: String,
-    #[tool(description = "Recorded managed worktree ID for integrate or remove")]
-    pub id: Option<String>,
-    #[tool(description = "Explicit base commit or revision for create")]
-    pub base: Option<String>,
-    #[tool(description = "For create: reject (default) or base_only")]
-    pub dirty_source: Option<String>,
+#[serde(tag = "operation", rename_all = "snake_case")]
+#[tool(
+    description = "Worktree operation. Fields belonging to other operations are ignored. Omit or use null for unused options."
+)]
+pub enum WorktreeInput {
+    #[default]
+    List,
+    Create {
+        #[tool(
+            description = "Required explicit base commit or revision for create.",
+            kind = "string"
+        )]
+        base: Revision,
+        #[tool(
+            description = "For create: reject dirty sources by default; base_only explicitly isolates the base commit. Empty strings use the default.",
+            values("reject", "base_only")
+        )]
+        dirty_source: Option<String>,
+    },
+    Integrate {
+        #[tool(
+            description = "Required recorded managed worktree ID for integrate or remove.",
+            kind = "string"
+        )]
+        id: NonEmptyString,
+    },
+    Remove {
+        #[tool(
+            description = "Required recorded managed worktree ID for integrate or remove.",
+            kind = "string"
+        )]
+        id: NonEmptyString,
+    },
+}
+
+impl WorktreeInput {
+    fn operation(&self) -> &'static str {
+        match self {
+            Self::List => "list",
+            Self::Create { .. } => "create",
+            Self::Integrate { .. } => "integrate",
+            Self::Remove { .. } => "remove",
+        }
+    }
 }
 
 impl TryFrom<WorktreeInput> for WorktreeOperation {
     type Error = anyhow::Error;
+
     fn try_from(input: WorktreeInput) -> anyhow::Result<Self> {
         match input {
-            WorktreeInput {
-                operation,
-                id: None,
-                base: None,
-                dirty_source: None,
-            } if operation == "list" => Ok(Self::List),
-            WorktreeInput {
-                operation,
-                id: None,
-                base: Some(base),
-                dirty_source,
-            } if operation == "create" => {
-                let dirty = match dirty_source.as_deref().unwrap_or("reject") {
-                    "reject" => Ok(DirtySource::Reject),
-                    "base_only" => Ok(DirtySource::BaseOnly),
-                    _ => Err(anyhow::anyhow!(
-                        "Dirty source policy must be reject or base_only"
-                    )),
-                }?;
-                Ok(Self::Create {
-                    base: Revision::new(&base)?,
-                    dirty,
-                })
-            }
-            WorktreeInput {
-                operation,
-                id: Some(id),
-                base: None,
-                dirty_source: None,
-            } if operation == "integrate" => Ok(Self::Integrate { id }),
-            WorktreeInput {
-                operation,
-                id: Some(id),
-                base: None,
-                dirty_source: None,
-            } if operation == "remove" => Ok(Self::Remove { id }),
-            _ => Err(anyhow::anyhow!("Invalid worktree operation or options")),
+            WorktreeInput::List => Ok(Self::List),
+            WorktreeInput::Create { base, dirty_source } => Ok(Self::Create {
+                base,
+                dirty: DirtySource::new(
+                    dirty_source
+                        .as_deref()
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or("reject"),
+                )?,
+            }),
+            WorktreeInput::Integrate { id } => Ok(Self::Integrate { id: id.into() }),
+            WorktreeInput::Remove { id } => Ok(Self::Remove { id: id.into() }),
         }
     }
 }
 
 impl Display for Worktree {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "- worktree {}", self.input.operation)
+        write!(f, "- worktree {}", self.input.operation())
     }
 }
 
@@ -89,6 +100,7 @@ impl Display for Worktree {
 impl<C: Context, A> ToolTrait<C, A> for Worktree {
     type Input = WorktreeInput;
     type Output = Vec<ManagedWorktree>;
+
     async fn run(
         input: Self::Input,
         _: ToolId,
@@ -97,17 +109,15 @@ impl<C: Context, A> ToolTrait<C, A> for Worktree {
     ) -> anyhow::Result<Self::Output> {
         let operation = WorktreeOperation::try_from(input)?;
         let scope = utils::execution::ExecutionScope::current();
-        if let WorktreeOperation::Integrate { id } = &operation {
-            let record = scope
-                .changes
-                .snapshot()?
-                .worktrees
-                .into_iter()
-                .find(|record| &record.id == id)
-                .ok_or_else(|| anyhow::anyhow!("Unknown managed worktree ID"))?;
-            let workspace = scope.workspace()?;
-            let paths = record.integration_paths(&workspace)?;
-            context.prepare_edit(&paths)?;
+        match &operation {
+            WorktreeOperation::Integrate { id } => {
+                let workspace = scope.workspace()?;
+                let record = ManagedWorktree::selected(&workspace, &scope.changes, id)?;
+                context.prepare_edit(&record.integration_paths(&workspace)?)?;
+            }
+            WorktreeOperation::Create { .. }
+            | WorktreeOperation::List
+            | WorktreeOperation::Remove { .. } => {}
         }
         let changes = scope.changes;
         let result = utils::files::operation(move |workspace| {
@@ -117,28 +127,97 @@ impl<C: Context, A> ToolTrait<C, A> for Worktree {
         context.refresh_workspace().await?;
         Ok(result)
     }
+
     fn display_input(input: &Self::Input) -> String {
         Self {
             input: input.clone(),
         }
         .to_string()
     }
+
     fn req_from_input(input: &Self::Input) -> anyhow::Result<FnvHashMap<String, String>> {
         Self {
             input: input.clone(),
         }
         .req()
     }
+
     fn output_to_content(_: &Self::Input, output: &Self::Output) -> anyhow::Result<String> {
         Ok(serde_json::to_string(output)?)
     }
+
     fn tool_type() -> ToolType {
         ToolType::Client
     }
-    fn effect_from_input(input: &Self::Input) -> crate::tool_defs::ToolEffect {
-        match input.operation.as_str() {
-            "list" => crate::tool_defs::ToolEffect::Read,
-            _ => crate::tool_defs::ToolEffect::Write,
+
+    fn effect_from_input(input: &Self::Input) -> ToolEffect {
+        match input {
+            WorktreeInput::List => ToolEffect::Read,
+            WorktreeInput::Create { .. }
+            | WorktreeInput::Integrate { .. }
+            | WorktreeInput::Remove { .. } => ToolEffect::Write,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tool_defs::LenientDeserialize;
+    use serde_json::{Value, json};
+
+    #[test]
+    fn unused_fields_do_not_prevent_listing_worktrees() {
+        let input = WorktreeInput::deserialize_lenient(json!({
+            "operation":"list","id":"","base":"","dirty_source":"reject"
+        }))
+        .unwrap();
+        assert!(matches!(
+            WorktreeOperation::try_from(input).unwrap(),
+            WorktreeOperation::List
+        ));
+    }
+
+    #[test]
+    fn creation_requires_a_base_and_explicit_opt_in_to_dirty_sources() {
+        for dirty_source in [Value::Null, json!(""), json!("reject")] {
+            let input = WorktreeInput::deserialize_lenient(json!({
+                "operation":"create","base":"HEAD","dirty_source":dirty_source
+            }))
+            .unwrap();
+            assert!(matches!(
+                WorktreeOperation::try_from(input).unwrap(),
+                WorktreeOperation::Create {
+                    dirty: DirtySource::Reject,
+                    ..
+                }
+            ));
+        }
+        let input = WorktreeInput::deserialize_lenient(json!({
+            "operation":"create","base":"HEAD","dirty_source":"base_only"
+        }))
+        .unwrap();
+        assert!(matches!(
+            WorktreeOperation::try_from(input).unwrap(),
+            WorktreeOperation::Create {
+                dirty: DirtySource::BaseOnly,
+                ..
+            }
+        ));
+        for value in [
+            json!({"operation":"create"}),
+            json!({"operation":"create","base":""}),
+            json!({"operation":"create","base":"HEAD","dirty_source":"copy"}),
+            json!({"operation":"remove"}),
+            json!({"operation":"remove","id":""}),
+            json!({"operation":"integrate","id":null}),
+        ] {
+            assert!(
+                WorktreeInput::deserialize_lenient(value.clone())
+                    .and_then(WorktreeOperation::try_from)
+                    .is_err(),
+                "{value}"
+            );
         }
     }
 }

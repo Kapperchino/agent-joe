@@ -17,6 +17,9 @@ pub mod list_directory;
 #[cfg(test)]
 mod discovery_test;
 
+#[cfg(test)]
+mod tool_input_test;
+
 pub mod cargo_tools;
 pub mod git;
 pub mod review_changes;

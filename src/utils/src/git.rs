@@ -1,8 +1,15 @@
 use crate::workspace::{Access, WorkspacePolicy};
-use git2::{DiffFormat, DiffOptions, Repository, RepositoryOpenFlags, StatusOptions};
+use control::{ControlDirectory, RepositoryLayout, initialize};
+use git2::{Repository, RepositoryOpenFlags, StatusOptions};
+use output::{BlobContent, diff_options, render_diff};
 use serde::{Deserialize, Serialize};
-use std::path::{Component, Path, PathBuf};
+use std::{
+    collections::BTreeSet,
+    path::{Component, Path, PathBuf},
+};
 
+mod control;
+mod output;
 pub mod worktrees;
 
 const OUTPUT_LIMIT: usize = 32 * 1024 * 1024;
@@ -56,6 +63,19 @@ pub enum DiffTarget {
     Staged,
     Unstaged,
     Head,
+}
+
+impl DiffTarget {
+    pub fn new(value: &str) -> anyhow::Result<Self> {
+        match value {
+            "staged" => Ok(Self::Staged),
+            "unstaged" => Ok(Self::Unstaged),
+            "head" => Ok(Self::Head),
+            _ => Err(anyhow::anyhow!(
+                "Diff target must be staged, unstaged, or head"
+            )),
+        }
+    }
 }
 
 pub enum GitOperation {
@@ -149,70 +169,33 @@ pub struct GitRepository {
 
 impl GitRepository {
     pub fn open(workspace: &WorkspacePolicy) -> anyhow::Result<Option<Self>> {
-        let workspace = workspace
-            .permits_workspace_access(Access::Read)
-            .then_some(workspace)
-            .ok_or_else(|| {
-                anyhow::anyhow!("Git and aggregate review require whole-project path access")
-            })?;
+        RepositoryLayout::discover(workspace)?
+            .map(|layout| Self::from_layout(workspace, layout))
+            .transpose()
+    }
+
+    fn from_layout(workspace: &WorkspacePolicy, layout: RepositoryLayout) -> anyhow::Result<Self> {
         initialize()?;
-        let dotgit = workspace.root().join(".git");
-        match std::fs::symlink_metadata(&dotgit) {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(error.into()),
-            Ok(metadata) => {
-                let control = match metadata.is_dir() {
-                    true => dotgit.clone(),
-                    false if metadata.is_file() => {
-                        let text = workspace.read(Path::new(".git"))?;
-                        let path = text
-                            .trim()
-                            .strip_prefix("gitdir: ")
-                            .ok_or_else(|| anyhow::anyhow!("Invalid linked-worktree metadata"))?;
-                        let control = workspace.root().join(path).canonicalize()?;
-                        let common = control.join("../..").canonicalize()?;
-                        let backlink = ordinary_text(&control.join("gitdir"))?;
-                        let common_link = ordinary_text(&control.join("commondir"))?;
-                        match control.parent().and_then(Path::file_name)
-                            == Some(std::ffi::OsStr::new("worktrees"))
-                            && common.file_name() == Some(std::ffi::OsStr::new(".git"))
-                            && Path::new(backlink.trim()).canonicalize()?
-                                == dotgit.canonicalize()?
-                            && control.join(common_link.trim()).canonicalize()? == common
-                        {
-                            true => control,
-                            false => Err(anyhow::anyhow!(
-                                "Linked worktree does not have matching Git control metadata"
-                            ))?,
-                        }
-                    }
-                    false => Err(anyhow::anyhow!(
-                        "Git metadata must be an ordinary file or directory"
-                    ))?,
-                };
-                let common = match control.parent().and_then(Path::file_name) {
-                    Some(name) if name == "worktrees" => control.join("../..").canonicalize()?,
-                    _ => control.clone(),
-                };
-                ControlDirectory::new(&common)?;
-                let repo = Repository::open_ext(
-                    &control,
-                    RepositoryOpenFlags::NO_SEARCH | RepositoryOpenFlags::NO_DOTGIT,
-                    std::iter::empty::<&Path>(),
-                )?;
-                repo.set_config(&git2::Config::new()?)?;
-                repo.add_ignore_rule(".[tT][uU][rR][bB][oO]-[cC][oO][dD][eE]/\n.[jJ][oO][eE]-[wW][oO][rR][kK][tT][rR][eE][eE][sS]/")?;
-                let workdir = repo
-                    .workdir()
-                    .ok_or_else(|| anyhow::anyhow!("Bare repositories are not task workspaces"))?
-                    .canonicalize()?;
-                match workdir == workspace.root() {
-                    true => Ok(Some(Self { repo })),
-                    false => Err(anyhow::anyhow!(
-                        "Git workdir differs from the fixed workspace"
-                    )),
-                }
-            }
+        let common = ControlDirectory::new(layout.common)?;
+        let repo = Repository::open_ext(
+            &layout.control,
+            RepositoryOpenFlags::NO_SEARCH | RepositoryOpenFlags::NO_DOTGIT,
+            std::iter::empty::<&Path>(),
+        )?;
+        repo.set_config(&git2::Config::new()?)?;
+        repo.add_ignore_rule(".[tT][uU][rR][bB][oO]-[cC][oO][dD][eE]/\n.[jJ][oO][eE]-[wW][oO][rR][kK][tT][rR][eE][eE][sS]/")?;
+        let workdir = repo
+            .workdir()
+            .ok_or_else(|| anyhow::anyhow!("Bare repositories are not task workspaces"))?
+            .canonicalize()?;
+        match workdir {
+            workdir if workdir != workspace.root() => Err(anyhow::anyhow!(
+                "Git workdir differs from the fixed workspace"
+            )),
+            _ if repo.commondir().canonicalize()? != common.path => Err(anyhow::anyhow!(
+                "Git common directory differs from the validated metadata"
+            )),
+            _ => Ok(Self { repo }),
         }
     }
 
@@ -221,71 +204,80 @@ impl GitRepository {
             .ok_or_else(|| anyhow::anyhow!("The workspace root is not a Git repository"))
     }
 
+    fn source(workspace: &WorkspacePolicy) -> anyhow::Result<Self> {
+        let git = Self::required(workspace)?;
+        match git
+            .repo
+            .commondir()
+            .canonicalize()?
+            .starts_with(workspace.root())
+        {
+            true => Ok(git),
+            false => Err(anyhow::anyhow!(
+                "Managed worktree mutations require the original repository root; this linked worktree has read-only shared Git metadata"
+            )),
+        }
+    }
+
     pub fn execute(
         workspace: &WorkspacePolicy,
         operation: GitOperation,
     ) -> anyhow::Result<GitResult> {
         let git = Self::required(workspace)?;
-        let result = match operation {
+        match operation {
             GitOperation::Status => git.status(workspace).map(GitResult::Status),
             GitOperation::Diff { target, path } => git
                 .diff(workspace, target, path.as_deref())
                 .map(GitResult::Diff),
             GitOperation::Show { revision, path } => {
-                let commit = git.commit(&revision)?;
-                let content = match path {
-                    Some(path) => {
-                        let path = GitPath::new(workspace, &path)?;
-                        let entry = commit.tree()?.get_path(&path.0)?;
-                        match git.repo.odb()?.read_header(entry.id())?.0 <= OUTPUT_LIMIT {
-                            true => Ok(()),
-                            false => {
-                                Err(anyhow::anyhow!("Git blob exceeds the 32 MiB output limit"))
-                            }
-                        }?;
-                        let blob = git.repo.find_blob(entry.id())?;
-                        bounded_text(blob.content())?
-                    }
-                    None => {
-                        let tree = commit.tree()?;
-                        let parent = commit
-                            .parents()
-                            .next()
-                            .map(|parent| parent.tree())
-                            .transpose()?;
-                        let diff = git.repo.diff_tree_to_tree(
-                            parent.as_ref(),
-                            Some(&tree),
-                            Some(&mut diff_options()),
-                        )?;
-                        render_diff(&diff)?
-                    }
-                };
-                Ok(GitResult::Show {
-                    commit: commit_info(&commit),
-                    content,
-                })
+                git.show(workspace, &revision, path.as_deref())
             }
-            GitOperation::Log { revision, limit } => {
-                let mut walk = git.repo.revwalk()?;
-                walk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)?;
-                walk.push(git.commit(&revision)?.id())?;
-                let commits = walk
-                    .take(limit.0)
-                    .map(|id| Ok(commit_info(&git.repo.find_commit(id?)?)))
-                    .collect::<anyhow::Result<Vec<_>>>()?;
-                match serde_json::to_vec(&commits)?.len() <= OUTPUT_LIMIT {
-                    true => Ok(GitResult::Log(commits)),
-                    false => Err(anyhow::anyhow!("Git log exceeds the 32 MiB output limit")),
-                }
+            GitOperation::Log { revision, limit } => git.log(&revision, limit).map(GitResult::Log),
+        }?
+        .bounded()
+    }
+
+    fn show(
+        &self,
+        workspace: &WorkspacePolicy,
+        revision: &Revision,
+        path: Option<&Path>,
+    ) -> anyhow::Result<GitResult> {
+        let commit = self.commit(revision)?;
+        let tree = commit.tree()?;
+        let content = match path {
+            Some(path) => {
+                let path = GitPath::new(workspace, path)?;
+                let entry = tree.get_path(&path.path)?;
+                BlobContent::new(&self.repo, entry.id())?.text
             }
-        }?;
-        match serde_json::to_vec(&result)?.len() <= OUTPUT_LIMIT {
-            true => Ok(result),
-            false => Err(anyhow::anyhow!(
-                "Git result exceeds the 32 MiB output limit"
-            )),
-        }
+            None => {
+                let parent = commit
+                    .parents()
+                    .next()
+                    .map(|parent| parent.tree())
+                    .transpose()?;
+                let diff = self.repo.diff_tree_to_tree(
+                    parent.as_ref(),
+                    Some(&tree),
+                    Some(&mut diff_options()),
+                )?;
+                render_diff(&diff)?
+            }
+        };
+        Ok(GitResult::Show {
+            commit: CommitInfo::from(&commit),
+            content,
+        })
+    }
+
+    fn log(&self, revision: &Revision, limit: LogLimit) -> anyhow::Result<Vec<CommitInfo>> {
+        let mut walk = self.repo.revwalk()?;
+        walk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)?;
+        walk.push(self.commit(revision)?.id())?;
+        walk.take(limit.0)
+            .map(|id| Ok(CommitInfo::from(&self.repo.find_commit(id?)?)))
+            .collect()
     }
 
     pub(crate) fn commit(&self, revision: &Revision) -> anyhow::Result<git2::Commit<'_>> {
@@ -311,57 +303,38 @@ impl GitRepository {
         self.repo
             .index()?
             .iter()
-            .map(|entry| {
-                Ok(IndexEntry {
-                    path: GitPath::new(workspace, Path::new(std::str::from_utf8(&entry.path)?))?.0,
-                    blob: entry.id.to_string(),
-                    mode: entry.mode,
-                    flags: entry.flags,
-                    extended_flags: entry.flags_extended,
-                })
-            })
+            .map(|entry| IndexEntry::new(workspace, &entry))
             .collect()
     }
 
     pub fn paths(&self, workspace: &WorkspacePolicy) -> anyhow::Result<Vec<PathBuf>> {
-        let index = self.repo.index()?;
-        let mut paths = index
+        let tracked = self
+            .repo
+            .index()?
             .iter()
             .map(|entry| {
-                let path = PathBuf::from(String::from_utf8(entry.path)?);
-                GitPath::new(workspace, &path).map(|path| path.0)
+                GitPath::new(workspace, Path::new(std::str::from_utf8(&entry.path)?))
+                    .map(|path| path.path)
             })
-            .collect::<anyhow::Result<Vec<_>>>()?;
-        paths.extend(
-            self.status(workspace)?
-                .entries
-                .into_iter()
-                .map(|entry| entry.path),
-        );
-        paths.sort();
-        paths.dedup();
-        Ok(paths)
+            .collect::<anyhow::Result<BTreeSet<_>>>()?;
+        Ok(tracked
+            .into_iter()
+            .chain(
+                self.status(workspace)?
+                    .entries
+                    .into_iter()
+                    .map(|entry| entry.path),
+            )
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect())
     }
 
     pub fn status(&self, workspace: &WorkspacePolicy) -> anyhow::Result<GitStatus> {
         crate::inventory::Inventory::scan_git(workspace)?;
-        for entry in self.repo.index()?.iter() {
-            let path = GitPath::new(workspace, Path::new(std::str::from_utf8(&entry.path)?))?;
-            match workspace.file_size(&path.0) {
-                Ok(size) if size <= 16 * 1024 * 1024 => Ok(()),
-                Ok(_) => Err(anyhow::anyhow!(
-                    "Tracked Git input exceeds the 16 MiB file limit"
-                )),
-                Err(error)
-                    if error
-                        .downcast_ref::<std::io::Error>()
-                        .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
-                {
-                    Ok(())
-                }
-                Err(error) => Err(error),
-            }?;
-        }
+        self.repo.index()?.iter().try_for_each(|entry| {
+            GitPath::tracked(workspace, Path::new(std::str::from_utf8(&entry.path)?)).map(|_| ())
+        })?;
         let mut options = StatusOptions::new();
         options
             .include_untracked(true)
@@ -375,26 +348,7 @@ impl GitRepository {
             .statuses(Some(&mut options))?
             .iter()
             .filter(|entry| !entry.path().is_ok_and(|path| excluded(Path::new(path))))
-            .map(|entry| {
-                let status = entry.status();
-                let delta = entry.index_to_workdir().or_else(|| entry.head_to_index());
-                let path = delta
-                    .as_ref()
-                    .and_then(|delta| delta.new_file().path().or_else(|| delta.old_file().path()))
-                    .or_else(|| entry.path().ok().map(Path::new))
-                    .ok_or_else(|| anyhow::anyhow!("Git returned a non-UTF-8 path"))?;
-                let path = GitPath::new(workspace, path)?.0;
-                let previous_path = delta
-                    .filter(|delta| delta.status() == git2::Delta::Renamed)
-                    .and_then(|delta| delta.old_file().path().map(Path::to_path_buf));
-                Ok(StatusEntry {
-                    path,
-                    previous_path,
-                    index: GitChange::from_status(status, StatusArea::Index),
-                    worktree: GitChange::from_status(status, StatusArea::Worktree),
-                    conflicted: status.is_conflicted(),
-                })
-            })
+            .map(|entry| StatusEntry::new(workspace, &entry))
             .collect::<anyhow::Result<Vec<_>>>()?;
         Ok(GitStatus {
             head: self.head()?,
@@ -408,15 +362,15 @@ impl GitRepository {
         target: DiffTarget,
         path: Option<&Path>,
     ) -> anyhow::Result<String> {
-        let mut options = diff_options();
         let paths = match path {
-            Some(path) => vec![GitPath::new(workspace, path)?.0],
+            Some(path) => vec![GitPath::new(workspace, path)?.path],
             None => self.paths(workspace)?,
         };
-        for path in &paths {
+        let mut options = paths.iter().try_fold(diff_options(), |mut options, path| {
             workspace.file_version(path)?;
             options.pathspec(path);
-        }
+            Ok::<_, anyhow::Error>(options)
+        })?;
         let tree = self
             .head()?
             .map(|id| self.repo.find_commit(git2::Oid::from_str(&id)?)?.tree())
@@ -443,22 +397,100 @@ impl GitRepository {
     }
 }
 
-pub(crate) struct GitPath(pub PathBuf);
+impl IndexEntry {
+    fn new(workspace: &WorkspacePolicy, entry: &git2::IndexEntry) -> anyhow::Result<Self> {
+        Ok(Self {
+            path: GitPath::new(workspace, Path::new(std::str::from_utf8(&entry.path)?))?.path,
+            blob: entry.id.to_string(),
+            mode: entry.mode,
+            flags: entry.flags,
+            extended_flags: entry.flags_extended,
+        })
+    }
+}
+
+impl StatusEntry {
+    fn new(workspace: &WorkspacePolicy, entry: &git2::StatusEntry<'_>) -> anyhow::Result<Self> {
+        let status = entry.status();
+        let delta = entry.index_to_workdir().or_else(|| entry.head_to_index());
+        let path = delta
+            .as_ref()
+            .and_then(|delta| delta.new_file().path().or_else(|| delta.old_file().path()))
+            .or_else(|| entry.path().ok().map(Path::new))
+            .ok_or_else(|| anyhow::anyhow!("Git returned a non-UTF-8 path"))?;
+        let path = GitPath::new(workspace, path)?.path;
+        let previous_path = delta
+            .filter(|delta| delta.status() == git2::Delta::Renamed)
+            .and_then(|delta| delta.old_file().path().map(Path::to_path_buf))
+            .map(|path| GitPath::new(workspace, &path).map(|path| path.path))
+            .transpose()?;
+        Ok(Self {
+            path,
+            previous_path,
+            index: GitChange::from_status(status, StatusArea::Index),
+            worktree: GitChange::from_status(status, StatusArea::Worktree),
+            conflicted: status.is_conflicted(),
+        })
+    }
+}
+
+impl GitStatus {
+    fn index_conflicts_with(&self, path: &Path) -> bool {
+        self.entries.iter().any(|entry| {
+            (entry.path == path || entry.previous_path.as_deref() == Some(path))
+                && (entry.index != GitChange::Unchanged || entry.conflicted)
+        })
+    }
+}
+
+impl From<&git2::Commit<'_>> for CommitInfo {
+    fn from(commit: &git2::Commit<'_>) -> Self {
+        Self {
+            id: commit.id().to_string(),
+            parents: commit.parent_ids().map(|id| id.to_string()).collect(),
+            author: commit.author().name().unwrap_or_default().to_owned(),
+            time: commit.time().seconds(),
+            message: String::from_utf8_lossy(commit.message_bytes()).into_owned(),
+        }
+    }
+}
+
+pub(crate) struct GitPath {
+    pub path: PathBuf,
+}
 
 impl GitPath {
     pub(crate) fn new(workspace: &WorkspacePolicy, path: &Path) -> anyhow::Result<Self> {
         let relative = workspace.relative_path(path, Access::Read)?;
-        match !relative.as_os_str().is_empty()
+        let valid = !relative.as_os_str().is_empty()
             && relative
                 .components()
                 .all(|component| matches!(component, Component::Normal(_)))
-            && !excluded(&relative)
-        {
-            true => Ok(Self(relative)),
+            && !excluded(&relative);
+        match valid {
+            true => Ok(Self { path: relative }),
             false => Err(anyhow::anyhow!(
                 "Git path is protected or empty: {}",
                 path.display()
             )),
+        }
+    }
+
+    fn tracked(workspace: &WorkspacePolicy, path: &Path) -> anyhow::Result<Self> {
+        let path = Self::new(workspace, path)?;
+        match workspace.file_size(&path.path) {
+            Ok(size) if size <= 16 * 1024 * 1024 => Ok(path),
+            Ok(_) => Err(anyhow::anyhow!(
+                "Tracked Git input exceeds the 16 MiB file limit"
+            )),
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                Ok(path)
+            }
+            Err(error) => Err(error),
         }
     }
 }
@@ -470,161 +502,6 @@ pub(crate) fn excluded(path: &Path) -> bool {
             .any(|excluded| name.eq_ignore_ascii_case(excluded)),
         _ => false,
     })
-}
-
-struct ControlDirectory;
-
-impl ControlDirectory {
-    fn new(root: &Path) -> anyhow::Result<Self> {
-        let mut pending = vec![root.to_path_buf()];
-        let mut count = 0usize;
-        while let Some(path) = pending.pop() {
-            let metadata = std::fs::symlink_metadata(&path)?;
-            count += 1;
-            match !metadata.is_symlink() && count <= 250_000 {
-                true => Ok(()),
-                false => Err(anyhow::anyhow!(
-                    "Git metadata has a symlink or exceeds 250000 entries"
-                )),
-            }?;
-            match (metadata.is_dir(), metadata.is_file()) {
-                (true, _) => pending.extend(
-                    std::fs::read_dir(&path)?
-                        .map(|entry| entry.map(|entry| entry.path()))
-                        .collect::<Result<Vec<_>, _>>()?,
-                ),
-                (_, true) => {
-                    if path.file_name().is_some_and(|name| {
-                        name.eq_ignore_ascii_case("config")
-                            || name.eq_ignore_ascii_case("config.worktree")
-                    }) {
-                        let config = ordinary_text(&path)?;
-                        let includes = config
-                            .lines()
-                            .map(str::trim)
-                            .map(str::to_ascii_lowercase)
-                            .any(|line| {
-                                line.starts_with('[')
-                                    && line
-                                        .trim_start_matches('[')
-                                        .trim_start()
-                                        .starts_with("include")
-                            });
-                        match includes {
-                            true => Err(anyhow::anyhow!(
-                                "Git config includes are unavailable inside the fixed project boundary"
-                            )),
-                            false => Ok(()),
-                        }?;
-                    }
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::fs::MetadataExt;
-                        match metadata.nlink() == 1 {
-                            true => Ok(()),
-                            false => {
-                                Err(anyhow::anyhow!("Git metadata hard links are unsupported"))
-                            }
-                        }?;
-                    }
-                    let normalized = path.to_string_lossy().to_ascii_lowercase();
-                    if normalized.ends_with("/objects/info/alternates")
-                        || normalized.ends_with("/objects/info/http-alternates")
-                    {
-                        match metadata.len() == 0 {
-                            true => Ok(()),
-                            false => Err(anyhow::anyhow!(
-                                "External Git object stores are unavailable"
-                            )),
-                        }?;
-                    }
-                }
-                _ => Err(anyhow::anyhow!("Git metadata contains a special file"))?,
-            }
-        }
-        Ok(Self)
-    }
-}
-
-fn ordinary_text(path: &Path) -> anyhow::Result<String> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("Missing Git metadata parent"))?;
-    let workspace = WorkspacePolicy::workspace(parent.to_path_buf())?;
-    workspace.read(path)
-}
-
-fn diff_options() -> DiffOptions {
-    let mut options = DiffOptions::new();
-    options
-        .include_untracked(true)
-        .recurse_untracked_dirs(true)
-        .show_untracked_content(true)
-        .disable_pathspec_match(true)
-        .ignore_submodules(true)
-        .skip_binary_check(false);
-    options
-}
-
-fn render_diff(diff: &git2::Diff<'_>) -> anyhow::Result<String> {
-    let mut bytes = Vec::new();
-    let mut exceeded = false;
-    let result = diff.print(DiffFormat::Patch, |delta, _, line| {
-        let hidden = delta
-            .new_file()
-            .path()
-            .or_else(|| delta.old_file().path())
-            .is_some_and(excluded);
-        let prefix = matches!(line.origin(), '+' | '-' | ' ');
-        let fits = bytes
-            .len()
-            .saturating_add(line.content().len() + usize::from(prefix))
-            <= OUTPUT_LIMIT;
-        match (hidden, fits) {
-            (true, _) => true,
-            (false, true) => {
-                bytes.extend(
-                    prefix
-                        .then_some(line.origin() as u8)
-                        .into_iter()
-                        .chain(line.content().iter().copied()),
-                );
-                true
-            }
-            (false, false) => {
-                exceeded = true;
-                false
-            }
-        }
-    });
-    match exceeded {
-        true => Err(anyhow::anyhow!("Git diff exceeds the 32 MiB output limit")),
-        false => {
-            result?;
-            Ok(String::from_utf8_lossy(&bytes).into_owned())
-        }
-    }
-}
-
-fn bounded_text(bytes: &[u8]) -> anyhow::Result<String> {
-    match bytes.len() <= OUTPUT_LIMIT {
-        true => String::from_utf8(bytes.to_vec()).map_err(|_| {
-            anyhow::anyhow!("The Git blob is binary; diff reports binary change metadata")
-        }),
-        false => Err(anyhow::anyhow!(
-            "Git content exceeds the 32 MiB output limit"
-        )),
-    }
-}
-
-fn commit_info(commit: &git2::Commit<'_>) -> CommitInfo {
-    CommitInfo {
-        id: commit.id().to_string(),
-        parents: commit.parent_ids().map(|id| id.to_string()).collect(),
-        author: commit.author().name().unwrap_or_default().to_owned(),
-        time: commit.time().seconds(),
-        message: String::from_utf8_lossy(commit.message_bytes()).into_owned(),
-    }
 }
 
 enum StatusArea {
@@ -660,24 +537,3 @@ impl GitChange {
 
 #[cfg(test)]
 pub(crate) mod tests;
-
-fn initialize() -> anyhow::Result<()> {
-    static INITIALIZED: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
-    INITIALIZED
-        .get_or_init(|| {
-            [
-                git2::ConfigLevel::System,
-                git2::ConfigLevel::Global,
-                git2::ConfigLevel::XDG,
-                git2::ConfigLevel::ProgramData,
-            ]
-            .into_iter()
-            .try_for_each(|level| {
-                unsafe { git2::opts::set_search_path(level, Path::new("/dev/null")) }
-                    .map_err(|error| error.to_string())
-            })
-        })
-        .as_ref()
-        .map(|_| ())
-        .map_err(|error| anyhow::anyhow!("Cannot disable external Git configuration: {error}"))
-}

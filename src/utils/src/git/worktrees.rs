@@ -1,13 +1,17 @@
-use super::{GitRepository, Revision};
+use super::{DiffTarget, GitRepository, Revision};
 use crate::{
-    changes::{Baseline, ChangeTracker, FileEdit, FileVersion},
+    changes::{ChangeTracker, FileEdit, FileVersion},
     workspace::{Access, WorkspacePolicy},
 };
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::{Path, PathBuf},
-};
+use snapshot::{WorktreeSnapshot, changed_paths};
+use state::WorktreeEvent;
+use std::path::PathBuf;
+
+mod snapshot;
+mod state;
+
+pub use state::WorktreeState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManagedWorktree {
@@ -19,26 +23,22 @@ pub struct ManagedWorktree {
     pub state: WorktreeState,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "state", rename_all = "snake_case")]
-pub enum WorktreeState {
-    Creating,
-    Active,
-    Integrated {
-        files: BTreeMap<PathBuf, FileVersion>,
-        head: String,
-    },
-    Removing,
-    Removed,
-    Failed {
-        message: String,
-    },
-}
-
 #[derive(Clone, Copy)]
 pub enum DirtySource {
     Reject,
     BaseOnly,
+}
+
+impl DirtySource {
+    pub fn new(value: &str) -> anyhow::Result<Self> {
+        match value {
+            "reject" => Ok(Self::Reject),
+            "base_only" => Ok(Self::BaseOnly),
+            _ => Err(anyhow::anyhow!(
+                "Dirty source policy must be reject or base_only"
+            )),
+        }
+    }
 }
 
 pub enum WorktreeOperation {
@@ -78,7 +78,7 @@ impl ManagedWorktree {
         }
     }
 
-    fn selected(
+    pub fn selected(
         workspace: &WorkspacePolicy,
         tracker: &ChangeTracker,
         id: &str,
@@ -90,13 +90,13 @@ impl ManagedWorktree {
             .find(|record| record.id == id)
             .ok_or_else(|| anyhow::anyhow!("Unknown managed worktree ID"))?;
         let uuid = uuid::Uuid::parse_str(id)?;
-        match record.path
+        let valid = record.path
             == workspace
                 .root()
                 .join(".joe-worktrees")
                 .join(uuid.to_string())
-            && record.branch == format!("joe/{uuid}")
-        {
+            && record.branch == format!("joe/{uuid}");
+        match valid {
             true => Ok(record),
             false => Err(anyhow::anyhow!(
                 "Managed worktree path or branch does not match its saved identity"
@@ -113,18 +113,28 @@ impl ManagedWorktree {
         tracker.update_worktrees(records)
     }
 
-    fn source(workspace: &WorkspacePolicy) -> anyhow::Result<GitRepository> {
-        let git = GitRepository::required(workspace)?;
-        match git
-            .repo
-            .commondir()
-            .canonicalize()?
-            .starts_with(workspace.root())
-        {
-            true => Ok(git),
-            false => Err(anyhow::anyhow!(
-                "Managed worktree mutations require the original repository root; this linked worktree has read-only shared Git metadata"
-            )),
+    fn transition(mut self, tracker: &ChangeTracker, event: WorktreeEvent) -> anyhow::Result<Self> {
+        self.state = self.state.transition(event)?;
+        self.save(tracker)?;
+        Ok(self)
+    }
+
+    fn finish(
+        self,
+        tracker: &ChangeTracker,
+        outcome: anyhow::Result<WorktreeEvent>,
+    ) -> anyhow::Result<Self> {
+        match outcome {
+            Ok(event) => self.transition(tracker, event),
+            Err(error) => {
+                self.transition(
+                    tracker,
+                    WorktreeEvent::Failed {
+                        message: format!("{error:#}"),
+                    },
+                )?;
+                Err(error)
+            }
         }
     }
 
@@ -134,55 +144,12 @@ impl ManagedWorktree {
         base: Revision,
         dirty: DirtySource,
     ) -> anyhow::Result<Self> {
-        let git = Self::source(workspace)?;
-        let status = git.status(workspace)?;
-        let dirty_source = !status.entries.is_empty();
-        match (dirty_source, dirty) {
-            (true, DirtySource::Reject) => Err(anyhow::anyhow!(
-                "Source index or worktree is dirty. Choose base_only explicitly to isolate the selected commit without copying existing edits"
-            )),
-            _ => Ok(()),
-        }?;
-        let commit = git.commit(&base)?;
-        let files = commit_files(&git.repo, commit.id())?;
-        let id = uuid::Uuid::new_v4().to_string();
-        let path = workspace.root().join(".joe-worktrees").join(&id);
-        for name in files.keys() {
-            workspace.check(&path.join(name), Access::Write)?;
-        }
-        workspace.create_parent_dirs(&path)?;
-        let mut record = Self {
-            id: id.clone(),
-            path,
-            base: commit.id().to_string(),
-            branch: format!("joe/{id}"),
-            dirty_source,
-            state: WorktreeState::Creating,
-        };
-        record.save(tracker)?;
-        let created = (|| {
-            let branch = git.repo.branch(&record.branch, &commit, false)?;
-            let mut options = git2::WorktreeAddOptions::new();
-            options.reference(Some(branch.get()));
-            git.repo.worktree(&id, &record.path, Some(&options))?;
-            let child = WorkspacePolicy::workspace(record.path.clone())?;
-            let snapshot = Baseline::capture(&child)?;
-            match snapshot.files == files {
-                true => Ok(()),
-                false => Err(anyhow::anyhow!(
-                    "Worktree checkout differs from the selected base; retained for inspection"
-                )),
-            }
-        })();
-        record.state = match &created {
-            Ok(()) => WorktreeState::Active,
-            Err(error) => WorktreeState::Failed {
-                message: format!("{error:#}"),
-            },
-        };
-        record.save(tracker)?;
-        created?;
-        Ok(record)
+        let git = GitRepository::source(workspace)?;
+        let checkout = WorktreeCheckout::new(workspace, &git, base, dirty)?;
+        workspace.create_parent_dirs(&checkout.record.path)?;
+        checkout.record.save(tracker)?;
+        let outcome = checkout.execute(&git);
+        checkout.record.finish(tracker, outcome)
     }
 
     fn child_workspace(
@@ -190,252 +157,229 @@ impl ManagedWorktree {
         workspace: &WorkspacePolicy,
         source: &GitRepository,
     ) -> anyhow::Result<WorkspacePolicy> {
-        match workspace.is_directory(&self.path)? {
-            true => Ok(()),
-            false => Err(anyhow::anyhow!(
-                "Managed worktree is not an ordinary project directory"
-            )),
-        }?;
-        let child = WorkspacePolicy::workspace(self.path.clone())?;
+        let path = workspace
+            .is_directory(&self.path)?
+            .then_some(self.path.clone())
+            .ok_or_else(|| {
+                anyhow::anyhow!("Managed worktree is not an ordinary project directory")
+            })?;
+        let child = WorkspacePolicy::workspace(path)?;
         let git = GitRepository::required(&child)?;
-        match git.repo.path().canonicalize()?
-            == source
-                .repo
-                .commondir()
-                .join("worktrees")
-                .join(&self.id)
-                .canonicalize()?
-        {
+        let expected = source
+            .repo
+            .commondir()
+            .join("worktrees")
+            .join(&self.id)
+            .canonicalize()?;
+        match git.repo.path().canonicalize()? == expected {
             true => Ok(child),
             false => Err(anyhow::anyhow!("Managed worktree control metadata changed")),
         }
     }
 
     pub fn integration_paths(&self, workspace: &WorkspacePolicy) -> anyhow::Result<Vec<PathBuf>> {
-        let git = Self::source(workspace)?;
-        let base = commit_files(&git.repo, git2::Oid::from_str(&self.base)?)?;
+        let git = GitRepository::source(workspace)?;
+        let base = WorktreeSnapshot::base(&git, &self.base)?;
+        let previous = self.state.integration_files(&base)?;
         let child = self.child_workspace(workspace, &git)?;
-        let current = Baseline::capture(&child)?.files;
-        Ok(changed_paths(&base, &current))
+        let current = WorktreeSnapshot::current(&child, &GitRepository::required(&child)?)?;
+        Ok(changed_paths(&base.files, &current.files)
+            .into_iter()
+            .chain(changed_paths(&base.files, previous))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect())
     }
 
     fn integrate(
-        mut self,
+        self,
         workspace: &WorkspacePolicy,
         tracker: &ChangeTracker,
     ) -> anyhow::Result<Self> {
-        match self.state {
-            WorktreeState::Active | WorktreeState::Integrated { .. } => Ok(()),
-            _ => Err(anyhow::anyhow!("Worktree is not available for integration")),
+        let integration = WorktreeIntegration::new(&self, workspace)?;
+        let event = integration.apply(workspace, tracker)?;
+        self.transition(tracker, event)
+    }
+
+    fn remove(self, workspace: &WorkspacePolicy, tracker: &ChangeTracker) -> anyhow::Result<Self> {
+        let git = GitRepository::source(workspace)?;
+        let removal = WorktreeRemoval::new(&self, workspace, &git)?;
+        let record = self.transition(tracker, WorktreeEvent::RemovalStarted)?;
+        record.finish(tracker, removal.execute())
+    }
+}
+
+struct WorktreeCheckout {
+    record: ManagedWorktree,
+    base: WorktreeSnapshot,
+}
+
+impl WorktreeCheckout {
+    fn new(
+        workspace: &WorkspacePolicy,
+        git: &GitRepository,
+        revision: Revision,
+        dirty: DirtySource,
+    ) -> anyhow::Result<Self> {
+        let dirty_source = !git.status(workspace)?.entries.is_empty();
+        let dirty_source = match dirty {
+            DirtySource::Reject if dirty_source => Err(anyhow::anyhow!(
+                "Source index or worktree is dirty. Choose base_only explicitly to isolate the selected commit without copying existing edits"
+            )),
+            _ => Ok(dirty_source),
         }?;
-        let git = Self::source(workspace)?;
-        match git.head()?.as_deref() == Some(&self.base) {
+        let base = WorktreeSnapshot::base(git, &git.commit(&revision)?.id().to_string())?;
+        let id = uuid::Uuid::new_v4().to_string();
+        let path = workspace.root().join(".joe-worktrees").join(&id);
+        base.files
+            .keys()
+            .try_for_each(|name| workspace.check(&path.join(name), Access::Write).map(|_| ()))?;
+        Ok(Self {
+            record: ManagedWorktree {
+                branch: format!("joe/{id}"),
+                id,
+                path,
+                base: base.head.clone(),
+                dirty_source,
+                state: WorktreeState::Creating,
+            },
+            base,
+        })
+    }
+
+    fn execute(&self, git: &GitRepository) -> anyhow::Result<WorktreeEvent> {
+        let commit = git
+            .repo
+            .find_commit(git2::Oid::from_str(&self.base.head)?)?;
+        let branch = git.repo.branch(&self.record.branch, &commit, false)?;
+        let mut options = git2::WorktreeAddOptions::new();
+        options.reference(Some(branch.get()));
+        git.repo
+            .worktree(&self.record.id, &self.record.path, Some(&options))?;
+        let child = WorkspacePolicy::workspace(self.record.path.clone())?;
+        let snapshot = WorktreeSnapshot::current(&child, &GitRepository::required(&child)?)?;
+        match snapshot.files == self.base.files && snapshot.head == self.base.head {
+            true => Ok(WorktreeEvent::CheckoutCompleted),
+            false => Err(anyhow::anyhow!(
+                "Worktree checkout differs from the selected base; retained for inspection"
+            )),
+        }
+    }
+}
+
+struct WorktreeIntegration {
+    snapshot: WorktreeSnapshot,
+    edits: Vec<FileEdit>,
+}
+
+impl WorktreeIntegration {
+    fn new(record: &ManagedWorktree, workspace: &WorkspacePolicy) -> anyhow::Result<Self> {
+        let git = GitRepository::source(workspace)?;
+        let base = WorktreeSnapshot::base(&git, &record.base)?;
+        let previous = record.state.integration_files(&base)?;
+        match git.head()?.as_deref() == Some(&record.base) {
             true => Ok(()),
             false => Err(anyhow::anyhow!(
                 "Integration conflict: source HEAD moved since the selected base"
             )),
         }?;
-        let base = commit_files(&git.repo, git2::Oid::from_str(&self.base)?)?;
-        let child = self.child_workspace(workspace, &git)?;
+        let child = record.child_workspace(workspace, &git)?;
         let child_git = GitRepository::required(&child)?;
-        match child_git
-            .status(&child)?
-            .entries
-            .iter()
-            .all(|entry| !entry.conflicted)
-        {
-            true => Ok(()),
-            false => Err(anyhow::anyhow!(
+        let status = child_git.status(&child)?;
+        let snapshot = match status.entries.iter().any(|entry| entry.conflicted) {
+            true => Err(anyhow::anyhow!(
                 "Resolve worktree index conflicts before integration"
             )),
+            false if !child_git.diff(&child, DiffTarget::Staged, None)?.is_empty() => {
+                Err(anyhow::anyhow!(
+                    "Worktree has staged changes; integration preserves index state by requiring committed or unstaged worktree edits"
+                ))
+            }
+            false => WorktreeSnapshot::current(&child, &child_git),
         }?;
-        match child_git
-            .diff(&child, super::DiffTarget::Staged, None)?
-            .is_empty()
-        {
-            true => Ok(()),
-            false => Err(anyhow::anyhow!(
-                "Worktree has staged changes; integration preserves index state by requiring committed or unstaged worktree edits"
-            )),
-        }?;
-        let mut current = Baseline::capture(&child)?.files;
-        current.retain(|_, version| *version != FileVersion::Missing);
-        let changed = changed_paths(&base, &current);
         let status = git.status(workspace)?;
-        let previous = match &self.state {
-            WorktreeState::Integrated { files, .. } => files,
-            _ => &base,
-        };
-        let paths = changed
+        let edits = changed_paths(&base.files, &snapshot.files)
             .into_iter()
-            .chain(changed_paths(&base, previous))
-            .collect::<BTreeSet<_>>();
-        let edits = paths
+            .chain(changed_paths(&base.files, previous))
+            .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
-            .map(|path| {
-                match status.entries.iter().any(|entry| {
-                    (entry.path == path || entry.previous_path.as_ref() == Some(&path))
-                        && (entry.index != super::GitChange::Unchanged || entry.conflicted)
-                }) {
-                    true => Err(anyhow::anyhow!(
-                        "Integration conflict with source index: {}",
-                        path.display()
-                    )),
-                    false => Ok(()),
-                }?;
-                let before = previous.get(&path).cloned().unwrap_or(FileVersion::Missing);
-                let after = current.get(&path).cloned().unwrap_or(FileVersion::Missing);
-                FileEdit::new(workspace, &path, before, after)
+            .map(|path| match status.index_conflicts_with(&path) {
+                true => Err(anyhow::anyhow!(
+                    "Integration conflict with source index: {}",
+                    path.display()
+                )),
+                false => FileEdit::new(
+                    workspace,
+                    &path,
+                    previous.get(&path).cloned().unwrap_or(FileVersion::Missing),
+                    snapshot
+                        .files
+                        .get(&path)
+                        .cloned()
+                        .unwrap_or(FileVersion::Missing),
+                ),
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
-        if !edits.is_empty() {
-            tracker.apply(workspace, edits)?;
-        }
-        self.state = WorktreeState::Integrated {
-            files: current,
-            head: child_git
-                .head()?
-                .ok_or_else(|| anyhow::anyhow!("Worktree HEAD is missing"))?,
-        };
-        self.save(tracker)?;
-        Ok(self)
+        Ok(Self { snapshot, edits })
     }
 
-    fn remove(
-        mut self,
+    fn apply(
+        self,
         workspace: &WorkspacePolicy,
         tracker: &ChangeTracker,
+    ) -> anyhow::Result<WorktreeEvent> {
+        match self.edits.is_empty() {
+            true => Ok(()),
+            false => tracker.apply(workspace, self.edits).map(|_| ()),
+        }?;
+        Ok(WorktreeEvent::Integrated {
+            snapshot: self.snapshot,
+        })
+    }
+}
+
+struct WorktreeRemoval<'repo> {
+    branch: git2::Branch<'repo>,
+    worktree: git2::Worktree,
+}
+
+impl<'repo> WorktreeRemoval<'repo> {
+    fn new(
+        record: &ManagedWorktree,
+        workspace: &WorkspacePolicy,
+        git: &'repo GitRepository,
     ) -> anyhow::Result<Self> {
-        let git = Self::source(workspace)?;
-        let child = self.child_workspace(workspace, &git)?;
+        let expected = record.state.cleanup_snapshot(git, &record.base)?;
+        let child = record.child_workspace(workspace, git)?;
         let child_git = GitRepository::required(&child)?;
-        let expected = match &self.state {
-            WorktreeState::Active => commit_files(&git.repo, git2::Oid::from_str(&self.base)?)?,
-            WorktreeState::Integrated { files, .. } => files.clone(),
-            _ => Err(anyhow::anyhow!(
-                "Incomplete worktree operation requires inspection; automatic cleanup is unavailable"
-            ))?,
-        };
-        let expected_head = match &self.state {
-            WorktreeState::Integrated { head, .. } => head,
-            _ => &self.base,
-        };
-        let actual = all_files(&child)?;
-        match actual == expected
-            && child_git.head()?.as_ref() == Some(expected_head)
+        let actual = WorktreeSnapshot::complete(&child, &child_git)?;
+        let unchanged = actual.files == expected.files
+            && actual.head == expected.head
             && !child_git.repo.index()?.has_conflicts()
-            && child_git
-                .diff(&child, super::DiffTarget::Staged, None)?
-                .is_empty()
-        {
+            && child_git.diff(&child, DiffTarget::Staged, None)?.is_empty();
+        match unchanged {
             true => Ok(()),
             false => Err(anyhow::anyhow!(
                 "Cleanup conflict: worktree has edits, commits, ignored files, or private session data that have not been integrated"
             )),
         }?;
-        let mut branch = git
+        let branch = git
             .repo
-            .find_branch(&self.branch, git2::BranchType::Local)?;
-        match branch.get().target().map(|id| id.to_string()).as_ref() == Some(expected_head) {
-            true => Ok(()),
+            .find_branch(&record.branch, git2::BranchType::Local)?;
+        match branch.get().target().map(|id| id.to_string()).as_ref() == Some(&expected.head) {
+            true => Ok(Self {
+                branch,
+                worktree: git.repo.find_worktree(&record.id)?,
+            }),
             false => Err(anyhow::anyhow!("Cleanup conflict: managed branch changed")),
-        }?;
-        self.state = WorktreeState::Removing;
-        self.save(tracker)?;
+        }
+    }
+
+    fn execute(mut self) -> anyhow::Result<WorktreeEvent> {
         let mut options = git2::WorktreePruneOptions::new();
         options.valid(true).working_tree(true);
-        git.repo
-            .find_worktree(&self.id)?
-            .prune(Some(&mut options))?;
-        branch.delete()?;
-        self.state = WorktreeState::Removed;
-        self.save(tracker)?;
-        Ok(self)
+        self.worktree.prune(Some(&mut options))?;
+        self.branch.delete()?;
+        Ok(WorktreeEvent::RemovalCompleted)
     }
-}
-
-fn changed_paths(
-    before: &BTreeMap<PathBuf, FileVersion>,
-    after: &BTreeMap<PathBuf, FileVersion>,
-) -> Vec<PathBuf> {
-    before
-        .keys()
-        .chain(after.keys())
-        .filter(|path| before.get(*path) != after.get(*path))
-        .cloned()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
-fn commit_files(
-    repo: &git2::Repository,
-    id: git2::Oid,
-) -> anyhow::Result<BTreeMap<PathBuf, FileVersion>> {
-    let tree = repo.find_commit(id)?.tree()?;
-    let mut files = BTreeMap::new();
-    let mut bytes = 0usize;
-    collect_tree(repo, &tree, Path::new(""), &mut files, &mut bytes)?;
-    Ok(files)
-}
-
-fn collect_tree(
-    repo: &git2::Repository,
-    tree: &git2::Tree<'_>,
-    root: &Path,
-    files: &mut BTreeMap<PathBuf, FileVersion>,
-    bytes: &mut usize,
-) -> anyhow::Result<()> {
-    tree.iter().try_for_each(|entry| {
-        let path = root.join(entry.name()?);
-        match entry.filemode() {
-            0o040000 => collect_tree(repo, &repo.find_tree(entry.id())?, &path, files, bytes),
-            0o100644 | 0o100755 => {
-                let blob = repo.find_blob(entry.id())?;
-                *bytes += blob.size();
-                match !super::excluded(&path) && *bytes <= 64 * 1024 * 1024 && blob.size() <= 16 * 1024 * 1024 && files.len() < 250_000 {
-                    true => Ok(()),
-                    false => Err(anyhow::anyhow!("Selected tree contains a protected path or exceeds snapshot limits")),
-                }?;
-                files.insert(path, FileVersion::File { content: blob.content().to_vec(), mode: (entry.filemode() & 0o777) as u32 });
-                Ok(())
-            }
-            _ => Err(anyhow::anyhow!("Managed checkout requires ordinary files; symlinks and submodules are unsupported: {}", path.display())),
-        }
-    })
-}
-
-fn all_files(workspace: &WorkspacePolicy) -> anyhow::Result<BTreeMap<PathBuf, FileVersion>> {
-    let mut pending = vec![workspace.root().to_path_buf()];
-    let mut files = BTreeMap::new();
-    let mut bytes = 0usize;
-    let mut visited = 0usize;
-    while let Some(directory) = pending.pop() {
-        for entry in workspace.entries(&directory)? {
-            visited += 1;
-            match visited <= 250_000 {
-                true => Ok(()),
-                false => Err(anyhow::anyhow!("Worktree cleanup exceeds the entry limit")),
-            }?;
-            match (
-                entry.path == workspace.root().join(".git"),
-                workspace.is_directory(&entry.path)?,
-            ) {
-                (true, _) => {}
-                (_, true) => pending.push(entry.path),
-                (_, false) => {
-                    let version = workspace.file_version(&entry.path)?;
-                    bytes += version.bytes().len();
-                    match bytes <= 64 * 1024 * 1024 {
-                        true => Ok(()),
-                        false => Err(anyhow::anyhow!(
-                            "Worktree cleanup exceeds the content limit"
-                        )),
-                    }?;
-                    files.insert(workspace.relative_path(&entry.path, Access::Read)?, version);
-                }
-            }
-        }
-    }
-    Ok(files)
 }

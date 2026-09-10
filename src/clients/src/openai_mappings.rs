@@ -425,6 +425,24 @@ mod tests {
     }
 
     #[test]
+    fn derived_input_schemas_survive_both_provider_mappings() {
+        use tools::tool_defs::ToolDefTrait;
+        for properties in [
+            tools::git::Git::field_properties(),
+            tools::worktree::Worktree::field_properties(),
+            tools::read_file::ReadFile::field_properties(),
+        ] {
+            for property in properties.into_values() {
+                let expected = property.clone().into_schema();
+                let openai: crate::openai::ToolProperty = property.clone().into();
+                let claude: crate::claude::ToolProperty = property.into();
+                assert_eq!(serde_json::to_value(openai).unwrap(), expected);
+                assert_eq!(serde_json::to_value(claude).unwrap(), expected);
+            }
+        }
+    }
+
+    #[test]
     fn native_compaction_replays_the_entire_window_without_altering_opaque_or_retained_items() {
         let items = serde_json::json!([
             {"type": "message", "id": "msg-old", "role": "user", "content": [{"type": "input_text", "text": "keep my requirements"}], "future": [1, 2]},

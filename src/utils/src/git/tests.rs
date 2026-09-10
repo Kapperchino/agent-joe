@@ -520,3 +520,121 @@ fn worker_scopes_cannot_read_repository_metadata_or_manage_unallowed_worktrees()
     }
     assert!(!fixture.root.join(".joe-worktrees").exists());
 }
+
+#[test]
+fn repeated_integration_includes_reverted_paths_and_preserves_the_source_index() {
+    use worktrees::{DirtySource, ManagedWorktree, WorktreeOperation, WorktreeState};
+    let fixture = Fixture::new();
+    fixture.write("file.txt", "base\n");
+    fixture.stage("file.txt");
+    fixture.commit();
+    let tracker = ChangeTracker::default();
+    tracker.start(&fixture.workspace).unwrap();
+    let source_index = std::fs::read(fixture.root.join(".git/index")).unwrap();
+    let record = ManagedWorktree::execute(
+        &fixture.workspace,
+        &tracker,
+        WorktreeOperation::Create {
+            base: Revision::new("HEAD").unwrap(),
+            dirty: DirtySource::Reject,
+        },
+    )
+    .unwrap()
+    .remove(0);
+    std::fs::write(record.path.join("file.txt"), "integrated\n").unwrap();
+    let integrated = ManagedWorktree::execute(
+        &fixture.workspace,
+        &tracker,
+        WorktreeOperation::Integrate {
+            id: record.id.clone(),
+        },
+    )
+    .unwrap()
+    .remove(0);
+    assert!(matches!(integrated.state, WorktreeState::Integrated { .. }));
+    assert_eq!(
+        fixture.workspace.read(Path::new("file.txt")).unwrap(),
+        "integrated\n"
+    );
+    std::fs::write(record.path.join("file.txt"), "base\n").unwrap();
+    assert_eq!(
+        integrated.integration_paths(&fixture.workspace).unwrap(),
+        vec![PathBuf::from("file.txt")]
+    );
+    ManagedWorktree::execute(
+        &fixture.workspace,
+        &tracker,
+        WorktreeOperation::Integrate {
+            id: record.id.clone(),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        fixture.workspace.read(Path::new("file.txt")).unwrap(),
+        "base\n"
+    );
+    assert_eq!(
+        source_index,
+        std::fs::read(fixture.root.join(".git/index")).unwrap()
+    );
+    let removed = ManagedWorktree::execute(
+        &fixture.workspace,
+        &tracker,
+        WorktreeOperation::Remove { id: record.id },
+    )
+    .unwrap();
+    assert!(matches!(removed[0].state, WorktreeState::Removed));
+}
+
+#[test]
+fn interrupted_worktree_states_prevent_integration_and_cleanup() {
+    use worktrees::{DirtySource, ManagedWorktree, WorktreeOperation, WorktreeState};
+    let fixture = Fixture::new();
+    fixture.write("file.txt", "base\n");
+    fixture.stage("file.txt");
+    fixture.commit();
+    let tracker = ChangeTracker::default();
+    tracker.start(&fixture.workspace).unwrap();
+    let record = ManagedWorktree::execute(
+        &fixture.workspace,
+        &tracker,
+        WorktreeOperation::Create {
+            base: Revision::new("HEAD").unwrap(),
+            dirty: DirtySource::Reject,
+        },
+    )
+    .unwrap()
+    .remove(0);
+    for state in [
+        WorktreeState::Creating,
+        WorktreeState::Removing,
+        WorktreeState::Removed,
+        WorktreeState::Failed {
+            message: "interrupted".into(),
+        },
+    ] {
+        let mut saved = record.clone();
+        saved.state = state;
+        tracker.update_worktrees(vec![saved.clone()]).unwrap();
+        assert!(saved.integration_paths(&fixture.workspace).is_err());
+        for operation in [
+            WorktreeOperation::Integrate {
+                id: record.id.clone(),
+            },
+            WorktreeOperation::Remove {
+                id: record.id.clone(),
+            },
+        ] {
+            assert!(ManagedWorktree::execute(&fixture.workspace, &tracker, operation).is_err());
+        }
+        assert_eq!(
+            serde_json::to_value(&tracker.snapshot().unwrap().worktrees[0].state).unwrap(),
+            serde_json::to_value(&saved.state).unwrap()
+        );
+        assert!(record.path.join("file.txt").exists());
+        assert_eq!(
+            fixture.workspace.read(Path::new("file.txt")).unwrap(),
+            "base\n"
+        );
+    }
+}
