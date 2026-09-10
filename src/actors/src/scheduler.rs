@@ -1,6 +1,6 @@
 use crate::{
     actor::{ActorContext, ActorInfo, Dependency, Message},
-    runtime::WorkspaceRevision,
+    runtime::{ExecutionRole, WorkspaceRevision},
     turn::{Tag, ToolJob},
 };
 use analysis::contexts::context::Context;
@@ -158,9 +158,14 @@ impl<C: Context + Clone + 'static> PreparedTool<C> {
 
 impl<C: Context + Clone + 'static> Executor<C> {
     fn prepare(&self, job: ToolJob) -> Result<PreparedTool<C>, ToolFailure> {
-        if let Some(worker) = &self.dependency.runtime.worker {
-            match worker.request.allows_tool(job.call.name.as_ref()) {
-                true => worker.budget.tool_call().map_err(|error| {
+        if let ExecutionRole::Worker { execution } = &self.dependency.runtime.role {
+            match self
+                .dependency
+                .runtime
+                .role
+                .allows_tool(job.call.name.as_ref())
+            {
+                true => execution.budget.tool_call().map_err(|error| {
                     ToolFailure::new(
                         ToolFailureKind::Worker,
                         ToolEffects::NotStarted,
@@ -214,13 +219,13 @@ impl<C: Context + Clone + 'static> Executor<C> {
                 ..result
             },
         };
-        if let Some(worker) = &self.dependency.runtime.worker {
+        if let ExecutionRole::Worker { execution } = &self.dependency.runtime.role {
             let effect = self
                 .dependency
                 .tool(job.call.name.as_ref())
                 .and_then(|tool| tool.effect_from_input_erased(&job.call.input_value()).ok())
                 .unwrap_or(ToolEffect::Read);
-            worker.record(effect, &result);
+            execution.record(effect, &result);
         }
         self.emit(
             tag,
@@ -243,8 +248,8 @@ impl<C: Context + Clone + 'static> Executor<C> {
             .interaction
             .authorize(prepared.effect)?;
         let _registration = scope.register(ResourceKind::Tool, prepared.job.call.name.to_string());
-        let _writer = match (prepared.effect, &self.dependency.runtime.worker) {
-            (ToolEffect::Write | ToolEffect::Validate, None) => Some(self.dependency.runtime.workspace.writer.clone().try_lock_owned().map_err(|_| ToolFailure::new(ToolFailureKind::InvalidInput, ToolEffects::NotStarted, "A worker owns workspace writes; wait for it to finish before editing or validating"))?),
+        let _writer = match (prepared.effect, &self.dependency.runtime.role) {
+            (ToolEffect::Write | ToolEffect::Validate, ExecutionRole::Root | ExecutionRole::Helper) => Some(self.dependency.runtime.workspace.writer.clone().try_lock_owned().map_err(|_| ToolFailure::new(ToolFailureKind::InvalidInput, ToolEffects::NotStarted, "A worker owns workspace writes; wait for it to finish before editing or validating"))?),
             _ => None,
         };
         let lease = self

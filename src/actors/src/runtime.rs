@@ -21,10 +21,28 @@ impl std::fmt::Display for WorkspaceRevision {
 }
 
 #[derive(Clone)]
+pub(crate) enum ExecutionRole {
+    Root,
+    Worker {
+        execution: Arc<crate::worker_registry::WorkerExecution>,
+    },
+    Helper,
+}
+
+impl ExecutionRole {
+    pub(crate) fn allows_tool(&self, name: &str) -> bool {
+        match self {
+            Self::Root | Self::Helper => true,
+            Self::Worker { execution } => execution.request.allows_tool(name),
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct Runtime {
     pub(crate) interaction: Arc<crate::interaction_policy::InteractionPolicy>,
     pub workers: Arc<crate::worker_registry::WorkerRegistry>,
-    pub(crate) worker: Option<Arc<crate::worker_registry::WorkerExecution>>,
+    pub(crate) role: ExecutionRole,
     pub(crate) turn_scope: Option<ExecutionScope>,
     pub(crate) inherited_constraints: Vec<String>,
     pub context_budget: crate::context::ContextBudget,
@@ -41,7 +59,7 @@ impl Default for Runtime {
         Self {
             interaction: Arc::default(),
             workers: Arc::default(),
-            worker: None,
+            role: ExecutionRole::Root,
             turn_scope: None,
             inherited_constraints: Vec::new(),
             context_budget: Default::default(),

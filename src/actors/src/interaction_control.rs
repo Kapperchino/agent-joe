@@ -1,6 +1,6 @@
 use crate::{
-    actor_state::ActorState, session::Event, session_control::Persistence, turn::FollowUp,
-    turn_machine::SessionEvent,
+    actor_state::ActorState, runtime::ExecutionRole, session::Event, session_control::Persistence,
+    turn::FollowUp, turn_machine::SessionEvent,
 };
 use analysis::contexts::context::Context;
 use commands::command::Command;
@@ -12,9 +12,9 @@ use utils::execution::ExecutionScope;
 
 impl<C: Context + Clone + 'static> ActorState<C> {
     pub(crate) fn interaction_instructions(&self) -> String {
-        let guidance = match self.dependency.runtime.worker.is_none() {
-            true => include_str!("workers/resources/interaction.md"),
-            false => {
+        let guidance = match self.dependency.runtime.role {
+            ExecutionRole::Root => include_str!("workers/resources/interaction.md"),
+            ExecutionRole::Worker { .. } | ExecutionRole::Helper => {
                 "Inherit the parent's work mode. Report questions, blockers, plan progress and evidence to the parent; only the root can update the shared plan or ask the user."
             }
         };
@@ -24,7 +24,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         )
     }
     pub(crate) fn refresh_interaction(&self) {
-        if self.dependency.runtime.worker.is_none() {
+        if matches!(self.dependency.runtime.role, ExecutionRole::Root) {
             self.dependency
                 .runtime
                 .interaction
@@ -193,12 +193,12 @@ impl<'a, C: Context + Clone + 'static> Interaction<'a, C> {
         match (
             &state.persistence,
             scope.cancel.is_cancelled(),
-            &state.dependency.runtime.worker,
+            &state.dependency.runtime.role,
         ) {
-            (Persistence::Ready, false, None) => Ok(Self { state }),
+            (Persistence::Ready, false, ExecutionRole::Root) => Ok(Self { state }),
             (Persistence::Failed(failure), _, _) => Err(anyhow::anyhow!(failure.to_string())),
             (_, true, _) => Err(anyhow::anyhow!("Interaction cancelled")),
-            (_, _, Some(_)) => Err(anyhow::anyhow!(
+            (_, _, ExecutionRole::Worker { .. } | ExecutionRole::Helper) => Err(anyhow::anyhow!(
                 "Only the root can change the plan or ask the user; report questions to the parent"
             )),
         }

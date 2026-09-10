@@ -131,12 +131,16 @@ impl Drop for Harness {
 }
 
 async fn harness() -> Harness {
+    harness_with_runtime(Default::default()).await
+}
+
+async fn harness_with_runtime(runtime: crate::runtime::Runtime) -> Harness {
     let (actor, _) = Actor::spawn(None, IdleActor, ()).await.unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
     let (tui_tx, _) = flume::unbounded();
     let state = ActorState::new(
         Dependency {
-            runtime: Default::default(),
+            runtime,
             client: LLmClient::Injected(Arc::new(UnusedProvider)),
             tools: vec![Arc::new(EchoTool(calls.clone()))],
             context: TestContext {
@@ -156,6 +160,49 @@ async fn harness() -> Harness {
         actor,
         calls,
     }
+}
+
+#[tokio::test]
+async fn helpers_preserve_parent_interaction_without_root_tools_or_plan_context() {
+    use crate::runtime::{ExecutionRole, Runtime};
+    use common_models::interaction::{Planning, WorkMode};
+
+    let runtime = Runtime {
+        role: ExecutionRole::Helper,
+        ..Runtime::default()
+    };
+    let interaction = runtime.interaction.clone();
+    interaction.set(
+        &Planning {
+            mode: WorkMode::Plan,
+            ..Planning::default()
+        },
+        &Default::default(),
+    );
+    let mut h = harness_with_runtime(runtime).await;
+    assert!(h.state.dependency.tool("echo").is_some());
+    assert!(h.state.dependency.tool("request_user_input").is_none());
+    assert!(h.state.dependency.tool("update_plan").is_none());
+    h.state.planning.mode = WorkMode::Implement;
+    h.state
+        .planning
+        .record_evidence("helper".into(), "Helper evidence".into());
+    h.state.refresh_interaction();
+    assert_eq!(interaction.mode(), WorkMode::Plan);
+    let input = h
+        .state
+        .context_input(common_models::runtime_ids::TurnId::new(), &h.state.llm)
+        .unwrap();
+    assert!(input.planning.is_none());
+    assert!(input.instructions.contains("Work mode: Plan"));
+    let scope = h.state.dependency.runtime.scope.clone();
+    assert!(crate::interaction_control::Interaction::new(&mut h.state, &scope).is_err());
+    h.state.clear_history().await.unwrap();
+    assert_eq!(interaction.mode(), WorkMode::Plan);
+    assert!(matches!(
+        h.state.dependency.runtime.role,
+        ExecutionRole::Helper
+    ));
 }
 
 #[tokio::test]

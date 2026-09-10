@@ -6,6 +6,7 @@ use super::{
 };
 use crate::{
     actor::{ActorInfo, Dependency},
+    runtime::ExecutionRole,
     worker::{Worker, WorkerFailure, run_worker},
     workers::task_worker::TaskWorker,
 };
@@ -64,14 +65,15 @@ impl PreparedWorker {
             WorkerRole::Write => tools::tool_defs::ToolEffect::DelegateWrite,
         };
         info.dep.runtime.interaction.authorize(effect)?;
-        let parent_scope = match &info.dep.runtime.worker {
-            None => info
+        let parent_scope = match &info.dep.runtime.role {
+            ExecutionRole::Root => info
                 .dep
                 .runtime
                 .turn_scope
                 .clone()
                 .ok_or_else(|| anyhow::anyhow!("Workers require an active parent turn")),
-            Some(_) => Err(anyhow::anyhow!("Maximum worker depth is one")),
+            ExecutionRole::Worker { .. } => Err(anyhow::anyhow!("Maximum worker depth is one")),
+            ExecutionRole::Helper => Err(anyhow::anyhow!("Only the root can start workers")),
         }?;
         let access = match request.role {
             WorkerRole::Read => utils::workspace::RootAccess::ReadOnly,
@@ -174,7 +176,9 @@ impl WorkerRegistry {
                 );
                 error
             })?;
-        prepared.dependency.runtime.worker = Some(execution.clone());
+        prepared.dependency.runtime.role = ExecutionRole::Worker {
+            execution: execution.clone(),
+        };
         let parent = info.actor_ref.clone();
         let registry = self.clone();
         prepared.parent_scope.tasks.clone().spawn(async move {

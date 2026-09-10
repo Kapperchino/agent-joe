@@ -1,6 +1,7 @@
 use crate::actor::Message;
 use crate::actor::{ActorContext, Dependency};
 use crate::actor_state::ActorState;
+use crate::runtime::ExecutionRole;
 use analysis::contexts::context::Context;
 use async_trait::async_trait;
 use ractor::{ActorProcessingErr, ActorRef};
@@ -37,10 +38,14 @@ pub trait Worker: Send + Sync + 'static {
 
 pub async fn run_worker<W: Worker>(
     worker: W,
-    dependency: Dependency<W::C>,
+    mut dependency: Dependency<W::C>,
     parent: ActorRef<Message>,
 ) -> Result<String, WorkerFailure> {
     use ractor::Actor;
+    dependency.runtime.role = match dependency.runtime.role {
+        ExecutionRole::Root => ExecutionRole::Helper,
+        role => role,
+    };
     let owner = utils::execution::ExecutionScope::current();
     let scope = dependency.runtime.scope.clone();
     let cancel_on_drop = scope.cancel.clone().drop_guard();

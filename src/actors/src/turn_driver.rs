@@ -2,6 +2,7 @@ use crate::{
     actor::{Dependency, Message},
     actor_state::ActorState,
     provider_task::{ProviderEvent, ProviderTarget, ProviderTask},
+    runtime::ExecutionRole,
     session_control::Persistence,
     turn::{HistoryDisposition, Tag},
     turn_machine::{
@@ -94,12 +95,12 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                         let client = self.llm.snapshot();
                         let input = self.context_input(run.tag.turn, &client);
                         ProviderTask {
-                            budget: self
-                                .dependency
-                                .runtime
-                                .worker
-                                .as_ref()
-                                .map(|worker| worker.budget.clone()),
+                            budget: match &self.dependency.runtime.role {
+                                ExecutionRole::Worker { execution } => {
+                                    Some(execution.budget.clone())
+                                }
+                                ExecutionRole::Root | ExecutionRole::Helper => None,
+                            },
                             target: ProviderTarget {
                                 actor: self.actor_ref.clone(),
                                 tag: run.tag,

@@ -921,10 +921,10 @@ async fn immediately_completed_worker_registers_reply_before_starting() {
         h.request().await.1,
         response(vec![call("delegate", "child")]),
     );
-    answer(
-        within(child_requests.recv_async()).await.unwrap().1,
-        response(vec![text("child result")]),
-    );
+    let (request, reply) = within(child_requests.recv_async()).await.unwrap();
+    assert!(request.tools.is_empty());
+    assert!(request.system.unwrap().contains("only the root"));
+    answer(reply, response(vec![text("child result")]));
     h.terminal(Lifecycle::Completed).await;
     let (request, reply) = h.request().await;
     assert!(

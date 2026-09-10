@@ -3,7 +3,7 @@ use crate::{
     background_actors::file_actor,
     context::{Checkpoint, ContextInput, RequestMode},
     event_reporter::EventReporter,
-    runtime::Runtime,
+    runtime::{ExecutionRole, Runtime},
     session_control::Persistence,
     stream_processor::StreamProcessor,
     turn_machine::TurnMachine,
@@ -58,7 +58,7 @@ impl ActorMode {
                 ..dependency
             },
             Self::Conversation => {
-                let interaction_tools = dependency.runtime.worker.is_none().then(|| {
+                let interaction_tools = matches!(dependency.runtime.role, ExecutionRole::Root).then(|| {
                     [
                         erased_tool::<
                             crate::tools::request_user_input::RequestUserInput,
@@ -70,11 +70,7 @@ impl ActorMode {
                 });
                 let artifact_tool = (dependency.runtime.sessions.is_some()
                     && dependency.tool("read_artifact").is_none()
-                    && dependency
-                        .runtime
-                        .worker
-                        .as_ref()
-                        .is_none_or(|worker| worker.request.allows_tool("read_artifact")))
+                    && dependency.runtime.role.allows_tool("read_artifact"))
                 .then(erased_tool::<crate::tools::read_artifact::ReadArtifact, C, ActorContext<C>>);
                 Dependency {
                     tools: dependency
@@ -131,8 +127,8 @@ impl SessionTransition {
         };
         runtime.scope.changes = match self {
             Self::Start => {
-                if let Some(worker) = &runtime.worker {
-                    worker.attach_session(runtime.session.clone())?;
+                if let ExecutionRole::Worker { execution } = &runtime.role {
+                    execution.attach_session(runtime.session.clone())?;
                 }
                 match &runtime.session {
                     Some(session) if session.snapshot()?.parent.is_none() => {
@@ -212,8 +208,8 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     }
 
     fn stream_log(dependency: &Dependency<C>) -> anyhow::Result<Option<tokio::fs::File>> {
-        match &dependency.runtime.worker {
-            None if dependency.debug_mode => {
+        match &dependency.runtime.role {
+            ExecutionRole::Root if dependency.debug_mode => {
                 let timestamp = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
@@ -265,7 +261,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             .join("\n");
         let planning = match self.request_mode {
             RequestMode::SingleResponse => None,
-            _ if self.dependency.runtime.worker.is_some() => None,
+            _ if !matches!(self.dependency.runtime.role, ExecutionRole::Root) => None,
             _ if self.planning.plan.steps.is_empty() && self.planning.evidence.is_empty() => None,
             _ => Some(self.planning.clone()),
         };

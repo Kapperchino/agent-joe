@@ -1,4 +1,5 @@
 use crate::actor::{ActorContext, Message};
+use crate::runtime::ExecutionRole;
 use analysis::contexts::context::Context;
 use async_trait::async_trait;
 use common_models::interaction::Question;
@@ -68,7 +69,11 @@ impl<C: Context> ToolTrait<C, ActorContext<C>> for RequestUserInput {
         actor: &ActorContext<C>,
     ) -> anyhow::Result<String> {
         let info = match actor {
-            ActorContext::ActorInfo(info) if info.dep.runtime.worker.is_none() => Ok(info),
+            ActorContext::ActorInfo(info)
+                if matches!(info.dep.runtime.role, ExecutionRole::Root) =>
+            {
+                Ok(info)
+            }
             _ => Err(anyhow::anyhow!("User interaction requires the root actor")),
         }?;
         let (reply, receive) = tokio::sync::oneshot::channel();

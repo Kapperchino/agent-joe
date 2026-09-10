@@ -4,7 +4,7 @@ use crate::{
     context::{ContextBudget, ContextLimits, Memory, NativeCompaction},
     event_reporter::EventReporter,
     provider_task::ProviderTask,
-    runtime::Runtime,
+    runtime::{ExecutionRole, Runtime},
     worker::{Worker, run_worker},
 };
 use analysis::contexts::{context::Context, rust_context::RustContextLineIndexCreator};
@@ -67,6 +67,7 @@ impl CompactionWorker {
                 debug_mode: false,
                 context: CompactionContext::new(messages, limits),
                 runtime: Runtime {
+                    role: ExecutionRole::Helper,
                     scope: ExecutionScope::current().child(),
                     context_budget: ContextBudget::Fixed(limits),
                     native_compaction: NativeCompaction::Disabled,
