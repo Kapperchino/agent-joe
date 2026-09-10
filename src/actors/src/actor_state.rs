@@ -1,25 +1,35 @@
-use crate::actor;
-use crate::actor::Dependency;
-use crate::background_actors::file_actor;
-use crate::event_reporter::EventReporter;
-use crate::stream_processor::StreamProcessor;
+use crate::{
+    actor::{self, ActorContext, Dependency},
+    background_actors::file_actor,
+    context::{Checkpoint, ContextInput, RequestMode},
+    event_reporter::EventReporter,
+    runtime::Runtime,
+    session_control::Persistence,
+    stream_processor::StreamProcessor,
+    turn_machine::TurnMachine,
+};
 use analysis::contexts::context::Context;
 use clients::llm::{LLmClient, Message};
-use common_models::tui_models::State;
+use common_models::{
+    interaction::{Planning, Questions},
+    runtime_ids::TurnId,
+    tui_models::State,
+};
 use ractor::ActorRef;
 use std::path::PathBuf;
-use tools::tool_defs::ToolDefinition;
+use tools::tool_defs::{ToolDefinition, erased_tool};
+use utils::execution::ExecutionScope;
 
 pub struct ActorState<C: Context> {
-    pub(crate) planning: common_models::interaction::Planning,
+    pub(crate) planning: Planning,
     pub(crate) deferred_input: Vec<Message>,
-    pub(crate) request_mode: crate::context::RequestMode,
-    pub(crate) context_checkpoint: crate::context::Checkpoint,
-    pub(crate) compact_turn: Option<common_models::runtime_ids::TurnId>,
-    pub(crate) questions: common_models::interaction::Questions,
-    pub(crate) persistence: crate::session_control::Persistence,
+    pub(crate) request_mode: RequestMode,
+    pub(crate) context_checkpoint: Checkpoint,
+    pub(crate) compact_turn: Option<TurnId>,
+    pub(crate) questions: Questions,
+    pub(crate) persistence: Persistence,
     pub cur_context: C,
-    pub(crate) turn: crate::turn_machine::TurnMachine,
+    pub(crate) turn: TurnMachine,
     pub history: Vec<Message>,
     pub llm: LLmClient,
     pub file_actor: Option<ActorRef<file_actor::Message>>,
@@ -35,6 +45,112 @@ pub(crate) enum ActorMode {
     SingleResponse(EventReporter),
 }
 
+impl ActorMode {
+    fn configure<C: Context + Clone + 'static>(&self, dependency: Dependency<C>) -> Dependency<C> {
+        match self {
+            Self::SingleResponse(_) => Dependency {
+                tools: Vec::new(),
+                runtime: Runtime {
+                    sessions: None,
+                    session: None,
+                    ..dependency.runtime
+                },
+                ..dependency
+            },
+            Self::Conversation => {
+                let interaction_tools = dependency.runtime.worker.is_none().then(|| {
+                    [
+                        erased_tool::<
+                            crate::tools::request_user_input::RequestUserInput,
+                            C,
+                            ActorContext<C>,
+                        >(),
+                        erased_tool::<crate::tools::update_plan::UpdatePlan, C, ActorContext<C>>(),
+                    ]
+                });
+                let artifact_tool = (dependency.runtime.sessions.is_some()
+                    && dependency.tool("read_artifact").is_none()
+                    && dependency
+                        .runtime
+                        .worker
+                        .as_ref()
+                        .is_none_or(|worker| worker.request.allows_tool("read_artifact")))
+                .then(erased_tool::<crate::tools::read_artifact::ReadArtifact, C, ActorContext<C>>);
+                Dependency {
+                    tools: dependency
+                        .tools
+                        .into_iter()
+                        .chain(interaction_tools.into_iter().flatten())
+                        .chain(artifact_tool)
+                        .collect(),
+                    ..dependency
+                }
+            }
+        }
+    }
+
+    fn request_mode(&self) -> RequestMode {
+        match self {
+            Self::Conversation => RequestMode::Continue,
+            Self::SingleResponse(_) => RequestMode::SingleResponse,
+        }
+    }
+
+    fn reporter<C: Context>(self, dependency: &Dependency<C>) -> EventReporter {
+        match self {
+            Self::Conversation => EventReporter::Interactive {
+                actor_id: dependency.context.get_id(),
+                tui_tx: dependency.tui_tx.clone(),
+            },
+            Self::SingleResponse(reporter) => reporter,
+        }
+    }
+}
+
+enum SessionTransition {
+    Start,
+    Clear,
+}
+
+impl SessionTransition {
+    fn apply(
+        self,
+        mut runtime: Runtime,
+        client: &LLmClient,
+        history: &[Message],
+    ) -> anyhow::Result<Runtime> {
+        let parent = match self {
+            Self::Start => runtime.session.as_ref().map(|session| session.id.clone()),
+            Self::Clear => None,
+        };
+        runtime.session = match &runtime.sessions {
+            Some(store) => {
+                Some(store.create(client.session_provider(), parent, history.to_vec())?)
+            }
+            None => runtime.session,
+        };
+        runtime.scope.changes = match self {
+            Self::Start => {
+                if let Some(worker) = &runtime.worker {
+                    worker.attach_session(runtime.session.clone())?;
+                }
+                match &runtime.session {
+                    Some(session) if session.snapshot()?.parent.is_none() => {
+                        session.change_tracker(Default::default())
+                    }
+                    _ => runtime.scope.changes,
+                }
+            }
+            Self::Clear => runtime
+                .session
+                .as_ref()
+                .map(|session| session.change_tracker(Default::default()))
+                .unwrap_or_default(),
+        };
+        Ok(runtime)
+    }
+}
+
 impl<C: Context + Clone + 'static> ActorState<C> {
     pub async fn new(
         dependency: Dependency<C>,
@@ -45,95 +161,27 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     }
 
     pub(crate) async fn with_mode(
-        mut dependency: Dependency<C>,
+        dependency: Dependency<C>,
         actor_ref: ActorRef<actor::Message>,
         file_actor: Option<ActorRef<file_actor::Message>>,
         mode: ActorMode,
     ) -> anyhow::Result<Self> {
-        if matches!(mode, ActorMode::SingleResponse(_)) {
-            dependency.tools.clear();
-            dependency.runtime.sessions = None;
-            dependency.runtime.session = None;
-        }
+        let dependency = mode.configure(dependency);
         let history = Self::initial_history(&dependency.context).await;
-        if matches!(mode, ActorMode::Conversation) && dependency.runtime.worker.is_none() {
-            dependency.tools.extend([
-                tools::tool_defs::erased_tool::<
-                    crate::tools::request_user_input::RequestUserInput,
-                    C,
-                    crate::actor::ActorContext<C>,
-                >(),
-                tools::tool_defs::erased_tool::<
-                    crate::tools::update_plan::UpdatePlan,
-                    C,
-                    crate::actor::ActorContext<C>,
-                >(),
-            ]);
-        }
-        if dependency.runtime.sessions.is_some()
-            && dependency.tool("read_artifact").is_none()
-            && dependency
-                .runtime
-                .worker
-                .as_ref()
-                .is_none_or(|worker| worker.request.allows_tool("read_artifact"))
-        {
-            dependency.tools.push(tools::tool_defs::erased_tool::<
-                crate::tools::read_artifact::ReadArtifact,
-                C,
-                crate::actor::ActorContext<C>,
-            >());
-        }
-        if let Some(store) = &dependency.runtime.sessions {
-            let parent = dependency
-                .runtime
-                .session
-                .as_ref()
-                .map(|session| session.id.clone());
-            dependency.runtime.session = Some(store.create(
-                dependency.client.session_provider(),
-                parent,
-                history.clone(),
-            )?);
-        }
-        if let Some(worker) = &dependency.runtime.worker {
-            worker.attach_session(dependency.runtime.session.clone())?;
-        }
-        if let Some(session) = &dependency.runtime.session
-            && session.snapshot()?.parent.is_none()
-        {
-            dependency.runtime.scope.changes = session.change_tracker(Default::default());
-        }
-        let dep_clone = dependency.clone();
-
-        let stream_log = if dependency.debug_mode && dependency.runtime.worker.is_none() {
-            let path = PathBuf::from(format!(
-                "./logs/stream_{}.jsonl",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs()
-            ));
-            let file = dependency.runtime.scope.workspace()?.open_append(&path)?;
-            Some(tokio::fs::File::from_std(file))
-        } else {
-            None
+        let dependency = Dependency {
+            runtime: SessionTransition::Start.apply(
+                dependency.runtime,
+                &dependency.client,
+                &history,
+            )?,
+            ..dependency
         };
-
-        let request_mode = match &mode {
-            ActorMode::Conversation => crate::context::RequestMode::Continue,
-            ActorMode::SingleResponse(_) => crate::context::RequestMode::SingleResponse,
-        };
-        let reporter = match mode {
-            ActorMode::Conversation => EventReporter::Interactive {
-                actor_id: dependency.context.get_id(),
-                tui_tx: dependency.tui_tx.clone(),
-            },
-            ActorMode::SingleResponse(reporter) => reporter,
-        };
+        let stream_log = Self::stream_log(&dependency)?;
+        let request_mode = mode.request_mode();
+        let reporter = mode.reporter(&dependency);
 
         Ok(Self {
-            planning: common_models::interaction::Planning {
+            planning: Planning {
                 mode: dependency.runtime.interaction.mode(),
                 ..Default::default()
             },
@@ -142,28 +190,40 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             context_checkpoint: Default::default(),
             compact_turn: None,
             questions: Default::default(),
-            persistence: crate::session_control::Persistence::Ready,
-            cur_context: dependency.context,
+            persistence: Persistence::Ready,
+            cur_context: dependency.context.clone(),
             history,
-            llm: dependency.client,
-            turn: crate::turn_machine::TurnMachine::new(
-                dep_clone.runtime.scope.clone(),
-                request_mode,
-            ),
+            llm: dependency.client.clone(),
+            turn: TurnMachine::new(dependency.runtime.scope.clone(), request_mode),
             reporter: reporter.clone(),
             debug_mode: dependency.debug_mode,
             file_actor,
             stream_processor: StreamProcessor {
-                batches: vec![],
+                batches: Vec::new(),
                 stream_log,
                 token_count: Default::default(),
                 reporter,
                 cur_state: State::Ready,
                 debug: dependency.debug_mode,
             },
-            dependency: dep_clone,
+            dependency,
             actor_ref,
         })
+    }
+
+    fn stream_log(dependency: &Dependency<C>) -> anyhow::Result<Option<tokio::fs::File>> {
+        match &dependency.runtime.worker {
+            None if dependency.debug_mode => {
+                let timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let path = PathBuf::from(format!("./logs/stream_{timestamp}.jsonl"));
+                let file = dependency.runtime.scope.workspace()?.open_append(&path)?;
+                Ok(Some(tokio::fs::File::from_std(file)))
+            }
+            _ => Ok(None),
+        }
     }
 
     async fn initial_history(context: &C) -> Vec<Message> {
@@ -186,28 +246,31 @@ impl<C: Context + Clone + 'static> ActorState<C> {
 
     pub(crate) fn context_input(
         &self,
-        turn: common_models::runtime_ids::TurnId,
+        turn: TurnId,
         client: &LLmClient,
-    ) -> anyhow::Result<crate::context::ContextInput> {
+    ) -> anyhow::Result<ContextInput> {
         let pending = self
             .dependency
             .runtime
             .workers
             .pending(&self.dependency.worker_owner());
-        let instructions = self.cur_context.effective_instructions()?;
-        let instructions = match self.request_mode {
-            crate::context::RequestMode::SingleResponse => instructions,
-            _ => format!("{instructions}\n{}", self.interaction_instructions()),
+        let interaction = match self.request_mode {
+            RequestMode::SingleResponse => None,
+            RequestMode::Continue | RequestMode::Compact => Some(self.interaction_instructions()),
         };
-        let instructions = match pending.is_empty() {
-            true => instructions,
-            false => format!("{instructions}\n{}", pending.join("\n")),
+        let instructions = std::iter::once(self.cur_context.effective_instructions()?)
+            .chain(interaction)
+            .chain(pending)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let planning = match self.request_mode {
+            RequestMode::SingleResponse => None,
+            _ if self.dependency.runtime.worker.is_some() => None,
+            _ if self.planning.plan.steps.is_empty() && self.planning.evidence.is_empty() => None,
+            _ => Some(self.planning.clone()),
         };
-        Ok(crate::context::ContextInput {
-            planning: (self.dependency.runtime.worker.is_none()
-                && self.request_mode != crate::context::RequestMode::SingleResponse
-                && (!self.planning.plan.steps.is_empty() || !self.planning.evidence.is_empty()))
-            .then(|| self.planning.clone()),
+        Ok(ContextInput {
+            planning,
             history: self.history.clone(),
             checkpoint: self.context_checkpoint.clone(),
             questions: self.questions.pending().to_vec(),
@@ -219,9 +282,9 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 .context_budget
                 .resolve(client.context_window())?,
             native: self.dependency.runtime.native_compaction,
-            mode: match self.compact_turn == Some(turn) {
-                true => crate::context::RequestMode::Compact,
-                false => self.request_mode,
+            mode: match self.compact_turn {
+                Some(compact_turn) if compact_turn == turn => RequestMode::Compact,
+                _ => self.request_mode,
             },
         })
     }
@@ -230,17 +293,8 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         let mut context = self.cur_context.clone();
         context.clear_task_context();
         let history = Self::initial_history(&context).await;
-        if let Some(store) = &self.dependency.runtime.sessions {
-            self.dependency.runtime.session =
-                Some(store.create(self.llm.session_provider(), None, history.clone())?);
-        }
-        self.dependency.runtime.scope.changes = self
-            .dependency
-            .runtime
-            .session
-            .as_ref()
-            .map(|session| session.change_tracker(Default::default()))
-            .unwrap_or_default();
+        self.dependency.runtime =
+            SessionTransition::Clear.apply(self.dependency.runtime.clone(), &self.llm, &history)?;
         self.cur_context = context;
         self.history = history;
         self.context_checkpoint = Default::default();
@@ -248,12 +302,9 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         self.questions = Default::default();
         self.planning = Default::default();
         self.deferred_input.clear();
-        self.turn = crate::turn_machine::TurnMachine::new(
-            self.dependency.runtime.scope.clone(),
-            self.request_mode,
-        );
+        self.turn = TurnMachine::new(self.dependency.runtime.scope.clone(), self.request_mode);
         self.refresh_interaction();
-        self.persistence = crate::session_control::Persistence::Ready;
+        self.persistence = Persistence::Ready;
         self.stream_processor.token_count = Default::default();
         Ok(())
     }
@@ -266,12 +317,9 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             .collect()
     }
 
-    pub(crate) fn executor(
-        &self,
-        scope: utils::execution::ExecutionScope,
-    ) -> crate::scheduler::Executor<C> {
+    pub(crate) fn executor(&self, scope: ExecutionScope) -> crate::scheduler::Executor<C> {
         let runtime = self.dependency.runtime.child(scope.clone());
-        let runtime = crate::runtime::Runtime {
+        let runtime = Runtime {
             turn_scope: Some(scope),
             inherited_constraints: runtime
                 .inherited_constraints
