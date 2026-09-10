@@ -1,5 +1,5 @@
 use crate::workspace::{ProcessWorkspace, WorkspacePolicy};
-use joe_sandbox::workspace::{Workspace, WorkspaceProtection};
+use sandbox::workspace::{Workspace, WorkspaceProtection};
 use std::{path::Path, sync::Arc};
 
 pub(super) struct SandboxWorkspace {

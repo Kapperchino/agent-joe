@@ -7,7 +7,7 @@ edition = "2024"
 test-support = []
 
 [dependencies]
-joe-sandbox = { path = "../sandbox" }
+sandbox = { path = "../sandbox" }
 grep = "0.4.1"
 cargo_metadata = "0.23.1"
 anyhow = "1.0.99"

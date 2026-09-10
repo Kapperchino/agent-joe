@@ -2268,27 +2268,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a037eddb7d28de1d0fc42411f501b53b75838d313908078d6698d064f3029b24"
 
 [[package]]
-name = "joe-sandbox"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "dirs",
- "flate2",
- "futures",
- "libc",
- "reqwest",
- "rustix",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tar",
- "tokio",
- "tokio-util",
- "toml 1.1.2+spec-1.1.0",
- "uuid",
-]
-
-[[package]]
 name = "js-sys"
 version = "0.3.85"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4459,6 +4438,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "sandbox"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "flate2",
+ "futures",
+ "libc",
+ "reqwest",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tar",
+ "tokio",
+ "tokio-util",
+ "toml 1.1.2+spec-1.1.0",
+ "uuid",
+]
+
+[[package]]
 name = "schannel"
 version = "0.1.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5673,10 +5673,10 @@ dependencies = [
  "grep",
  "ignore",
  "itertools 0.15.0",
- "joe-sandbox",
  "libc",
  "regex",
  "rustix",
+ "sandbox",
  "serde",
  "serde_json",
  "similar",

@@ -148,7 +148,7 @@ async fn sandbox_crate_observes_caller_cancellation_after_launch() {
         let project = Fixture::new();
         let marker = project.root.join("process");
         let scope = project.scope();
-        let sandbox = joe_sandbox::Sandbox::new(
+        let sandbox = sandbox::Sandbox::new(
             std::sync::Arc::new(workspace::SandboxWorkspace::new(scope.workspace().unwrap())),
             scope.tasks.clone(),
         );
