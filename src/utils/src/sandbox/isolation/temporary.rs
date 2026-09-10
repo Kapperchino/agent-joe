@@ -6,17 +6,23 @@ use std::{
 
 pub(crate) struct TemporaryDirectory {
     path: PathBuf,
+    id: uuid::Uuid,
 }
 
 impl TemporaryDirectory {
     pub(super) fn new(workspace: &WorkspacePolicy) -> anyhow::Result<Self> {
         workspace.create_parent_dirs(Path::new("target/.joe/tmp/placeholder"))?;
+        let id = uuid::Uuid::new_v4();
         let path = workspace
             .root()
             .join("target/.joe/tmp")
-            .join(uuid::Uuid::new_v4().to_string());
+            .join(id.to_string());
         std::fs::DirBuilder::new().mode(0o700).create(&path)?;
-        Ok(Self { path })
+        Ok(Self { path, id })
+    }
+
+    pub(super) fn id(&self) -> uuid::Uuid {
+        self.id
     }
 
     pub(super) fn path(&self) -> &Path {

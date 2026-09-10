@@ -1,5 +1,5 @@
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-use std::process::{Command, Output};
+use std::process::Output;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::sync::OnceLock;
 
@@ -24,38 +24,16 @@ enum SandboxAvailability {
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 impl SandboxAvailability {
     fn probe() -> anyhow::Result<Self> {
-        #[cfg(target_os = "macos")]
-        let mut command = {
-            let profile = format!(
-                "(version 1)(allow default)(deny file-write* (literal \"/joe-sandbox-probe-{}\"))",
-                uuid::Uuid::new_v4()
-            );
-            let mut command = Command::new("/usr/bin/sandbox-exec");
-            command.args(["-p", &profile, "/usr/bin/true"]);
-            command
-        };
-        #[cfg(target_os = "linux")]
-        let mut command = {
-            let mut command = Command::new("/usr/bin/bwrap");
-            command.args([
-                "--unshare-all",
-                "--unshare-user",
-                "--die-with-parent",
-                "--ro-bind",
-                "/",
-                "/",
-                "--",
-                "/usr/bin/true",
-            ]);
-            command
-        };
-        match command.env("LC_ALL", "C").output() {
-            Ok(output) => Self::from_output(output),
-            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-                Ok(Self::Restricted(error.to_string()))
-            }
-            Err(error) => Err(error.into()),
-        }
+        std::thread::spawn(|| {
+            let directory =
+                std::env::temp_dir().join(format!("joe-krun-probe-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir(&directory)?;
+            let result = probe_guest(&directory);
+            std::fs::remove_dir_all(&directory)?;
+            result
+        })
+        .join()
+        .map_err(|_| anyhow::anyhow!("libkrun probe thread panicked"))?
     }
 
     fn from_output(output: Output) -> anyhow::Result<Self> {
@@ -63,19 +41,63 @@ impl SandboxAvailability {
         match output.status.success() {
             true => Ok(Self::Available),
             false
-                if stderr.contains("Operation not permitted")
-                    || stderr.contains("Permission denied")
-                    || stderr.contains("No permissions to create a new namespace")
-                    || stderr.contains("No permissions to create new namespace") =>
+                if stderr.contains("sandbox-exec: sandbox_apply: Operation not permitted")
+                    || stderr.contains(
+                        "bwrap: Creating new namespace failed: Operation not permitted",
+                    )
+                    || stderr.contains("bwrap: setting up uid map: Permission denied")
+                    || stderr.contains("bwrap: No permissions to create a new namespace")
+                    || stderr.contains("bwrap: No permissions to create new namespace") =>
             {
                 Ok(Self::Restricted(stderr))
             }
             false => Err(anyhow::anyhow!(
-                "Sandbox probe failed with {}: {stderr}",
-                output.status
+                "Sandbox probe failed with {}: {stderr}\n{}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout)
             )),
         }
     }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn probe_guest(directory: &std::path::Path) -> anyhow::Result<SandboxAvailability> {
+    struct Probe;
+    impl crate::sandbox::sealed::Operation for Probe {
+        fn into_command(self) -> tokio::process::Command {
+            tokio::process::Command::new("/bin/true")
+        }
+    }
+    impl crate::sandbox::SandboxOperation for Probe {}
+    let scope = crate::execution::ExecutionScope::with_workspace(
+        crate::workspace::WorkspacePolicy::workspace(directory.into())?,
+    );
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?
+        .block_on(async {
+            let result = scope
+                .enter(crate::sandbox::Sandbox::capture(Probe, 15))
+                .await;
+            scope.finish().await;
+            let output = result?;
+            match output.status {
+                crate::process::ProcessStatus::Exited => {
+                    use std::os::unix::process::ExitStatusExt;
+                    SandboxAvailability::from_output(Output {
+                        status: std::process::ExitStatus::from_raw(
+                            output.exit_code.unwrap_or(125) << 8,
+                        ),
+                        stdout: output.stdout.into_bytes(),
+                        stderr: output.stderr.into_bytes(),
+                    })
+                }
+                status => Err(anyhow::anyhow!(
+                    "libkrun guest probe failed: {status:?}: {:?}",
+                    output.error
+                )),
+            }
+        })
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -87,6 +109,10 @@ pub fn sandbox_available() -> bool {
         SandboxAvailability::Available => true,
         SandboxAvailability::Restricted(reason) => {
             eprintln!("Skipping test: the runner prevents creating a process sandbox: {reason}");
+            assert!(
+                std::env::var_os("JOE_SANDBOX_REQUIRED").is_none(),
+                "Required libkrun sandbox unavailable: {reason}"
+            );
             false
         }
     }
@@ -132,7 +158,12 @@ mod tests {
 
     #[test]
     fn unexpected_probe_failures_are_not_skipped() {
-        for message in ["", "sandbox-exec: invalid profile", "bwrap: Unknown option"] {
+        for message in [
+            "",
+            "sandbox-exec: invalid profile",
+            "bwrap: Unknown option",
+            "Cannot load libkrun: Permission denied",
+        ] {
             assert!(SandboxAvailability::from_output(output(1, message)).is_err());
         }
     }
@@ -158,7 +189,8 @@ mod tests {
     #[test]
     fn permissive_parent_sandboxes_skip_nested_sandbox_tests() {
         if sandbox_available() {
-            let result = Command::new("/usr/bin/sandbox-exec")
+            let result = std::process::Command::new("/usr/bin/sandbox-exec")
+                .env_remove("JOE_SANDBOX_REQUIRED")
                 .args(["-p", "(version 1)(allow default)"])
                 .arg(std::env::current_exe().unwrap())
                 .args([

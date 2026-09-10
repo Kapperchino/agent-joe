@@ -4,8 +4,8 @@ use tokio::process::Command;
 #[cfg(unix)]
 mod isolation;
 
-#[cfg(target_os = "linux")]
-mod seccomp;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod protocol;
 
 struct ProcessLimits {
     timeout: std::time::Duration,
@@ -150,11 +150,13 @@ mod unix {
         process::{Child, ChildStderr, ChildStdout},
     };
 
-    struct ProcessGroup(u32);
+    struct ProcessGroup {
+        leader: u32,
+    }
     impl ProcessGroup {
         fn kill(&self) {
             unsafe {
-                libc::kill(-(self.0 as i32), libc::SIGKILL);
+                libc::kill(-(self.leader as i32), libc::SIGKILL);
             }
         }
     }
@@ -183,7 +185,7 @@ mod unix {
             match (child.id(), child.stdout.take(), child.stderr.take()) {
                 (Some(pid), Some(stdout), Some(stderr)) => Ok(Self {
                     child,
-                    group: ProcessGroup(pid),
+                    group: ProcessGroup { leader: pid },
                     stdout,
                     stderr,
                     temporary: prepared.temporary,
@@ -302,9 +304,30 @@ mod unix {
     ) -> anyhow::Result<()> {
         let scope = ExecutionScope::current();
         let workspace = scope.workspace()?;
+        let cancellations = [
+            scope.cancel.clone(),
+            owner.cancel.clone(),
+            handle.cancel.clone(),
+        ];
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        if command.as_std().get_program() == "cargo"
+            && command.as_std().get_args().next() != Some(std::ffi::OsStr::new("fmt"))
+        {
+            super::isolation::registry::prepare(workspace.clone(), cancellations.to_vec()).await?;
+        }
         let prepared = scope
             .tasks
-            .spawn_blocking(move || IsolatedCommand::new(command, &workspace))
+            .spawn_blocking(move || {
+                IsolatedCommand::new(command, &workspace, &|| match cancellations
+                    .iter()
+                    .any(|cancel| cancel.is_cancelled())
+                {
+                    true => Err(anyhow::anyhow!(
+                        "Process cancelled before launch during sandbox preparation"
+                    )),
+                    false => Ok(()),
+                })
+            })
             .await??;
         match scope.cancel.is_cancelled()
             || owner.cancel.is_cancelled()
@@ -315,7 +338,7 @@ mod unix {
                 let process = RunningProcess::spawn(prepared).await?;
                 let registration = owner.register(
                     ResourceKind::Process,
-                    format!("Process {}", process.group.0),
+                    format!("Process {}", process.group.leader),
                 );
                 owner.tasks.spawn(async move {
                     process.run(handle.clone(), limits).await;

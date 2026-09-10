@@ -188,7 +188,7 @@ The `cargo` tool takes a required `operation` parameter:
 | `run` | Run a finite named binary or example |
 | `start` | Start a managed named binary or example |
 | `poll` | Read status and incremental output using a process ID |
-| `stop` | Stop the process group, reap its leader, and return output |
+| `stop` | Stop the microVM and all guest processes, reap the launcher, and return output |
 
 Both root modes and write workers support all operations. Delegated workers
 inherit the selected tools from their parent; the specialized validation worker
@@ -232,11 +232,16 @@ and have a 4096-byte individual limit; the complete command and environment must
 fit within 2048 serialized JSON bytes. Omitted options keep Cargo's default
 selection. No credentials or other host environment values are inherited.
 
-Commands run offline in the shared macOS/Linux sandbox. `timeout_seconds` is
+Commands run offline in a fresh libkrun Linux microVM on both macOS and Linux.
+Joe automatically prepares and caches the sandbox on first use, including the
+Linux guest and crates.io dependencies. No sandbox setup is required.
+macOS also builds and executes Linux binaries, using the guest's Rust toolchain.
+The project appears at `/workspace` inside the guest, and guest build artifacts
+use `target/.joe/linux/build`. `timeout_seconds` is
 1–300, defaulting to 300, including build and program execution. Each output
 stream retains at most 16 MiB; exceeding the limit stops the process and reports
-`output_limit` with captured output. Network access, including localhost
-servers, remains unavailable. Missing isolation or missing offline dependencies
+`output_limit` with captured output. Guest commands cannot access the host network
+or localhost servers. Missing isolation or missing offline dependencies
 produce failures rather than executing outside the sandbox.
 
 Results are JSON on success and failure, with the requested executable, argument
@@ -261,8 +266,8 @@ cleanup. Terminal status and retained output are journaled to the owning session
 including when no final poll occurs. Resume reports saved process evidence;
 process IDs are never reattached or relaunched after restart. If a crash prevented
 completion from being recorded, the outcome remains explicitly unknown. The
-existing sandbox limit on guaranteeing termination of deliberately detached
-descendants still applies.
+VMM is terminated along with every guest process, including deliberately detached
+descendants.
 
 ## Git and task review
 
@@ -341,6 +346,6 @@ configuration after repository identity is checked. Git discovery uses project
 visits to 250,000 entries and paths to 32 MiB. Individual working files cap at
 16 MiB; Git text output caps at 32 MiB; baseline content, serialized journals, and
 aggregate tool reviews cap at 64 MiB. Limits fail explicitly. Existing session map
-limits still apply. Cargo's macOS sandbox permits fresh Git fixtures only inside
+limits still apply. Cargo's macOS host policy permits fresh Git fixtures only inside
 the command's private temporary directory; existing repository metadata remains
 protected.

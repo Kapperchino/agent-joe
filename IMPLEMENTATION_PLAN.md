@@ -115,10 +115,13 @@ Code: `src/actors/src/{turn,turn_machine,turn_driver,scheduler,supervisor}.rs`;
   expansion remain unavailable.
 - The sealed `SandboxOperation` contract admits registered typed operations.
   M6 expanded Cargo beyond the original check/test surface.
-- macOS uses Seatbelt; Linux uses Bubblewrap namespaces, dropped capabilities,
-  and seccomp. Processes run offline with a clean environment, project-local
-  writes, read-only toolchains/caches, and a fresh temporary directory that is
-  removed after execution or cancellation.
+- macOS and Linux share the libkrun launcher, Linux guest, command protocol,
+  and automatic provisioning. Each command runs offline in a fresh microVM with
+  a clean environment, a read-only guest toolchain, and project-local writes.
+  Joe bundles the native runtime and prepares the guest and dependencies itself.
+- Seatbelt on macOS and bundled Bubblewrap with seccomp on Linux isolate the
+  VMM's host filesystem access. Their policies expose the native runtime and
+  system libraries. Build tools and dependency execution live in the guest.
 - Existing hard links are accepted for process workspaces only when every alias
   stays inside the workspace with the same access permissions. Processes cannot
   create new hard links. Private temporary fixtures can create session storage
@@ -126,12 +129,11 @@ Code: `src/actors/src/{turn,turn_machine,turn_driver,scheduler,supervisor}.rs`;
 
 Code: `src/utils/src/{workspace,files,sandbox}.rs` and their submodules.
 
-Boundary limits: Linux requires `/usr/bin/bwrap` and host namespace support.
-Deliberately detached descendants remain confined, but guaranteed termination is
-outside scope. macOS semaphore access relies on ordinary OS ownership and is not
-scoped by workspace; read-only process information supports session ownership.
-Trusted provider connections and user setup are outside the model tool surface.
-Concurrent hostile host processes are outside the threat model.
+Boundary limits: Linux requires usable KVM and host namespaces; Apple Silicon
+macOS requires Hypervisor.framework and Seatbelt. Stopping the VMM terminates
+all guest processes, including detached descendants. Trusted provider connections
+remain outside the model tool surface. Concurrent hostile host processes are
+outside the threat model.
 
 **M4 — Sessions and context management — complete**
 
@@ -415,7 +417,7 @@ denied effects, credential refresh/redaction, and inherited plan-mode policy.
 
 **Recorded validation and rollout**
 
-Latest recorded runs on 2026-09-08:
+Historical runs before the libkrun migration (2026-09-08):
 
 | Code state | macOS ARM64 | Linux ARM64 |
 | --- | --- | --- |
@@ -433,9 +435,18 @@ implementation. Recorded checks pass
 with existing warnings; changed Rust files pass formatting and whitespace
 checks. Workspace-wide formatting has pre-existing differences.
 
-Linux runs use Rust 1.95 Bookworm with rustfmt, Clippy, Bubblewrap, and
-nested namespaces enabled.
-Unsupported nested sandbox fixtures may skip; outer isolation tests still run.
+Libkrun worktree validation on 2026-09-09: 95 utility tests, two launcher tests,
+and workspace compilation pass on Apple Silicon macOS. First use with an empty
+cache and no host Cargo on `PATH`, including changed dependencies, also passes.
+The native runtime rebuilds from pinned sources. The Linux ARM64 seccomp module
+compiles; the bundled Linux Bubblewrap builds and runs inside the guest.
+Full Linux KVM execution remains untested. Strict utility Clippy checks report
+existing warnings in diff, text search and workspace process code.
+
+These historical Linux runs exercised the previous host-process sandbox; they
+do not validate libkrun/KVM. Current sandbox validation uses the automatically
+provisioned runtime described in `sandbox/README.md`. Unsupported host isolation
+may cause explicit test skips.
 Live provider checks, native Windows, and model/task-performance comparisons
 remain unverified.
 

@@ -1,5 +1,4 @@
 use crate::workspace::{ProcessWorkspace, WorkspacePolicy};
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 use anyhow::Context;
 use tokio::process::Command;
 
@@ -7,199 +6,66 @@ mod temporary;
 pub(crate) use temporary::TemporaryDirectory;
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-mod toolchain;
-
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-mod cargo_cache;
-
+mod bootstrap;
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[path = "../../../../sandbox/provision/mod.rs"]
+mod provision;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub(super) mod registry;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod runtime;
+#[cfg(target_os = "linux")]
+mod seccomp;
 
 pub(super) struct IsolatedCommand {
     pub(super) command: Command,
     pub(super) temporary: TemporaryDirectory,
     #[cfg(target_os = "linux")]
-    pub(super) _filter: super::seccomp::Filter,
+    _filter: seccomp::Filter,
 }
 
 impl IsolatedCommand {
-    pub(super) fn new(command: Command, workspace: &WorkspacePolicy) -> anyhow::Result<Self> {
-        let workspace = match workspace.permits_workspace_execution() {
-            true => Ok(workspace),
+    pub(super) fn new(
+        command: Command,
+        policy: &WorkspacePolicy,
+        check: &dyn Fn() -> anyhow::Result<()>,
+    ) -> anyhow::Result<Self> {
+        let policy = match policy.permits_workspace_execution() {
+            true => Ok(policy),
             false => Err(anyhow::anyhow!(
                 "Executable operations require worker access to the whole workspace"
             )),
         }?;
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
         let workspace =
-            ProcessWorkspace::new(workspace).context("Cannot prepare the process workspace")?;
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
-        let temporary = TemporaryDirectory::new(workspace.policy())
+            ProcessWorkspace::new(policy).context("Cannot prepare the process workspace")?;
+        let temporary = TemporaryDirectory::new(policy)
             .context("Cannot create the process temporary directory")?;
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         {
-            let command = macos::prepare(command, &workspace, &temporary)
-                .context("Cannot prepare the macOS sandbox")?;
-            Ok(Self { command, temporary })
-        }
-        #[cfg(target_os = "linux")]
-        {
-            linux::prepare(command, &workspace, temporary)
-                .context("Cannot prepare the Linux sandbox")
+            let runtime = runtime::Runtime::new(policy, check)?;
+            let command = runtime.prepare(command, &workspace, &temporary)?;
+            #[cfg(target_os = "macos")]
+            let command = macos::prepare(command, policy, &runtime, &temporary)?;
+            #[cfg(target_os = "linux")]
+            let filter = seccomp::Filter::new()?;
+            #[cfg(target_os = "linux")]
+            let command = linux::prepare(command, policy, &runtime, &filter)?;
+            Ok(Self {
+                command,
+                temporary,
+                #[cfg(target_os = "linux")]
+                _filter: filter,
+            })
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
-            let _ = command;
-            let _ = workspace;
+            let _ = (command, workspace, temporary);
             Err(anyhow::anyhow!(
                 "Project process isolation is unavailable on this platform; execution is disabled"
-            ))
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
-mod macos {
-    use super::cargo_cache::CargoCache;
-    use super::toolchain::Toolchain;
-    use super::*;
-    use std::ffi::{OsStr, OsString};
-    use std::path::{Path, PathBuf};
-
-    struct Profile {
-        rules: String,
-        parameters: Vec<OsString>,
-    }
-
-    impl Profile {
-        fn new(
-            workspace: &WorkspacePolicy,
-            executable: &Path,
-            toolchain: &Toolchain,
-            temporary: &TemporaryDirectory,
-        ) -> anyhow::Result<Self> {
-            let mut profile = Self {
-                rules: r#"(version 1)
-(deny default)
-(allow process-exec process-fork)
-(allow process-info-pidinfo)
-(allow ipc-sysv-sem)
-(allow signal (target self))
-(allow sysctl-read)
-(allow file-read-metadata)
-(allow file-read* (literal "/") (subpath "/usr/bin") (subpath "/usr/lib") (subpath "/usr/libexec") (subpath "/usr/share") (subpath "/bin") (subpath "/sbin") (subpath "/System/Library") (subpath "/System/Cryptexes") (subpath "/System/Volumes/Preboot/Cryptexes") (subpath "/Library/Developer") (subpath "/Library/Apple") (subpath "/private/var/db/dyld") (subpath "/private/preboot/Cryptexes") (subpath "/private/etc/ssl") (literal "/dev/null") (literal "/dev/random") (literal "/dev/urandom"))
-(allow file-write-data (literal "/dev/null"))
-"#.into(),
-                parameters: Vec::new(),
-            };
-            profile.path(
-                "allow",
-                "file-read* file-write*",
-                "subpath",
-                workspace.root(),
-            );
-            profile.path("allow", "file-read*", "literal", executable);
-            for path in [
-                toolchain.rustup_home.clone(),
-                toolchain.bin.clone(),
-                toolchain.cargo_home.join("registry"),
-            ] {
-                if path.exists() {
-                    profile.path("allow", "file-read*", "subpath", &path.canonicalize()?);
-                }
-            }
-            let temporary = profile.parameter(temporary.path());
-            profile.rules.push_str(&format!(
-                r#"(deny file-link)
-(deny file-read* file-write* (require-all
-    (regex #"(^|/)[.]([tT][uU][rR][bB][oO]-[cC][oO][dD][eE])(/|$)")
-    (require-not (subpath (param "{temporary}")))))
-(deny file-write* (require-all
-    (regex #"(^|/)[.]([gG][iI][tT])(/|$)")
-    (require-not (subpath (param "{temporary}")))))
-(deny file-write* (regex #"(^|/)[.]([aA][gG][eE][nN][tT][sS]|[cC][oO][dD][eE][xX])(/|$)"))
-"#
-            ));
-            for root in workspace.read_only_roots() {
-                profile.path("deny", "file-write*", "subpath", root);
-            }
-            Ok(profile)
-        }
-
-        fn path(&mut self, decision: &str, operations: &str, filter: &str, path: &Path) {
-            let name = self.parameter(path);
-            self.rules.push_str(&format!(
-                "({decision} {operations} ({filter} (param \"{name}\")))\n"
-            ));
-        }
-
-        fn parameter(&mut self, path: &Path) -> String {
-            let name = format!("PATH_{}", self.parameters.len());
-            let mut parameter = OsString::from(format!("{name}="));
-            parameter.push(path);
-            self.parameters.push(parameter);
-            name
-        }
-    }
-
-    pub(super) fn prepare(
-        command: Command,
-        workspace: &ProcessWorkspace<'_>,
-        temporary: &TemporaryDirectory,
-    ) -> anyhow::Result<Command> {
-        let workspace = workspace.policy();
-        let source = command.as_std();
-        let toolchain = Toolchain::new()?;
-        let executable = if source.get_program() == OsStr::new("cargo") {
-            toolchain.bin.join("cargo")
-        } else {
-            PathBuf::from(source.get_program())
-        };
-        if executable.is_absolute() && executable.is_file() {
-            let profile = Profile::new(
-                workspace,
-                &executable.canonicalize()?,
-                &toolchain,
-                temporary,
-            )?;
-            let cache = CargoCache::new(workspace, &toolchain.cargo_home)?;
-            let mut isolated = Command::new("/usr/bin/sandbox-exec");
-            isolated.env_clear().current_dir(workspace.root());
-            for parameter in profile.parameters {
-                isolated.arg("-D").arg(parameter);
-            }
-            isolated.args(["-p", &profile.rules, "/usr/bin/env", "-i"]);
-            for (key, value) in [
-                ("HOME", workspace.root().to_path_buf()),
-                ("TMPDIR", temporary.path().to_path_buf()),
-                ("CARGO_TARGET_DIR", cache.target),
-                ("CARGO_HOME", cache.home),
-                ("RUSTUP_HOME", toolchain.rustup_home),
-            ] {
-                let mut assignment = OsString::from(format!("{key}="));
-                assignment.push(value);
-                isolated.arg(assignment);
-            }
-            let mut path = OsString::from("PATH=");
-            path.push(toolchain.bin);
-            path.push(":/usr/bin:/bin:/usr/sbin:/sbin");
-            isolated
-                .arg(path)
-                .args(["LANG=C", "CARGO_NET_OFFLINE=true", "RUSTUP_AUTO_INSTALL=0"]);
-            for (key, value) in source.get_envs() {
-                if let Some(value) = value {
-                    let mut assignment = key.to_os_string();
-                    assignment.push("=");
-                    assignment.push(value);
-                    isolated.arg(assignment);
-                }
-            }
-            isolated.arg(executable).args(source.get_args());
-            Ok(isolated)
-        } else {
-            Err(anyhow::anyhow!(
-                "An installed absolute executable is required: {}",
-                executable.display()
             ))
         }
     }

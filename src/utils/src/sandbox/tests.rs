@@ -1,43 +1,11 @@
 use super::*;
 use crate::execution::ExecutionScope;
-use std::{io::Write, path::PathBuf, time::Duration};
+use std::{path::PathBuf, time::Duration};
 
 struct Fixture {
     directory: PathBuf,
     root: PathBuf,
     outside: PathBuf,
-}
-
-#[cfg(target_os = "macos")]
-struct Semaphore {
-    id: i32,
-}
-
-#[cfg(target_os = "macos")]
-impl Semaphore {
-    fn new() -> Self {
-        let id = unsafe { libc::semget(libc::IPC_PRIVATE, 1, libc::IPC_CREAT | 0o600) };
-        assert!(id >= 0, "{}", std::io::Error::last_os_error());
-        let semaphore = Self { id };
-        assert_eq!(unsafe { libc::semctl(id, 0, libc::SETVAL, 1) }, 0);
-        semaphore
-    }
-
-    fn acquire(&self) {
-        let mut operation = libc::sembuf {
-            sem_num: 0,
-            sem_op: -1,
-            sem_flg: libc::SEM_UNDO as i16,
-        };
-        assert_eq!(unsafe { libc::semop(self.id, &mut operation, 1) }, 0);
-    }
-}
-
-#[cfg(target_os = "macos")]
-impl Drop for Semaphore {
-    fn drop(&mut self) {
-        unsafe { libc::semctl(self.id, 0, libc::IPC_RMID) };
-    }
 }
 
 impl Fixture {
@@ -68,155 +36,25 @@ impl Drop for Fixture {
 
 #[test]
 fn process_fixture() {
-    match std::env::var("JOE_M2_PROCESS_FIXTURE").as_deref() {
-        Ok("pipes") => {
-            std::io::stdout()
-                .write_all(&vec![b'o'; 256 * 1024])
-                .unwrap();
-            std::io::stderr()
-                .write_all(&vec![b'e'; 256 * 1024])
-                .unwrap();
-        }
-        Ok(mode @ ("descendant" | "tree")) => {
-            let marker = PathBuf::from(std::env::var_os("JOE_M2_PROCESS_MARKER").unwrap());
-            if mode == "descendant" {
-                std::fs::write(
-                    marker.with_extension("child"),
-                    std::process::id().to_string(),
-                )
-                .unwrap();
-            } else {
-                let child = std::process::Command::new(std::env::current_exe().unwrap())
-                    .args(["--exact", "sandbox::tests::process_fixture", "--nocapture"])
-                    .env("JOE_M2_PROCESS_FIXTURE", "descendant")
-                    .spawn()
-                    .unwrap();
-                let mut attempts = 0;
-                while !marker.with_extension("child").exists() && attempts < 500 {
-                    std::thread::sleep(Duration::from_millis(5));
-                    attempts += 1;
-                }
-                std::fs::write(&marker, format!("{} {}", std::process::id(), child.id())).unwrap();
-            }
-            loop {
-                std::thread::sleep(Duration::from_secs(1));
-            }
-        }
-        Ok("boundary") => {
-            let root = std::env::current_dir().unwrap();
-            let outside = PathBuf::from(std::env::var_os("JOE_OUTSIDE").unwrap());
-            assert_eq!(std::env::var_os("HOME").unwrap(), root.as_os_str());
-            assert!(std::env::var_os("JOE_INHERITED_SECRET").is_none());
-            assert!(std::env::var_os("SSH_AUTH_SOCK").is_none());
-            assert!(std::fs::read_to_string(outside.join("secret")).is_err());
-            let volume_alias = PathBuf::from("/System/Volumes/Data")
-                .join(outside.strip_prefix("/").unwrap())
-                .join("secret");
-            assert!(std::fs::read_to_string(volume_alias).is_err());
-            assert!(std::fs::write(outside.join("secret"), "changed").is_err());
-            assert!(std::fs::write(root.join("escape/secret"), "changed").is_err());
-            assert!(std::fs::hard_link(outside.join("secret"), root.join("hardlink")).is_err());
-            assert!(std::fs::hard_link(root.join("input"), root.join("new-link")).is_err());
-            assert!(std::fs::rename(root.join("input"), outside.join("moved")).is_err());
-            for path in [
-                ".git/config",
-                ".GIT/config",
-                ".agents/rules",
-                ".codex/config",
-                "readonly/file",
-                "READONLY/file",
-            ] {
-                assert!(
-                    std::fs::write(root.join(path), "changed").is_err(),
-                    "Write succeeded: {path}"
-                );
-            }
-            assert!(
-                std::fs::rename(root.join("readonly"), root.join("formerly-readonly")).is_err()
-            );
-            assert!(std::fs::read(root.join(".turbo-code/config")).is_err());
-            let endpoint = std::env::var("JOE_ENDPOINT").unwrap();
-            assert!(std::net::TcpStream::connect(endpoint).is_err());
-            let parent = std::env::var("JOE_PARENT_PID")
-                .unwrap()
-                .parse::<i32>()
-                .unwrap();
-            assert_eq!(unsafe { libc::kill(parent, libc::SIGCONT) }, -1);
-            std::fs::write(root.join("allowed"), "allowed").unwrap();
-            let child = std::process::Command::new(std::env::current_exe().unwrap())
-                .args(["--exact", "sandbox::tests::process_fixture", "--nocapture"])
-                .env("JOE_M2_PROCESS_FIXTURE", "escaped-session")
-                .status()
-                .unwrap();
-            assert!(child.success());
-        }
-        Ok("escaped-session") => {
-            assert!(unsafe { libc::setsid() } > 0);
-            let outside = PathBuf::from(std::env::var_os("JOE_OUTSIDE").unwrap());
-            assert!(std::fs::write(outside.join("secret"), "changed").is_err());
-            assert!(std::net::TcpStream::connect(std::env::var("JOE_ENDPOINT").unwrap()).is_err());
-        }
-        Ok("overflow") => {
-            let _ = std::io::stdout().write_all(&vec![b'x'; 17 * 1024 * 1024]);
-        }
-
-        Ok("temporary-storage") => {
-            #[cfg(target_os = "macos")]
-            {
-                let semaphore = Semaphore::new();
-                semaphore.acquire();
-                let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
-                let size = std::mem::size_of_val(&info) as i32;
-                let read = unsafe {
-                    libc::proc_pidinfo(
-                        std::process::id() as i32,
-                        libc::PROC_PIDTBSDINFO,
-                        0,
-                        info.as_mut_ptr().cast(),
-                        size,
-                    )
-                };
-                assert_eq!(read, size, "{}", std::io::Error::last_os_error());
-            }
-            let project = std::env::temp_dir().join("storage-fixture");
-            std::fs::create_dir(&project).unwrap();
-            let policy = crate::workspace::WorkspacePolicy::workspace(project).unwrap();
-            let storage = policy.session_storage("sessions").unwrap();
-            std::fs::write(storage.path().join("data.mdb"), "fixture").unwrap();
-            let saved = std::env::current_dir().unwrap().join(".turbo-code");
-            let alias = std::env::temp_dir().join("saved-session-alias");
-            std::os::unix::fs::symlink(&saved, &alias).unwrap();
-            for directory in [saved, alias] {
-                assert!(std::fs::read(directory.join("secret")).is_err());
-                assert!(std::fs::write(directory.join("secret"), "overwrite").is_err());
-            }
-        }
-
-        Ok("environment-parent") => {
-            assert!(std::env::var_os("JOE_INHERITED_SECRET").is_some());
-            let project = Fixture::new();
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-            let result = runtime
-                .block_on(
-                    project
-                        .scope()
-                        .enter(output(fixture("environment-child", &PathBuf::new()))),
-                )
-                .unwrap();
-            assert!(
-                result.status.success(),
-                "{}",
-                String::from_utf8_lossy(&result.stderr)
-            );
-        }
-        Ok("environment-child") => {
-            assert!(std::env::var_os("JOE_INHERITED_SECRET").is_none());
-            assert!(std::env::var_os("SSH_AUTH_SOCK").is_none());
-        }
-        _ => {}
+    if std::env::var("JOE_SANDBOX_FIXTURE").as_deref() == Ok("environment-parent") {
+        assert!(std::env::var_os("JOE_INHERITED_SECRET").is_some());
+        let project = Fixture::new();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result = runtime
+            .block_on(
+                project
+                    .scope()
+                    .enter(output(fixture("environment-child", &PathBuf::new()))),
+            )
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
     }
 }
 
@@ -224,31 +62,16 @@ async fn output(command: Command) -> anyhow::Result<Output> {
     execute(command, ProcessLimits::default()).await
 }
 
-fn fixture(mode: &str, marker: &PathBuf) -> Command {
-    let mut command = Command::new(std::env::current_exe().unwrap());
+fn fixture(mode: &str, marker: &std::path::Path) -> Command {
+    let mut command = Command::new("/usr/bin/python3");
     command
-        .args(["--exact", "sandbox::tests::process_fixture", "--nocapture"])
-        .env("JOE_M2_PROCESS_FIXTURE", mode)
-        .env("JOE_M2_PROCESS_MARKER", marker);
+        .args(["-c", include_str!("fixture.py")])
+        .env("JOE_SANDBOX_FIXTURE", mode)
+        .env(
+            "JOE_SANDBOX_MARKER",
+            PathBuf::from("/workspace").join(marker.file_name().unwrap_or_default()),
+        );
     command
-}
-
-#[tokio::test]
-async fn sandboxed_runners_can_run_the_utils_suite() {
-    if crate::test_support::sandbox_available() {
-        let project = Fixture::new();
-        let mut command = Command::new(std::env::current_exe().unwrap());
-        command.args([
-            "--nocapture",
-            "--skip",
-            "sandbox::tests::sandboxed_runners_can_run_the_utils_suite",
-        ]);
-        let result = project.scope().enter(output(command)).await.unwrap();
-        let stdout = String::from_utf8_lossy(&result.stdout);
-        let stderr = String::from_utf8_lossy(&result.stderr);
-        assert!(result.status.success(), "{stdout}\n{stderr}");
-        assert!(stderr.contains("Skipping test:"), "{stderr}");
-    }
 }
 
 #[test]
@@ -256,7 +79,7 @@ fn inherited_credentials_and_sockets_are_removed() {
     if crate::test_support::sandbox_available() {
         let result = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "sandbox::tests::process_fixture", "--nocapture"])
-            .env("JOE_M2_PROCESS_FIXTURE", "environment-parent")
+            .env("JOE_SANDBOX_FIXTURE", "environment-parent")
             .env("JOE_INHERITED_SECRET", "fixture-secret")
             .env("SSH_AUTH_SOCK", "/fixture/host-agent")
             .output()
@@ -322,27 +145,27 @@ async fn temporary_workspaces_can_create_private_session_storage() {
 #[tokio::test]
 async fn cancellation_and_dropping_future_kill_descendants_and_reap_leader() {
     if crate::test_support::sandbox_available() {
-        for drop_future in [false, true] {
+        enum StopMode {
+            CancelScope,
+            DropFuture,
+        }
+        for mode in [StopMode::CancelScope, StopMode::DropFuture] {
             let project = Fixture::new();
             let marker = project.root.join("process");
             let command = fixture("tree", &marker);
             let scope = project.scope();
             let task_scope = scope.clone();
             let task = tokio::spawn(async move { task_scope.enter(output(command)).await });
-            let pids = tokio::time::timeout(Duration::from_secs(5), async {
-                let mut pids = String::new();
-                while pids.split_whitespace().count() != 2 {
-                    pids = tokio::fs::read_to_string(&marker).await.unwrap_or_default();
+            tokio::time::timeout(Duration::from_secs(15), async {
+                while !marker.with_extension("child").exists() {
                     tokio::time::sleep(Duration::from_millis(5)).await;
                 }
-                pids
             })
             .await
             .unwrap();
-            if drop_future {
-                task.abort();
-            } else {
-                scope.cancel.cancel();
+            match mode {
+                StopMode::DropFuture => task.abort(),
+                StopMode::CancelScope => scope.cancel.cancel(),
             }
             let result = tokio::time::timeout(Duration::from_secs(3), task)
                 .await
@@ -358,21 +181,12 @@ async fn cancellation_and_dropping_future_kill_descendants_and_reap_leader() {
                     .next()
                     .is_none()
             );
-            #[cfg(target_os = "macos")]
-            for pid in pids
-                .split_whitespace()
-                .map(|pid| pid.parse::<i32>().unwrap())
-            {
-                tokio::time::timeout(Duration::from_secs(3), async {
-                    while unsafe { libc::kill(pid, 0) } == 0 {
-                        tokio::time::sleep(Duration::from_millis(10)).await;
-                    }
-                })
-                .await
-                .expect("child process survived cancellation");
-            }
-            #[cfg(target_os = "linux")]
-            assert_eq!(tokio::fs::read_to_string(&marker).await.unwrap(), pids);
+            let heartbeat = std::fs::read(marker.with_extension("child")).unwrap();
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            assert_eq!(
+                std::fs::read(marker.with_extension("child")).unwrap(),
+                heartbeat
+            );
             std::fs::remove_file(&marker).unwrap();
             std::fs::remove_file(marker.with_extension("child")).unwrap();
         }
@@ -498,7 +312,7 @@ async fn unavailable_executables_do_not_disable_file_tools() {
     let result = scope
         .enter(output(Command::new(project.outside.join("missing"))))
         .await;
-    assert!(result.is_err());
+    assert!(result.is_err() || !result.unwrap().status.success());
     scope
         .workspace()
         .unwrap()
@@ -527,7 +341,7 @@ async fn protected_symlinks_cannot_add_host_mounts() {
 }
 
 #[tokio::test]
-async fn cargo_artifacts_are_reused_across_agents_and_terminal_builds() {
+async fn cargo_artifacts_are_reused_across_agents_and_restarts() {
     if crate::test_support::sandbox_available() {
         let project = Fixture::new();
         std::fs::create_dir(project.root.join("src")).unwrap();
@@ -558,20 +372,19 @@ async fn cargo_artifacts_are_reused_across_agents_and_terminal_builds() {
         );
         for result in [second, third] {
             let artifacts = cargo_artifacts(result.unwrap());
-            assert!(artifacts.iter().all(|artifact| artifact.fresh), "{artifacts:?}");
+            assert!(
+                artifacts.iter().all(|artifact| artifact.fresh),
+                "{artifacts:?}"
+            );
         }
         sibling.finish().await;
         peer.finish().await;
         scope.finish().await;
-        let terminal = command()
-            .current_dir(&project.root)
-            .env_remove("CARGO_TARGET_DIR")
-            .output()
-            .await
-            .unwrap();
-        cargo_artifacts(terminal);
         let restarted = cargo_artifacts(project.scope().enter(output(command())).await.unwrap());
-        assert!(restarted.iter().all(|artifact| artifact.fresh), "{restarted:?}");
+        assert!(
+            restarted.iter().all(|artifact| artifact.fresh),
+            "{restarted:?}"
+        );
         std::fs::write(
             project.root.join("src/lib.rs"),
             "#[test] fn changed() { panic!(\"changed source must execute\"); }",
@@ -582,7 +395,10 @@ async fn cargo_artifacts_are_reused_across_agents_and_terminal_builds() {
             .enter(crate::cargo::Cargo::cargo_test(None, None))
             .await
             .unwrap();
-        assert!(matches!(changed, crate::cargo::CargoTest::TestFailed { .. }));
+        assert!(matches!(
+            changed,
+            crate::cargo::CargoTest::TestFailed { .. }
+        ));
     }
 }
 
@@ -655,5 +471,46 @@ async fn cargo_build_scripts_proc_macros_and_tests_cannot_escape() {
             crate::cargo::CargoTest::TestFailed { output } => panic!("{output}"),
         }
         assert_eq!(std::fs::read_to_string(outside).unwrap(), "secret");
+    }
+}
+
+#[tokio::test]
+async fn changing_dependencies_prepares_new_packages_automatically() {
+    if crate::test_support::sandbox_available() {
+        let project = Fixture::new();
+        std::fs::create_dir(project.root.join("src")).unwrap();
+        std::fs::write(
+            project.root.join("src/lib.rs"),
+            "pub fn value() -> u8 { 1 }",
+        )
+        .unwrap();
+        let manifest = "[package]\nname = 'dependency_fixture'\nversion = '0.1.0'\nedition = '2024'\n[dependencies]\neither = '=1.15.0'\n";
+        std::fs::write(project.root.join("Cargo.toml"), manifest).unwrap();
+        let scope = project.scope();
+        let first = scope
+            .enter(crate::cargo::Cargo::cargo_check())
+            .await
+            .unwrap();
+        assert!(matches!(
+            first,
+            crate::cargo::CargoCheck::CheckPasses { .. }
+        ));
+        std::fs::write(
+            project.root.join("Cargo.toml"),
+            format!("{manifest}itoa = '=1.0.15'\n"),
+        )
+        .unwrap();
+        let second = scope
+            .enter(crate::cargo::Cargo::cargo_check())
+            .await
+            .unwrap();
+        assert!(matches!(
+            second,
+            crate::cargo::CargoCheck::CheckPasses { .. }
+        ));
+        let lock = std::fs::read_to_string(project.root.join("Cargo.lock")).unwrap();
+        assert!(lock.contains("name = \"itoa\"\nversion = \"1.0.15\""));
+        assert!(lock.contains("name = \"either\"\nversion = \"1.15.0\""));
+        scope.finish().await;
     }
 }
