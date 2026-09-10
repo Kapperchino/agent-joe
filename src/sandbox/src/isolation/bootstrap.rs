@@ -1,5 +1,5 @@
 use super::provision;
-use crate::workspace::WorkspacePolicy;
+use crate::workspace::Workspace;
 #[cfg(target_os = "macos")]
 use anyhow::Context;
 use sha2::{Digest, Sha256};
@@ -14,7 +14,7 @@ pub(super) struct Installation {
 
 impl Installation {
     pub fn new(
-        workspace: &WorkspacePolicy,
+        workspace: &dyn Workspace,
         check: &dyn Fn() -> anyhow::Result<()>,
     ) -> anyhow::Result<Self> {
         let cache = provision::cache()?;
@@ -40,10 +40,7 @@ impl Installation {
             #[cfg(target_os = "macos")]
             {
                 let entitlements = staging.join("entitlements.plist");
-                fs::write(
-                    &entitlements,
-                    include_bytes!("../../../../../sandbox/entitlements.plist"),
-                )?;
+                fs::write(&entitlements, include_bytes!("../../entitlements.plist"))?;
                 let output = std::process::Command::new("/usr/bin/codesign")
                     .args(["--force", "--sign", "-", "--entitlements"])
                     .arg(entitlements)

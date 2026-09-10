@@ -1,17 +1,17 @@
 use super::runtime::Runtime;
-use crate::workspace::{Access, WorkspacePolicy};
+use crate::workspace::{Workspace, WorkspaceProtection};
 use std::path::Path;
 use tokio::process::Command;
 
 enum Protection {
     HiddenDirectory,
     HiddenFile,
-    ReadOnly,
 }
 
 pub(super) fn prepare(
     source: Command,
-    workspace: &WorkspacePolicy,
+    workspace: &dyn Workspace,
+    protection: &WorkspaceProtection,
     runtime: &Runtime,
     filter: &super::seccomp::Filter,
 ) -> anyhow::Result<Command> {
@@ -55,32 +55,28 @@ pub(super) fn prepare(
         .arg("--bind")
         .arg(workspace.root())
         .arg(workspace.root());
-    for path in workspace.process_protected_paths()? {
-        let protection = match (workspace.check(&path, Access::Read).is_ok(), path.is_dir()) {
-            (true, _) => Protection::ReadOnly,
-            (false, true) => Protection::HiddenDirectory,
-            (false, false) => Protection::HiddenFile,
+    for path in &protection.hidden {
+        let protection = match path.is_dir() {
+            true => Protection::HiddenDirectory,
+            false => Protection::HiddenFile,
         };
         match protection {
             Protection::HiddenDirectory => {
                 command
                     .arg("--tmpfs")
-                    .arg(&path)
+                    .arg(path)
                     .args(["--chmod", "000"])
-                    .arg(&path)
+                    .arg(path)
                     .arg("--remount-ro")
-                    .arg(&path);
+                    .arg(path);
             }
             Protection::HiddenFile => {
-                command.arg("--ro-bind").arg("/dev/null").arg(&path);
-            }
-            Protection::ReadOnly => {
-                command.arg("--ro-bind").arg(&path).arg(&path);
+                command.arg("--ro-bind").arg("/dev/null").arg(path);
             }
         }
     }
 
-    for path in workspace.read_only_roots() {
+    for path in &protection.read_only {
         command.arg("--ro-bind").arg(path).arg(path);
     }
     filter.attach(&mut command);

@@ -1,4 +1,4 @@
-use crate::workspace::{ProcessWorkspace, WorkspacePolicy};
+use crate::workspace::Workspace;
 use anyhow::Context;
 use tokio::process::Command;
 
@@ -12,8 +12,7 @@ mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-#[path = "../../../../sandbox/provision/mod.rs"]
-mod provision;
+use crate::provision;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(super) mod registry;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -31,29 +30,22 @@ pub(super) struct IsolatedCommand {
 impl IsolatedCommand {
     pub(super) fn new(
         command: Command,
-        policy: &WorkspacePolicy,
+        policy: &dyn Workspace,
         check: &dyn Fn() -> anyhow::Result<()>,
     ) -> anyhow::Result<Self> {
-        let policy = match policy.permits_workspace_execution() {
-            true => Ok(policy),
-            false => Err(anyhow::anyhow!(
-                "Executable operations require worker access to the whole workspace"
-            )),
-        }?;
-        let workspace =
-            ProcessWorkspace::new(policy).context("Cannot prepare the process workspace")?;
+        let protection = policy.prepare()?;
         let temporary = TemporaryDirectory::new(policy)
             .context("Cannot create the process temporary directory")?;
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         {
             let runtime = runtime::Runtime::new(policy, check)?;
-            let command = runtime.prepare(command, &workspace, &temporary)?;
+            let command = runtime.prepare(command, policy, &temporary)?;
             #[cfg(target_os = "macos")]
-            let command = macos::prepare(command, policy, &runtime, &temporary)?;
+            let command = macos::prepare(command, policy, &protection, &runtime, &temporary)?;
             #[cfg(target_os = "linux")]
             let filter = seccomp::Filter::new()?;
             #[cfg(target_os = "linux")]
-            let command = linux::prepare(command, policy, &runtime, &filter)?;
+            let command = linux::prepare(command, policy, &protection, &runtime, &filter)?;
             Ok(Self {
                 command,
                 temporary,
@@ -63,7 +55,7 @@ impl IsolatedCommand {
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
-            let _ = (command, workspace, temporary);
+            let _ = (command, protection, temporary);
             Err(anyhow::anyhow!(
                 "Project process isolation is unavailable on this platform; execution is disabled"
             ))

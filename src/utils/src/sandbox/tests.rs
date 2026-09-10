@@ -143,6 +143,57 @@ async fn temporary_workspaces_can_create_private_session_storage() {
 }
 
 #[tokio::test]
+async fn sandbox_crate_observes_caller_cancellation_after_launch() {
+    if crate::test_support::sandbox_available() {
+        let project = Fixture::new();
+        let marker = project.root.join("process");
+        let scope = project.scope();
+        let sandbox = joe_sandbox::Sandbox::new(
+            std::sync::Arc::new(workspace::SandboxWorkspace::new(scope.workspace().unwrap())),
+            scope.tasks.clone(),
+        );
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let cancellations = vec![scope.cancel.clone(), cancel.clone()];
+        let command = fixture("tree", &marker);
+        let task = tokio::spawn(async move {
+            sandbox
+                .capture(command, ProcessLimits::default(), cancellations)
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(15), async {
+            while !marker.with_extension("child").exists() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        cancel.cancel();
+        let result = tokio::time::timeout(Duration::from_secs(3), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.status, crate::process::ProcessStatus::Cancelled);
+        tokio::time::timeout(Duration::from_secs(3), scope.finish())
+            .await
+            .unwrap();
+        assert!(scope.tasks.is_empty());
+        assert!(
+            std::fs::read_dir(project.root.join("target/.joe/tmp"))
+                .unwrap()
+                .next()
+                .is_none()
+        );
+        let heartbeat = std::fs::read(marker.with_extension("child")).unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(
+            std::fs::read(marker.with_extension("child")).unwrap(),
+            heartbeat
+        );
+    }
+}
+
+#[tokio::test]
 async fn cancellation_and_dropping_future_kill_descendants_and_reap_leader() {
     if crate::test_support::sandbox_available() {
         enum StopMode {
@@ -513,4 +564,15 @@ async fn changing_dependencies_prepares_new_packages_automatically() {
         assert!(lock.contains("name = \"either\"\nversion = \"1.15.0\""));
         scope.finish().await;
     }
+}
+
+#[tokio::test]
+async fn redirected_cache_paths_cannot_escape_the_workspace() {
+    let fixture = Fixture::new();
+    let cache = fixture.root.join("target/.joe/linux");
+    std::fs::create_dir_all(&cache).unwrap();
+    std::os::unix::fs::symlink(&fixture.outside, cache.join("cargo")).unwrap();
+    let result = fixture.scope().enter(output(Command::new("cargo"))).await;
+    assert!(result.is_err());
+    assert!(!fixture.outside.join("registry").exists());
 }

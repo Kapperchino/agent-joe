@@ -233,6 +233,7 @@ fit within 2048 serialized JSON bytes. Omitted options keep Cargo's default
 selection. No credentials or other host environment values are inherited.
 
 Commands run offline in a fresh libkrun Linux microVM on both macOS and Linux.
+The shared implementation lives in the [`joe-sandbox` crate](src/sandbox/README.md).
 Joe automatically prepares and caches the sandbox on first use, including the
 Linux guest and crates.io dependencies. No sandbox setup is required.
 macOS also builds and executes Linux binaries, using the guest's Rust toolchain.

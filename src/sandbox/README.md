@@ -1,3 +1,20 @@
+The `joe-sandbox` workspace crate owns process supervision, host isolation,
+runtime provisioning and the libkrun launcher. It has no dependency on Joe's
+utility crate. `utils::sandbox` connects Joe's execution scopes and workspace
+policy to the crate through the `Workspace` trait, retaining the sealed Cargo
+operation interface used by the application.
+
+`Sandbox::launch` creates a managed process with a `ProcessHandle` for retained
+output and cancellation; `RunningProcess::run` supervises it through completion.
+Its completion callback releases application resources before handle waiters wake.
+`Sandbox::launch` observes caller cancellation tokens during preparation, then
+the handle controls cancellation of the running process. `Sandbox::capture`
+runs this lifecycle and observes caller cancellation until completion. Both
+accept validated `ProcessLimits`. A shared
+`TaskTracker` lets the application await preparation and process cleanup.
+The `Workspace` implementation authorizes execution, supplies read-only and
+hidden paths, and controls manifest reads and process cache links.
+
 Joe prepares its sandbox automatically. Its launcher depends directly on the
 pinned `libkrun` 1.18.0 crate, imported as `krun`, and the application bundles
 libkrunfw 5.5.0. On first use it downloads the pinned Rust 1.95

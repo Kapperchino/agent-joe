@@ -1,5 +1,6 @@
 use super::runtime::Runtime;
 use super::*;
+use crate::workspace::WorkspaceProtection;
 use std::ffi::OsString;
 use std::path::Path;
 
@@ -10,7 +11,8 @@ struct Profile {
 
 impl Profile {
     fn new(
-        workspace: &WorkspacePolicy,
+        workspace: &dyn Workspace,
+        protection: &WorkspaceProtection,
         executable: &Path,
         runtime: &Runtime,
         temporary: &TemporaryDirectory,
@@ -49,8 +51,11 @@ impl Profile {
 (deny file-write* (regex #"(^|/)[.]([aA][gG][eE][nN][tT][sS]|[cC][oO][dD][eE][xX])(/|$)"))
 "#
         ));
-        for root in workspace.read_only_roots() {
+        for root in &protection.read_only {
             profile.path("deny", "file-write*", "subpath", root);
+        }
+        for root in &protection.hidden {
+            profile.path("deny", "file-read* file-write*", "subpath", root);
         }
         Ok(profile)
     }
@@ -73,12 +78,13 @@ impl Profile {
 
 pub(super) fn prepare(
     command: Command,
-    workspace: &WorkspacePolicy,
+    workspace: &dyn Workspace,
+    protection: &WorkspaceProtection,
     runtime: &Runtime,
     temporary: &TemporaryDirectory,
 ) -> anyhow::Result<Command> {
     let source = command.as_std();
-    let profile = Profile::new(workspace, &runtime.helper, runtime, temporary)?;
+    let profile = Profile::new(workspace, protection, &runtime.helper, runtime, temporary)?;
     let mut isolated = Command::new("/usr/bin/sandbox-exec");
     isolated.env_clear().current_dir(workspace.root());
     for parameter in profile.parameters {

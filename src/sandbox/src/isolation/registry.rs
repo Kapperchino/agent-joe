@@ -2,14 +2,14 @@ use super::provision::{
     artifact::{Artifact, Checksum},
     download::Downloads,
 };
-use crate::{execution::ExecutionScope, workspace::WorkspacePolicy};
+use crate::{ProcessLimits, Sandbox, workspace::Workspace};
 use anyhow::Context;
 use serde::Deserialize;
+use std::time::Duration;
 use std::{
     collections::HashSet,
     fs,
     path::{Path, PathBuf},
-    sync::Arc,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -21,7 +21,7 @@ struct Lockfile {
 }
 
 impl Lockfile {
-    fn read(workspace: &WorkspacePolicy) -> anyhow::Result<Self> {
+    fn read(workspace: &dyn Workspace) -> anyhow::Result<Self> {
         match workspace.root().join("Cargo.lock").exists() {
             true => Ok(toml::from_str(&workspace.read(Path::new("Cargo.lock"))?)?),
             false => Ok(Self::default()),
@@ -227,7 +227,7 @@ impl RegistryCache {
 
     fn install_packages(
         &self,
-        workspace: &WorkspacePolicy,
+        workspace: &dyn Workspace,
         downloads: &Downloads<'_>,
     ) -> anyhow::Result<()> {
         Lockfile::read(workspace)?
@@ -251,15 +251,13 @@ fn atomic_write(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
 
 struct ResolveLock;
 
-impl crate::sandbox::sealed::Operation for ResolveLock {
+impl ResolveLock {
     fn into_command(self) -> tokio::process::Command {
         let mut command = tokio::process::Command::new("/usr/local/cargo/bin/cargo");
         command.args(["update", "--workspace", "--offline"]);
         command
     }
 }
-
-impl crate::sandbox::SandboxOperation for ResolveLock {}
 
 enum Resolution {
     Seed,
@@ -275,8 +273,7 @@ enum RegistryRequest {
 }
 
 struct DependencyResolver {
-    scope: ExecutionScope,
-    workspace: Arc<WorkspacePolicy>,
+    sandbox: Sandbox,
     cancellations: Vec<CancellationToken>,
     requested: HashSet<String>,
 }
@@ -307,7 +304,7 @@ impl DependencyResolver {
 
     async fn resolve(&mut self) -> anyhow::Result<Resolution> {
         let result = tokio::select! {
-            result = crate::sandbox::Sandbox::capture(ResolveLock, 30) => result?,
+            result = self.sandbox.capture(ResolveLock.into_command(), ProcessLimits::new(Duration::from_secs(30), 16 * 1024 * 1024)?, self.cancellations.clone()) => result?,
             _ = futures::future::select_all(self.cancellations.iter().map(|token| Box::pin(token.cancelled()))) => Err(anyhow::anyhow!("Process cancelled before launch"))?,
         };
         match result.exit_code {
@@ -324,16 +321,16 @@ impl DependencyResolver {
     }
 
     async fn fetch(&self, request: RegistryRequest) -> anyhow::Result<()> {
-        let workspace = self.workspace.clone();
+        let workspace = self.sandbox.workspace.clone();
         let cancellations = self.cancellations.clone();
-        self.scope
+        self.sandbox
             .tasks
             .spawn_blocking(move || {
                 let check = || match cancellations.iter().any(|cancel| cancel.is_cancelled()) {
                     true => Err(anyhow::anyhow!("Process cancelled before launch")),
                     false => Ok(()),
                 };
-                let runtime = super::bootstrap::Installation::new(&workspace, &check)?;
+                let runtime = super::bootstrap::Installation::new(workspace.as_ref(), &check)?;
                 let installation = super::provision::download::Installation::new(
                     super::provision::cache()?,
                     &check,
@@ -341,7 +338,9 @@ impl DependencyResolver {
                 let downloads = Downloads::new(installation.path().join("downloads"), &check)?;
                 let registry = RegistryCache::new(&runtime.rootfs)?;
                 match request {
-                    RegistryRequest::Packages => registry.install_packages(&workspace, &downloads),
+                    RegistryRequest::Packages => {
+                        registry.install_packages(workspace.as_ref(), &downloads)
+                    }
                     RegistryRequest::Index { index } => {
                         registry.install_index(&index, None, &downloads)
                     }
@@ -351,14 +350,13 @@ impl DependencyResolver {
     }
 }
 
-pub(in crate::sandbox) fn prepare(
-    workspace: Arc<WorkspacePolicy>,
+pub(crate) fn prepare(
+    sandbox: Sandbox,
     cancellations: Vec<CancellationToken>,
 ) -> futures::future::BoxFuture<'static, anyhow::Result<()>> {
     Box::pin(
         DependencyResolver {
-            scope: ExecutionScope::current(),
-            workspace,
+            sandbox,
             cancellations,
             requested: HashSet::new(),
         }

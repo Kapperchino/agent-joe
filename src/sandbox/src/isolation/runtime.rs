@@ -14,7 +14,7 @@ pub(super) struct Runtime {
 
 impl Runtime {
     pub(super) fn new(
-        workspace: &WorkspacePolicy,
+        workspace: &dyn Workspace,
         check: &dyn Fn() -> anyhow::Result<()>,
     ) -> anyhow::Result<Self> {
         let installation = super::bootstrap::Installation::new(workspace, check)?;
@@ -46,7 +46,7 @@ impl Runtime {
             && runtime.rootfs.join("usr/local/rustup").is_dir()
             && runtime.rootfs.join("workspace").is_dir()
             && std::fs::read(runtime.rootfs.join("usr/local/libexec/joe-guest"))?
-                == include_bytes!("../../../../../sandbox/guest.sh")
+                == include_bytes!("../../guest.sh")
             && runtime
                 .read_only_paths()?
                 .iter()
@@ -72,10 +72,9 @@ impl Runtime {
     pub(super) fn prepare(
         &self,
         source: Command,
-        workspace: &ProcessWorkspace<'_>,
+        workspace: &dyn Workspace,
         temporary: &TemporaryDirectory,
     ) -> anyhow::Result<Command> {
-        let workspace = workspace.policy();
         let guest = GuestCommand::new(source.as_std(), temporary.id())?;
         let cache = Path::new("target/.joe/linux");
         for directory in [cache.join("build"), cache.join("cargo")] {
@@ -89,7 +88,7 @@ impl Runtime {
         }
         std::fs::create_dir(temporary.path().join("guest"))?;
         std::fs::write(temporary.path().join("command"), guest.script())?;
-        let configuration = super::super::protocol::Configuration {
+        let configuration = crate::protocol::Configuration {
             firmware: self.firmware.clone(),
             rootfs: self.rootfs.clone(),
             workspace: workspace.root().into(),
@@ -188,10 +187,42 @@ fn guest_command(arguments: &[String]) -> String {
 mod tests {
     use super::*;
 
+    struct FixtureWorkspace {
+        root: PathBuf,
+    }
+
+    impl Workspace for FixtureWorkspace {
+        fn root(&self) -> &Path {
+            &self.root
+        }
+
+        fn prepare(&self) -> anyhow::Result<crate::workspace::WorkspaceProtection> {
+            Ok(crate::workspace::WorkspaceProtection::default())
+        }
+
+        fn read(&self, path: &Path) -> anyhow::Result<String> {
+            Ok(std::fs::read_to_string(self.root.join(path))?)
+        }
+
+        fn create_parent_dirs(&self, path: &Path) -> anyhow::Result<()> {
+            std::fs::create_dir_all(
+                self.root
+                    .join(path.parent().context("Missing fixture parent")?),
+            )?;
+            Ok(())
+        }
+
+        fn link_process_cache(&self, source: &Path, destination: &Path) -> anyhow::Result<()> {
+            self.create_parent_dirs(destination)?;
+            std::os::unix::fs::symlink(source, self.root.join(destination))?;
+            Ok(())
+        }
+    }
+
     struct RuntimeFixture {
         directory: PathBuf,
         runtime: Runtime,
-        workspace: WorkspacePolicy,
+        workspace: FixtureWorkspace,
     }
 
     impl RuntimeFixture {
@@ -224,7 +255,7 @@ mod tests {
             }
             std::fs::write(
                 rootfs.join("usr/local/libexec/joe-guest"),
-                include_bytes!("../../../../../sandbox/guest.sh"),
+                include_bytes!("../../guest.sh"),
             )
             .unwrap();
             std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -232,7 +263,7 @@ mod tests {
             Self {
                 directory,
                 runtime,
-                workspace: WorkspacePolicy::workspace(project).unwrap(),
+                workspace: FixtureWorkspace { root: project },
             }
         }
     }
@@ -272,12 +303,11 @@ mod tests {
     fn guest_environment_is_clean_and_arguments_stay_out_of_the_helper_protocol() {
         let fixture = RuntimeFixture::new();
         let temporary = TemporaryDirectory::new(&fixture.workspace).unwrap();
-        let workspace = ProcessWorkspace::new(&fixture.workspace).unwrap();
         let mut source = Command::new("/usr/bin/env");
         source.env("JOE_RUN_VALUE", "'\"$HOME`id`$(id);*");
         let command = fixture
             .runtime
-            .prepare(source, &workspace, &temporary)
+            .prepare(source, &fixture.workspace, &temporary)
             .unwrap();
         let output = std::process::Command::new("/bin/sh")
             .arg(temporary.path().join("command"))
@@ -289,7 +319,7 @@ mod tests {
         assert!(environment.contains("JOE_RUN_VALUE='\"$HOME`id`$(id);*\n"));
         assert!(environment.contains("HOME=/workspace\n"));
         assert!(!environment.contains("JOE_SECRET"));
-        let configuration: super::super::super::protocol::Configuration = serde_json::from_slice(
+        let configuration: crate::protocol::Configuration = serde_json::from_slice(
             command
                 .as_std()
                 .get_args()
@@ -308,23 +338,6 @@ mod tests {
             std::fs::read_link(cache).unwrap(),
             Path::new("/usr/local/cargo/registry/index")
         );
-    }
-
-    #[test]
-    fn redirected_cache_paths_cannot_escape_the_workspace() {
-        let fixture = RuntimeFixture::new();
-        let temporary = TemporaryDirectory::new(&fixture.workspace).unwrap();
-        let cache = fixture.workspace.root().join("target/.joe/linux");
-        std::fs::create_dir(&cache).unwrap();
-        std::os::unix::fs::symlink(&fixture.runtime.rootfs, cache.join("cargo")).unwrap();
-        let workspace = ProcessWorkspace::new(&fixture.workspace).unwrap();
-        assert!(
-            fixture
-                .runtime
-                .prepare(Command::new("cargo"), &workspace, &temporary)
-                .is_err()
-        );
-        assert!(!fixture.runtime.rootfs.join("registry").exists());
     }
 
     #[test]

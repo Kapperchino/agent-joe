@@ -448,7 +448,7 @@ impl CargoResult {
             ProcessAction::Stop => process.stop().await,
         }
         Self::new(
-            process.command.clone(),
+            process.command().clone(),
             process.output(),
             Some(id.to_owned()),
             offsets,

@@ -2268,6 +2268,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a037eddb7d28de1d0fc42411f501b53b75838d313908078d6698d064f3029b24"
 
 [[package]]
+name = "joe-sandbox"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "flate2",
+ "futures",
+ "libc",
+ "reqwest",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tar",
+ "tokio",
+ "tokio-util",
+ "toml 1.1.2+spec-1.1.0",
+ "uuid",
+]
+
+[[package]]
 name = "js-sys"
 version = "0.3.85"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5645,7 +5666,6 @@ dependencies = [
  "blake3",
  "cargo_metadata",
  "dirs",
- "flate2",
  "fnv",
  "futures",
  "git2",
@@ -5653,19 +5673,16 @@ dependencies = [
  "grep",
  "ignore",
  "itertools 0.15.0",
+ "joe-sandbox",
  "libc",
  "regex",
- "reqwest",
  "rustix",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "similar",
- "tar",
  "tokio",
  "tokio-stream",
  "tokio-util",
- "toml 1.1.2+spec-1.1.0",
  "uuid",
 ]
 

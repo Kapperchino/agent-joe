@@ -1,4 +1,4 @@
-use crate::workspace::WorkspacePolicy;
+use crate::workspace::Workspace;
 use std::{
     os::unix::fs::DirBuilderExt,
     path::{Path, PathBuf},
@@ -10,7 +10,7 @@ pub(crate) struct TemporaryDirectory {
 }
 
 impl TemporaryDirectory {
-    pub(super) fn new(workspace: &WorkspacePolicy) -> anyhow::Result<Self> {
+    pub(super) fn new(workspace: &dyn Workspace) -> anyhow::Result<Self> {
         workspace.create_parent_dirs(Path::new("target/.joe/tmp/placeholder"))?;
         let id = uuid::Uuid::new_v4();
         let path = workspace

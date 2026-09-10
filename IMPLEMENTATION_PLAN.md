@@ -445,9 +445,19 @@ built and run inside the guest during the preceding sandbox migration.
 Full Linux KVM execution remains untested. Strict utility Clippy checks report
 existing warnings in diff, text search and workspace process code.
 
+Sandbox crate extraction validation on 2026-09-09: 15 `joe-sandbox` tests,
+81 utility tests and three launcher tests pass on Apple Silicon macOS.
+Workspace compilation, strict Clippy for the sandbox and launcher, and first
+use with an empty home directory and no host Cargo pass. Linux ARM64 checks
+cover the library, utility adapter and launcher; the library and adapter use a
+temporary check-only manifest without native bundling. The crate owns the
+launcher, provisioning assets and process lifecycle, with no dependency on
+`utils`. Joe supplies its workspace policy and execution scopes through an
+adapter. Linux KVM execution remains untested.
+
 These historical Linux runs exercised the previous host-process sandbox; they
 do not validate libkrun/KVM. Current sandbox validation uses the automatically
-provisioned runtime described in `sandbox/README.md`. Unsupported host isolation
+provisioned runtime described in `src/sandbox/README.md`. Unsupported host isolation
 may cause explicit test skips.
 Live provider checks, native Windows, and model/task-performance comparisons
 remain unverified.

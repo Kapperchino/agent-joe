@@ -34,22 +34,21 @@ impl BuildTarget {
 
 pub struct NativeBuild {
     target: BuildTarget,
-    repository: PathBuf,
+    package: PathBuf,
     output: PathBuf,
 }
 
 impl NativeBuild {
     pub fn new() -> anyhow::Result<Self> {
-        let repository = PathBuf::from(
+        let package = PathBuf::from(
             std::env::var_os("CARGO_MANIFEST_DIR").context("Missing manifest directory")?,
         )
-        .join("../..")
         .canonicalize()?;
         let output =
             PathBuf::from(std::env::var_os("OUT_DIR").context("Missing build output directory")?);
         Ok(Self {
             target: BuildTarget::new()?,
-            repository,
+            package,
             output,
         })
     }
@@ -68,7 +67,7 @@ impl NativeBuild {
         )?;
         run(self
             .cargo(&self.output.join("launcher-target"))
-            .current_dir(self.repository.join("sandbox/launcher"))
+            .current_dir(self.package.join("launcher"))
             .env("KRUN_INIT_BINARY_PATH", native.join("joe-init"))
             .env("KRUN_EDK2_BINARY_PATH", native.join("KRUN_EFI.silent.fd")))?;
         let archive = self.output.join("sandbox-native.tar.gz");

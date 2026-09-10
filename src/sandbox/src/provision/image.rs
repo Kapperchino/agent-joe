@@ -143,7 +143,7 @@ pub fn prepare(
         for directory in ["workspace", "dev", "proc", "sys", "tmp", "usr/local/libexec", "usr/local/cargo/registry/index", "usr/local/cargo/registry/cache"] {
             fs::create_dir_all(rootfs.join(directory))?;
         }
-        fs::write(rootfs.join("usr/local/libexec/joe-guest"), include_bytes!("../guest.sh"))?;
+        fs::write(rootfs.join("usr/local/libexec/joe-guest"), include_bytes!("../../guest.sh"))?;
         Ok(())
     }).map(|path| path.join("rootfs"))
 }
