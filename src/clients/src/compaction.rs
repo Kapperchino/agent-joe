@@ -1,3 +1,4 @@
+use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -79,6 +80,126 @@ pub struct CompactionResponse {
     pub usage: crate::openai::Usage,
 }
 
+impl CompactionResponse {
+    pub(crate) async fn from_stream(
+        stream: impl Stream<Item = anyhow::Result<CompactionEvent>>,
+    ) -> anyhow::Result<Self> {
+        futures::pin_mut!(stream);
+        let mut state = CompactionState::Pending;
+        while let Some(event) = stream.next().await {
+            state = state.advance(event?)?;
+        }
+        match state {
+            CompactionState::Complete(response) => Ok(response),
+            _ => Err(anyhow::anyhow!(
+                "Compaction stream ended before response.completed"
+            )),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type")]
+pub(crate) enum CompactionEvent {
+    #[serde(rename = "response.output_item.done")]
+    Item { item: Value },
+    #[serde(rename = "response.completed")]
+    Completed { response: CompactionStatus },
+    #[serde(rename = "response.failed")]
+    Failed { response: CompactionStatus },
+    #[serde(rename = "response.incomplete")]
+    Incomplete { response: CompactionStatus },
+    #[serde(rename = "error")]
+    Error {
+        #[serde(default)]
+        code: Option<String>,
+        message: String,
+    },
+    #[serde(other)]
+    Other,
+}
+
+impl CompactionEvent {
+    pub(crate) fn terminal(&self) -> bool {
+        matches!(
+            self,
+            Self::Completed { .. }
+                | Self::Failed { .. }
+                | Self::Incomplete { .. }
+                | Self::Error { .. }
+        )
+    }
+}
+
+#[derive(Deserialize)]
+pub(crate) struct CompactionStatus {
+    usage: Option<crate::openai::Usage>,
+    error: Option<crate::openai::ResponseError>,
+    incomplete_details: Option<crate::openai::IncompleteDetails>,
+}
+
+enum CompactionState {
+    Pending,
+    Collected(CompactedWindow),
+    Complete(CompactionResponse),
+}
+
+impl CompactionState {
+    fn advance(self, event: CompactionEvent) -> anyhow::Result<Self> {
+        match (self, event) {
+            (Self::Pending, CompactionEvent::Item { item }) if item["type"] == "compaction" => {
+                CompactedWindow::try_from(vec![item]).map(Self::Collected)
+            }
+            (_, CompactionEvent::Item { item }) if item["type"] == "compaction" => Err(
+                anyhow::anyhow!("Compaction stream returned more than one compaction item"),
+            ),
+            (Self::Collected(output), CompactionEvent::Completed { response }) => {
+                Ok(Self::Complete(CompactionResponse {
+                    output,
+                    usage: response.usage.unwrap_or_default(),
+                }))
+            }
+            (_, CompactionEvent::Completed { .. }) => Err(anyhow::anyhow!(
+                "Compaction completed without an encrypted compaction item"
+            )),
+            (_, CompactionEvent::Failed { response }) => {
+                let error = response.error.unwrap_or(crate::openai::ResponseError {
+                    code: None,
+                    message: "Compaction failed".into(),
+                });
+                Err(crate::failure::Failure::api(
+                    error.code.as_deref().unwrap_or("failed_response"),
+                    &error.message,
+                )
+                .into())
+            }
+            (_, CompactionEvent::Incomplete { response }) => {
+                let reason = response
+                    .incomplete_details
+                    .map(|details| details.reason)
+                    .unwrap_or_default();
+                let code = match reason.as_str() {
+                    "context_length_exceeded" | "context_window_exceeded" | "context_exceeded" => {
+                        "context_length_exceeded"
+                    }
+                    "content_filter" => "content_filter",
+                    _ => "incomplete_response",
+                };
+                Err(
+                    crate::failure::Failure::api(code, &format!("Compaction incomplete: {reason}"))
+                        .into(),
+                )
+            }
+            (_, CompactionEvent::Error { code, message }) => Err(crate::failure::Failure::api(
+                code.as_deref().unwrap_or("failed_response"),
+                &message,
+            )
+            .into()),
+            (state, _) => Ok(state),
+        }
+    }
+}
+
 #[derive(Serialize)]
 pub(crate) struct CompactionRequest {
     pub model: String,
@@ -96,6 +217,105 @@ mod tests {
     };
     use serde_json::json;
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+
+    async fn streamed(events: Vec<Value>) -> anyhow::Result<CompactionResponse> {
+        let data = events
+            .iter()
+            .map(|event| format!("data: {event}\r\n\r\n"))
+            .collect::<String>();
+        let bytes = futures::stream::iter(
+            data.into_bytes()
+                .into_iter()
+                .map(|byte| Ok::<_, std::io::Error>(vec![byte])),
+        );
+        CompactionResponse::from_stream(crate::sse::decode(bytes, CompactionEvent::terminal)).await
+    }
+
+    fn compaction_item() -> Value {
+        json!({"type":"compaction", "id":"cmp-1", "encrypted_content":"opaque", "future":{"preserve":"終😀"}})
+    }
+
+    fn item_done(item: Value) -> Value {
+        json!({"type":"response.output_item.done", "item":item, "output_index":0})
+    }
+
+    fn completed() -> Value {
+        json!({"type":"response.completed", "response":{"output":[compaction_item()], "usage":{"input_tokens":1234,"output_tokens":90}}})
+    }
+
+    #[tokio::test]
+    async fn streaming_compaction_preserves_opaque_state_and_completion_usage() {
+        let response = streamed(vec![
+            json!({"type":"response.created", "response":{"id":"resp-1"}}),
+            json!({"type":"response.output_item.added", "item":{"type":"compaction"}}),
+            json!({"type":"response.keepalive"}),
+            item_done(compaction_item()),
+            completed(),
+        ])
+        .await
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(response.output).unwrap(),
+            json!([compaction_item()])
+        );
+        assert_eq!(response.usage.input_tokens, 1234);
+        assert_eq!(response.usage.output_tokens, 90);
+    }
+
+    #[tokio::test]
+    async fn streaming_compaction_rejects_partial_missing_duplicate_and_invalid_state() {
+        for events in [
+            vec![item_done(compaction_item())],
+            vec![completed()],
+            vec![
+                item_done(compaction_item()),
+                item_done(compaction_item()),
+                completed(),
+            ],
+            vec![
+                item_done(json!({"type":"compaction", "encrypted_content":""})),
+                completed(),
+            ],
+            vec![
+                item_done(json!({"type":"message", "role":"assistant", "content":"summary"})),
+                completed(),
+            ],
+        ] {
+            assert!(streamed(events).await.is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn streaming_compaction_propagates_terminal_failures_after_an_output_item() {
+        use crate::failure::{Failure, FailureKind};
+        struct FailureCase {
+            event: Value,
+            kind: FailureKind,
+        }
+        for case in [
+            FailureCase {
+                event: json!({"type":"error", "code":"rate_limit_exceeded", "message":"slow down"}),
+                kind: FailureKind::RateLimit,
+            },
+            FailureCase {
+                event: json!({"type":"response.failed", "response":{"error":{"code":"server_error", "message":"failed"}}}),
+                kind: FailureKind::Transport,
+            },
+            FailureCase {
+                event: json!({"type":"response.incomplete", "response":{"incomplete_details":{"reason":"max_output_tokens"}}}),
+                kind: FailureKind::Truncation,
+            },
+            FailureCase {
+                event: json!({"type":"response.incomplete", "response":{"incomplete_details":{"reason":"context_length_exceeded"}}}),
+                kind: FailureKind::ContextOverflow,
+            },
+        ] {
+            let error = streamed(vec![item_done(compaction_item()), case.event])
+                .await
+                .unwrap_err();
+            assert_eq!(error.downcast_ref::<Failure>().unwrap().kind, case.kind);
+        }
+    }
 
     #[test]
     fn malformed_native_windows_and_orphan_exchanges_are_rejected() {

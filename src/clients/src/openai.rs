@@ -63,6 +63,8 @@ pub enum InputItem {
     },
     #[serde(rename = "reasoning")]
     Reasoning(ReasoningItem),
+    #[serde(rename = "compaction_trigger")]
+    CompactionTrigger,
     #[serde(untagged)]
     Native(serde_json::Value),
 }
@@ -162,6 +164,11 @@ struct ResponseRequest {
 }
 
 impl ResponseRequest {
+    fn compaction(config: &OpenAIConfig, mut request: ClientRequest) -> Self {
+        request.input.push(InputItem::CompactionTrigger);
+        Self::new(config, request, true)
+    }
+
     fn new(config: &OpenAIConfig, req: ClientRequest, stream: bool) -> Self {
         Self {
             model: req.model.unwrap_or_else(|| config.model.clone()),
@@ -686,6 +693,25 @@ impl OpenAIClient {
         request: llm::ClientRequest,
     ) -> anyhow::Result<crate::compaction::CompactionResponse> {
         let request: ClientRequest = request.try_into()?;
+        match self.config.auth {
+            OpenAIAuthConfig::Codex(_) => {
+                let response = self
+                    .stream_response(ResponseRequest::compaction(&self.config, request))
+                    .await?;
+                crate::compaction::CompactionResponse::from_stream(crate::sse::decode(
+                    response.bytes_stream(),
+                    crate::compaction::CompactionEvent::terminal,
+                ))
+                .await
+            }
+            _ => self.compact_standalone(request).await,
+        }
+    }
+
+    async fn compact_standalone(
+        &self,
+        request: ClientRequest,
+    ) -> anyhow::Result<crate::compaction::CompactionResponse> {
         let body = crate::compaction::CompactionRequest {
             model: request.model.unwrap_or_else(|| self.config.model.clone()),
             input: request.input,
@@ -825,26 +851,29 @@ impl OpenAIClient {
         req: ClientRequest,
     ) -> Result<impl Stream<Item = anyhow::Result<StreamEvent>> + Send + 'static, anyhow::Error>
     {
-        let url = format!("{}/responses", self.config.get_url());
-
         let request = ResponseRequest::new(&self.config, req, true);
+        let response = self.stream_response(request).await?;
+        Ok(crate::sse::decode(response.bytes_stream(), |event| {
+            matches!(
+                event,
+                StreamEvent::ResponseCompleted { .. }
+                    | StreamEvent::ResponseIncomplete { .. }
+                    | StreamEvent::ResponseFailed { .. }
+                    | StreamEvent::Error { .. }
+            )
+        }))
+    }
 
-        let initial = self.client.post(&url).json(&request).send().await?;
-
-        if initial.status().is_success() {
-            Ok(crate::sse::decode(initial.bytes_stream(), |event| {
-                matches!(
-                    event,
-                    StreamEvent::ResponseCompleted { .. }
-                        | StreamEvent::ResponseIncomplete { .. }
-                        | StreamEvent::ResponseFailed { .. }
-                        | StreamEvent::Error { .. }
-                )
-            }))
-        } else {
-            let status = initial.status();
-            let body = initial.text().await.unwrap_or_default();
-            Err(crate::failure::Failure::http(status.as_u16(), body).into())
+    async fn stream_response(&self, request: ResponseRequest) -> anyhow::Result<reqwest::Response> {
+        let url = format!("{}/responses", self.config.get_url().trim_end_matches('/'));
+        let response = self.client.post(&url).json(&request).send().await?;
+        match response.status().is_success() {
+            true => Ok(response),
+            false => {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                Err(crate::failure::Failure::http(status.as_u16(), body).into())
+            }
         }
     }
 }
@@ -905,6 +934,108 @@ mod request_tests {
             stream,
         ))
         .unwrap()
+    }
+
+    fn codex_auth() -> OpenAIAuthConfig {
+        OpenAIAuthConfig::Codex(OpenAICodexConfig {
+            id_token: "fixture".into(),
+            access_token: "fixture".into(),
+            refresh_token: "fixture".into(),
+            account_id: "fixture".into(),
+            last_refresh: Duration::ZERO,
+            expires_at_ms: 0,
+        })
+    }
+
+    #[test]
+    fn codex_compaction_appends_a_transient_trigger_to_a_streaming_request() {
+        let config = config(codex_auth());
+        let previous =
+            json!({"type":"compaction", "encrypted_content":"opaque", "future":{"keep":true}});
+        let request = ClientRequest::new(vec![
+            InputItem::Native(previous.clone()),
+            InputItem::user("latest requirement".into()),
+        ])
+        .with_model("gpt-6-astra".into())
+        .with_instructions("current instructions".into());
+        let body = serde_json::to_value(ResponseRequest::compaction(&config, request)).unwrap();
+        assert_eq!(body["model"], "gpt-6-astra");
+        assert_eq!(body["instructions"], "current instructions");
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["store"], false);
+        assert!(body.get("max_output_tokens").is_none());
+        assert_eq!(
+            body["input"],
+            json!([
+                previous,
+                {"type":"message", "role":"user", "content":"latest requirement"},
+                {"type":"compaction_trigger"},
+            ])
+        );
+        assert_eq!(
+            wire_request(&config, true)["input"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn native_compaction_auto_recognizes_codex_and_public_openai_only() {
+        use crate::{
+            config::{Config, ConfigContext},
+            llm::LLmClient,
+        };
+        struct Route {
+            auth: OpenAIAuthConfig,
+            supported: bool,
+        }
+        for route in [
+            Route {
+                auth: codex_auth(),
+                supported: true,
+            },
+            Route {
+                auth: OpenAIAuthConfig::APIKey(OpenAIKeyConfig {
+                    api_key: "fixture".into(),
+                    url: None,
+                }),
+                supported: true,
+            },
+            Route {
+                auth: OpenAIAuthConfig::APIKey(OpenAIKeyConfig {
+                    api_key: "fixture".into(),
+                    url: Some("https://api.openai.com/v1/".into()),
+                }),
+                supported: true,
+            },
+            Route {
+                auth: OpenAIAuthConfig::APIKey(OpenAIKeyConfig {
+                    api_key: "fixture".into(),
+                    url: Some("https://compatible.invalid/v1".into()),
+                }),
+                supported: false,
+            },
+            Route {
+                auth: OpenAIAuthConfig::Local(LocalOpenAIConfig {
+                    api_key: None,
+                    url: "http://localhost:1234/v1".into(),
+                }),
+                supported: false,
+            },
+            Route {
+                auth: OpenAIAuthConfig::OpenRouter(OpenRouterConfig {
+                    api_key: "fixture".into(),
+                    url: None,
+                }),
+                supported: false,
+            },
+        ] {
+            let client =
+                LLmClient::new(ConfigContext::new(Config::OpenAI(config(route.auth)))).unwrap();
+            assert_eq!(client.native_compaction(), route.supported);
+        }
     }
 
     #[test]

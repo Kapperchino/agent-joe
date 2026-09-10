@@ -81,7 +81,8 @@ impl LLmClient {
             Self::Injected(provider) => provider.native_compaction(),
             Self::OpenApi { config, .. } => match config.get_config() {
                 Config::OpenAI(config) => {
-                    config.get_url().trim_end_matches('/') == "https://api.openai.com/v1"
+                    matches!(config.auth, crate::OpenAIAuthConfig::Codex(_))
+                        || config.get_url().trim_end_matches('/') == "https://api.openai.com/v1"
                 }
                 _ => false,
             },

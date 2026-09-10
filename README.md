@@ -39,6 +39,14 @@ actor stops retain a post-stop cleanup fallback when mailbox delivery is unavail
 | OpenRouter | Does not support web_search but everything should work |
 | Local      | Response api fully supported                           |
 
+Context compaction runs automatically as the conversation approaches its token
+budget, or manually with `/compact` while idle. The default
+`--native-compaction auto` uses streaming native compaction with Codex login,
+including Astra, and the standalone compaction endpoint with the public OpenAI
+API. Other providers use conversation summaries. `--native-compaction off`
+selects summaries for sessions that do not already contain encrypted context.
+The saved transcript remains available after compaction.
+
 ## Build & Run
 
 ```sh
