@@ -27,7 +27,7 @@ use tokio::task::JoinHandle;
 use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
 
-const INLINE_VIEWPORT_HEIGHT: u16 = 12;
+const INLINE_VIEWPORT_HEIGHT: u16 = 24;
 
 #[derive(Parser)]
 #[command(name = "joe")]

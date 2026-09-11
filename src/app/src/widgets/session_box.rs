@@ -1,12 +1,13 @@
+use crate::theme;
 use commands::command::ResumeTarget;
 use common_models::tui_models::{SessionSummary, SessionTranscript};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::Line,
-    widgets::{Block, Paragraph, Row, StatefulWidget, Table, TableState, Widget, Wrap},
+    widgets::{Paragraph, Row, StatefulWidget, Table, TableState, Widget, Wrap},
 };
 use std::time::SystemTime;
 
@@ -218,7 +219,9 @@ impl SessionSelection {
             Constraint::Length(4),
         ])
         .areas(area);
-        Paragraph::new(format!("Search: {}▏", self.query)).render(search, buf);
+        Paragraph::new(format!(" / Search: {}▏", self.query))
+            .style(Style::default().fg(theme::ACCENT))
+            .render(search, buf);
         match (self.sessions.as_slice(), self.matches.as_slice()) {
             ([], _) => Paragraph::new("No saved conversations in this project.")
                 .wrap(Wrap { trim: false })
@@ -250,17 +253,18 @@ impl SessionSelection {
                 )
                 .row_highlight_style(
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(theme::ACCENT)
+                        .bg(theme::SELECTION)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("> ");
+                .highlight_symbol(" › ");
                 StatefulWidget::render(table, list, buf, &mut self.table);
             }
         }
         if let Some(session) = self.selected() {
             Paragraph::new(
                 std::iter::once(
-                    Line::from(session.id.as_str()).style(Style::default().fg(Color::DarkGray)),
+                    Line::from(session.id.as_str()).style(Style::default().fg(theme::MUTED)),
                 )
                 .chain(session.preview.lines().map(Line::from))
                 .collect::<Vec<_>>(),
@@ -275,8 +279,7 @@ impl StatefulWidget for SessionBox {
     type State = SessionPickerState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-        let block = Block::bordered()
-            .title("Resume a session")
+        let block = theme::panel("Resume a session", theme::ACCENT)
             .title_bottom(" ↑/↓ select · Enter resume · Esc cancel ");
         let inner = block.inner(area);
         block.render(area, buf);
@@ -289,7 +292,7 @@ impl StatefulWidget for SessionBox {
                 Paragraph::new("Resuming conversation…").render(inner, buf)
             }
             SessionPickerState::Failed(error) => Paragraph::new(error.as_str())
-                .style(Style::default().fg(Color::Red))
+                .style(Style::default().fg(theme::RED))
                 .wrap(Wrap { trim: false })
                 .render(inner, buf),
             SessionPickerState::Selecting(selection) => selection.render(inner, buf),

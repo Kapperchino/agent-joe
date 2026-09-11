@@ -1,7 +1,7 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::prelude::{Color, Modifier, Style};
-use ratatui::widgets::{Block, List, ListItem, ListState, StatefulWidget};
+use ratatui::prelude::{Modifier, Style};
+use ratatui::widgets::{List, ListItem, ListState, StatefulWidget};
 
 pub struct SelectList {
     title: String,
@@ -22,10 +22,11 @@ impl Default for SelectList {
         Self {
             title: "Select".to_string(),
             empty_message: "No items".to_string(),
-            selected_symbol: "> ".to_string(),
-            style: Style::default(),
+            selected_symbol: " › ".to_string(),
+            style: theme::base().bg(theme::SURFACE),
             selected_style: Style::default()
-                .fg(Color::Yellow)
+                .fg(theme::ACCENT)
+                .bg(theme::SELECTION)
                 .add_modifier(Modifier::BOLD),
         }
     }
@@ -50,7 +51,7 @@ impl StatefulWidget for SelectList {
         Self: Sized,
     {
         let items = if state.items.is_empty() {
-            vec![ListItem::new(self.empty_message).style(Style::default().fg(Color::DarkGray))]
+            vec![ListItem::new(self.empty_message).style(Style::default().fg(theme::MUTED))]
         } else {
             state
                 .items
@@ -60,7 +61,7 @@ impl StatefulWidget for SelectList {
         };
 
         let list = List::new(items)
-            .block(Block::bordered().title(self.title))
+            .block(theme::panel(self.title, theme::ACCENT))
             .style(self.style)
             .highlight_style(self.selected_style)
             .highlight_symbol(self.selected_symbol);
@@ -200,3 +201,4 @@ impl Default for SelectListState {
         Self::new(Vec::new(), "")
     }
 }
+use crate::theme;

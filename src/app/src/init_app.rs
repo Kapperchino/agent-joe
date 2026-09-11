@@ -1,3 +1,4 @@
+use crate::theme;
 use anyhow::{Context, Result, anyhow};
 use clients::config::Config;
 use clients::openai_codex_auth::{
@@ -14,9 +15,9 @@ use ratatui::{
     DefaultTerminal, Frame,
     crossterm::event::Event,
     layout::{Constraint, Flex, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Clear, Paragraph},
+    widgets::{Block, Paragraph},
 };
 use std::process::Command;
 use std::time::Duration;
@@ -621,9 +622,9 @@ impl InitApp {
 
     fn draw(&mut self, frame: &mut Frame) {
         let popup = centered_rect(frame.area(), 88, 24);
-        frame.render_widget(Clear, popup);
+        frame.render_widget(Block::new().style(theme::base()), frame.area());
 
-        let block = Block::bordered().title(" turbo-code setup ");
+        let block = theme::panel("◆ agent joe / SETUP", theme::ACCENT);
         let inner = block.inner(popup);
         frame.render_widget(block, popup);
 
@@ -636,12 +637,12 @@ impl InitApp {
 
         let header = Paragraph::new(vec![
             Line::from(Span::styled(
-                "No config found. Create one here and the app will reuse it next time.",
-                Style::default().fg(Color::Gray),
+                "A little Joe. A lot of possibility.",
+                Style::default().fg(theme::MUTED),
             )),
             Line::from(Span::styled(
-                "Use dedicated tabs for Claude, OpenAI, local-compatible endpoints, and OpenRouter.",
-                Style::default().fg(Color::Gray),
+                "Connect your preferred provider to get started.",
+                Style::default().fg(theme::MUTED),
             )),
         ]);
         frame.render_widget(header, header_area);
@@ -728,11 +729,11 @@ impl InitApp {
                         let auth_url = format!("Auth URL: {}", login.auth_url);
                         lines.push(Line::from(Span::styled(
                             auth_url,
-                            Style::default().fg(Color::DarkGray),
+                            Style::default().fg(theme::MUTED),
                         )));
                         lines.push(Line::from(Span::styled(
                             codex_status_line(login),
-                            Style::default().fg(Color::DarkGray),
+                            Style::default().fg(theme::MUTED),
                         )));
                         lines.push(Line::default());
 
@@ -760,11 +761,11 @@ impl InitApp {
                                 "Codex login uses a PKCE browser flow and expects a callback on {}.",
                                 REDIRECT_URI
                             ),
-                            Style::default().fg(Color::DarkGray),
+                            Style::default().fg(theme::MUTED),
                         )));
                         lines.push(Line::from(Span::styled(
                             "Start login to open the browser. If the callback cannot reach the app, paste the full redirect URL manually.",
-                            Style::default().fg(Color::DarkGray),
+                            Style::default().fg(theme::MUTED),
                         )));
                         lines.push(Line::default());
                     }
@@ -839,7 +840,7 @@ impl InitApp {
         let mut footer_lines = vec![
             Line::from(Span::styled(
                 "Tab/Shift+Tab move  •  Left/Right switches provider or auth mode  •  Enter continues",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme::MUTED),
             )),
             Line::from(Span::styled(
                 format!(
@@ -848,7 +849,7 @@ impl InitApp {
                         .map(|p| p.display().to_string())
                         .unwrap_or_else(|_| "<unavailable>".to_string())
                 ),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme::MUTED),
             )),
         ];
 
@@ -856,7 +857,7 @@ impl InitApp {
             footer_lines.push(Line::default());
             footer_lines.push(Line::from(Span::styled(
                 status.clone(),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(theme::ACCENT),
             )));
         }
 
@@ -864,7 +865,7 @@ impl InitApp {
             footer_lines.push(Line::default());
             footer_lines.push(Line::from(Span::styled(
                 error.clone(),
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                Style::default().fg(theme::RED).add_modifier(Modifier::BOLD),
             )));
         }
 
@@ -884,10 +885,10 @@ impl InitApp {
         };
         let prefix_style = if self.selected_field == field {
             Style::default()
-                .fg(Color::Yellow)
+                .fg(theme::ACCENT)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(theme::MUTED)
         };
 
         let mut line = vec![Span::styled(prefix, prefix_style)];
@@ -896,16 +897,16 @@ impl InitApp {
     }
 
     fn label_style(&self) -> Style {
-        Style::default().fg(Color::Gray)
+        Style::default().fg(theme::MUTED)
     }
 
     fn value_style(&self, field: InitField) -> Style {
         if self.selected_field == field {
             Style::default()
-                .fg(Color::Yellow)
+                .fg(theme::ACCENT)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme::TEXT)
         }
     }
 
@@ -938,11 +939,11 @@ impl InitApp {
 
         let style = if self.selected_field == InitField::Action {
             Style::default()
-                .fg(Color::Black)
-                .bg(Color::Green)
+                .fg(theme::BACKGROUND)
+                .bg(theme::ACCENT)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::Green)
+            Style::default().fg(theme::ACCENT)
         };
 
         Span::styled(label, style)
@@ -1052,13 +1053,13 @@ fn default_model(provider: Provider, auth_mode: OpenAIAuthMode) -> &'static str 
 
 fn selectable_chip(label: &'static str, is_selected: bool, is_active_field: bool) -> Span<'static> {
     let style = if is_selected {
-        let mut style = Style::default().fg(Color::Black).bg(Color::Cyan);
+        let mut style = Style::default().fg(theme::BACKGROUND).bg(theme::ACCENT);
         if is_active_field {
             style = style.add_modifier(Modifier::BOLD);
         }
         style
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(theme::MUTED)
     };
 
     Span::styled(label, style)

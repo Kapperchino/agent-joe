@@ -34,7 +34,13 @@ impl StatefulWidget for ModelBox {
     type State = ModelBoxState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-        self.select_list.render(area, buf, &mut state.list_state);
+        let title = match state.page_state {
+            ModelBoxPageState::SelectModel => "Choose a model · 1 / 2",
+            ModelBoxPageState::SelectEffort => "Reasoning effort · 2 / 2",
+        };
+        self.select_list
+            .title(title)
+            .render(area, buf, &mut state.list_state);
     }
 }
 

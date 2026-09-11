@@ -3,6 +3,7 @@ use crate::widgets::message_box::indicator::BusyIndicator;
 use crate::widgets::message_box::scrollback::ScrollbackRenderer;
 use crate::widgets::message_box::transcript::MessageTranscript;
 use crate::widgets::message_box::viewport::MessageViewport;
+use crate::{theme, widgets::welcome::Welcome};
 use common_models::tui_models::State;
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
@@ -23,6 +24,7 @@ pub enum Msg {
 pub struct MessageBox {}
 
 pub struct MessageBoxState {
+    view: ConversationView,
     viewport: MessageViewport,
     transcript: MessageTranscript,
     scrollback: ScrollbackRenderer,
@@ -30,9 +32,15 @@ pub struct MessageBoxState {
     pub actor_state: State,
 }
 
+enum ConversationView {
+    Welcome,
+    Transcript,
+}
+
 impl MessageBoxState {
     pub fn new() -> MessageBoxState {
         MessageBoxState {
+            view: ConversationView::Welcome,
             viewport: MessageViewport::default(),
             transcript: MessageTranscript::default(),
             scrollback: ScrollbackRenderer::new(),
@@ -42,6 +50,7 @@ impl MessageBoxState {
     }
 
     pub fn append(&mut self, msg: Msg) {
+        self.view = ConversationView::Transcript;
         self.transcript.append(msg, &self.formatter());
     }
 
@@ -50,6 +59,7 @@ impl MessageBoxState {
     }
 
     pub fn clear(&mut self) {
+        self.view = ConversationView::Welcome;
         self.transcript.clear();
         self.scrollback.reset();
         self.busy_indicator.reset();
@@ -83,18 +93,22 @@ impl MessageBoxState {
 
         let rendered_lines = self.scrollback.render_flushed_lines(&flushed_lines);
         terminal.insert_before(rendered_lines.len() as u16, |buf| {
-            Paragraph::new(rendered_lines).render(buf.area, buf);
+            Paragraph::new(rendered_lines)
+                .style(theme::base())
+                .render(buf.area, buf);
         })?;
 
         Ok(())
     }
 
     pub fn start_stream_message(&mut self, leading_blank_line: bool) {
+        self.view = ConversationView::Transcript;
         self.transcript
             .start_stream(leading_blank_line, &self.formatter());
     }
 
     pub fn push_stream_message(&mut self, chunk: &str) {
+        self.view = ConversationView::Transcript;
         self.transcript.push_stream_chunk(chunk);
     }
 
@@ -149,6 +163,11 @@ impl StatefulWidget for MessageBox {
     type State = MessageBoxState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-        Paragraph::new(state.output_lines()).render(area, buf);
+        match state.view {
+            ConversationView::Welcome => Welcome.render(area, buf),
+            ConversationView::Transcript => Paragraph::new(state.output_lines())
+                .style(theme::base())
+                .render(area, buf),
+        }
     }
 }

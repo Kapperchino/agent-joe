@@ -1,4 +1,5 @@
 use crate::models::{EffortsSelection, ModelSelections};
+use crate::theme;
 use crate::tui::{CommandMenu, HomeMenu, InputMode};
 use crate::widgets::command_box::CommandBox;
 use crate::widgets::model_box::{ModelBox, ModelBoxResult, ModelBoxState};
@@ -9,7 +10,7 @@ use crossterm::event::KeyEvent;
 use hjkl_engine::{DefaultHost, Editor, InsertDir, Options, Query, VimMode};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
-use ratatui::prelude::{Color, Line, Modifier, Span, Style};
+use ratatui::prelude::{Line, Modifier, Span, Style};
 use ratatui::widgets::{Block, Paragraph, StatefulWidget, Widget};
 
 pub struct InputBox {
@@ -22,6 +23,11 @@ pub struct InputBoxState {
     command_context: CommandContext,
     model_box_state: ModelBoxState,
     pub(crate) session_picker: SessionPickerState,
+}
+
+struct InputViewport {
+    cursor: Position,
+    scroll: u16,
 }
 
 impl StatefulWidget for InputBox {
@@ -51,6 +57,7 @@ impl StatefulWidget for InputBox {
         );
         let editing_input_lines = editing_display_lines.max(usize::from(editing_cursor.1) + 1);
         let command_input_lines = command_display_lines.max(usize::from(command_cursor.1) + 1);
+        let viewport = state.viewport(area);
 
         match &state.input_mode {
             InputMode::HomeMenu(home) => match home {
@@ -64,25 +71,36 @@ impl StatefulWidget for InputBox {
 
                     let command_section =
                         Paragraph::new(state.command_lines(input_wrap_width, command_input_lines))
-                            .block(Block::bordered().title("Command"));
+                            .scroll((viewport.scroll, 0))
+                            .block(theme::panel("Command", theme::AMBER).title(
+                                Line::from(theme::badge("COMMAND", theme::AMBER)).right_aligned(),
+                            ));
                     command_section.render(command_input_area, buf);
                     CommandBox {
                         commands: state.command_context.search(&input),
                     }
                     .render(command_box_area, buf);
                 }
-                _ => {
-                    let input =
-                        Paragraph::new(state.input_lines(input_wrap_width, editing_input_lines))
-                            .style(match &state.input_mode {
-                                InputMode::HomeMenu(home) => match home {
-                                    HomeMenu::Normal => Style::default(),
-                                    HomeMenu::Editing => Style::default().fg(Color::Yellow),
-                                    HomeMenu::InputCommand => Style::default().fg(Color::Green),
-                                },
-                                InputMode::CommandMenu(_) | InputMode::None => Style::default(),
-                            })
-                            .block(Block::bordered().title("Input"));
+                HomeMenu::Normal | HomeMenu::Editing => {
+                    let color = match home {
+                        HomeMenu::Editing => theme::ACCENT,
+                        _ => theme::BORDER,
+                    };
+                    let mode = match home {
+                        HomeMenu::Editing => "INSERT",
+                        _ => "NORMAL",
+                    };
+                    let lines = match (state.is_empty(), home) {
+                        (true, HomeMenu::Normal) => vec![Line::from(theme::muted(
+                            "Press i to describe what you want to build…",
+                        ))],
+                        (true, _) => vec![Line::from(theme::muted("What are we building?"))],
+                        (false, _) => state.input_lines(input_wrap_width, editing_input_lines),
+                    };
+                    let input = Paragraph::new(lines).scroll((viewport.scroll, 0)).block(
+                        theme::panel("Message", color)
+                            .title(Line::from(theme::badge(mode, theme::ACCENT)).right_aligned()),
+                    );
                     input.render(area, buf);
                 }
             },
@@ -165,6 +183,10 @@ impl InputBoxState {
     }
 
     pub fn get_cursor_pos(&self, area: &Rect) -> Position {
+        self.viewport(*area).cursor
+    }
+
+    fn viewport(&self, area: Rect) -> InputViewport {
         let input_wrap_width = Self::input_wrap_width(area.width);
         let (cursor_x, cursor_y) = match &self.input_mode {
             InputMode::HomeMenu(home) => match home {
@@ -182,7 +204,28 @@ impl InputBoxState {
             }
         };
 
-        Position::new(area.x + cursor_x + 1, area.y + cursor_y + 1)
+        let text_area = match self.input_mode {
+            InputMode::HomeMenu(HomeMenu::InputCommand) => {
+                let [input, _] = Layout::vertical([
+                    Constraint::Length(self.get_height(area.width).saturating_sub(7)),
+                    Constraint::Min(3),
+                ])
+                .areas(area);
+                input
+            }
+            _ => area,
+        };
+        let inner = Block::bordered().inner(text_area);
+        let scroll = cursor_y.saturating_sub(inner.height.saturating_sub(1));
+        InputViewport {
+            cursor: Position::new(
+                inner
+                    .x
+                    .saturating_add(cursor_x.min(inner.width.saturating_sub(1))),
+                inner.y.saturating_add(cursor_y.saturating_sub(scroll)),
+            ),
+            scroll,
+        }
     }
 
     pub fn get_height(&self, width: u16) -> u16 {
@@ -369,7 +412,7 @@ impl InputBoxState {
             Span::styled(
                 Self::COMMAND_PROMPT,
                 Style::default()
-                    .fg(Color::Green)
+                    .fg(theme::AMBER)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(

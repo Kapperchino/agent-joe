@@ -1,5 +1,6 @@
 #![warn(clippy::pedantic)]
 
+use crate::theme;
 use actors::actor::Message;
 use common_models::tui_models::State;
 use common_models::tui_models::TokenCount;
@@ -25,8 +26,6 @@ use ratatui::{
     DefaultTerminal, Frame,
     crossterm::event::{Event, KeyCode},
     layout::{Constraint, Layout},
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
     widgets::Block,
 };
 use tracing::error;
@@ -75,6 +74,8 @@ impl std::fmt::Display for Progress {
         }
     }
 }
+
+mod chrome;
 
 #[cfg(test)]
 mod tests;
@@ -623,111 +624,38 @@ impl TUIApp {
         self.validation = None;
     }
 
-    #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
     fn draw(&mut self, frame: &mut Frame) {
-        let chunks = Layout::vertical([
-            Constraint::Min(1),
+        let area = frame.area();
+        frame.render_widget(Block::new().style(theme::base()), area);
+        let input_height = self
+            .input_box
+            .get_height(area.width)
+            .min(area.height.saturating_sub(7).max(3));
+        let [header, msg_area, progress, input_area, footer] = Layout::vertical([
+            Constraint::Length(2),
+            Constraint::Min(0),
             Constraint::Length(1),
-            Constraint::Length(self.input_box.get_height(frame.area().width)),
-            Constraint::Length(1),
-        ]);
+            Constraint::Length(input_height),
+            Constraint::Length(2),
+        ])
+        .areas(area);
 
-        let [msg_area, progress_area, input_area, token_area] = chunks.areas(frame.area());
-        let completed = self
-            .interaction
-            .planning
-            .plan
-            .steps
-            .iter()
-            .filter(|step| step.state == common_models::interaction::StepState::Completed)
-            .count();
-        let active_workers = self
-            .workers
-            .values()
-            .filter(|state| !state.terminal())
-            .count();
-        let stale = match self.interaction.planning.review() {
-            common_models::interaction::PlanReview::Required => " · plan needs review",
-            common_models::interaction::PlanReview::Current => "",
-        };
-        let validation = self
-            .validation
-            .as_ref()
-            .map(|validation| format!("last {} {:?} · ", validation.operation, validation.state))
-            .unwrap_or_default();
-        frame.render_widget(
-            Line::from(format!(
-                " {:?} · plan {}/{}{} · questions {} · queued {} · workers {} · {}{}",
-                self.interaction.planning.mode,
-                completed,
-                self.interaction.planning.plan.steps.len(),
-                stale,
-                self.interaction.questions.len(),
-                self.queued.len(),
-                active_workers,
-                validation,
-                self.progress
-            )),
-            progress_area,
-        );
-
+        self.draw_header(frame, header);
+        frame.render_widget(self.progress_line(progress.width), progress);
+        self.draw_footer(frame, footer);
         self.message_box
             .update_width_height(msg_area.width, msg_area.height);
-
-        let token_line = Line::from(vec![
-            Span::raw(format!(
-                " Context ~{}/{} (+{} response) | Total",
-                self.request_context.estimated_tokens,
-                self.request_context.ceiling,
-                self.request_context.response_reserve
-            )),
-            Span::styled(
-                " ↑ ",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                self.token_count.input_tokens.to_string(),
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                "  ↓ ",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                self.token_count.output_tokens.to_string(),
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" "),
-        ]);
-
-        let token_block = Block::new().title_bottom(token_line);
-        frame.render_widget(token_block, token_area);
-
+        frame.render_stateful_widget(MessageBox {}, msg_area, &mut self.message_box);
         frame.render_stateful_widget(InputBox::new(), input_area, &mut self.input_box);
 
-        let cursor_pos = self.input_box.get_cursor_pos(&input_area);
-
-        match self.input_mode {
-            InputMode::HomeMenu(HomeMenu::Editing | HomeMenu::InputCommand) => {
-                frame.set_cursor_position(cursor_pos)
-            }
-            InputMode::HomeMenu(HomeMenu::Normal) => {
-                if !self.input_box.is_empty() {
-                    frame.set_cursor_position(cursor_pos);
-                }
-            }
-            InputMode::None => {}
-            InputMode::CommandMenu(_) => {}
+        let cursor = self.input_box.get_cursor_pos(&input_area);
+        let show_cursor = match self.input_mode {
+            InputMode::HomeMenu(HomeMenu::Editing | HomeMenu::InputCommand) => true,
+            InputMode::HomeMenu(HomeMenu::Normal) => !self.input_box.is_empty(),
+            InputMode::None | InputMode::CommandMenu(_) => false,
+        };
+        if show_cursor && input_area.contains(cursor) {
+            frame.set_cursor_position(cursor);
         }
-
-        frame.render_stateful_widget(MessageBox {}, msg_area, &mut self.message_box);
     }
 }

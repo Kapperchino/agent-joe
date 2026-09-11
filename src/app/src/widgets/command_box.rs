@@ -1,8 +1,8 @@
 use commands::command::Command;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::prelude::{Color, Line, Modifier, Span, Style};
-use ratatui::widgets::{Block, Paragraph, Widget};
+use ratatui::prelude::{Line, Modifier, Span, Style};
+use ratatui::widgets::{Paragraph, Widget};
 use std::str::FromStr;
 use strum::EnumMessage;
 use textwrap::core::display_width;
@@ -16,9 +16,13 @@ impl Widget for CommandBox {
     where
         Self: Sized,
     {
-        let mut lines = vec![];
-        lines.extend(self.get_lines());
-        let paragraph = Paragraph::new(lines).block(Block::bordered().title("Command"));
+        let lines = match self.commands.is_empty() {
+            true => vec![Line::from(theme::muted(
+                "No matching commands. Try a different search.",
+            ))],
+            false => self.get_lines(),
+        };
+        let paragraph = Paragraph::new(lines).block(theme::panel("Commands", theme::BORDER));
         paragraph.render(area, buf);
     }
 }
@@ -41,19 +45,21 @@ impl CommandBox {
                 );
 
                 Line::from(vec![
+                    Span::styled(" /", Style::default().fg(theme::AMBER)),
                     Span::styled(
                         command_name,
                         Style::default()
-                            .fg(Color::Green)
+                            .fg(theme::ACCENT)
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::raw(padding),
                     Span::styled(
                         command.get_message().unwrap(),
-                        Style::default().fg(Color::Gray),
+                        Style::default().fg(theme::MUTED),
                     ),
                 ])
             })
             .collect()
     }
 }
+use crate::theme;

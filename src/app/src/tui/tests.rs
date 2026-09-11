@@ -264,7 +264,8 @@ async fn interaction_commands_questions_and_queue_preserve_vim_and_transcript() 
     }));
     let rendered = fixture.render();
     assert!(rendered.contains("Which target?"));
-    assert!(rendered.contains("Plan · plan 0/0"));
+    assert!(rendered.contains("PLAN"));
+    assert!(rendered.contains("plan 0/0"));
     assert!(rendered.contains("questions 1"));
     fixture.key(KeyCode::Char('/'));
     fixture.app.input_box.paste("answer target text Library");
@@ -354,5 +355,111 @@ async fn worker_streams_update_progress_without_replacing_the_root_stream() {
         detail: "Provider request".into(),
     });
     assert!(fixture.render().contains("last test Passed"));
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn welcome_gives_way_to_conversation_and_returns_after_clear() {
+    let mut fixture = Fixture::new().await;
+    assert!(
+        fixture
+            .render()
+            .contains("A little Joe. A lot of possibility.")
+    );
+    fixture.key(KeyCode::Char('i'));
+    fixture.app.input_box.paste("Explain this crate");
+    fixture.key(KeyCode::Enter);
+    let conversation = fixture.render();
+    assert!(conversation.contains("Explain this crate"));
+    assert!(!conversation.contains("A little Joe. A lot of possibility."));
+    fixture.app.clear_messages_and_terminal();
+    assert!(
+        fixture
+            .render()
+            .contains("A little Joe. A lot of possibility.")
+    );
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn long_prompt_scrolls_with_the_cursor_in_both_directions() {
+    use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+
+    let mut fixture = Fixture::new().await;
+    fixture.key(KeyCode::Char('i'));
+    fixture
+        .app
+        .input_box
+        .paste("first line\nsecond line\nthird line\nfourth line\nlast line");
+    let area = Rect::new(0, 0, 24, 5);
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+    terminal
+        .draw(|frame| {
+            frame.render_stateful_widget(InputBox::new(), area, &mut fixture.app.input_box);
+        })
+        .unwrap();
+    let cursor = fixture.app.input_box.get_cursor_pos(&area);
+    assert_eq!(cursor, ratatui::layout::Position::new(10, 3));
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect();
+    assert!(text.contains("last line"));
+    assert!(!text.contains("first line"));
+
+    fixture.key(KeyCode::Esc);
+    fixture.key(KeyCode::Char('g'));
+    fixture.key(KeyCode::Char('g'));
+    terminal
+        .draw(|frame| {
+            frame.render_stateful_widget(InputBox::new(), area, &mut fixture.app.input_box);
+        })
+        .unwrap();
+    let cursor = fixture.app.input_box.get_cursor_pos(&area);
+    assert_eq!(cursor.y, 1);
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect();
+    assert!(text.contains("first line"));
+    assert!(!text.contains("last line"));
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn all_input_modes_render_within_small_terminal_bounds() {
+    use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+
+    let mut fixture = Fixture::new().await;
+    fixture
+        .app
+        .input_box
+        .paste(&"A long prompt with Unicode: 日本語\n".repeat(20));
+    for area in [
+        Rect::new(0, 0, 100, 24),
+        Rect::new(0, 0, 60, 16),
+        Rect::new(0, 0, 32, 10),
+        Rect::new(0, 0, 12, 5),
+        Rect::new(0, 0, 1, 1),
+    ] {
+        for mode in [
+            InputMode::HomeMenu(HomeMenu::Normal),
+            InputMode::HomeMenu(HomeMenu::Editing),
+            InputMode::HomeMenu(HomeMenu::InputCommand),
+            InputMode::CommandMenu(CommandMenu::ModelSelector),
+            InputMode::CommandMenu(CommandMenu::SessionSelector),
+        ] {
+            fixture.app.update_input_mode(mode);
+            let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+            terminal.draw(|frame| fixture.app.draw(frame)).unwrap();
+            assert!(area.contains(terminal.get_cursor_position().unwrap()));
+        }
+    }
     fixture.stop().await;
 }

@@ -1,5 +1,6 @@
+use crate::theme;
 use common_models::tui_models::State;
-use ratatui::prelude::{Color, Line, Modifier, Style};
+use ratatui::prelude::{Line, Modifier, Style};
 use throbber_widgets_tui::{Throbber, ThrobberState};
 
 const THROBBER_FRAME_TICKS: usize = 8;
@@ -37,9 +38,9 @@ impl BusyIndicator {
 
     fn label(actor_state: &State) -> Option<&'static str> {
         match actor_state {
-            State::StreamStart => Some("requesting"),
-            State::ThinkingStart => Some("thinking"),
-            State::ToolStart => Some("working"),
+            State::StreamStart => Some("Connecting…"),
+            State::ThinkingStart => Some("Thinking it through…"),
+            State::ToolStart => Some("Working on it…"),
             _ => None,
         }
     }
@@ -58,10 +59,10 @@ impl BusyIndicator {
     fn throbber(label: &str) -> Throbber<'static> {
         Throbber::default()
             .label(label.to_string())
-            .style(Style::default().fg(Color::Yellow))
+            .style(Style::default().fg(theme::AMBER))
             .throbber_style(
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme::AMBER)
                     .add_modifier(Modifier::BOLD),
             )
     }
