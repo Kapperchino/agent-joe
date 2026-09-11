@@ -5,6 +5,7 @@ use std::path::PathBuf;
 #[serde(deny_unknown_fields)]
 pub(super) struct Configuration {
     pub firmware: PathBuf,
+    pub init: PathBuf,
     pub rootfs: PathBuf,
     pub workspace: PathBuf,
     pub temporary_name: uuid::Uuid,
@@ -19,6 +20,7 @@ mod tests {
         for identifier in ["../outside", "/tmp/command", "", "command;exit"] {
             let configuration = serde_json::json!({
                 "firmware": "/runtime/libkrunfw",
+                "init": "/runtime/joe-init",
                 "rootfs": "/runtime/rootfs",
                 "workspace": "/workspace",
                 "temporary_name": identifier,

@@ -9,6 +9,7 @@ use std::{
 pub(super) struct Runtime {
     pub rootfs: PathBuf,
     pub firmware: PathBuf,
+    pub init: PathBuf,
     pub helper: PathBuf,
 }
 
@@ -35,11 +36,13 @@ impl Runtime {
     ) -> anyhow::Result<Self> {
         let runtime = Self {
             rootfs,
+            init: firmware.with_file_name("joe-init"),
             firmware,
             helper,
         };
         Platform::current()?;
         let valid = runtime.firmware.is_file()
+            && runtime.init.is_file()
             && runtime.helper.is_file()
             && runtime.helper.metadata()?.permissions().mode() & 0o111 != 0
             && runtime.rootfs.join("usr/local/cargo/bin/cargo").is_file()
@@ -90,6 +93,7 @@ impl Runtime {
         std::fs::write(temporary.path().join("command"), guest.script())?;
         let configuration = crate::protocol::Configuration {
             firmware: self.firmware.clone(),
+            init: self.init.clone(),
             rootfs: self.rootfs.clone(),
             workspace: workspace.root().into(),
             temporary_name: temporary.id(),
@@ -248,6 +252,7 @@ mod tests {
             std::fs::create_dir(&project).unwrap();
             for path in [
                 &firmware,
+                &firmware.with_file_name("joe-init"),
                 &helper,
                 &rootfs.join("usr/local/cargo/bin/cargo"),
             ] {
@@ -300,6 +305,22 @@ mod tests {
     }
 
     #[test]
+    fn runtime_requires_the_guest_init_program() {
+        let fixture = RuntimeFixture::new();
+        let runtime = &fixture.runtime;
+        std::fs::remove_file(&runtime.init).unwrap();
+        assert!(
+            Runtime::from_paths(
+                runtime.rootfs.clone(),
+                runtime.firmware.clone(),
+                runtime.helper.clone(),
+                fixture.workspace.root()
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn guest_environment_is_clean_and_arguments_stay_out_of_the_helper_protocol() {
         let fixture = RuntimeFixture::new();
         let temporary = TemporaryDirectory::new(&fixture.workspace).unwrap();
@@ -329,6 +350,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(configuration.workspace, fixture.workspace.root());
+        assert_eq!(configuration.init, fixture.runtime.init);
         assert_eq!(configuration.temporary_name, temporary.id());
         let cache = fixture
             .workspace

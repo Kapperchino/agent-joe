@@ -8,6 +8,8 @@ use anyhow::Context;
 use sha2::{Digest, Sha256};
 use std::{
     fs,
+    io::Read,
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -26,57 +28,80 @@ impl BuildTarget {
     }
 }
 
-struct LauncherFile {
-    path: &'static str,
-    contents: &'static [u8],
+struct Launcher {
+    path: PathBuf,
 }
 
-const LAUNCHER_FILES: &[LauncherFile] = &[
-    LauncherFile {
-        path: "launcher/Cargo.toml",
-        contents: include_bytes!("../../launcher/Cargo.toml"),
-    },
-    LauncherFile {
-        path: "launcher/Cargo.lock",
-        contents: include_bytes!("../../launcher/Cargo.lock"),
-    },
-    LauncherFile {
-        path: "launcher/src/main.rs",
-        contents: include_bytes!("../../launcher/src/main.rs"),
-    },
-    LauncherFile {
-        path: "launcher/src/krun.rs",
-        contents: include_bytes!("../../launcher/src/krun.rs"),
-    },
-    LauncherFile {
-        path: "src/protocol.rs",
-        contents: include_bytes!("../protocol.rs"),
-    },
-    LauncherFile {
-        path: "entitlements.plist",
-        contents: include_bytes!("../../entitlements.plist"),
-    },
-];
+impl Launcher {
+    fn new(path: PathBuf) -> anyhow::Result<Self> {
+        let metadata = fs::metadata(&path).with_context(|| {
+            format!(
+                "Cannot find sandbox launcher at {}. Build it with `cargo build -p sandbox --bin joe-sandbox` and install it beside Joe, or set JOE_SANDBOX_LAUNCHER",
+                path.display()
+            )
+        })?;
+        match metadata.is_file() && metadata.permissions().mode() & 0o111 != 0 {
+            true => Ok(Self {
+                path: path.canonicalize()?,
+            }),
+            false => Err(anyhow::anyhow!(
+                "Sandbox launcher is not an executable file: {}",
+                path.display()
+            )),
+        }
+    }
 
-pub struct NativeBuild {
+    fn beside(executable: &Path) -> anyhow::Result<Self> {
+        let directory = executable
+            .parent()
+            .context("Missing executable directory")?;
+        let directory = match directory.file_name() {
+            Some(name) if name == "deps" => directory
+                .parent()
+                .context("Missing Cargo output directory")?,
+            _ => directory,
+        };
+        Self::new(directory.join("joe-sandbox"))
+    }
+
+    fn locate() -> anyhow::Result<Self> {
+        match std::env::var_os("JOE_SANDBOX_LAUNCHER") {
+            Some(path) => Self::new(path.into()),
+            None => Self::beside(&std::env::current_exe()?),
+        }
+    }
+
+    fn version(&self, check: &dyn Fn() -> anyhow::Result<()>) -> anyhow::Result<String> {
+        let mut digest = Sha256::new();
+        digest.update(include_bytes!("native.rs"));
+        digest.update(include_bytes!("../../entitlements.plist"));
+        let mut file = fs::File::open(&self.path)?;
+        let mut buffer = [0; 128 * 1024];
+        let mut count = file.read(&mut buffer)?;
+        while count > 0 {
+            check()?;
+            digest.update(&buffer[..count]);
+            count = file.read(&mut buffer)?;
+        }
+        Ok(format!(
+            "launcher-{}-{:x}",
+            env!("JOE_SANDBOX_TARGET"),
+            digest.finalize()
+        ))
+    }
+}
+
+pub struct NativeRuntime {
     target: BuildTarget,
+    launcher: Launcher,
 }
 
-impl NativeBuild {
+impl NativeRuntime {
     pub fn new() -> anyhow::Result<Self> {
         Ok(Self {
             target: BuildTarget::new()?,
+            launcher: Launcher::locate()?,
         })
-    }
-
-    fn version(&self) -> String {
-        let mut digest = Sha256::new();
-        digest.update(include_bytes!("native.rs"));
-        for file in LAUNCHER_FILES {
-            digest.update(file.path);
-            digest.update(file.contents);
-        }
-        format!("launcher-{}-{:x}", self.target.triple, digest.finalize())
     }
 
     pub fn prepare(
@@ -84,30 +109,15 @@ impl NativeBuild {
         installation: &Installation,
         downloads: &Downloads<'_>,
     ) -> anyhow::Result<PathBuf> {
-        installation.prepare(&self.version(), |staging| {
-            eprintln!("Joe is preparing its sandbox launcher for the first time");
+        installation.prepare(&self.launcher.version(&|| downloads.check())?, |staging| {
+            eprintln!("Joe is installing its sandbox launcher");
             let native = installation.prepare(
                 &format!(
-                    "launcher-components-1.18.0-fw5.5.0-bwrap0.11.0-{}-v2",
+                    "launcher-components-1.19.3-fw5.5.0-bwrap0.11.0-{}-v1",
                     self.target.triple
                 ),
                 |staging| self.prepare_components(staging, installation, downloads),
             )?;
-            let source = staging.join("source");
-            for file in LAUNCHER_FILES {
-                let path = source.join(file.path);
-                fs::create_dir_all(path.parent().context("Missing launcher source directory")?)?;
-                fs::write(path, file.contents)?;
-            }
-            let output = installation
-                .path()
-                .join(format!("launcher-target-{}", self.target.triple));
-            downloads.check()?;
-            run(self
-                .cargo(&output)
-                .current_dir(source.join("launcher"))
-                .env("KRUN_INIT_BINARY_PATH", native.join("joe-init"))
-                .env("KRUN_EDK2_BINARY_PATH", native.join("KRUN_EFI.silent.fd")))?;
             downloads.check()?;
             fs::create_dir(staging.join("lib"))?;
             fs::create_dir(staging.join("bin"))?;
@@ -115,39 +125,25 @@ impl NativeBuild {
                 native.join("lib").join(self.target.platform.firmware()),
                 staging.join("lib").join(self.target.platform.firmware()),
             )?;
+            fs::copy(native.join("joe-init"), staging.join("lib/joe-init"))?;
             let helper = staging.join("bin/joe-sandbox");
-            fs::copy(
-                output
-                    .join(&self.target.triple)
-                    .join("release/joe-sandbox-launcher"),
-                &helper,
-            )?;
+            fs::copy(&self.launcher.path, &helper)?;
             match self.target.platform {
-                Platform::MacOs => run(Command::new("/usr/bin/codesign")
-                    .args(["--force", "--sign", "-", "--entitlements"])
-                    .arg(source.join("entitlements.plist"))
-                    .arg(helper))?,
+                Platform::MacOs => {
+                    let entitlements = staging.join("entitlements.plist");
+                    fs::write(&entitlements, include_bytes!("../../entitlements.plist"))?;
+                    run(Command::new("/usr/bin/codesign")
+                        .args(["--force", "--sign", "-", "--entitlements"])
+                        .arg(&entitlements)
+                        .arg(helper))?;
+                    fs::remove_file(entitlements)?;
+                }
                 Platform::Linux { .. } => {
                     fs::copy(native.join("bwrap"), staging.join("bin/bwrap"))?;
                 }
             }
-            fs::remove_dir_all(source)?;
             Ok(())
         })
-    }
-
-    fn cargo(&self, directory: &Path) -> Command {
-        let mut command = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
-        command
-            .args(["build", "--release", "--locked", "--target"])
-            .arg(&self.target.triple)
-            .arg("--target-dir")
-            .arg(directory)
-            .env_remove("CARGO_ENCODED_RUSTFLAGS")
-            .env_remove("RUSTFLAGS")
-            .env_remove("RUSTC_WORKSPACE_WRAPPER")
-            .env_remove("CARGO_MAKEFLAGS");
-        command
     }
 
     fn prepare_components(
@@ -161,29 +157,23 @@ impl NativeBuild {
             self.target.triple
         );
         let artifact = Artifact::new(
-            "https://github.com/libkrun/libkrun/archive/refs/tags/v1.18.0.tar.gz",
-            "3aad8087049c77424b2675ba08fe7b53708000e6df242d606e45af731f8a62cd",
+            "https://github.com/libkrun/libkrun/archive/refs/tags/v1.19.3.tar.gz",
+            "955b0d948f1d1cf315c55ea92b55d5251928e6ec6f6aa6697cea95afccd4d2b0",
         )?;
         let archive = downloads.get(&artifact, None)?;
         let build = staging.join("build");
         downloads.unpack(&archive, &build)?;
-        let source = build.join("libkrun-1.18.0");
+        let source = build.join("libkrun-1.19.3/src/init_blob/init");
         let library = staging.join("lib");
         fs::create_dir(&library)?;
         let init = staging.join("joe-init");
         run(self
             .init_compiler(installation, downloads)?
             .args(["-O2", "-static", "-Wl,-strip-debug"])
-            .arg(source.join("init/init.c"))
-            .arg(source.join("init/dhcp.c"))
+            .arg(source.join("init.c"))
+            .arg(source.join("dhcp.c"))
             .arg("-o")
             .arg(&init))?;
-        if let Architecture::Arm64 = self.target.platform.architecture() {
-            fs::copy(
-                source.join("edk2/KRUN_EFI.silent.fd"),
-                staging.join("KRUN_EFI.silent.fd"),
-            )?;
-        }
         self.compile_firmware(&build, &library, downloads)?;
         if let Platform::Linux { .. } = self.target.platform {
             build_bubblewrap(downloads, &build, &staging.join("bwrap"))?;
@@ -336,3 +326,6 @@ fn build_bubblewrap(downloads: &Downloads<'_>, build: &Path, output: &Path) -> a
         .arg("-o")
         .arg(output))
 }
+
+#[cfg(test)]
+mod tests;
