@@ -763,4 +763,5 @@ impl Review {
 }
 
 #[cfg(test)]
+#[path = "../../../tests/utils/changes/tests.rs"]
 mod tests;

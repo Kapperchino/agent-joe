@@ -311,4 +311,5 @@ fn updated_label(updated: Option<SystemTime>, now: SystemTime) -> String {
 }
 
 #[cfg(test)]
+#[path = "../../../../tests/app/widgets/session_box/tests.rs"]
 mod tests;

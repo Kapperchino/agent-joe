@@ -531,4 +531,5 @@ impl Cargo {
 }
 
 #[cfg(test)]
+#[path = "../../../tests/utils/cargo/tests.rs"]
 mod tests;

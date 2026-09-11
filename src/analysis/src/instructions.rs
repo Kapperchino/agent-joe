@@ -218,4 +218,5 @@ fn optional<T>(result: anyhow::Result<T>) -> anyhow::Result<Option<T>> {
 }
 
 #[cfg(test)]
+#[path = "../../../tests/analysis/instructions/tests.rs"]
 mod tests;

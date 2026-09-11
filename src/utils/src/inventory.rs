@@ -208,4 +208,5 @@ impl Listing {
 }
 
 #[cfg(test)]
+#[path = "../../../tests/utils/inventory/tests.rs"]
 mod tests;

@@ -70,27 +70,8 @@ impl Decoder {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn unicode_framing_and_keepalives_at_every_chunk_boundary() {
-        let input = ": ping\r\n\r\nevent: msg\r\ndata:{\"text\":\"終😀\",\r\ndata: \"ok\":true}\r\n\r\ndata: [DONE]\n\n";
-        for split in 0..=input.len() {
-            let mut decoder = Decoder::default();
-            let mut events = decoder.push(&input.as_bytes()[..split]).unwrap();
-            events.extend(decoder.push(&input.as_bytes()[split..]).unwrap());
-            decoder.finish().unwrap();
-            assert_eq!(events, ["{\"text\":\"終😀\",\n\"ok\":true}", "[DONE]"]);
-        }
-    }
-    #[test]
-    fn rejects_partial_event_and_invalid_utf8() {
-        let mut decoder = Decoder::default();
-        decoder.push(b"data: {}\n").unwrap();
-        assert!(decoder.finish().is_err());
-        assert!(Decoder::default().push(b"data: \xff\n\n").is_err());
-    }
-}
+#[path = "../../../tests/clients/sse/tests.rs"]
+mod tests;
 
 #[derive(Default)]
 enum StreamState {
@@ -147,53 +128,5 @@ where
 }
 
 #[cfg(test)]
-mod stream_tests {
-    use super::*;
-    use futures::StreamExt;
-    async fn events(text: &str) -> Vec<anyhow::Result<crate::llm::StreamEvent>> {
-        let stream = futures::stream::iter(
-            text.as_bytes()
-                .iter()
-                .map(|byte| Ok::<_, std::io::Error>(vec![*byte]))
-                .collect::<Vec<_>>(),
-        );
-        decode(stream, |event: &crate::claude::StreamEvent| {
-            matches!(
-                event,
-                crate::claude::StreamEvent::MessageStop | crate::claude::StreamEvent::Error { .. }
-            )
-        })
-        .map(|result| result.map(Into::into))
-        .collect()
-        .await
-    }
-    #[tokio::test]
-    async fn claude_terminal_errors_keepalives_and_premature_eof() {
-        let result = events(": keepalive\r\n\r\ndata:{\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"busy\"}}\r\n\r\n").await;
-        assert!(matches!(
-            result.as_slice(),
-            [Ok(crate::llm::StreamEvent::Error { .. })]
-        ));
-        assert!(
-            events("data: {\"type\":\"ping\"}\n\ndata: [DONE]\n\n")
-                .await
-                .last()
-                .unwrap()
-                .is_err()
-        );
-        assert!(events("data: {\"type\":\"message_stop\"}\n\n").await[0].is_ok());
-    }
-    #[tokio::test]
-    async fn openai_terminal_failure_is_not_swallowed_by_keepalives() {
-        let bytes = b": ping\n\ndata:{\"type\":\"error\",\"code\":\"rate_limit_exceeded\",\"message\":\"slow down\"}\n\n";
-        let stream = futures::stream::iter(vec![Ok::<_, std::io::Error>(bytes.to_vec())]);
-        let result = decode(stream, |event: &crate::openai::StreamEvent| {
-            matches!(event, crate::openai::StreamEvent::Error { .. })
-        })
-        .collect::<Vec<_>>()
-        .await;
-        assert!(
-            matches!(result.as_slice(), [Ok(crate::openai::StreamEvent::Error { code, .. })] if code == "rate_limit_exceeded")
-        );
-    }
-}
+#[path = "../../../tests/clients/sse/stream_tests.rs"]
+mod stream_tests;
