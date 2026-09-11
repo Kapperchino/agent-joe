@@ -361,23 +361,90 @@ async fn worker_streams_update_progress_without_replacing_the_root_stream() {
 #[tokio::test]
 async fn welcome_gives_way_to_conversation_and_returns_after_clear() {
     let mut fixture = Fixture::new().await;
-    assert!(
-        fixture
-            .render()
-            .contains("A little Joe. A lot of possibility.")
-    );
+    let welcome = fixture.render();
+    assert!(welcome.contains(crate::branding::TAGLINE));
+    assert!(welcome.contains(crate::branding::FERRIS[1].trim()));
     fixture.key(KeyCode::Char('i'));
     fixture.app.input_box.paste("Explain this crate");
     fixture.key(KeyCode::Enter);
     let conversation = fixture.render();
     assert!(conversation.contains("Explain this crate"));
-    assert!(!conversation.contains("A little Joe. A lot of possibility."));
+    assert!(!conversation.contains(crate::branding::TAGLINE));
+    assert!(!conversation.contains(crate::branding::FERRIS[1].trim()));
+    assert!(conversation.contains(crate::branding::TITLE));
     fixture.app.clear_messages_and_terminal();
-    assert!(
-        fixture
-            .render()
-            .contains("A little Joe. A lot of possibility.")
+    let welcome = fixture.render();
+    assert!(welcome.contains(crate::branding::TAGLINE));
+    assert!(welcome.contains(crate::branding::FERRIS[1].trim()));
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn ferris_header_preserves_the_model_label_at_compact_and_full_widths() {
+    use ratatui::{Terminal, backend::TestBackend, style::Modifier};
+
+    let fixture = Fixture::new().await;
+    for width in [32, 63, 64, 100] {
+        let mut terminal = Terminal::new(TestBackend::new(width, 2)).unwrap();
+        terminal
+            .draw(|frame| fixture.app.draw_header(frame, frame.area()))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let text: String = buffer.content.iter().map(|cell| cell.symbol()).collect();
+        assert!(text.contains(crate::branding::TITLE));
+        assert!(text.contains("fixture"));
+        assert_eq!(text.contains("THE RUST WORKSPACE"), width >= 64);
+        assert_eq!(buffer[(1, 0)].fg, theme::ACCENT);
+        assert!(buffer[(1, 0)].modifier.contains(Modifier::BOLD));
+    }
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn orange_branding_preserves_semantic_progress_and_validation_colors() {
+    use common_models::tui_models::{ValidationProgress, ValidationState};
+
+    let mut fixture = Fixture::new().await;
+    for (state, color) in [
+        (Lifecycle::Completed, theme::GREEN),
+        (Lifecycle::Failed, theme::RED),
+    ] {
+        for progress in [
+            Progress::Turn(state),
+            Progress::Operation {
+                state,
+                detail: "test".into(),
+            },
+        ] {
+            fixture.app.progress = progress;
+            let line = fixture.app.progress_line(100);
+            assert_eq!(line.spans[0].style.bg, Some(theme::ACCENT));
+            assert_eq!(line.spans[1].style.fg, Some(color));
+        }
+    }
+    fixture.app.progress = Progress::Turn(Lifecycle::Running);
+    fixture.app.root_busy = true;
+    assert_eq!(
+        fixture.app.progress_line(100).spans[1].style.fg,
+        Some(theme::AMBER)
     );
+    for (state, color) in [
+        (ValidationState::Passed, theme::GREEN),
+        (ValidationState::Failed, theme::RED),
+        (ValidationState::NotRun, theme::MUTED),
+    ] {
+        fixture.app.validation = Some(ValidationProgress {
+            operation: "test".into(),
+            state,
+        });
+        let line = fixture.app.progress_line(100);
+        let status = line
+            .spans
+            .iter()
+            .find(|span| span.content.contains("last test"))
+            .unwrap();
+        assert_eq!(status.style.fg, Some(color));
+    }
     fixture.stop().await;
 }
 

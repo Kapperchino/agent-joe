@@ -34,7 +34,7 @@ impl ToolDefTrait for UpdatePlan {
         "update_plan"
     }
     fn tool_description() -> &'static str {
-        "Persist 1–16 plan steps with stable IDs, dependencies, acceptance criteria and states. Use the current plan and requirements revisions from runtime context. Start steps before completing; completion needs successful evidence source IDs from runtime context plus explanations. After requirements change, reopen completed steps before revalidating. Does not change work mode."
+        "Persist 1–16 plan steps with stable IDs, dependencies, acceptance criteria and states. Use the current plan and requirements revisions from runtime context. A new step may start in_progress if its dependencies are completed; at most one step may be in_progress. Start steps before completing; completion needs successful evidence source IDs from runtime context plus explanations. After requirements change, reopen completed steps before revalidating. Does not change work mode."
     }
     fn field_properties() -> FnvHashMap<String, ToolProperty> {
         json!({

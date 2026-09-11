@@ -4,15 +4,16 @@ use ratatui::{
     widgets::{Block, BorderType},
 };
 
-pub(crate) const BACKGROUND: Color = Color::Rgb(18, 24, 28);
-pub(crate) const SURFACE: Color = Color::Rgb(25, 34, 39);
-pub(crate) const SELECTION: Color = Color::Rgb(35, 57, 55);
-pub(crate) const BORDER: Color = Color::Rgb(62, 82, 88);
-pub(crate) const TEXT: Color = Color::Rgb(225, 231, 224);
-pub(crate) const MUTED: Color = Color::Rgb(145, 164, 169);
-pub(crate) const ACCENT: Color = Color::Rgb(131, 213, 184);
-pub(crate) const AMBER: Color = Color::Rgb(232, 189, 120);
-pub(crate) const RED: Color = Color::Rgb(239, 145, 145);
+pub(crate) const BACKGROUND: Color = Color::Rgb(27, 22, 20);
+pub(crate) const SURFACE: Color = Color::Rgb(38, 30, 26);
+pub(crate) const SELECTION: Color = Color::Rgb(67, 45, 32);
+pub(crate) const BORDER: Color = Color::Rgb(120, 87, 68);
+pub(crate) const TEXT: Color = Color::Rgb(249, 235, 216);
+pub(crate) const MUTED: Color = Color::Rgb(185, 160, 140);
+pub(crate) const ACCENT: Color = Color::Rgb(255, 153, 102);
+pub(crate) const AMBER: Color = Color::Rgb(242, 201, 109);
+pub(crate) const RED: Color = Color::Rgb(242, 139, 130);
+pub(crate) const GREEN: Color = Color::Rgb(169, 204, 140);
 
 pub(crate) fn base() -> Style {
     Style::default().fg(TEXT).bg(BACKGROUND)
@@ -86,3 +87,7 @@ pub(crate) fn compact_number(value: u64) -> String {
         _ => format!("{}.{}m", value / 1_000_000, value % 1_000_000 / 100_000),
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/theme/tests.rs"]
+mod tests;

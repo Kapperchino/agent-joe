@@ -203,6 +203,62 @@ fn question_state_preserves_saved_ids_and_enforces_pending_and_session_limits() 
 }
 
 #[test]
+fn new_plan_steps_can_start_in_progress_when_dependencies_are_complete() {
+    let evidence = Default::default();
+    let mut input = PlanUpdate {
+        revision: 0,
+        requirements_revision: 0,
+        steps: vec![
+            PlanStep {
+                state: StepState::InProgress,
+                ..step("inspect")
+            },
+            PlanStep {
+                dependencies: vec!["inspect".into()],
+                ..step("implement")
+            },
+        ],
+    };
+    let plan = Plan::default().update(input.clone(), 0, &evidence).unwrap();
+    assert_eq!(plan.revision, 1);
+    assert_eq!(plan.steps, input.steps);
+
+    input.steps[1].state = StepState::InProgress;
+    assert!(Plan::default().update(input.clone(), 0, &evidence).is_err());
+    input.steps[0].state = StepState::Pending;
+    assert!(Plan::default().update(input, 0, &evidence).is_err());
+
+    let plan = Plan::default()
+        .update(
+            PlanUpdate {
+                revision: 0,
+                requirements_revision: 0,
+                steps: vec![step("implement")],
+            },
+            0,
+            &evidence,
+        )
+        .unwrap();
+    let input = PlanUpdate {
+        revision: plan.revision,
+        requirements_revision: 0,
+        steps: vec![
+            PlanStep {
+                state: StepState::InProgress,
+                ..step("inspect")
+            },
+            PlanStep {
+                dependencies: vec!["inspect".into()],
+                ..step("implement")
+            },
+        ],
+    };
+    let plan = plan.update(input.clone(), 0, &evidence).unwrap();
+    assert_eq!(plan.revision, 2);
+    assert_eq!(plan.steps, input.steps);
+}
+
+#[test]
 fn plan_transitions_require_dependencies_real_evidence_and_reconciliation() {
     use common_models::interaction::PlanEvidence;
     let evidence = [("tool:read".into(), "read_file".into())].into();
@@ -219,6 +275,13 @@ fn plan_transitions_require_dependencies_real_evidence_and_reconciliation() {
     assert!(plan.update(input.clone(), 0, &evidence).is_err());
     input.steps[1].state = StepState::Pending;
     input.steps[0].state = StepState::Completed;
+    input.steps[0].evidence = vec![PlanEvidence {
+        source: "tool:read".into(),
+        explanation: "Read the source".into(),
+    }];
+    let mut initial = input.clone();
+    initial.revision = 0;
+    assert!(Plan::default().update(initial, 0, &evidence).is_err());
     assert!(plan.update(input.clone(), 0, &evidence).is_err());
     input.steps[0].state = StepState::InProgress;
     let plan = plan.update(input.clone(), 0, &evidence).unwrap();
@@ -552,7 +615,10 @@ async fn tracked_plan_uses_observed_evidence_and_survives_compaction_and_fork() 
     let mut update = PlanUpdate {
         revision: 0,
         requirements_revision: 0,
-        steps: vec![step("inspect")],
+        steps: vec![PlanStep {
+            state: StepState::InProgress,
+            ..step("inspect")
+        }],
     };
     answer(
         h.request().await.1,
@@ -576,17 +642,6 @@ async fn tracked_plan_uses_observed_evidence_and_survives_compaction_and_fork() 
             .any(|message| message.text().contains("tool:evidence"))
     );
     update.revision = 1;
-    update.steps[0].state = StepState::InProgress;
-    answer(
-        reply,
-        response(vec![tool(
-            "update_plan",
-            "started",
-            serde_json::to_value(&update).unwrap(),
-        )]),
-    );
-    let (_, reply) = h.request().await;
-    update.revision = 2;
     update.steps[0].state = StepState::Completed;
     update.steps[0].evidence = vec![PlanEvidence {
         source: "tool:evidence".into(),
@@ -607,7 +662,7 @@ async fn tracked_plan_uses_observed_evidence_and_survives_compaction_and_fork() 
     );
     h.terminal(Lifecycle::Completed).await;
     let saved = store.list().unwrap().into_iter().next().unwrap();
-    assert_eq!(saved.planning.plan.revision, 3);
+    assert_eq!(saved.planning.plan.revision, 2);
     assert_eq!(saved.planning.plan.steps[0].state, StepState::Completed);
     h.actor
         .send_message(Message::Command(Command::Compact))

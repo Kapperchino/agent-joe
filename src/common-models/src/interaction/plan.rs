@@ -93,7 +93,7 @@ impl PlanStep {
             (Some(StepState::InProgress), StepState::Completed, _) if definition_unchanged => {
                 Ok(self.clone())
             }
-            (Some(StepState::Pending | StepState::Blocked), StepState::InProgress, _)
+            (None | Some(StepState::Pending | StepState::Blocked), StepState::InProgress, _)
             | (_, StepState::Pending | StepState::Blocked, _) => Ok(self.clone()),
             (Some(old), new, _) if old == new && definition_unchanged => Ok(self.clone()),
             _ => Err(anyhow::anyhow!(

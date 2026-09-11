@@ -1,4 +1,4 @@
-use crate::theme;
+use crate::{branding, theme};
 use anyhow::{Context, Result, anyhow};
 use clients::config::Config;
 use clients::openai_codex_auth::{
@@ -624,7 +624,7 @@ impl InitApp {
         let popup = centered_rect(frame.area(), 88, 24);
         frame.render_widget(Block::new().style(theme::base()), frame.area());
 
-        let block = theme::panel("◆ agent joe / SETUP", theme::ACCENT);
+        let block = theme::panel(format!("{} / SETUP", branding::TITLE), theme::ACCENT);
         let inner = block.inner(popup);
         frame.render_widget(block, popup);
 
@@ -637,9 +637,12 @@ impl InitApp {
 
         let header = Paragraph::new(vec![
             Line::from(Span::styled(
-                "A little Joe. A lot of possibility.",
-                Style::default().fg(theme::MUTED),
+                branding::TAGLINE,
+                Style::default()
+                    .fg(theme::ACCENT)
+                    .add_modifier(Modifier::BOLD),
             )),
+            Line::from(theme::muted(branding::CAPTION)),
             Line::from(Span::styled(
                 "Connect your preferred provider to get started.",
                 Style::default().fg(theme::MUTED),
@@ -1211,3 +1214,7 @@ fn open_browser(url: &str) -> bool {
     #[allow(unreachable_code)]
     false
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/init_app/tests.rs"]
+mod tests;

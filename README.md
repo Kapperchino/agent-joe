@@ -1,4 +1,15 @@
-# Agent Joe
+# Joe Code
+
+```text
+    _~^~^~_
+\) /  o o  \ (/
+  '_   -   _'
+  / '-----' \
+```
+
+**Small claws. Big ideas.** Ferris is Joe Code's mascot and your Rust coding companion.
+The terminal UI pairs crab-orange accents with warm charcoal surfaces and cream text.
+Success and added lines stay green; warnings are amber, and errors and removed lines stay red.
 
 An open source TUI-based coding tool that only works with rust and does not have access to the shell.
 

@@ -1,3 +1,4 @@
+use crate::theme;
 use markdown::ParseOptions;
 use markdown::mdast::{AlignKind, Node};
 use ratatui::prelude::{Color, Line, Modifier, Span, Style};
@@ -371,22 +372,20 @@ impl DrawLine {
 
     fn diff_line_style(line: &str) -> Style {
         let trimmed = line.trim_start();
-        if trimmed.starts_with('+') {
-            Style::default().fg(Color::Green)
-        } else if trimmed.starts_with('-') {
-            Style::default().fg(Color::Red)
-        } else if trimmed.starts_with("@@") {
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
-        } else if trimmed.starts_with("diff --git")
-            || trimmed.starts_with("index ")
-            || trimmed.starts_with("rename ")
-            || trimmed.starts_with("similarity ")
-        {
-            Style::default().fg(Color::DarkGray)
-        } else {
-            Style::default()
+        match trimmed {
+            line if line.starts_with('+') => Style::default().fg(theme::GREEN),
+            line if line.starts_with('-') => Style::default().fg(theme::RED),
+            line if line.starts_with("@@") => Style::default()
+                .fg(theme::ACCENT)
+                .add_modifier(Modifier::BOLD),
+            line if line.starts_with("diff --git")
+                || line.starts_with("index ")
+                || line.starts_with("rename ")
+                || line.starts_with("similarity ") =>
+            {
+                Style::default().fg(theme::MUTED)
+            }
+            _ => Style::default(),
         }
     }
 
@@ -706,13 +705,13 @@ impl DrawLine {
             Node::Heading(heading) => {
                 let style = match heading.depth {
                     1 => Style::default()
-                        .fg(Color::Yellow)
+                        .fg(theme::ACCENT)
                         .add_modifier(Modifier::BOLD),
                     2 => Style::default()
-                        .fg(Color::Green)
+                        .fg(theme::AMBER)
                         .add_modifier(Modifier::BOLD),
                     _ => Style::default()
-                        .fg(Color::Cyan)
+                        .fg(theme::TEXT)
                         .add_modifier(Modifier::BOLD),
                 };
                 let spans = Self::render_inline_children(&heading.children, style);
@@ -738,12 +737,12 @@ impl DrawLine {
                     .into_iter()
                     .map(|line| {
                         let mut spans =
-                            vec![Span::styled("│ ", Style::default().fg(Color::DarkGray))];
+                            vec![Span::styled("│ ", Style::default().fg(theme::BORDER))];
                         for span in line.spans {
                             spans.push(Span::styled(
                                 span.content.into_owned(),
                                 if span.style == Style::default() {
-                                    Style::default().fg(Color::Gray)
+                                    Style::default().fg(theme::MUTED)
                                 } else {
                                     span.style
                                 },
@@ -759,7 +758,7 @@ impl DrawLine {
             Node::ThematicBreak(_) => {
                 vec![Line::from(Span::styled(
                     "───────────────────",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme::BORDER),
                 ))]
             }
 
@@ -771,16 +770,16 @@ impl DrawLine {
                 .map(|line| {
                     Line::from(Span::styled(
                         line.to_string(),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(theme::MUTED),
                     ))
                 })
                 .collect(),
 
             Node::Math(math) => {
                 let fence_style = Style::default()
-                    .fg(Color::Magenta)
+                    .fg(theme::AMBER)
                     .add_modifier(Modifier::DIM);
-                let math_style = Style::default().fg(Color::Magenta);
+                let math_style = Style::default().fg(theme::AMBER);
                 let mut lines = vec![Line::from(Span::styled("$$", fence_style))];
                 for line in math.value.lines() {
                     lines.push(Line::from(Span::styled(line.to_string(), math_style)));
@@ -815,7 +814,7 @@ impl DrawLine {
                 "• ".to_string()
             };
             let bullet_style = Style::default()
-                .fg(Color::Cyan)
+                .fg(theme::ACCENT)
                 .add_modifier(Modifier::BOLD);
             let indent = " ".repeat(bullet.chars().count());
             let source_indent = source_lines
@@ -931,7 +930,7 @@ impl DrawLine {
                 vec![Span::styled(
                     code.value.clone(),
                     Style::default()
-                        .fg(Color::Rgb(196, 167, 231))
+                        .fg(theme::AMBER)
                         .add_modifier(Modifier::BOLD),
                 )]
             }
@@ -943,12 +942,12 @@ impl DrawLine {
 
             Node::Link(link) => {
                 let link_style = base_style
-                    .fg(Color::Blue)
+                    .fg(theme::ACCENT)
                     .add_modifier(Modifier::UNDERLINED);
                 let mut spans = Self::render_inline_children(&link.children, link_style);
                 spans.push(Span::styled(
                     format!(" ({})", link.url),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme::MUTED),
                 ));
                 spans
             }
@@ -956,21 +955,21 @@ impl DrawLine {
             Node::Image(image) => {
                 vec![Span::styled(
                     format!("[image: {}]", image.alt),
-                    Style::default().fg(Color::Blue),
+                    Style::default().fg(theme::ACCENT),
                 )]
             }
 
             Node::InlineMath(math) => {
                 vec![Span::styled(
                     math.value.clone(),
-                    Style::default().fg(Color::Magenta),
+                    Style::default().fg(theme::AMBER),
                 )]
             }
 
             Node::Html(html) => {
                 vec![Span::styled(
                     html.value.clone(),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme::MUTED),
                 )]
             }
 
@@ -1129,7 +1128,7 @@ impl DrawLine {
         alignments: &[AlignKind],
         is_header: bool,
     ) -> Line<'static> {
-        let border_style = Style::default().fg(Color::DarkGray);
+        let border_style = Style::default().fg(theme::BORDER);
         let cell_style = if is_header {
             Style::default().add_modifier(Modifier::BOLD)
         } else {
@@ -1233,10 +1232,7 @@ impl DrawLine {
             .collect::<Vec<_>>()
             .join("─┼─");
 
-        Line::from(Span::styled(
-            separator,
-            Style::default().fg(Color::DarkGray),
-        ))
+        Line::from(Span::styled(separator, Style::default().fg(theme::BORDER)))
     }
 
     fn node_display_width(node: &Node) -> usize {

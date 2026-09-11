@@ -23,11 +23,44 @@ fn renders_diff_fence_with_info_string_and_add_remove_colors() {
 
     let rendered = draw_line.render_lines(&lines);
 
-    assert_eq!(rendered[0].spans[0].style.fg, Some(Color::DarkGray));
-    assert_eq!(rendered[1].spans[0].style.fg, Some(Color::Cyan));
-    assert_eq!(rendered[2].spans[0].style.fg, Some(Color::Red));
-    assert_eq!(rendered[3].spans[0].style.fg, Some(Color::Green));
+    assert_eq!(rendered[0].spans[0].style.fg, Some(theme::MUTED));
+    assert_eq!(rendered[1].spans[0].style.fg, Some(theme::ACCENT));
+    assert_eq!(rendered[2].spans[0].style.fg, Some(theme::RED));
+    assert_eq!(rendered[3].spans[0].style.fg, Some(theme::GREEN));
     assert_eq!(rendered[4].spans[0].style.fg, None);
+}
+
+#[test]
+fn markdown_uses_warm_accents_and_retains_formatting_cues() {
+    let draw_line = DrawLine::new();
+    let rendered = draw_line.render_lines(&[
+        "# First".into(),
+        "## Second".into(),
+        "### Third".into(),
+        "`code` and [link](https://example.com)".into(),
+        "- item".into(),
+    ]);
+    let spans = rendered
+        .iter()
+        .flat_map(|line| &line.spans)
+        .collect::<Vec<_>>();
+    for (text, color, modifier) in [
+        ("First", theme::ACCENT, Modifier::BOLD),
+        ("Second", theme::AMBER, Modifier::BOLD),
+        ("Third", theme::TEXT, Modifier::BOLD),
+        ("code", theme::AMBER, Modifier::BOLD),
+        ("link", theme::ACCENT, Modifier::UNDERLINED),
+        ("• ", theme::ACCENT, Modifier::BOLD),
+    ] {
+        let span = spans.iter().find(|span| span.content == text).unwrap();
+        assert_eq!(span.style.fg, Some(color), "{text}");
+        assert!(span.style.add_modifier.contains(modifier), "{text}");
+    }
+    let url = spans
+        .iter()
+        .find(|span| span.content.contains("https://example.com"))
+        .unwrap();
+    assert_eq!(url.style.fg, Some(theme::MUTED));
 }
 
 #[test]
@@ -137,8 +170,8 @@ fn keeps_code_fence_state_across_render_batches() {
         &mut state,
     );
 
-    assert_eq!(first[0].spans[0].style.fg, Some(Color::Red));
-    assert_eq!(second[0].spans[0].style.fg, Some(Color::Green));
+    assert_eq!(first[0].spans[0].style.fg, Some(theme::RED));
+    assert_eq!(second[0].spans[0].style.fg, Some(theme::GREEN));
     assert_eq!(line_text(&second[1]), "after");
     assert!(state.fence.is_none());
 }
@@ -253,7 +286,7 @@ fn diff_fences_do_not_recover_on_removed_markdown_like_lines() {
             "- **removed heading**".to_string(),
         ]
     );
-    assert_eq!(rendered[2].spans[0].style.fg, Some(Color::Red));
+    assert_eq!(rendered[2].spans[0].style.fg, Some(theme::RED));
     assert!(state.fence.is_some());
 }
 

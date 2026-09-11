@@ -1,4 +1,5 @@
 use super::{CommandMenu, HomeMenu, InputMode, Progress, TUIApp};
+use crate::branding;
 use crate::theme::{self, KeyHint};
 use common_models::interaction::{PlanReview, StepState, WorkMode};
 use common_models::tui_models::{Lifecycle, ValidationState};
@@ -17,16 +18,8 @@ impl TUIApp {
             .border_style(Style::default().fg(theme::BORDER));
         let inner = block.inner(area);
         frame.render_widget(block, area);
-        let [brand, model] = Layout::horizontal([
-            Constraint::Length(match area.width {
-                0..64 => 13,
-                _ => 35,
-            }),
-            Constraint::Min(0),
-        ])
-        .areas(inner);
         let mut title = vec![Span::styled(
-            " ◆ agent joe ",
+            format!(" {} ", branding::TITLE),
             Style::default()
                 .fg(theme::ACCENT)
                 .add_modifier(Modifier::BOLD),
@@ -34,7 +27,13 @@ impl TUIApp {
         if area.width >= 64 {
             title.push(theme::muted(" /  THE RUST WORKSPACE"));
         }
-        frame.render_widget(Line::from(title), brand);
+        let title = Line::from(title);
+        let [brand, model] = Layout::horizontal([
+            Constraint::Length(u16::try_from(title.width()).unwrap_or(u16::MAX)),
+            Constraint::Min(0),
+        ])
+        .areas(inner);
+        frame.render_widget(title, brand);
         let config = self.config_context.get_config();
         let model_label = match area.width {
             0..64 => format!("{} ", config.get_model()),
@@ -55,6 +54,11 @@ impl TUIApp {
                 ..
             } => theme::RED,
             _ if self.root_busy => theme::AMBER,
+            Progress::Turn(Lifecycle::Completed)
+            | Progress::Operation {
+                state: Lifecycle::Completed,
+                ..
+            } => theme::GREEN,
             _ => theme::ACCENT,
         };
         let label = match &self.progress {
@@ -81,7 +85,7 @@ impl TUIApp {
         }
         if let Some(validation) = &self.validation {
             let color = match validation.state {
-                ValidationState::Passed => theme::ACCENT,
+                ValidationState::Passed => theme::GREEN,
                 ValidationState::Failed => theme::RED,
                 ValidationState::NotRun => theme::MUTED,
             };

@@ -1,3 +1,4 @@
+mod branding;
 pub mod init_app;
 mod models;
 mod theme;
