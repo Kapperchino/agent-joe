@@ -53,6 +53,11 @@ The saved transcript remains available after compaction.
 cargo run --relase
 ```
 
+Building Joe does not download or compile the sandbox launcher. The first sandbox
+operation prepares it on the host and caches it for later runs. This setup needs
+network access, Cargo, a Rust compiler, a C compiler, and `make` on Linux. Cargo
+commands inside the sandbox remain offline.
+
 ## Keybindings
 
 The TUI is similar to claude code and codex with one major difference. Vim bindings are foced upon you.

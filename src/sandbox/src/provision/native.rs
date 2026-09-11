@@ -5,6 +5,7 @@ use crate::provision::{
     platform::{Architecture, Platform},
 };
 use anyhow::Context;
+use sha2::{Digest, Sha256};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -18,77 +19,121 @@ struct BuildTarget {
 
 impl BuildTarget {
     fn new() -> anyhow::Result<Self> {
-        let host = std::env::var("HOST")?;
-        let triple = std::env::var("TARGET")?;
-        match triple == host {
-            true => Ok(Self {
-                triple,
-                platform: Platform::current()?,
-            }),
-            false => Err(anyhow::anyhow!(
-                "Joe's bundled sandbox must be built on its target platform"
-            )),
-        }
+        Ok(Self {
+            triple: env!("JOE_SANDBOX_TARGET").into(),
+            platform: Platform::current()?,
+        })
     }
 }
 
+struct LauncherFile {
+    path: &'static str,
+    contents: &'static [u8],
+}
+
+const LAUNCHER_FILES: &[LauncherFile] = &[
+    LauncherFile {
+        path: "launcher/Cargo.toml",
+        contents: include_bytes!("../../launcher/Cargo.toml"),
+    },
+    LauncherFile {
+        path: "launcher/Cargo.lock",
+        contents: include_bytes!("../../launcher/Cargo.lock"),
+    },
+    LauncherFile {
+        path: "launcher/src/main.rs",
+        contents: include_bytes!("../../launcher/src/main.rs"),
+    },
+    LauncherFile {
+        path: "launcher/src/krun.rs",
+        contents: include_bytes!("../../launcher/src/krun.rs"),
+    },
+    LauncherFile {
+        path: "src/protocol.rs",
+        contents: include_bytes!("../protocol.rs"),
+    },
+    LauncherFile {
+        path: "entitlements.plist",
+        contents: include_bytes!("../../entitlements.plist"),
+    },
+];
+
 pub struct NativeBuild {
     target: BuildTarget,
-    package: PathBuf,
-    output: PathBuf,
 }
 
 impl NativeBuild {
     pub fn new() -> anyhow::Result<Self> {
-        let package = PathBuf::from(
-            std::env::var_os("CARGO_MANIFEST_DIR").context("Missing manifest directory")?,
-        )
-        .canonicalize()?;
-        let output =
-            PathBuf::from(std::env::var_os("OUT_DIR").context("Missing build output directory")?);
         Ok(Self {
             target: BuildTarget::new()?,
-            package,
-            output,
         })
     }
 
-    pub fn bundle(
+    fn version(&self) -> String {
+        let mut digest = Sha256::new();
+        digest.update(include_bytes!("native.rs"));
+        for file in LAUNCHER_FILES {
+            digest.update(file.path);
+            digest.update(file.contents);
+        }
+        format!("launcher-{}-{:x}", self.target.triple, digest.finalize())
+    }
+
+    pub fn prepare(
         &self,
         installation: &Installation,
         downloads: &Downloads<'_>,
     ) -> anyhow::Result<PathBuf> {
-        let native = installation.prepare(
-            &format!(
-                "launcher-components-1.18.0-fw5.5.0-bwrap0.11.0-{}-v2",
-                self.target.triple
-            ),
-            |staging| self.prepare_components(staging, installation, downloads),
-        )?;
-        run(self
-            .cargo(&self.output.join("launcher-target"))
-            .current_dir(self.package.join("launcher"))
-            .env("KRUN_INIT_BINARY_PATH", native.join("joe-init"))
-            .env("KRUN_EDK2_BINARY_PATH", native.join("KRUN_EFI.silent.fd")))?;
-        let archive = self.output.join("sandbox-native.tar.gz");
-        let writer = flate2::write::GzEncoder::new(
-            fs::File::create(&archive)?,
-            flate2::Compression::default(),
-        );
-        let mut bundle = tar::Builder::new(writer);
-        bundle.append_dir_all("lib", native.join("lib"))?;
-        bundle.append_path_with_name(
-            self.output
-                .join("launcher-target")
-                .join(&self.target.triple)
-                .join("release/joe-sandbox-launcher"),
-            "bin/joe-sandbox",
-        )?;
-        if let Platform::Linux { .. } = self.target.platform {
-            bundle.append_path_with_name(native.join("bwrap"), "bin/bwrap")?;
-        }
-        bundle.into_inner()?.finish()?.sync_all()?;
-        Ok(archive)
+        installation.prepare(&self.version(), |staging| {
+            eprintln!("Joe is preparing its sandbox launcher for the first time");
+            let native = installation.prepare(
+                &format!(
+                    "launcher-components-1.18.0-fw5.5.0-bwrap0.11.0-{}-v2",
+                    self.target.triple
+                ),
+                |staging| self.prepare_components(staging, installation, downloads),
+            )?;
+            let source = staging.join("source");
+            for file in LAUNCHER_FILES {
+                let path = source.join(file.path);
+                fs::create_dir_all(path.parent().context("Missing launcher source directory")?)?;
+                fs::write(path, file.contents)?;
+            }
+            let output = installation
+                .path()
+                .join(format!("launcher-target-{}", self.target.triple));
+            downloads.check()?;
+            run(self
+                .cargo(&output)
+                .current_dir(source.join("launcher"))
+                .env("KRUN_INIT_BINARY_PATH", native.join("joe-init"))
+                .env("KRUN_EDK2_BINARY_PATH", native.join("KRUN_EFI.silent.fd")))?;
+            downloads.check()?;
+            fs::create_dir(staging.join("lib"))?;
+            fs::create_dir(staging.join("bin"))?;
+            fs::copy(
+                native.join("lib").join(self.target.platform.firmware()),
+                staging.join("lib").join(self.target.platform.firmware()),
+            )?;
+            let helper = staging.join("bin/joe-sandbox");
+            fs::copy(
+                output
+                    .join(&self.target.triple)
+                    .join("release/joe-sandbox-launcher"),
+                &helper,
+            )?;
+            match self.target.platform {
+                Platform::MacOs => run(Command::new("/usr/bin/codesign")
+                    .args(["--force", "--sign", "-", "--entitlements"])
+                    .arg(source.join("entitlements.plist"))
+                    .arg(helper))?,
+                Platform::Linux { .. } => {
+                    fs::copy(native.join("bwrap"), staging.join("bin/bwrap"))?;
+                }
+            }
+            fs::remove_dir_all(source)?;
+            Ok(())
+        })
     }
 
     fn cargo(&self, directory: &Path) -> Command {
@@ -157,7 +202,7 @@ impl NativeBuild {
             Platform::MacOs => {
                 let rootfs =
                     image::prepare(installation, downloads, self.target.platform.architecture())?;
-                let rustc = std::env::var_os("RUSTC").context("Missing Rust compiler")?;
+                let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
                 let rustlib = Command::new(rustc)
                     .args(["--print", "target-libdir"])
                     .output()?;

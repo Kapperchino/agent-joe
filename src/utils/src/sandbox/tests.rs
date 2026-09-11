@@ -437,6 +437,39 @@ async fn protected_symlinks_cannot_add_host_mounts() {
 }
 
 #[tokio::test]
+async fn sandbox_build_metadata_compiles_without_downloading_a_runtime() {
+    if crate::test_support::sandbox_available() {
+        let project = Fixture::new();
+        std::fs::create_dir(project.root.join("src")).unwrap();
+        std::fs::write(
+            project.root.join("Cargo.toml"),
+            "[package]\nname = 'sandbox_build_fixture'\nversion = '0.1.0'\nedition = '2024'\n",
+        )
+        .unwrap();
+        std::fs::write(
+            project.root.join("build.rs"),
+            include_str!("../../../sandbox/build.rs"),
+        )
+        .unwrap();
+        std::fs::write(
+            project.root.join("src/lib.rs"),
+            "pub const TARGET: &str = env!(\"JOE_SANDBOX_TARGET\");",
+        )
+        .unwrap();
+        let result = project
+            .scope()
+            .enter(crate::cargo::Cargo::cargo_check())
+            .await
+            .unwrap();
+        assert!(matches!(
+            result,
+            crate::cargo::CargoCheck::CheckPasses { .. }
+        ));
+        assert!(!project.root.join(".cache/agent-joe").exists());
+    }
+}
+
+#[tokio::test]
 async fn cargo_artifacts_are_reused_across_agents_and_restarts() {
     if crate::test_support::sandbox_available() {
         let project = Fixture::new();
