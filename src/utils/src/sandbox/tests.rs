@@ -604,6 +604,60 @@ async fn cargo_build_scripts_proc_macros_and_tests_cannot_escape() {
 }
 
 #[tokio::test]
+async fn cargo_downloads_dependencies_before_running_isolated_builds() {
+    if crate::test_support::sandbox_available() {
+        let project = Fixture::new();
+        std::fs::create_dir(project.root.join("src")).unwrap();
+        std::fs::write(
+            project.root.join("Cargo.toml"),
+            "[package]\nname = 'cargo_download_fixture'\nversion = '0.1.0'\nedition = '2024'\n[build-dependencies]\nitoa = '=1.0.14'\n[dev-dependencies]\neither = '=1.13.0'\n",
+        )
+        .unwrap();
+        let network_check = "assert!(std::net::TcpStream::connect_timeout(&\"1.1.1.1:443\".parse().unwrap(), std::time::Duration::from_secs(1)).is_err());";
+        std::fs::write(
+            project.root.join("build.rs"),
+            format!(
+                "fn main() {{ assert_eq!(itoa::Buffer::new().format(42), \"42\"); {network_check} }}"
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            project.root.join("src/lib.rs"),
+            format!(
+                "#[test] fn dependencies_are_available() {{ assert_eq!(either::Either::<u8, u8>::Left(42).left(), Some(42)); {network_check} }}"
+            ),
+        )
+        .unwrap();
+        let scope = project.scope();
+        assert!(!project.root.join("Cargo.lock").exists());
+        let result = scope
+            .enter(crate::cargo::Cargo::cargo_test(None, None))
+            .await
+            .unwrap();
+        match result {
+            crate::cargo::CargoTest::TestPasses { .. } => {}
+            crate::cargo::CargoTest::TestFailed { output } => panic!("{output}"),
+        }
+        let lock = std::fs::read_to_string(project.root.join("Cargo.lock")).unwrap();
+        assert!(lock.contains("name = \"itoa\"\nversion = \"1.0.14\""));
+        assert!(lock.contains("name = \"either\"\nversion = \"1.13.0\""));
+        let result = scope
+            .enter(crate::cargo::Cargo::cargo_check())
+            .await
+            .unwrap();
+        assert!(matches!(
+            result,
+            crate::cargo::CargoCheck::CheckPasses { .. }
+        ));
+        assert_eq!(
+            std::fs::read_to_string(project.root.join("Cargo.lock")).unwrap(),
+            lock
+        );
+        scope.finish().await;
+    }
+}
+
+#[tokio::test]
 async fn changing_dependencies_prepares_new_packages_automatically() {
     if crate::test_support::sandbox_available() {
         let project = Fixture::new();

@@ -166,7 +166,7 @@ async fn get_actor<W: Worker<C = RustContext>>(
         context.guidance = context.guidance.with_global(path)?;
     }
     context.initial_prompt.push_str(
-        "\nAll repository operations must remain inside the project. Outside access is denied automatically; do not request permissions or broader access. File tools run through the project filesystem policy. Cargo runs offline inside the project sandbox and fails if isolation is unavailable.",
+        "\nAll repository operations must remain inside the project. File tools run through the project filesystem policy. Cargo automatically downloads missing crates.io dependencies through the host before running inside the project sandbox. These dependency downloads are allowed and require no permission request. Project code has no network access, and Cargo fails if isolation is unavailable. Other outside access is denied automatically; do not request permissions or broader access.",
     );
     let client = LLmClient::new(config_context)?;
     let (supervisor, _) = Actor::spawn(None, WorkerSupervisor, ())

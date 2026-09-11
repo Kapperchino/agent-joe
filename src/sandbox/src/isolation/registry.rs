@@ -37,6 +37,7 @@ struct LockedPackage {
     checksum: Option<String>,
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct RegistryIndex {
     name: String,
 }
@@ -249,12 +250,12 @@ fn atomic_write(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
     Ok(())
 }
 
-struct ResolveLock;
+struct FetchDependencies;
 
-impl ResolveLock {
+impl FetchDependencies {
     fn into_command(self) -> tokio::process::Command {
         let mut command = tokio::process::Command::new("/usr/local/cargo/bin/cargo");
-        command.args(["update", "--workspace", "--offline"]);
+        command.args(["fetch", "--offline"]);
         command
     }
 }
@@ -262,20 +263,36 @@ impl ResolveLock {
 enum Resolution {
     Seed,
     Resolve,
-    FetchIndex { index: RegistryIndex },
-    FetchPackages,
+    Fetch { request: RegistryRequest },
     Complete,
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 enum RegistryRequest {
     Packages,
     Index { index: RegistryIndex },
 }
 
+impl RegistryRequest {
+    fn from_diagnostic(stderr: &str) -> anyhow::Result<Option<Self>> {
+        match RegistryIndex::from_diagnostic(stderr)? {
+            Some(index) => Ok(Some(Self::Index { index })),
+            None if stderr.contains("failed to download `")
+                && stderr.contains(
+                    "attempting to make an HTTP request, but --offline was specified",
+                ) =>
+            {
+                Ok(Some(Self::Packages))
+            }
+            None => Ok(None),
+        }
+    }
+}
+
 struct DependencyResolver {
     sandbox: Sandbox,
     cancellations: Vec<CancellationToken>,
-    requested: HashSet<String>,
+    requested: HashSet<RegistryRequest>,
 }
 
 impl DependencyResolver {
@@ -288,13 +305,9 @@ impl DependencyResolver {
                     Resolution::Resolve
                 }
                 Resolution::Resolve => self.resolve().await?,
-                Resolution::FetchIndex { index } => {
-                    self.fetch(RegistryRequest::Index { index }).await?;
+                Resolution::Fetch { request } => {
+                    self.fetch(request).await?;
                     Resolution::Resolve
-                }
-                Resolution::FetchPackages => {
-                    self.fetch(RegistryRequest::Packages).await?;
-                    Resolution::Complete
                 }
                 Resolution::Complete => Resolution::Complete,
             };
@@ -304,16 +317,16 @@ impl DependencyResolver {
 
     async fn resolve(&mut self) -> anyhow::Result<Resolution> {
         let result = tokio::select! {
-            result = self.sandbox.capture(ResolveLock.into_command(), ProcessLimits::new(Duration::from_secs(30), 16 * 1024 * 1024)?, self.cancellations.clone()) => result?,
+            result = self.sandbox.capture(FetchDependencies.into_command(), ProcessLimits::new(Duration::from_secs(30), 16 * 1024 * 1024)?, self.cancellations.clone()) => result?,
             _ = futures::future::select_all(self.cancellations.iter().map(|token| Box::pin(token.cancelled()))) => Err(anyhow::anyhow!("Process cancelled before launch"))?,
         };
         match result.exit_code {
-            Some(0) => Ok(Resolution::FetchPackages),
-            _ => match RegistryIndex::from_diagnostic(&result.stderr)? {
-                Some(index)
-                    if self.requested.len() < 2048 && self.requested.insert(index.name.clone()) =>
+            Some(0) => Ok(Resolution::Complete),
+            _ => match RegistryRequest::from_diagnostic(&result.stderr)? {
+                Some(request)
+                    if self.requested.len() < 2048 && self.requested.insert(request.clone()) =>
                 {
-                    Ok(Resolution::FetchIndex { index })
+                    Ok(Resolution::Fetch { request })
                 }
                 _ => Ok(Resolution::Complete),
             },
@@ -366,6 +379,35 @@ pub(crate) fn prepare(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cargo_fetch_requests_missing_indexes_and_archives() {
+        for diagnostic in [
+            "error: no matching package named `itoa` found\nlocation searched: crates.io index",
+            "error: failed to select a version for the requirement `itoa = \"=1.0.14\"`",
+        ] {
+            assert_eq!(
+                RegistryRequest::from_diagnostic(diagnostic).unwrap(),
+                Some(RegistryRequest::Index {
+                    index: RegistryIndex::new("itoa".into()).unwrap(),
+                })
+            );
+        }
+        assert_eq!(
+            RegistryRequest::from_diagnostic(
+                "error: failed to download `itoa v1.0.14`\n\nCaused by:\n  attempting to make an HTTP request, but --offline was specified"
+            )
+            .unwrap(),
+            Some(RegistryRequest::Packages)
+        );
+        for diagnostic in [
+            "error: failed to parse manifest at `/workspace/Cargo.toml`",
+            "error: failed to download `itoa v1.0.14`\nCaused by:\n  checksum mismatch",
+            "error: failed to get `demo` as a dependency\nCaused by:\n  can't checkout from 'https://example.com/demo': you are in the offline mode (--offline)",
+        ] {
+            assert_eq!(RegistryRequest::from_diagnostic(diagnostic).unwrap(), None);
+        }
+    }
 
     #[test]
     fn locked_dependencies_cannot_redirect_downloads_or_cache_writes() {

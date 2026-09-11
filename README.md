@@ -55,8 +55,13 @@ cargo run --relase
 
 Building Joe does not download or compile the sandbox launcher. The first sandbox
 operation prepares it on the host and caches it for later runs. This setup needs
-network access, Cargo, a Rust compiler, a C compiler, and `make` on Linux. Cargo
-commands inside the sandbox remain offline.
+network access, Cargo, a Rust compiler, a C compiler, and `make` on Linux.
+
+Cargo operations automatically download missing crates.io dependencies on the
+host, verify their checksums, and cache them for the sandbox. This also works
+without a lockfile and after dependencies change. Builds, build scripts, tests,
+and programs run inside the sandbox without network access. Git dependencies and
+custom registries are not downloaded automatically.
 
 ## Keybindings
 

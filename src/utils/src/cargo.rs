@@ -239,7 +239,6 @@ impl CargoOperation {
                 (action == CargoAction::CheckFormat).then_some("--check"),
             ],
             false => vec![
-                Some("--offline"),
                 Some("--message-format=json-diagnostic-rendered-ansi"),
                 input.workspace.then_some("--workspace"),
                 input.release.then_some("--release"),

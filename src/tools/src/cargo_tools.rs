@@ -197,7 +197,7 @@ impl<P: CargoPolicy> ToolDefTrait for Cargo<P> {
         "cargo"
     }
     fn tool_description() -> &'static str {
-        "Run typed Rust operations offline. Select operation: check, test, fmt, fmt_check, clippy, run, start, poll or stop, as available to this worker. Prefer targeted validation; compilation alone does not prove behavior. run/start require a named binary or example; start returns a process_id for poll/stop. Stop managed targets before edits or other Cargo operations. Processes stop with the turn or after five minutes. Returns structured command, diagnostics, status and output evidence."
+        "Run typed Rust operations in the project sandbox. Missing crates.io dependencies are downloaded automatically. Select operation: check, test, fmt, fmt_check, clippy, run, start, poll or stop, as available to this worker. Prefer targeted validation; compilation alone does not prove behavior. run/start require a named binary or example; start returns a process_id for poll/stop. Stop managed targets before edits or other Cargo operations. Processes stop with the turn or after five minutes. Returns structured command, diagnostics, status and output evidence."
     }
     fn field_properties() -> FnvHashMap<String, ToolProperty> {
         properties(P::OPERATIONS)

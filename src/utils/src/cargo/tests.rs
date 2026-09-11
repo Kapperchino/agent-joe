@@ -31,7 +31,6 @@ fn command_details_preserve_arguments_and_validate_combinations() {
         operation.details().args,
         [
             "test",
-            "--offline",
             "--message-format=json-diagnostic-rendered-ansi",
             "--package",
             "member",
@@ -105,10 +104,11 @@ fn program_values_cannot_change_the_executor() {
         },
     )
     .unwrap();
-    assert_eq!(
-        &operation.details().args[5..],
-        ["--", "--config=net.offline=false", "$(touch injected)"]
-    );
+    assert!(operation.details().args.ends_with(&[
+        "--".into(),
+        "--config=net.offline=false".into(),
+        "$(touch injected)".into(),
+    ]));
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
