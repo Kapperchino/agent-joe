@@ -263,5 +263,5 @@ impl PendingContent {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/actors/batch/tests.rs"]
+#[path = "../tests/unit/batch/tests.rs"]
 mod tests;

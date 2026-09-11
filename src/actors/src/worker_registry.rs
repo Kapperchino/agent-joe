@@ -275,9 +275,9 @@ impl WorkerRegistry {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/actors/worker_registry/tests.rs"]
+#[path = "../tests/unit/worker_registry/tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "../../../tests/actors/worker_registry/recovery_tests.rs"]
+#[path = "../tests/unit/worker_registry/recovery_tests.rs"]
 mod recovery_tests;

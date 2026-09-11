@@ -22,7 +22,7 @@ impl RPath {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/analysis/utils/tests.rs"]
+#[path = "../tests/unit/utils/tests.rs"]
 mod tests;
 
 impl Display for RPath {

@@ -226,5 +226,5 @@ impl WorkerRequest {
 }
 
 #[cfg(test)]
-#[path = "../../../../tests/actors/worker_registry/request/tests.rs"]
+#[path = "../../tests/unit/worker_registry/request/tests.rs"]
 mod tests;

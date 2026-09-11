@@ -12,5 +12,5 @@ pub(super) struct Configuration {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/sandbox/protocol/tests.rs"]
+#[path = "../tests/unit/protocol/tests.rs"]
 mod tests;

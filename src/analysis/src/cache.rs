@@ -133,5 +133,5 @@ impl<V: CacheVal> TypedCacheDbRo<'_, V> {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/analysis/cache/tests.rs"]
+#[path = "../tests/unit/cache/tests.rs"]
 mod tests;

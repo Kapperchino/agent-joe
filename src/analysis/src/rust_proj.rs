@@ -163,5 +163,5 @@ impl RustProject {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/analysis/rust_proj/tests.rs"]
+#[path = "../tests/unit/rust_proj/tests.rs"]
 mod tests;

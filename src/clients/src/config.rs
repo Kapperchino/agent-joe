@@ -144,5 +144,5 @@ impl Config {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/clients/config/tests.rs"]
+#[path = "../tests/unit/config/tests.rs"]
 mod tests;

@@ -1305,5 +1305,5 @@ impl DrawLine {
 }
 
 #[cfg(test)]
-#[path = "../../../../tests/app/utils/draw_line/tests.rs"]
+#[path = "../../tests/unit/utils/draw_line/tests.rs"]
 mod tests;

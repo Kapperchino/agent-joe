@@ -127,5 +127,5 @@ impl WorkerBudget {
 }
 
 #[cfg(test)]
-#[path = "../../../../tests/actors/worker_registry/budget/tests.rs"]
+#[path = "../../tests/unit/worker_registry/budget/tests.rs"]
 mod tests;

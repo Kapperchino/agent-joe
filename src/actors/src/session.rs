@@ -790,7 +790,7 @@ impl Operation {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/actors/session/tests.rs"]
+#[path = "../tests/unit/session/tests.rs"]
 pub(crate) mod tests;
 
 impl utils::changes::ChangeStore for Session {

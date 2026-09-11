@@ -173,5 +173,5 @@ impl MessageTranscript {
 }
 
 #[cfg(test)]
-#[path = "../../../../../tests/app/widgets/message_box/transcript/tests.rs"]
+#[path = "../../../tests/unit/widgets/message_box/transcript/tests.rs"]
 mod tests;

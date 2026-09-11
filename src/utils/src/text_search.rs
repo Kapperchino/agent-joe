@@ -50,5 +50,5 @@ impl TextSearch {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/utils/text_search/tests.rs"]
+#[path = "../tests/unit/text_search/tests.rs"]
 mod tests;

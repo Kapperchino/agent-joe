@@ -208,5 +208,5 @@ impl Listing {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/utils/inventory/tests.rs"]
+#[path = "../tests/unit/inventory/tests.rs"]
 mod tests;

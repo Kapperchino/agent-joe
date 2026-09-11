@@ -152,5 +152,5 @@ fn markdown_parse_options() -> ParseOptions {
 }
 
 #[cfg(test)]
-#[path = "../../../../../tests/app/widgets/message_box/table_flow/tests.rs"]
+#[path = "../../../tests/unit/widgets/message_box/table_flow/tests.rs"]
 mod tests;

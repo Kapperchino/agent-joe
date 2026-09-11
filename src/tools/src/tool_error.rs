@@ -60,5 +60,5 @@ impl fmt::Display for ToolFailure {
 impl std::error::Error for ToolFailure {}
 
 #[cfg(test)]
-#[path = "../../../tests/tools/tool_error/tests.rs"]
+#[path = "../tests/unit/tool_error/tests.rs"]
 mod tests;

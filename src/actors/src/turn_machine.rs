@@ -812,5 +812,5 @@ impl Shutdown {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/actors/turn_machine_test.rs"]
+#[path = "../tests/unit/turn_machine_test.rs"]
 mod tests;

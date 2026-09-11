@@ -912,5 +912,5 @@ impl LLmClientTrait for OpenAIClient {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/clients/openai/request_tests.rs"]
+#[path = "../tests/unit/openai/request_tests.rs"]
 mod request_tests;

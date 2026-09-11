@@ -344,5 +344,5 @@ fn apply_changes(base: &str, changes: PatchChange<'_>) -> anyhow::Result<String>
 }
 
 #[cfg(test)]
-#[path = "../../../tests/utils/diff/tests.rs"]
+#[path = "../tests/unit/diff/tests.rs"]
 mod tests;

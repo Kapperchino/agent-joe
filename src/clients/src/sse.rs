@@ -70,7 +70,7 @@ impl Decoder {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/clients/sse/tests.rs"]
+#[path = "../tests/unit/sse/tests.rs"]
 mod tests;
 
 #[derive(Default)]
@@ -128,5 +128,5 @@ where
 }
 
 #[cfg(test)]
-#[path = "../../../tests/clients/sse/stream_tests.rs"]
+#[path = "../tests/unit/sse/stream_tests.rs"]
 mod stream_tests;

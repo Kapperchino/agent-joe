@@ -328,5 +328,5 @@ fn build_bubblewrap(downloads: &Downloads<'_>, build: &Path, output: &Path) -> a
 }
 
 #[cfg(test)]
-#[path = "../../../../tests/sandbox/provision/native/tests.rs"]
+#[path = "../../tests/unit/provision/native/tests.rs"]
 mod tests;

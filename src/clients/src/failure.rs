@@ -137,5 +137,5 @@ impl ProviderErrorCode {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/clients/failure/tests.rs"]
+#[path = "../tests/unit/failure/tests.rs"]
 mod tests;

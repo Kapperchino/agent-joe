@@ -208,5 +208,5 @@ pub(crate) struct CompactionRequest {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/clients/compaction/tests.rs"]
+#[path = "../tests/unit/compaction/tests.rs"]
 mod tests;

@@ -8,7 +8,7 @@ pub struct CommandContext {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/commands/command/tests.rs"]
+#[path = "../tests/unit/command/tests.rs"]
 mod tests;
 
 #[derive(Debug, PartialEq, EnumString, VariantNames, Clone, EnumMessage)]

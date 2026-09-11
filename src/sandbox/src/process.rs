@@ -241,5 +241,5 @@ fn output_text(bytes: &[u8], status: &ProcessStatus) -> String {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/sandbox/process/tests.rs"]
+#[path = "../tests/unit/process/tests.rs"]
 mod tests;

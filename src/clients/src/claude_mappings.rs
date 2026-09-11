@@ -320,5 +320,5 @@ impl From<ChatResponse> for ClientResponse {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/clients/claude_mappings/tests.rs"]
+#[path = "../tests/unit/claude_mappings/tests.rs"]
 mod tests;

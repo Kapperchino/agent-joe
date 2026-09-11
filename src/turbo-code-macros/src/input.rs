@@ -387,5 +387,5 @@ fn named_fields(
 }
 
 #[cfg(test)]
-#[path = "../../../tests/turbo-code-macros/input/tests.rs"]
+#[path = "../tests/unit/input/tests.rs"]
 mod tests;

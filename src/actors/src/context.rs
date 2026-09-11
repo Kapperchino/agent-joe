@@ -468,7 +468,7 @@ struct EvidenceCall<'a> {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/actors/context/tests.rs"]
+#[path = "../tests/unit/context/tests.rs"]
 mod tests;
 
 pub(crate) fn estimated_tokens(request: &ClientRequest) -> anyhow::Result<usize> {

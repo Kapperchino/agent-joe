@@ -537,5 +537,5 @@ impl DrawTable {
 }
 
 #[cfg(test)]
-#[path = "../../../../tests/app/utils/draw_table/tests.rs"]
+#[path = "../../tests/unit/utils/draw_table/tests.rs"]
 mod tests;

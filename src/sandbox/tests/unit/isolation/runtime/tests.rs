@@ -68,7 +68,7 @@ impl RuntimeFixture {
         }
         std::fs::write(
             rootfs.join("usr/local/libexec/joe-guest"),
-            include_bytes!("../../../../src/sandbox/guest.sh"),
+            include_bytes!("../../../../guest.sh"),
         )
         .unwrap();
         std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700)).unwrap();

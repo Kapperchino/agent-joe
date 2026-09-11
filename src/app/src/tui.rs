@@ -78,7 +78,7 @@ impl std::fmt::Display for Progress {
 mod chrome;
 
 #[cfg(test)]
-#[path = "../../../tests/app/tui/tests.rs"]
+#[path = "../tests/unit/tui/tests.rs"]
 mod tests;
 #[derive(Clone, Copy)]
 pub enum InputMode {

@@ -302,5 +302,5 @@ mod unsupported;
 pub use unsupported::PrivateStorage;
 
 #[cfg(all(test, unix))]
-#[path = "../../../tests/utils/workspace/tests.rs"]
+#[path = "../tests/unit/workspace/tests.rs"]
 mod tests;

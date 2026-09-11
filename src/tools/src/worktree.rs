@@ -161,5 +161,5 @@ impl<C: Context, A> ToolTrait<C, A> for Worktree {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/tools/worktree/tests.rs"]
+#[path = "../tests/unit/worktree/tests.rs"]
 mod tests;

@@ -15,5 +15,5 @@ pub fn cache() -> anyhow::Result<PathBuf> {
 }
 
 #[cfg(test)]
-#[path = "../../../../tests/sandbox/provision/tests.rs"]
+#[path = "../../tests/unit/provision/tests.rs"]
 mod tests;

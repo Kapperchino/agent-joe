@@ -380,5 +380,5 @@ impl From<tool_defs::ToolProperty> for openai::ToolProperty {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/clients/openai_mappings/tests.rs"]
+#[path = "../tests/unit/openai_mappings/tests.rs"]
 mod tests;

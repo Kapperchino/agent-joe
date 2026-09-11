@@ -148,5 +148,5 @@ impl ReadFile {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/tools/read_file/tests.rs"]
+#[path = "../tests/unit/read_file/tests.rs"]
 mod tests;

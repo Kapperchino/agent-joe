@@ -291,5 +291,5 @@ fn named_target(kind: &str) -> Value {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/tools/cargo_tools/tests.rs"]
+#[path = "../tests/unit/cargo_tools/tests.rs"]
 mod tests;

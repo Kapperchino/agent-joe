@@ -100,5 +100,5 @@ fn model_name(model: &str) -> &str {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/clients/models/tests.rs"]
+#[path = "../tests/unit/models/tests.rs"]
 mod tests;

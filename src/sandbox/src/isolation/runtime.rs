@@ -188,5 +188,5 @@ fn guest_command(arguments: &[String]) -> String {
 }
 
 #[cfg(test)]
-#[path = "../../../../tests/sandbox/isolation/runtime/tests.rs"]
+#[path = "../../tests/unit/isolation/runtime/tests.rs"]
 mod tests;

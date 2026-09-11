@@ -15,11 +15,11 @@ pub mod inspect_context;
 pub mod list_directory;
 
 #[cfg(test)]
-#[path = "../../../tests/tools/discovery_test.rs"]
+#[path = "../tests/unit/discovery_test.rs"]
 mod discovery_test;
 
 #[cfg(test)]
-#[path = "../../../tests/tools/tool_input_test.rs"]
+#[path = "../tests/unit/tool_input_test.rs"]
 mod tool_input_test;
 
 pub mod cargo_tools;

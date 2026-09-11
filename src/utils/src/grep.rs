@@ -193,5 +193,5 @@ impl SearchResults {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/utils/grep/tests.rs"]
+#[path = "../tests/unit/grep/tests.rs"]
 mod tests;

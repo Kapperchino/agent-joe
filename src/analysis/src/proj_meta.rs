@@ -817,5 +817,5 @@ impl Display for ProjMeta {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/analysis/proj_meta/tests.rs"]
+#[path = "../tests/unit/proj_meta/tests.rs"]
 mod tests;

@@ -131,5 +131,5 @@ impl<C: Context, A> ToolTrait<C, A> for Git {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/tools/git/tests.rs"]
+#[path = "../tests/unit/git/tests.rs"]
 mod tests;

@@ -486,5 +486,5 @@ pub fn tool_failure(failure: &ToolFailure) -> Failure {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/actors/turn/tests.rs"]
+#[path = "../tests/unit/turn/tests.rs"]
 mod tests;

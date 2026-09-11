@@ -377,5 +377,5 @@ pub(crate) fn prepare(
     )
 }
 #[cfg(test)]
-#[path = "../../../../tests/sandbox/isolation/registry/tests.rs"]
+#[path = "../../tests/unit/isolation/registry/tests.rs"]
 mod tests;

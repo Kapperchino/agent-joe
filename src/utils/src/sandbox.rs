@@ -152,5 +152,5 @@ async fn execute(command: Command, limits: ProcessLimits) -> anyhow::Result<Outp
 }
 
 #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
-#[path = "../../../tests/utils/sandbox/tests.rs"]
+#[path = "../tests/unit/sandbox/tests.rs"]
 mod tests;

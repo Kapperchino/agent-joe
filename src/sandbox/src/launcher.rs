@@ -176,5 +176,5 @@ pub(super) fn run() -> anyhow::Result<()> {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/sandbox/launcher/tests.rs"]
+#[path = "../tests/unit/launcher/tests.rs"]
 mod tests;

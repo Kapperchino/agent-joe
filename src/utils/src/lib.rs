@@ -13,7 +13,7 @@ pub mod sandbox;
 pub mod workspace;
 
 #[cfg(any(test, feature = "test-support"))]
-#[path = "../../../tests/utils/test_support.rs"]
+#[path = "../tests/unit/test_support.rs"]
 pub mod test_support;
 
 pub mod discovery;

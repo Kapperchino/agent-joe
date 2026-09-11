@@ -448,7 +448,7 @@ async fn sandbox_build_metadata_compiles_without_downloading_a_runtime() {
         .unwrap();
         std::fs::write(
             project.root.join("build.rs"),
-            include_str!("../../../src/sandbox/build.rs"),
+            include_str!("../../../../sandbox/build.rs"),
         )
         .unwrap();
         std::fs::write(

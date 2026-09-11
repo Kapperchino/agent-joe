@@ -450,5 +450,5 @@ fn prepared_patch(
 }
 
 #[cfg(test)]
-#[path = "../../../tests/tools/apply_patch/tests.rs"]
+#[path = "../tests/unit/apply_patch/tests.rs"]
 mod tests;

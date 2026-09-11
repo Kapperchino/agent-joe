@@ -73,11 +73,13 @@ custom registries are not downloaded automatically.
 
 ## Tests
 
-Tests and fixtures live in the top-level `tests/` directory, organized by crate
-and module. For example, `src/clients/src/sse.rs` has its tests in
-`tests/clients/sse/`. Unit tests are connected with `#[cfg(test)]` and `#[path]`
-so they retain access to private module items. The sandbox launcher integration
-test is registered in `src/sandbox/Cargo.toml`.
+Each crate keeps its tests and fixtures in its own `tests/` directory. Unit tests
+live under `tests/unit/`, organized by module. For example,
+`src/actors/src/batch.rs` has its tests in `src/actors/tests/unit/batch/tests.rs`.
+They are connected with `#[cfg(test)]` and `#[path]` so they retain access to
+private module items. Integration tests live directly under the crate's `tests/`
+directory, such as `src/sandbox/tests/launcher.rs`, where Cargo discovers them
+automatically.
 
 ```sh
 cargo test --workspace
