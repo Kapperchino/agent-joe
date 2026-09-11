@@ -299,7 +299,7 @@ async fn openai_event(state: &mut ActorState<TestContext>, event: Value) -> anyh
 #[tokio::test]
 async fn replay_preserves_reasoning_phase_arguments_and_results_across_turns() {
     let mut h = harness().await;
-    for line in include_str!("../resources/openai_tool_cycle.jsonl").lines() {
+    for line in include_str!("resources/openai_tool_cycle.jsonl").lines() {
         openai_event(&mut h.state, serde_json::from_str(line).unwrap())
             .await
             .unwrap();

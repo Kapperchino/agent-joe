@@ -71,6 +71,18 @@ without a lockfile and after dependencies change. Builds, build scripts, tests,
 and programs run inside the sandbox without network access. Git dependencies and
 custom registries are not downloaded automatically.
 
+## Tests
+
+Tests and fixtures live in the top-level `tests/` directory, organized by crate
+and module. For example, `src/clients/src/sse.rs` has its tests in
+`tests/clients/sse/`. Unit tests are connected with `#[cfg(test)]` and `#[path]`
+so they retain access to private module items. The sandbox launcher integration
+test is registered in `src/sandbox/Cargo.toml`.
+
+```sh
+cargo test --workspace
+```
+
 ## Keybindings
 
 The TUI is similar to claude code and codex with one major difference. Vim bindings are foced upon you.

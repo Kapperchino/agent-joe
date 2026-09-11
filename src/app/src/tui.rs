@@ -77,6 +77,7 @@ impl std::fmt::Display for Progress {
 }
 
 #[cfg(test)]
+#[path = "../../../tests/app/tui/tests.rs"]
 mod tests;
 #[derive(Clone, Copy)]
 pub enum InputMode {

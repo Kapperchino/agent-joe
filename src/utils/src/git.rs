@@ -536,4 +536,5 @@ impl GitChange {
 }
 
 #[cfg(test)]
+#[path = "../../../tests/utils/git/tests.rs"]
 pub(crate) mod tests;
