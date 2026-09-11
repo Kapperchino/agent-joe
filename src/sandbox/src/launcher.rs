@@ -16,12 +16,13 @@ struct Filesystem {
 
 struct KrunContext {
     id: u32,
+    init: Box<[u8]>,
 }
 
 impl KrunContext {
-    fn new() -> anyhow::Result<Self> {
+    fn new(init: Box<[u8]>) -> anyhow::Result<Self> {
         let id = result("krun_create_ctx", krun::krun_create_ctx())? as u32;
-        Ok(Self { id })
+        Ok(Self { id, init })
     }
 
     fn configure(&self, configuration: Configuration) -> anyhow::Result<()> {
@@ -70,6 +71,17 @@ impl KrunContext {
                 )
             })?;
         }
+        result("krun_fs_add_overlay_file", unsafe {
+            krun::krun_fs_add_overlay_file(
+                self.id,
+                c"/dev/root".as_ptr(),
+                c"init.krun".as_ptr(),
+                self.init.as_ptr(),
+                self.init.len(),
+                0o755,
+                true,
+            )
+        })?;
         let arguments = [
             CString::new("/usr/local/libexec/joe-guest")?,
             CString::new(configuration.temporary_name.to_string())?,
@@ -156,7 +168,9 @@ pub(super) fn run() -> anyhow::Result<()> {
     raise_open_file_limit()?;
     let _firmware = unsafe { libloading::Library::new(&configuration.firmware) }
         .context("Cannot load Joe's bundled libkrun firmware")?;
-    let context = KrunContext::new()?;
+    let init =
+        std::fs::read(&configuration.init).context("Cannot read Joe's guest init program")?;
+    let context = KrunContext::new(init.into_boxed_slice())?;
     context.configure(configuration)?;
     context.start()
 }
@@ -167,7 +181,7 @@ mod tests {
 
     #[test]
     fn dropping_a_context_releases_it_in_the_crate() {
-        let context = KrunContext::new().unwrap();
+        let context = KrunContext::new(Box::default()).unwrap();
         let id = context.id;
         assert_eq!(krun::krun_set_vm_config(id, 2, 4096), 0);
         drop(context);
@@ -176,7 +190,7 @@ mod tests {
 
     #[test]
     fn crate_errors_retain_the_operation_and_cause() {
-        let context = KrunContext::new().unwrap();
+        let context = KrunContext::new(Box::default()).unwrap();
         let error = result(
             "krun_set_vm_config",
             krun::krun_set_vm_config(context.id, 0, 4096),

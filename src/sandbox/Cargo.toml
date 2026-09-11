@@ -21,3 +21,7 @@ flate2 = "1"
 tar = "0.4"
 toml = "1"
 dirs = "6"
+
+[target.'cfg(any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64")))'.dependencies]
+libkrun = { version = "=1.19.3", default-features = false }
+libloading = "0.8"

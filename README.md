@@ -50,12 +50,20 @@ The saved transcript remains available after compaction.
 ## Build & Run
 
 ```sh
-cargo run --relase
+cargo build --release
+cargo run --release -p turbo-code
 ```
 
-Building Joe does not download or compile the sandbox launcher. The first sandbox
-operation prepares it on the host and caches it for later runs. This setup needs
-network access, Cargo, a Rust compiler, a C compiler, and `make` on Linux.
+The default build compiles Joe and the `joe-sandbox` binary from the `sandbox`
+package. Keep both executables in the same directory when installing Joe. Other
+applications using the sandbox crate can set `JOE_SANDBOX_LAUNCHER` to the launcher
+path. Workspace checks and tests include the launcher.
+
+The first sandbox operation prepares the Linux guest image, guest init program,
+and native components, then caches a copy of the built launcher outside the
+workspace. On macOS, this copy is signed with hypervisor entitlements. Setup needs
+network access and a C compiler, plus Rust's linker tools on macOS and `make` on
+Linux. It does not invoke Cargo or compile the Rust launcher.
 
 Cargo operations automatically download missing crates.io dependencies on the
 host, verify their checksums, and cache them for the sandbox. This also works

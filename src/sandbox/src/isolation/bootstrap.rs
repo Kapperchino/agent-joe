@@ -12,6 +12,7 @@ impl Installation {
         workspace: &dyn Workspace,
         check: &dyn Fn() -> anyhow::Result<()>,
     ) -> anyhow::Result<Self> {
+        let native = provision::native::NativeRuntime::new()?;
         let cache = provision::cache()?;
         let directory = provision::directory::PrivateDirectory::new(cache)?;
         let cache = directory.path().to_path_buf();
@@ -27,7 +28,7 @@ impl Installation {
             provision::download::Downloads::new(installation.path().join("downloads"), check)?;
         let architecture = provision::platform::Platform::current()?.architecture();
         let rootfs = provision::image::prepare(&installation, &downloads, architecture)?;
-        let native = provision::native::NativeBuild::new()?.prepare(&installation, &downloads)?;
+        let native = native.prepare(&installation, &downloads)?;
         check()?;
         Ok(Self { rootfs, native })
     }
