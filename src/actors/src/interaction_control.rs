@@ -115,6 +115,9 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 }
                 result
             }
+            Command::Steer(_) if !self.turn.accepts_input() => Err(anyhow::anyhow!(
+                "Actor is stopping; correction was not accepted."
+            )),
             Command::Steer(text) => {
                 let follow_up = FollowUp::new(Some(format!(
                     "Updated requirements for the current task: {text}"

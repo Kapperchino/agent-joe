@@ -273,6 +273,10 @@ impl TurnMachine {
         }
     }
 
+    pub fn accepts_input(&self) -> bool {
+        matches!(&self.state, SessionState::Running(_))
+    }
+
     pub fn is_idle(&self) -> bool {
         matches!(
             &self.state,

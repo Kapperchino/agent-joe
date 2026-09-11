@@ -56,7 +56,7 @@ impl Failure {
         error
             .downcast_ref::<Self>()
             .cloned()
-            .unwrap_or_else(|| Self::new(FailureKind::Transport, error.to_string()))
+            .unwrap_or_else(|| Self::new(FailureKind::Transport, format!("{error:#}")))
     }
     pub fn retryable(&self) -> bool {
         matches!(self.kind, FailureKind::Transport | FailureKind::RateLimit)
@@ -139,6 +139,44 @@ impl ProviderErrorCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transport_failures_preserve_the_underlying_cause() {
+        let error = anyhow::Error::new(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "connection reset by peer",
+        ))
+        .context("error decoding response body");
+
+        let failure = Failure::from_error(error);
+
+        assert_eq!(failure.kind, FailureKind::Transport);
+        assert_eq!(
+            failure.message,
+            "error decoding response body: connection reset by peer"
+        );
+        assert!(failure.retryable());
+    }
+
+    #[test]
+    fn contextual_failures_preserve_their_classification_and_message() {
+        for kind in [
+            FailureKind::Authentication,
+            FailureKind::RateLimit,
+            FailureKind::InvalidInput,
+        ] {
+            let original = Failure::new(kind, "provider failure");
+            let retryable = original.retryable();
+            let error = anyhow::Error::new(original).context("provider request failed");
+
+            let failure = Failure::from_error(error);
+
+            assert_eq!(failure.kind, kind);
+            assert_eq!(failure.message, "provider failure");
+            assert_eq!(failure.retryable(), retryable);
+        }
+    }
+
     #[test]
     fn diagnostic_text_cannot_change_recovery_policy() {
         let misleading = "authentication error, context overflow, timeout, rate limit";

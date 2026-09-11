@@ -267,6 +267,14 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 }
                 update => update,
             };
+            if let ProviderUpdate::Finished(Err(failure)) = &update {
+                tracing::warn!(
+                    turn_id = %tag.turn,
+                    operation_id = %tag.operation,
+                    error = %failure,
+                    "Provider request failed"
+                );
+            }
             if matches!(update, ProviderUpdate::Finished(_)) {
                 self.persist(crate::session::Event::Usage(
                     self.stream_processor.token_count.clone(),

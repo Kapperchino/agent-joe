@@ -506,9 +506,11 @@ fn idle_shutdown_drains_the_session_and_stays_stopped() {
 #[test]
 fn accepted_inputs_are_persisted_before_starting_or_queueing() {
     let mut machine = machine();
+    assert!(machine.accepts_input());
     let input = FollowUp::new(Some("first".into()));
     let id = input.id;
     let effects = machine.transition(SessionEvent::Start(input));
+    assert!(machine.accepts_input());
     assert!(matches!(&effects[0], Effect::QueueInput(input) if input.id == id));
     assert!(matches!(&effects[1], Effect::BeginTurn(input) if input.id == id));
     let queued = FollowUp::new(Some("next".into()));
@@ -518,6 +520,7 @@ fn accepted_inputs_are_persisted_before_starting_or_queueing() {
         matches!(effects.as_slice(), [Effect::QueueInput(input), Effect::Report(ActorToTuiPacket::Queued { .. })] if input.id == id)
     );
     machine.transition(Event::StopRequested);
+    assert!(!machine.accepts_input());
     assert!(
         machine
             .transition(SessionEvent::Start(FollowUp::new(Some("rejected".into()))))
@@ -668,6 +671,7 @@ fn graceful_worker_stop_resolves_after_cleanup_with_a_forced_stop_fallback() {
 fn graceful_stop_reuses_pending_cleanup_and_stops_idle_sessions() {
     let mut machine = machine();
     let effects = machine.transition(Event::StopRequested);
+    assert!(!machine.accepts_input());
     assert!(matches!(
         effects.as_slice(),
         [Effect::Shutdown(ShutdownScope::Session)]
@@ -676,10 +680,13 @@ fn graceful_stop_reuses_pending_cleanup_and_stops_idle_sessions() {
         machine.feedback(EffectOutcome::ShutdownFinished).as_slice(),
         [Effect::StopActor]
     ));
+    assert!(!machine.accepts_input());
     let mut machine = TurnMachine::new(ExecutionScope::default(), RequestMode::Continue);
     let tag = start(&mut machine);
     machine.transition(SessionEvent::Interrupt(HistoryDisposition::Retain));
+    assert!(machine.accepts_input());
     assert!(machine.transition(Event::StopRequested).is_empty());
+    assert!(!machine.accepts_input());
     assert!(matches!(machine.state, SessionState::Closing(_)));
     assert!(matches!(
         machine

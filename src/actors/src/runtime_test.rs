@@ -1630,11 +1630,29 @@ async fn graceful_actor_stop_drains_turn_events_and_rejects_followups() {
     .await;
     h.actor.send_message(Message::KYS).unwrap();
     h.start("rejected while closing");
+    h.actor
+        .send_message(Message::Command(commands::command::Command::Steer(
+            "rejected correction".into(),
+        )))
+        .unwrap();
+    let reply = h
+        .event(|event| {
+            matches!(
+                event,
+                ActorToTuiPacket::CommandResult(commands::command::Command::Steer(_), _)
+            )
+        })
+        .await;
+    assert!(matches!(
+        reply,
+        ActorToTuiPacket::CommandResult(_, message)
+            if message == "Actor is stopping; correction was not accepted."
+    ));
     let history = h.history().await;
     assert!(
         history
             .iter()
-            .all(|message| !message.text().contains("rejected while closing"))
+            .all(|message| !message.text().contains("rejected"))
     );
     assert_eq!(write.active.load(Ordering::SeqCst), 1);
     assert!(!h.handle.as_ref().unwrap().is_finished());
@@ -1655,7 +1673,7 @@ async fn graceful_actor_stop_drains_turn_events_and_rejects_followups() {
         snapshot
             .history
             .iter()
-            .all(|message| !message.text().contains("rejected while closing"))
+            .all(|message| !message.text().contains("rejected"))
     );
     let outputs = &snapshot.history.last().unwrap().content;
     assert!(

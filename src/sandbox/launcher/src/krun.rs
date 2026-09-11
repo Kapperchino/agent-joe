@@ -5,6 +5,9 @@ use std::{
     path::PathBuf,
 };
 
+const LINUX_RLIMIT_NOFILE: u32 = 7;
+const OPEN_FILE_LIMIT: libc::rlim_t = 65536;
+
 struct Filesystem {
     tag: &'static CStr,
     path: PathBuf,
@@ -26,6 +29,13 @@ impl KrunContext {
             "krun_set_vm_config",
             krun::krun_set_vm_config(self.id, 2, 4096),
         )?;
+        let limits = [CString::new(format!(
+            "{LINUX_RLIMIT_NOFILE}={OPEN_FILE_LIMIT}:{OPEN_FILE_LIMIT}"
+        ))?];
+        let limits = pointers(&limits);
+        result("krun_set_rlimits", unsafe {
+            krun::krun_set_rlimits(self.id, limits.as_ptr())
+        })?;
         result(
             "krun_disable_implicit_vsock",
             krun::krun_disable_implicit_vsock(self.id),
@@ -110,6 +120,30 @@ fn result(operation: &str, status: i32) -> anyhow::Result<i32> {
     }
 }
 
+fn raise_open_file_limit() -> anyhow::Result<()> {
+    let mut limits = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    match unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limits) } {
+        0 => Ok(()),
+        _ => Err(std::io::Error::last_os_error()),
+    }
+    .context("Cannot read the sandbox launcher's open file limit")?;
+    let desired = limits.rlim_max.min(OPEN_FILE_LIMIT);
+    match limits.rlim_cur < desired {
+        true => {
+            limits.rlim_cur = desired;
+            match unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limits) } {
+                0 => Ok(()),
+                _ => Err(std::io::Error::last_os_error()),
+            }
+            .context("Cannot raise the sandbox launcher's open file limit")
+        }
+        false => Ok(()),
+    }
+}
+
 pub(super) fn run() -> anyhow::Result<()> {
     let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
     let configuration: Configuration = match arguments.as_slice() {
@@ -119,6 +153,7 @@ pub(super) fn run() -> anyhow::Result<()> {
             "joe-sandbox requires one internal JSON configuration"
         )),
     }?;
+    raise_open_file_limit()?;
     let _firmware = unsafe { libloading::Library::new(&configuration.firmware) }
         .context("Cannot load Joe's bundled libkrun firmware")?;
     let context = KrunContext::new()?;

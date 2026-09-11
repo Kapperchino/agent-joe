@@ -94,6 +94,51 @@ fn inherited_credentials_and_sockets_are_removed() {
 }
 
 #[tokio::test]
+async fn sandbox_can_hold_build_sized_file_sets_open() {
+    if crate::test_support::sandbox_available() {
+        let project = Fixture::new();
+        let result = project
+            .scope()
+            .enter(output(fixture("open-files", &PathBuf::new())))
+            .await
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+}
+
+#[test]
+fn sandbox_file_limits_do_not_depend_on_the_host_shell() {
+    if crate::test_support::sandbox_available() {
+        let result = std::process::Command::new("/bin/sh")
+            .args([
+                "-c",
+                "ulimit -S -n 256 && exec \"$@\"",
+                "joe-file-limit-test",
+            ])
+            .arg(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "sandbox::tests::sandbox_can_hold_build_sized_file_sets_open",
+                "--nocapture",
+            ])
+            .env("JOE_SANDBOX_REQUIRED", "1")
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+}
+
+#[tokio::test]
 async fn drains_both_pipes_beyond_pipe_capacity() {
     if crate::test_support::sandbox_available() {
         let project = Fixture::new();

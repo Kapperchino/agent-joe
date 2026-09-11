@@ -1,5 +1,7 @@
+import contextlib
 import os
 import pathlib
+import resource
 import socket
 import subprocess
 import sys
@@ -20,6 +22,22 @@ root = pathlib.Path.cwd()
 marker = pathlib.Path(os.environ["JOE_SANDBOX_MARKER"])
 
 match mode:
+    case "open-files":
+        print(resource.getrlimit(resource.RLIMIT_NOFILE), flush=True)
+        with contextlib.ExitStack() as resources:
+            files = [
+                resources.enter_context(open("/dev/null", "rb"))
+                for _ in range(8192)
+            ]
+            assert all(file.read() == b"" for file in files)
+        with contextlib.ExitStack() as resources:
+            files = [
+                resources.enter_context((root / f"object-{index}").open("w+b"))
+                for index in range(2048)
+            ]
+            for file in files:
+                file.write(b"object")
+                file.flush()
     case "pipes":
         sys.stdout.buffer.write(b"o" * (256 * 1024))
         sys.stderr.buffer.write(b"e" * (256 * 1024))
