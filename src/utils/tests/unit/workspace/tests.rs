@@ -33,6 +33,23 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn sharing_a_sandbox_does_not_grant_restricted_workers_execution_access() {
+    let fixture = Fixture::new();
+    let scope = ExecutionScope::with_workspace(fixture.policy());
+    assert!(scope.sandbox().is_ok());
+    for access in [RootAccess::ReadOnly, RootAccess::ReadWrite] {
+        let restricted = scope
+            .restricted_child(&[fixture.root.join("src")], access)
+            .unwrap();
+        assert!(restricted.sandbox().is_err());
+    }
+    let readonly = scope
+        .restricted_child(&[fixture.root.clone()], RootAccess::ReadOnly)
+        .unwrap();
+    assert!(readonly.sandbox().is_err());
+}
+
+#[test]
 fn file_reads_reject_oversized_content_before_allocating_unbounded_output() {
     let fixture = Fixture::new();
     let path = fixture.root.join("large-file");

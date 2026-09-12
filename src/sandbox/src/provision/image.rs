@@ -5,6 +5,7 @@ use super::{
 };
 use anyhow::Context;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -123,7 +124,14 @@ pub fn prepare(
     downloads: &Downloads<'_>,
     architecture: Architecture,
 ) -> anyhow::Result<PathBuf> {
-    installation.prepare(&format!("guest-{}-v1", architecture.manifest()), |staging| {
+    let guest_version = format!(
+        "{:x}",
+        Sha256::new()
+            .chain_update(include_bytes!("../../guest.sh"))
+            .chain_update(include_bytes!("../../guest.py"))
+            .finalize()
+    );
+    installation.prepare(&format!("guest-{}-{guest_version}", architecture.manifest()), |staging| {
         eprintln!("Joe is preparing its Linux sandbox for the first time");
         let token: Token = downloads.json("https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/rust:pull")?;
         let artifact = Artifact::new(
@@ -144,6 +152,7 @@ pub fn prepare(
             fs::create_dir_all(rootfs.join(directory))?;
         }
         fs::write(rootfs.join("usr/local/libexec/joe-guest"), include_bytes!("../../guest.sh"))?;
+        fs::write(rootfs.join("usr/local/libexec/joe-session.py"), include_bytes!("../../guest.py"))?;
         Ok(())
     }).map(|path| path.join("rootfs"))
 }

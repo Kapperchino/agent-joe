@@ -40,23 +40,31 @@ impl SandboxAvailability {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
         match output.status.success() {
             true => Ok(Self::Available),
-            false
-                if stderr.contains("sandbox-exec: sandbox_apply: Operation not permitted")
-                    || stderr.contains(
-                        "bwrap: Creating new namespace failed: Operation not permitted",
-                    )
-                    || stderr.contains("bwrap: setting up uid map: Permission denied")
-                    || stderr.contains("bwrap: No permissions to create a new namespace")
-                    || stderr.contains("bwrap: No permissions to create new namespace") =>
-            {
-                Ok(Self::Restricted(stderr))
-            }
-            false => Err(anyhow::anyhow!(
-                "Sandbox probe failed with {}: {stderr}\n{}",
-                output.status,
-                String::from_utf8_lossy(&output.stdout)
-            )),
+            false => Self::restriction(&stderr).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Sandbox probe failed with {}: {stderr}\n{}",
+                    output.status,
+                    String::from_utf8_lossy(&output.stdout)
+                )
+            }),
         }
+    }
+
+    fn from_error(error: anyhow::Error) -> anyhow::Result<Self> {
+        Self::restriction(&format!("{error:#}")).ok_or(error)
+    }
+
+    fn restriction(reason: &str) -> Option<Self> {
+        [
+            "sandbox-exec: sandbox_apply: Operation not permitted",
+            "bwrap: Creating new namespace failed: Operation not permitted",
+            "bwrap: setting up uid map: Permission denied",
+            "bwrap: No permissions to create a new namespace",
+            "bwrap: No permissions to create new namespace",
+        ]
+        .iter()
+        .any(|message| reason.contains(message))
+        .then(|| Self::Restricted(reason.to_owned()))
     }
 }
 
@@ -80,23 +88,24 @@ fn probe_guest(directory: &std::path::Path) -> anyhow::Result<SandboxAvailabilit
                 .enter(crate::sandbox::Sandbox::capture(Probe, 15))
                 .await;
             scope.finish().await;
-            let output = result?;
-            match output.status {
-                crate::process::ProcessStatus::Exited => {
-                    use std::os::unix::process::ExitStatusExt;
-                    SandboxAvailability::from_output(Output {
-                        status: std::process::ExitStatus::from_raw(
-                            output.exit_code.unwrap_or(125) << 8,
-                        ),
-                        stdout: output.stdout.into_bytes(),
-                        stderr: output.stderr.into_bytes(),
-                    })
-                }
-                status => Err(anyhow::anyhow!(
-                    "libkrun guest probe failed: {status:?}: {:?}",
-                    output.error
-                )),
-            }
+            result
+                .and_then(|output| match output.status {
+                    crate::process::ProcessStatus::Exited => {
+                        use std::os::unix::process::ExitStatusExt;
+                        SandboxAvailability::from_output(Output {
+                            status: std::process::ExitStatus::from_raw(
+                                output.exit_code.unwrap_or(125) << 8,
+                            ),
+                            stdout: output.stdout.into_bytes(),
+                            stderr: output.stderr.into_bytes(),
+                        })
+                    }
+                    status => Err(anyhow::anyhow!(
+                        "libkrun guest probe failed: {status:?}: {:?}",
+                        output.error
+                    )),
+                })
+                .or_else(SandboxAvailability::from_error)
         })
 }
 

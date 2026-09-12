@@ -134,7 +134,8 @@ enum ProcessState {
     Completed(ProcessOutput),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum OutputStream {
     Stdout,
     Stderr,

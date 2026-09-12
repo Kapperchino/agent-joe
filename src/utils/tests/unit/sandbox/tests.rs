@@ -62,6 +62,179 @@ async fn output(command: Command) -> anyhow::Result<Output> {
     execute(command, ProcessLimits::default()).await
 }
 
+fn boot_id() -> Command {
+    let mut command = Command::new("/usr/bin/cat");
+    command.arg("/proc/sys/kernel/random/boot_id");
+    command
+}
+
+#[tokio::test]
+async fn new_outside_hard_links_block_commands_without_restarting_the_vm() {
+    if crate::test_support::sandbox_available() {
+        let project = Fixture::new();
+        let scope = project.scope();
+        let first = scope.enter(output(boot_id())).await.unwrap();
+        assert!(first.status.success());
+        let outside = project.outside.join("secret");
+        let alias = project.root.join("alias");
+        std::fs::write(&outside, "untouched").unwrap();
+        std::fs::hard_link(&outside, &alias).unwrap();
+        let mut command = Command::new("/usr/bin/python3");
+        command.args([
+            "-c",
+            "from pathlib import Path; Path('alias').write_text('changed')",
+        ]);
+        let error = scope.enter(output(command)).await.unwrap_err();
+        assert!(format!("{error:#}").contains("Hard links must remain within workspace"));
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "untouched");
+        std::fs::remove_file(alias).unwrap();
+        let next = scope.enter(output(boot_id())).await.unwrap();
+        assert!(next.status.success());
+        assert_eq!(first.stdout, next.stdout);
+        scope.finish().await;
+    }
+}
+
+#[tokio::test]
+async fn protected_paths_created_after_startup_remain_protected() {
+    if crate::test_support::sandbox_available() {
+        let project = Fixture::new();
+        let scope = project.scope();
+        let first = scope.enter(output(boot_id())).await.unwrap();
+        assert!(first.status.success());
+        let worktree = project.root.join(".joe-worktrees/checkout");
+        std::fs::create_dir_all(&worktree).unwrap();
+        std::fs::write(worktree.join(".git"), "gitdir: /protected/metadata").unwrap();
+        std::fs::create_dir(project.root.join(".turbo-code")).unwrap();
+        std::fs::write(project.root.join(".turbo-code/secret"), "private").unwrap();
+        let protected = scope
+            .workspace()
+            .unwrap()
+            .process_protected_paths()
+            .unwrap();
+        assert!(protected.contains(&worktree.join(".git")));
+        assert!(protected.contains(&project.root.join(".turbo-code")));
+        let result = scope
+            .enter(output(fixture("new-protected-paths", &PathBuf::new())))
+            .await
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert_eq!(
+            std::fs::read_to_string(worktree.join(".git")).unwrap(),
+            "gitdir: /protected/metadata"
+        );
+        assert_eq!(
+            std::fs::read_to_string(project.root.join(".turbo-code/secret")).unwrap(),
+            "private"
+        );
+        let next = scope.enter(output(boot_id())).await.unwrap();
+        assert!(next.status.success());
+        assert_eq!(first.stdout, next.stdout);
+        scope.finish().await;
+    }
+}
+
+struct DynamicProtection {
+    workspace: workspace::SandboxWorkspace,
+}
+
+impl sandbox::workspace::Workspace for DynamicProtection {
+    fn root(&self) -> &std::path::Path {
+        self.workspace.root()
+    }
+
+    fn prepare(&self) -> anyhow::Result<sandbox::workspace::WorkspaceProtection> {
+        let mut protection = self.workspace.prepare()?;
+        protection.read_only.extend(
+            ["metadata", "pointer"]
+                .into_iter()
+                .map(|path| self.root().join(path))
+                .filter(|path| path.exists()),
+        );
+        protection.hidden.extend(
+            ["saved-state", "secret-file"]
+                .into_iter()
+                .map(|path| self.root().join(path))
+                .filter(|path| path.exists()),
+        );
+        Ok(protection)
+    }
+
+    fn read(&self, path: &std::path::Path) -> anyhow::Result<String> {
+        self.workspace.read(path)
+    }
+
+    fn create_parent_dirs(&self, path: &std::path::Path) -> anyhow::Result<()> {
+        self.workspace.create_parent_dirs(path)
+    }
+
+    fn link_process_cache(
+        &self,
+        source: &std::path::Path,
+        destination: &std::path::Path,
+    ) -> anyhow::Result<()> {
+        self.workspace.link_process_cache(source, destination)
+    }
+}
+
+#[tokio::test]
+async fn command_mounts_refresh_read_only_and_hidden_files_and_directories() {
+    if crate::test_support::sandbox_available() {
+        let project = Fixture::new();
+        let scope = project.scope();
+        let sandbox = sandbox::Sandbox::new(
+            std::sync::Arc::new(DynamicProtection {
+                workspace: workspace::SandboxWorkspace::new(scope.workspace().unwrap()),
+            }),
+            scope.tasks.clone(),
+            scope.cancel.clone(),
+        );
+        let first = sandbox
+            .capture(boot_id(), ProcessLimits::default(), vec![])
+            .await
+            .unwrap();
+        assert!(first.success());
+        for path in ["metadata", "saved-state"] {
+            std::fs::create_dir(project.root.join(path)).unwrap();
+            std::fs::write(project.root.join(path).join("file"), "original").unwrap();
+        }
+        for path in ["pointer", "secret-file"] {
+            std::fs::write(project.root.join(path), "original").unwrap();
+        }
+        let result = sandbox
+            .capture(
+                fixture("dynamic-mounts", &PathBuf::new()),
+                ProcessLimits::default(),
+                vec![],
+            )
+            .await
+            .unwrap();
+        assert!(result.success(), "{}", result.stderr);
+        for path in [
+            "metadata/file",
+            "pointer",
+            "saved-state/file",
+            "secret-file",
+        ] {
+            assert_eq!(
+                std::fs::read_to_string(project.root.join(path)).unwrap(),
+                "original"
+            );
+        }
+        let next = sandbox
+            .capture(boot_id(), ProcessLimits::default(), vec![])
+            .await
+            .unwrap();
+        assert!(next.success(), "{}", next.stderr);
+        assert_eq!(first.stdout, next.stdout);
+        scope.finish().await;
+    }
+}
+
 fn fixture(mode: &str, marker: &std::path::Path) -> Command {
     let mut command = Command::new("/usr/bin/python3");
     command
@@ -90,6 +263,113 @@ fn inherited_credentials_and_sockets_are_removed() {
             String::from_utf8_lossy(&result.stdout),
             String::from_utf8_lossy(&result.stderr)
         );
+    }
+}
+
+#[tokio::test]
+async fn sandbox_session_survives_commands_timeouts_and_turn_cleanup_until_shutdown() {
+    if crate::test_support::sandbox_available() {
+        let project = Fixture::new();
+        let scope = project.scope();
+        scope.sandbox().unwrap().start().await.unwrap();
+        let boot = || {
+            let mut command = Command::new("/usr/bin/cat");
+            command.arg("/proc/sys/kernel/random/boot_id");
+            command
+        };
+        let first_turn = scope.child();
+        let first = first_turn.enter(output(boot())).await.unwrap();
+        assert!(first.status.success());
+        first_turn.finish().await;
+        let second_turn = scope.child();
+        let marker = project.root.join("timeout");
+        let timed_out = second_turn
+            .enter(execute(
+                fixture("tree", &marker),
+                ProcessLimits::new(Duration::from_millis(500), 1024 * 1024).unwrap(),
+            ))
+            .await
+            .unwrap_err();
+        assert!(timed_out.to_string().contains("time limit"));
+        let heartbeat = std::fs::read(marker.with_extension("child")).unwrap();
+        let second = second_turn.enter(output(boot())).await.unwrap();
+        assert!(second.status.success());
+        assert_eq!(first.stdout, second.stdout);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            std::fs::read(marker.with_extension("child")).unwrap(),
+            heartbeat
+        );
+        second_turn.finish().await;
+        let interrupted = scope.child();
+        let task_scope = interrupted.clone();
+        let marker = project.root.join("cancelled");
+        let command = fixture("tree", &marker);
+        let running = tokio::spawn(async move { task_scope.enter(output(command)).await });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !marker.with_extension("child").exists() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        interrupted.finish().await;
+        assert!(running.await.unwrap().is_err());
+        let after_cancel = scope.enter(output(boot())).await.unwrap();
+        assert!(after_cancel.status.success());
+        assert_eq!(first.stdout, after_cancel.stdout);
+        scope.finish().await;
+        assert!(scope.tasks.is_empty());
+        assert!(scope.sandbox().unwrap().start().await.is_err());
+        assert!(
+            std::fs::read_dir(project.root.join("target/.joe/tmp"))
+                .unwrap()
+                .next()
+                .is_none()
+        );
+    }
+}
+
+#[tokio::test]
+async fn cargo_observes_atomic_source_edits_in_a_running_sandbox() {
+    if crate::test_support::sandbox_available() {
+        let project = Fixture::new();
+        std::fs::create_dir(project.root.join("src")).unwrap();
+        std::fs::write(
+            project.root.join("Cargo.toml"),
+            "[package]\nname = 'live_edits'\nversion = '0.1.0'\nedition = '2024'\n",
+        )
+        .unwrap();
+        let scope = project.scope();
+        let source = std::path::Path::new("src/lib.rs");
+        scope
+            .workspace()
+            .unwrap()
+            .write(source, "#[test] fn current() { assert_eq!(1, 1); }")
+            .unwrap();
+        scope.sandbox().unwrap().start().await.unwrap();
+        let first = scope
+            .enter(crate::cargo::Cargo::cargo_test(None, None))
+            .await
+            .unwrap();
+        assert!(matches!(first, crate::cargo::CargoTest::TestPasses { .. }));
+        scope
+            .workspace()
+            .unwrap()
+            .write(source, "#[test] fn current() { assert_eq!(1, 2); }")
+            .unwrap();
+        let changed = scope
+            .enter(crate::cargo::Cargo::cargo_test(None, None))
+            .await
+            .unwrap();
+        match changed {
+            crate::cargo::CargoTest::TestFailed { output } => assert!(
+                output.contains("assertion `left == right` failed"),
+                "{output}"
+            ),
+            crate::cargo::CargoTest::TestPasses { .. } => panic!("Cargo reused stale source"),
+        }
+        scope.finish().await;
     }
 }
 
@@ -163,11 +443,12 @@ async fn temporary_workspaces_can_create_private_session_storage() {
         let saved = project.root.join(".turbo-code");
         std::fs::create_dir(&saved).unwrap();
         std::fs::write(saved.join("secret"), "saved session").unwrap();
-        let result = project
-            .scope()
+        let scope = project.scope();
+        let result = scope
             .enter(output(fixture("temporary-storage", &PathBuf::new())))
             .await
             .unwrap();
+        scope.finish().await;
         assert!(
             result.status.success(),
             "{}\n{}",
@@ -196,6 +477,7 @@ async fn sandbox_crate_observes_caller_cancellation_after_launch() {
         let sandbox = sandbox::Sandbox::new(
             std::sync::Arc::new(workspace::SandboxWorkspace::new(scope.workspace().unwrap())),
             scope.tasks.clone(),
+            scope.cancel.clone(),
         );
         let cancel = tokio_util::sync::CancellationToken::new();
         let cancellations = vec![scope.cancel.clone(), cancel.clone()];

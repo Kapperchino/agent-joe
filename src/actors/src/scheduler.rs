@@ -45,6 +45,7 @@ struct PreparedTool<C: Context> {
     job: ToolJob,
     display: String,
     effect: ToolEffect,
+    execution_budget: std::time::Duration,
 }
 
 enum ToolGroup {
@@ -95,8 +96,10 @@ impl<C: Context + Clone + 'static> PreparedTool<C> {
             .display_erased(&input)
             .and_then(|display| {
                 let effect = implementation.effect_from_input_erased(&input)?;
+                let execution_budget = implementation.execution_budget_erased(&input)?;
                 Ok(Self {
                     effect,
+                    execution_budget,
                     implementation,
                     job,
                     display,
@@ -347,10 +350,13 @@ impl<C: Context + Clone + 'static> Executor<C> {
             &context,
         ));
         tokio::pin!(run);
+        let timeout = runtime
+            .tool_timeout
+            .saturating_add(prepared.execution_budget);
         let state = tokio::select! {
             biased;
             _ = scope.cancel.cancelled() => InvocationState::Interrupted(Interruption::Cancelled),
-            _ = tokio::time::sleep(runtime.tool_timeout) => InvocationState::Interrupted(Interruption::TimedOut),
+            _ = tokio::time::sleep(timeout) => InvocationState::Interrupted(Interruption::TimedOut),
             result = &mut run => InvocationState::Completed(result),
         };
         let interruption = match &state {

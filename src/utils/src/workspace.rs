@@ -163,7 +163,7 @@ impl WorkspacePolicy {
             .map(|root| root.path.as_path())
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", all(test, unix)))]
     pub(crate) fn process_protected_paths(&self) -> anyhow::Result<Vec<PathBuf>> {
         let mut directories = vec![self.base.clone()];
         let mut paths = Vec::new();

@@ -3,7 +3,7 @@ use tokio::process::Command;
 
 use sandbox::ProcessLimits;
 #[cfg(unix)]
-mod workspace;
+pub(crate) mod workspace;
 
 pub struct Sandbox;
 
@@ -90,8 +90,7 @@ async fn launch_command(
     owner: crate::execution::ExecutionScope,
 ) -> anyhow::Result<()> {
     let scope = crate::execution::ExecutionScope::current();
-    let policy = std::sync::Arc::new(workspace::SandboxWorkspace::new(scope.workspace()?));
-    let sandbox = sandbox::Sandbox::new(policy, scope.tasks.clone());
+    let sandbox = scope.sandbox()?;
     let process = sandbox
         .launch(
             command,

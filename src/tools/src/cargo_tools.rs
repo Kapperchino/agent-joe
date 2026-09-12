@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use std::{
     fmt::{Display, Formatter},
     marker::PhantomData,
+    time::Duration,
 };
 use utils::{
     cargo::{CargoAction, CargoInput, CargoOperation, CargoResult, OutputOffsets, ProcessAction},
@@ -197,7 +198,7 @@ impl<P: CargoPolicy> ToolDefTrait for Cargo<P> {
         "cargo"
     }
     fn tool_description() -> &'static str {
-        "Run typed Rust operations in the project sandbox. Missing crates.io dependencies are downloaded automatically. Select operation: check, test, fmt, fmt_check, clippy, run, start, poll or stop, as available to this worker. Prefer targeted validation; compilation alone does not prove behavior. run/start require a named binary or example; start returns a process_id for poll/stop. Stop managed targets before edits or other Cargo operations. Processes stop with the turn or after five minutes. Returns structured command, diagnostics, status and output evidence."
+        "Run typed Rust operations in the project sandbox. Missing crates.io dependencies are downloaded automatically. Select operation: check, test, fmt, fmt_check, clippy, run, start, poll or stop, as available to this worker. Prefer targeted validation; compilation alone does not prove behavior. run/start require a named binary or example; start returns a process_id for poll/stop. Stop managed targets before edits or other Cargo operations. Processes stop with the turn or at timeout_seconds: 30 minutes by default, at most one hour. Returns structured command, diagnostics, status and output evidence."
     }
     fn field_properties() -> FnvHashMap<String, ToolProperty> {
         properties(P::OPERATIONS)
@@ -247,6 +248,12 @@ impl<C: Context, A, P: CargoPolicy> ToolTrait<C, A> for Cargo<P> {
     fn cancellation_mode() -> CancellationMode {
         CancellationMode::AwaitCompletion
     }
+    fn execution_budget(input: &Self::Input) -> anyhow::Result<Duration> {
+        match CargoInvocation::new(input.clone(), P::OPERATIONS)? {
+            CargoInvocation::Execute(operation) => Ok(operation.timeout()),
+            CargoInvocation::Start(_) | CargoInvocation::Control { .. } => Ok(Duration::ZERO),
+        }
+    }
     fn tool_type() -> ToolType {
         ToolType::Client
     }
@@ -261,7 +268,7 @@ fn properties(operations: &[&str]) -> FnvHashMap<String, ToolProperty> {
         "workspace": {"type":"boolean", "description":"Select the workspace; mutually exclusive with package. Not available for run/start."},
         "package": {"type":"string", "description":"One Cargo package name; omit to use Cargo's default members.", "minLength":1, "maxLength":256},
         "environment": {"type":"object", "description":"Clean environment additions: RUST_LOG, RUST_BACKTRACE, NO_COLOR, or uppercase JOE_RUN_* keys. No toolchain, loader, Cargo or network overrides.", "additionalProperties":{"type":"string","maxLength":4096}, "maxProperties":16},
-        "timeout_seconds":{"type":"integer","minimum":1,"maximum":300,"description":"Execution deadline including build time; defaults to 300 seconds."},
+        "timeout_seconds":{"type":"integer","minimum":1,"maximum":CargoOperation::MAX_TIMEOUT_SECONDS,"default":CargoOperation::DEFAULT_TIMEOUT_SECONDS,"description":"Sandbox process deadline including build time; defaults to 1800 seconds, at most 3600. Sandbox preparation has a separate tool budget."},
         "features":{"type":"array","items":{"type":"string","minLength":1,"maxLength":256},"maxItems":64},
         "all_features":{"type":"boolean"},
         "no_default_features":{"type":"boolean"},

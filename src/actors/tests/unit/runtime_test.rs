@@ -251,6 +251,7 @@ struct GateTool {
 }
 #[derive(Clone, Copy)]
 enum GateOutcome {
+    Budgeted,
     LargeValidation,
     Success,
     AwaitCompletion,
@@ -285,6 +286,12 @@ impl ErasedToolTrait<TestContext, ActorContext<TestContext>> for GateTool {
             GateOutcome::AwaitCompletion => CancellationMode::AwaitCompletion,
             _ => CancellationMode::DropFuture,
         }
+    }
+    fn execution_budget_erased(&self, _: &Value) -> anyhow::Result<Duration> {
+        Ok(match self.outcome {
+            GateOutcome::Budgeted => Duration::from_millis(200),
+            _ => Duration::ZERO,
+        })
     }
     fn display_erased(&self, _: &Value) -> anyhow::Result<String> {
         match self.outcome {
@@ -536,6 +543,40 @@ async fn cancel_tools_retains_success_and_marks_unexecuted_calls() {
     assert!(
         matches!(&outputs[2], ContentBlock::ToolResult { content, is_error: Some(true), .. } if content.contains("Not executed"))
     );
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn execution_budget_allows_work_past_the_preparation_deadline() {
+    let (mut tool, entered) = gate("build", ToolEffect::Validate);
+    Arc::get_mut(&mut tool).unwrap().outcome = GateOutcome::Budgeted;
+    let h = Harness::new(vec![tool], Duration::from_millis(30)).await;
+    h.start("work");
+    answer(
+        h.request().await.1,
+        response(vec![call("build", "complete")]),
+    );
+    let (_, pending) = within(entered.recv_async()).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    pending.send(()).unwrap();
+    answer(h.request().await.1, response(vec![text("done")]));
+    h.terminal(Lifecycle::Completed).await;
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn execution_budget_still_has_a_deadline() {
+    let (mut tool, entered) = gate("build", ToolEffect::Validate);
+    Arc::get_mut(&mut tool).unwrap().outcome = GateOutcome::Budgeted;
+    let h = Harness::new(vec![tool], Duration::from_millis(30)).await;
+    h.start("work");
+    answer(
+        h.request().await.1,
+        response(vec![call("build", "timeout")]),
+    );
+    let (_, pending) = within(entered.recv_async()).await.unwrap();
+    h.terminal(Lifecycle::Failed).await;
+    assert!(pending.is_closed());
     h.stop().await;
 }
 

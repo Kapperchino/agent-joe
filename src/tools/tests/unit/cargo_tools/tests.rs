@@ -3,6 +3,44 @@ use crate::tool_defs::erased_tool;
 use analysis::contexts::rust_empty_context::RustEmptyContext;
 
 #[test]
+fn cargo_execution_budgets_follow_validated_timeouts() {
+    let cargo = erased_tool::<Cargo, RustEmptyContext, ()>();
+    for operation in ["check", "test", "fmt", "fmt_check", "clippy"] {
+        assert_eq!(
+            cargo
+                .execution_budget_erased(&json!({"operation":operation}))
+                .unwrap(),
+            Duration::from_secs(1800)
+        );
+        assert_eq!(
+            cargo
+                .execution_budget_erased(&json!({"operation":operation,"timeout_seconds":3600}))
+                .unwrap(),
+            Duration::from_secs(3600)
+        );
+        assert!(
+            cargo
+                .execution_budget_erased(&json!({"operation":operation,"timeout_seconds":3601}))
+                .is_err()
+        );
+    }
+    for input in [
+        json!({"operation":"start","target":{"kind":"example","name":"server"}}),
+        json!({"operation":"poll","process_id":"id"}),
+        json!({"operation":"stop","process_id":"id"}),
+    ] {
+        assert_eq!(
+            cargo.execution_budget_erased(&input).unwrap(),
+            Duration::ZERO
+        );
+    }
+    let properties = <Cargo as ToolDefTrait>::field_properties();
+    let timeout = properties["timeout_seconds"].clone().into_schema();
+    assert_eq!(timeout["maximum"], CargoOperation::MAX_TIMEOUT_SECONDS);
+    assert_eq!(timeout["default"], CargoOperation::DEFAULT_TIMEOUT_SECONDS);
+}
+
+#[test]
 fn preparation_rejects_missing_operations_and_incompatible_inputs() {
     let cargo = erased_tool::<Cargo, RustEmptyContext, ()>();
     for input in [

@@ -30,24 +30,15 @@ impl<'a> ProcessWorkspace<'a> {
             root.validate_identity()?;
         }
         policy.resolve(&policy.base, Access::Read)?;
-        let mut scan = WorkspaceScan {
-            links: HashMap::new(),
-            directories: vec![policy.base.clone()],
+        Self::from_scan(policy, WorkspaceScan::new(policy)?)
+    }
+
+    fn from_scan(policy: &'a WorkspacePolicy, scan: WorkspaceScan) -> anyhow::Result<Self> {
+        let scan = match scan.incomplete_links() {
+            Some(_) => WorkspaceScan::new(policy)?,
+            None => scan,
         };
-        while let Some(directory) = scan.directories.pop() {
-            match scan.read(policy, &directory) {
-                Err(error)
-                    if error
-                        .downcast_ref::<std::io::Error>()
-                        .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) => {}
-                result => result?,
-            }
-        }
-        match scan
-            .links
-            .values()
-            .find(|file| file.observed != file.expected)
-        {
+        match scan.incomplete_links() {
             Some(file) => Err(anyhow::anyhow!(
                 "Hard links must remain within workspace paths with the same access: {} ({} of {} links found)",
                 file.path.display(),
@@ -64,6 +55,29 @@ impl<'a> ProcessWorkspace<'a> {
 }
 
 impl WorkspaceScan {
+    fn new(policy: &WorkspacePolicy) -> anyhow::Result<Self> {
+        let mut scan = Self {
+            links: HashMap::new(),
+            directories: vec![policy.base.clone()],
+        };
+        while let Some(directory) = scan.directories.pop() {
+            match scan.read(policy, &directory) {
+                Err(error)
+                    if error
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) => {}
+                result => result?,
+            }
+        }
+        Ok(scan)
+    }
+
+    fn incomplete_links(&self) -> Option<&FileLinks> {
+        self.links
+            .values()
+            .find(|file| file.observed != file.expected)
+    }
+
     fn read(&mut self, policy: &WorkspacePolicy, directory: &Path) -> anyhow::Result<()> {
         let directory_handle = policy
             .resolve(directory, Access::Read)?
@@ -137,3 +151,7 @@ impl WorkspaceScan {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/workspace/process/tests.rs"]
+mod tests;

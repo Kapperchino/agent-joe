@@ -108,6 +108,7 @@ async fn run(cli: &Cli, terminal: DefaultTerminal) -> Result<()> {
     let RunningActor {
         actor: joe,
         handle: actor_handle,
+        scope,
     } = if cli.simple {
         get_actor(cli, SimpleWorker::new(), tx, config_context.clone()).await
     } else {
@@ -124,12 +125,14 @@ async fn run(cli: &Cli, terminal: DefaultTerminal) -> Result<()> {
         let _ = joe.send_message(Message::KYS);
     }
     let stopped = actor_handle.await.context("Actor failed to exit cleanly");
+    scope.finish().await;
     result.and(stopped)
 }
 
 struct RunningActor {
     actor: ActorRef<Message>,
     handle: JoinHandle<()>,
+    scope: utils::execution::OwnedScope,
 }
 
 async fn get_actor<W: Worker<C = RustContext>>(
@@ -148,6 +151,12 @@ async fn get_actor<W: Worker<C = RustContext>>(
         .context_budget
         .resolve(config_context.get_config().context_window())?;
     runtime.native_compaction = cli.native_compaction;
+    let scope = utils::execution::OwnedScope::new(runtime.scope.clone());
+    scope
+        .sandbox()?
+        .start()
+        .await
+        .context("Failed to start the project sandbox")?;
     let workspace = runtime.scope.workspace()?;
     let mut context = runtime
         .scope
@@ -187,5 +196,9 @@ async fn get_actor<W: Worker<C = RustContext>>(
     )
     .await
     .context("Failed to start actor")?;
-    Ok(RunningActor { actor, handle })
+    Ok(RunningActor {
+        actor,
+        handle,
+        scope,
+    })
 }

@@ -158,13 +158,18 @@ pub struct CargoOperation {
 }
 
 impl CargoOperation {
+    pub const DEFAULT_TIMEOUT_SECONDS: u64 = 1800;
+    pub const MAX_TIMEOUT_SECONDS: u64 = sandbox::ProcessLimits::MAX_TIMEOUT.as_secs();
+
     pub fn new(action: CargoAction, input: CargoInput) -> anyhow::Result<Self> {
         let formatting = matches!(action, CargoAction::Format | CargoAction::CheckFormat);
         let selected_run = matches!(
             input.target,
             Some(CargoTarget::Example { .. } | CargoTarget::Bin { .. })
         );
-        let timeout_seconds = input.timeout_seconds.unwrap_or(300);
+        let timeout_seconds = input
+            .timeout_seconds
+            .unwrap_or(Self::DEFAULT_TIMEOUT_SECONDS);
         let input = match action {
             _ if input.workspace && input.package.is_some() => {
                 Err(anyhow!("Choose workspace or package, not both"))
@@ -172,9 +177,10 @@ impl CargoOperation {
             _ if input.all_features && !input.features.is_empty() => {
                 Err(anyhow!("Choose all_features or named features"))
             }
-            _ if !(1..=300).contains(&timeout_seconds) => {
-                Err(anyhow!("timeout_seconds must be between 1 and 300"))
-            }
+            _ if !(1..=Self::MAX_TIMEOUT_SECONDS).contains(&timeout_seconds) => Err(anyhow!(
+                "timeout_seconds must be between 1 and {}",
+                Self::MAX_TIMEOUT_SECONDS
+            )),
             _ if action != CargoAction::Test
                 && (input.test_name.is_some() || input.exact || input.show_output) =>
             {
@@ -302,6 +308,10 @@ impl CargoOperation {
 
     pub fn details(&self) -> &CargoCommand {
         &self.command
+    }
+
+    pub fn timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.timeout_seconds)
     }
 
     pub async fn execute(self) -> anyhow::Result<CargoResult> {

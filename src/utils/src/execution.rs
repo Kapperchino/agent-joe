@@ -15,6 +15,7 @@ pub struct ExecutionScope {
     pub tasks: TaskTracker,
     resources: Arc<Mutex<BTreeMap<u64, Resource>>>,
     workspace: WorkspaceAccess,
+    sandbox: Option<sandbox::Sandbox>,
     pub processes: Arc<crate::process::ProcessRegistry>,
     process_owner: Option<Arc<ExecutionScope>>,
 }
@@ -30,9 +31,34 @@ tokio::task_local! { static CURRENT: ExecutionScope; }
 
 impl ExecutionScope {
     pub fn with_workspace(workspace: crate::workspace::WorkspacePolicy) -> Self {
+        let scope = Self::default();
+        let workspace = Arc::new(workspace);
+        #[cfg(unix)]
+        let sandbox = Some(sandbox::Sandbox::new(
+            Arc::new(crate::sandbox::workspace::SandboxWorkspace::new(
+                workspace.clone(),
+            )),
+            scope.tasks.clone(),
+            scope.cancel.clone(),
+        ));
+        #[cfg(not(unix))]
+        let sandbox = None;
         Self {
-            workspace: WorkspaceAccess::Configured(Arc::new(workspace)),
-            ..Self::default()
+            workspace: WorkspaceAccess::Configured(workspace),
+            sandbox,
+            ..scope
+        }
+    }
+
+    pub fn sandbox(&self) -> anyhow::Result<sandbox::Sandbox> {
+        match self.workspace()?.permits_workspace_execution() {
+            true => self
+                .sandbox
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("No sandbox is configured")),
+            false => Err(anyhow::anyhow!(
+                "Executable operations require worker access to the whole workspace"
+            )),
         }
     }
 
@@ -51,6 +77,7 @@ impl ExecutionScope {
             tasks: TaskTracker::new(),
             resources: self.resources.clone(),
             workspace: self.workspace.clone(),
+            sandbox: self.sandbox.clone(),
             processes: Arc::default(),
             process_owner: None,
             changes: self.changes.clone(),

@@ -1,4 +1,5 @@
 use super::*;
+use crate::protocol::GuestCommand;
 
 struct FixtureWorkspace {
     root: PathBuf,
@@ -71,6 +72,11 @@ impl RuntimeFixture {
             include_bytes!("../../../../guest.sh"),
         )
         .unwrap();
+        std::fs::write(
+            rootfs.join("usr/local/libexec/joe-session.py"),
+            include_bytes!("../../../../guest.py"),
+        )
+        .unwrap();
         std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700)).unwrap();
         let runtime = Runtime::from_paths(rootfs, firmware, helper, &project).unwrap();
         Self {
@@ -131,16 +137,16 @@ fn runtime_requires_the_guest_init_program() {
 #[test]
 fn guest_environment_is_clean_and_arguments_stay_out_of_the_helper_protocol() {
     let fixture = RuntimeFixture::new();
-    let temporary = TemporaryDirectory::new(&fixture.workspace).unwrap();
     let mut source = Command::new("/usr/bin/env");
     source.env("JOE_RUN_VALUE", "'\"$HOME`id`$(id);*");
-    let command = fixture
-        .runtime
-        .prepare(source, &fixture.workspace, &temporary)
-        .unwrap();
-    let output = std::process::Command::new("/bin/sh")
-        .arg(temporary.path().join("command"))
+    let command = fixture.runtime.prepare(&fixture.workspace).unwrap();
+    let guest =
+        GuestCommand::new(source.as_std(), uuid::Uuid::new_v4(), uuid::Uuid::new_v4()).unwrap();
+    let output = std::process::Command::new(guest.program)
+        .args(guest.args)
         .env("JOE_SECRET", "not for the guest")
+        .env_clear()
+        .envs(guest.environment)
         .output()
         .unwrap();
     assert!(output.status.success());
@@ -148,7 +154,7 @@ fn guest_environment_is_clean_and_arguments_stay_out_of_the_helper_protocol() {
     assert!(environment.contains("JOE_RUN_VALUE='\"$HOME`id`$(id);*\n"));
     assert!(environment.contains("HOME=/workspace\n"));
     assert!(!environment.contains("JOE_SECRET"));
-    let configuration: crate::protocol::Configuration = serde_json::from_slice(
+    let configuration: crate::configuration::Configuration = serde_json::from_slice(
         command
             .as_std()
             .get_args()
@@ -159,7 +165,6 @@ fn guest_environment_is_clean_and_arguments_stay_out_of_the_helper_protocol() {
     .unwrap();
     assert_eq!(configuration.workspace, fixture.workspace.root());
     assert_eq!(configuration.init, fixture.runtime.init);
-    assert_eq!(configuration.temporary_name, temporary.id());
     let cache = fixture
         .workspace
         .root()
@@ -173,13 +178,13 @@ fn guest_environment_is_clean_and_arguments_stay_out_of_the_helper_protocol() {
 #[test]
 fn guest_arguments_are_literal_and_preserve_empty_values() {
     let values = ["", "a b", "'\"$HOME`id`$(id);*\\", "--", "こんにちは"];
-    let arguments = ["/usr/bin/printf", "%s\\n"]
-        .into_iter()
-        .chain(values)
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    let output = std::process::Command::new("/bin/sh")
-        .args(["-c", &guest_command(&arguments)])
+    let mut source = std::process::Command::new("/usr/bin/printf");
+    source.arg("%s\\n").args(values);
+    let guest = GuestCommand::new(&source, uuid::Uuid::new_v4(), uuid::Uuid::new_v4()).unwrap();
+    let output = std::process::Command::new(guest.program)
+        .args(guest.args)
+        .env_clear()
+        .envs(guest.environment)
         .output()
         .unwrap();
     assert!(output.status.success());

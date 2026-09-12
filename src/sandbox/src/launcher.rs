@@ -1,4 +1,4 @@
-use super::protocol::Configuration;
+use super::configuration::Configuration;
 use anyhow::Context;
 use std::{
     ffi::{CStr, CString},
@@ -82,10 +82,7 @@ impl KrunContext {
                 true,
             )
         })?;
-        let arguments = [
-            CString::new("/usr/local/libexec/joe-guest")?,
-            CString::new(configuration.temporary_name.to_string())?,
-        ];
+        let arguments = [CString::new("/usr/local/libexec/joe-guest")?];
         let arguments = pointers(&arguments);
         let environment = pointers(&[]);
         result("krun_set_exec", unsafe {

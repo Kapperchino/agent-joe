@@ -200,10 +200,13 @@ impl RegistryCache {
         for directory in ["cache", "index"] {
             fs::create_dir_all(root.join(directory).join(INDEX))?;
         }
-        atomic_write(
-            &root.join("index").join(INDEX).join("config.json"),
-            br#"{"dl":"https://static.crates.io/crates","api":"https://crates.io"}"#,
-        )?;
+        let configuration = root.join("index").join(INDEX).join("config.json");
+        if !configuration.is_file() {
+            atomic_write(
+                &configuration,
+                br#"{"dl":"https://static.crates.io/crates","api":"https://crates.io"}"#,
+            )?;
+        }
         Ok(Self { root })
     }
 
@@ -335,6 +338,13 @@ impl DependencyResolver {
 
     async fn fetch(&self, request: RegistryRequest) -> anyhow::Result<()> {
         let workspace = self.sandbox.workspace.clone();
+        let rootfs = self
+            .sandbox
+            .session
+            .get(workspace.clone(), &self.sandbox.tasks)
+            .await?
+            .rootfs
+            .clone();
         let cancellations = self.cancellations.clone();
         self.sandbox
             .tasks
@@ -343,13 +353,12 @@ impl DependencyResolver {
                     true => Err(anyhow::anyhow!("Process cancelled before launch")),
                     false => Ok(()),
                 };
-                let runtime = super::bootstrap::Installation::new(workspace.as_ref(), &check)?;
                 let installation = super::provision::download::Installation::new(
                     super::provision::cache()?,
                     &check,
                 )?;
                 let downloads = Downloads::new(installation.path().join("downloads"), &check)?;
-                let registry = RegistryCache::new(&runtime.rootfs)?;
+                let registry = RegistryCache::new(&rootfs)?;
                 match request {
                     RegistryRequest::Packages => {
                         registry.install_packages(workspace.as_ref(), &downloads)

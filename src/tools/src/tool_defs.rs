@@ -6,6 +6,7 @@ use serde_json::Value;
 use std::fmt::Display;
 use std::marker::PhantomData;
 use std::sync::Arc;
+use std::time::Duration;
 use turbo_code_macros::ToolInput;
 use utils::utils::FnvHashMap;
 
@@ -78,6 +79,10 @@ pub trait ToolTrait<C: Context, A>: ToolDefTrait + Display {
         CancellationMode::DropFuture
     }
 
+    fn execution_budget(_input: &Self::Input) -> anyhow::Result<Duration> {
+        Ok(Duration::ZERO)
+    }
+
     fn output_is_error(_input: &Self::Input, _output: &Self::Output) -> bool {
         false
     }
@@ -140,6 +145,10 @@ pub trait ErasedToolTrait<C: Context, A>: Send + Sync {
 
     fn cancellation_mode(&self) -> CancellationMode {
         CancellationMode::DropFuture
+    }
+
+    fn execution_budget_erased(&self, _input: &Value) -> anyhow::Result<Duration> {
+        Ok(Duration::ZERO)
     }
 
     fn display_erased(&self, input: &Value) -> anyhow::Result<String>;
@@ -213,6 +222,11 @@ where
 
     fn cancellation_mode(&self) -> CancellationMode {
         T::cancellation_mode()
+    }
+
+    fn execution_budget_erased(&self, input: &Value) -> anyhow::Result<Duration> {
+        let input = T::Input::deserialize_lenient(input.clone())?;
+        T::execution_budget(&input)
     }
 
     fn display_erased(&self, input: &Value) -> anyhow::Result<String> {

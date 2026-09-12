@@ -70,7 +70,16 @@ package. Keep both executables in the same directory when installing Joe. Other
 applications using the sandbox crate can set `JOE_SANDBOX_LAUNCHER` to the launcher
 path. Workspace checks and tests include the launcher.
 
-The first sandbox operation prepares the Linux guest image, guest init program,
+Joe starts one sandbox VM during startup and keeps it until Joe exits. Cargo
+operations share that VM and its build cache. Each command runs in its own PID
+namespace, so timeouts and turn cancellation stop its descendants without
+shutting down the VM. Workspace hard links are checked before every command, and
+each command receives fresh protection mounts for read-only and hidden paths.
+Temporary directories use verified directory handles for creation and cleanup.
+Cargo timeouts default to 30 minutes and can be set between
+1 and 3600 seconds with `timeout_seconds`.
+
+Startup prepares the Linux guest image, guest init program,
 and native components, then caches a copy of the built launcher outside the
 workspace. On macOS, this copy is signed with hypervisor entitlements. Setup needs
 network access and a C compiler, plus Rust's linker tools on macOS and `make` on

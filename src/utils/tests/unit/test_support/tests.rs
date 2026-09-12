@@ -31,6 +31,11 @@ fn restricted_runners_skip_sandbox_tests() {
             SandboxAvailability::from_output(output(1, message)).unwrap(),
             SandboxAvailability::Restricted(reason) if reason == message
         ));
+        let error = anyhow::anyhow!(message).context("Sandbox session stopped");
+        assert!(matches!(
+            SandboxAvailability::from_error(error).unwrap(),
+            SandboxAvailability::Restricted(reason) if reason.contains(message)
+        ));
     }
 }
 
@@ -43,6 +48,8 @@ fn unexpected_probe_failures_are_not_skipped() {
         "Cannot load libkrun: Permission denied",
     ] {
         assert!(SandboxAvailability::from_output(output(1, message)).is_err());
+        let error = anyhow::anyhow!(message).context("Sandbox session stopped");
+        assert!(SandboxAvailability::from_error(error).is_err());
     }
 }
 

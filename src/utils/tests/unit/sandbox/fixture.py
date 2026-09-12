@@ -22,6 +22,20 @@ root = pathlib.Path.cwd()
 marker = pathlib.Path(os.environ["JOE_SANDBOX_MARKER"])
 
 match mode:
+    case "new-protected-paths":
+        denied(lambda: (root / ".joe-worktrees/checkout/.git").write_text("changed"))
+        denied(lambda: (root / ".turbo-code/secret").read_bytes())
+        denied(lambda: (root / ".turbo-code/secret").write_text("changed"))
+        (root / "allowed").write_text("allowed")
+    case "dynamic-mounts":
+        for name in ["metadata/file", "pointer"]:
+            assert (root / name).read_text() == "original"
+            denied(lambda: (root / name).write_text("changed"))
+        denied(lambda: (root / "saved-state/file").read_bytes())
+        denied(lambda: (root / "saved-state/file").write_text("changed"))
+        denied(lambda: (root / "secret-file").read_bytes())
+        denied(lambda: (root / "secret-file").write_text("changed"))
+        (root / "allowed").write_text("allowed")
     case "open-files":
         print(resource.getrlimit(resource.RLIMIT_NOFILE), flush=True)
         with contextlib.ExitStack() as resources:

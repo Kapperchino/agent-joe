@@ -1,6 +1,35 @@
 use super::*;
 
 #[test]
+fn cargo_timeouts_allow_long_builds_and_reject_unbounded_values() {
+    let default = CargoOperation::new(CargoAction::Test, CargoInput::default()).unwrap();
+    assert_eq!(default.timeout(), std::time::Duration::from_secs(1800));
+    for seconds in [1, 300, 1800, CargoOperation::MAX_TIMEOUT_SECONDS] {
+        let operation = CargoOperation::new(
+            CargoAction::Test,
+            CargoInput {
+                timeout_seconds: Some(seconds),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(operation.timeout(), std::time::Duration::from_secs(seconds));
+    }
+    for seconds in [0, CargoOperation::MAX_TIMEOUT_SECONDS + 1, u64::MAX] {
+        assert!(
+            CargoOperation::new(
+                CargoAction::Test,
+                CargoInput {
+                    timeout_seconds: Some(seconds),
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
 fn selectors_cannot_inject_options() {
     for selector in [
         "--config=net.offline=false",
