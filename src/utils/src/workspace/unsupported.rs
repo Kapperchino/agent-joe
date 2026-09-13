@@ -3,6 +3,30 @@ use super::*;
 pub enum PrivateStorage {}
 
 impl PrivateStorage {
+    pub fn open_file(&self, _: &str) -> anyhow::Result<File> {
+        match *self {}
+    }
+    pub fn read_file(&self, _: &str) -> anyhow::Result<Option<File>> {
+        match *self {}
+    }
+    pub fn child(&self, _: &str) -> anyhow::Result<Self> {
+        match *self {}
+    }
+    pub fn publish_file(&self, _: &str, _: &str) -> anyhow::Result<()> {
+        match *self {}
+    }
+    pub fn replace_file(&self, _: &str, _: &[u8]) -> anyhow::Result<()> {
+        match *self {}
+    }
+    pub fn remove_file(&self, _: &str) -> anyhow::Result<()> {
+        match *self {}
+    }
+    pub fn remove_child(&self, _: &str) -> anyhow::Result<()> {
+        match *self {}
+    }
+    pub fn sync(&self) -> anyhow::Result<()> {
+        match *self {}
+    }
     pub fn workspace_identity(&self) -> &str {
         match *self {}
     }

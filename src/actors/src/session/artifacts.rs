@@ -1,4 +1,4 @@
-use super::{Event, Session, Snapshot};
+use super::{Event, Session, SessionDatabase, Snapshot};
 use serde::{Deserialize, Serialize};
 use tools::tool_defs::ToolResult;
 
@@ -71,73 +71,89 @@ pub fn preview(content: &str, bytes: usize) -> String {
 
 impl Session {
     pub fn archive_outputs(&self) -> anyhow::Result<()> {
-        let mut transaction = self.store.env.write_txn()?;
-        let mut snapshot = self.owned_snapshot(&transaction)?;
-        let mut history = snapshot.history.clone();
-        let previous_artifacts = snapshot.artifacts.len();
-        for block in history.iter_mut().flat_map(|message| &mut message.content) {
-            if let clients::llm::ContentBlock::ToolResult { content, .. } = block
-                && content.len() > INLINE_BYTES
-            {
-                let artifact = self.save_artifact(&mut transaction, &mut snapshot, content)?;
-                *content = artifact.preview(content);
+        self.store.update(Some(&self.id), |database| {
+            let mut transaction = database.env.write_txn()?;
+            let mut snapshot = self.owned_snapshot(database, &transaction)?;
+            let mut history = snapshot.history.clone();
+            let previous_artifacts = snapshot.artifacts.len();
+            for block in history.iter_mut().flat_map(|message| &mut message.content) {
+                if let clients::llm::ContentBlock::ToolResult { content, .. } = block
+                    && content.len() > INLINE_BYTES
+                {
+                    let artifact =
+                        self.save_artifact(database, &mut transaction, &mut snapshot, content)?;
+                    *content = artifact.preview(content);
+                }
             }
-        }
-        match snapshot.artifacts.len() == previous_artifacts {
-            true => Ok(()),
-            false => self.commit_event(transaction, snapshot, Event::OutputsArchived(history)),
-        }
+            match snapshot.artifacts.len() == previous_artifacts {
+                true => Ok(()),
+                false => self.commit_event(
+                    database,
+                    transaction,
+                    snapshot,
+                    Event::OutputsArchived(history),
+                ),
+            }
+        })
     }
 
     pub fn complete_tool(
         &self,
         operation: String,
-        mut result: ToolResult,
+        result: ToolResult,
     ) -> anyhow::Result<ToolResult> {
-        let mut transaction = self.store.env.write_txn()?;
-        let mut snapshot = self.owned_snapshot(&transaction)?;
-        let content = match &mut result.outcome {
-            Ok(content) => content,
-            Err(failure) => &mut failure.message,
-        };
-        match serde_json::from_str::<utils::cargo::CargoResult>(content) {
-            Ok(cargo) => {
-                let cargo = self.archive_cargo(&mut transaction, &mut snapshot, cargo)?;
-                *content = serde_json::to_string(&cargo)?;
+        self.store.update(Some(&self.id), |database| {
+            let mut result = result.clone();
+            let mut transaction = database.env.write_txn()?;
+            let mut snapshot = self.owned_snapshot(database, &transaction)?;
+            let content = match &mut result.outcome {
+                Ok(content) => content,
+                Err(failure) => &mut failure.message,
+            };
+            match serde_json::from_str::<utils::cargo::CargoResult>(content) {
+                Ok(cargo) => {
+                    let cargo =
+                        self.archive_cargo(database, &mut transaction, &mut snapshot, cargo)?;
+                    *content = serde_json::to_string(&cargo)?;
+                }
+                Err(_) if content.len() > INLINE_BYTES => {
+                    let artifact =
+                        self.save_artifact(database, &mut transaction, &mut snapshot, content)?;
+                    *content = artifact.preview(content);
+                }
+                Err(_) => {}
             }
-            Err(_) if content.len() > INLINE_BYTES => {
-                let artifact = self.save_artifact(&mut transaction, &mut snapshot, content)?;
-                *content = artifact.preview(content);
-            }
-            Err(_) => {}
-        }
-        self.commit_event(
-            transaction,
-            snapshot,
-            Event::Completed {
-                operation,
-                result: result.clone(),
-            },
-        )?;
-        Ok(result)
+            self.commit_event(
+                database,
+                transaction,
+                snapshot,
+                Event::Completed {
+                    operation: operation.clone(),
+                    result: result.clone(),
+                },
+            )?;
+            Ok(result)
+        })
     }
 
     fn archive_cargo(
         &self,
+        database: &SessionDatabase,
         transaction: &mut heed::RwTxn<'_>,
         snapshot: &mut Snapshot,
         mut result: utils::cargo::CargoResult,
     ) -> anyhow::Result<utils::cargo::CargoResult> {
         for stream in [&mut result.stdout, &mut result.stderr] {
             if stream.content.len() > 1024 {
-                let artifact = self.save_artifact(transaction, snapshot, &stream.content)?;
+                let artifact =
+                    self.save_artifact(database, transaction, snapshot, &stream.content)?;
                 stream.artifact = Some(artifact.into());
                 stream.content = preview(&stream.content, 1024);
             }
         }
         let diagnostics = serde_json::to_string(&result.diagnostics)?;
         if diagnostics.len() > 1024 {
-            let artifact = self.save_artifact(transaction, snapshot, &diagnostics)?;
+            let artifact = self.save_artifact(database, transaction, snapshot, &diagnostics)?;
             result.diagnostics_artifact = Some(artifact.into());
             result.diagnostics.clear();
         }
@@ -145,47 +161,53 @@ impl Session {
     }
 
     pub(crate) fn complete_process(&self, result: utils::cargo::CargoResult) -> anyhow::Result<()> {
-        let mut transaction = self.store.env.write_txn()?;
-        let mut snapshot = self.owned_snapshot(&transaction)?;
-        let result = self.archive_cargo(&mut transaction, &mut snapshot, result)?;
-        self.commit_event(
-            transaction,
-            snapshot,
-            Event::ProcessCompleted(Box::new(result)),
-        )
+        self.store.update(Some(&self.id), |database| {
+            let result = result.clone();
+            let mut transaction = database.env.write_txn()?;
+            let mut snapshot = self.owned_snapshot(database, &transaction)?;
+            let result = self.archive_cargo(database, &mut transaction, &mut snapshot, result)?;
+            self.commit_event(
+                database,
+                transaction,
+                snapshot,
+                Event::ProcessCompleted(Box::new(result)),
+            )
+        })
     }
 
     pub(super) fn save_artifact(
         &self,
+        database: &SessionDatabase,
         transaction: &mut heed::RwTxn<'_>,
         snapshot: &mut Snapshot,
         content: &str,
     ) -> anyhow::Result<ArtifactReference> {
         let artifact = ArtifactReference::new(self.store.storage.new_id(), content.len())?;
-        self.store
+        database
             .artifacts
             .put(transaction, &artifact.id, content.as_bytes())?;
-        self.store
+        database
             .artifact_index
-            .record(transaction, self.store.snapshots, snapshot, &artifact)?;
+            .record(transaction, database.snapshots, snapshot, &artifact)?;
         snapshot.artifacts.push(artifact.clone());
         Ok(artifact)
     }
 
     pub fn read_artifact(&self, id: &str, range: ArtifactRange) -> anyhow::Result<ArtifactPage> {
-        let transaction = self.store.env.read_txn()?;
-        let artifact = match self.store.owner(&transaction, &self.id)? {
-            Some(owner) if owner == self.owner => {
-                self.store.artifact_index.get(&transaction, &self.id, id)
-            }
-            _ => Err(anyhow::anyhow!("Session {} ownership was lost", self.id)),
-        }?;
-        let bytes = self
-            .store
-            .artifacts
-            .get(&transaction, id)?
-            .ok_or_else(|| anyhow::anyhow!("Artifact {id} is missing"))?;
-        range.page(artifact, std::str::from_utf8(bytes)?)
+        self.store.read(&self.id, |database| {
+            let transaction = database.env.read_txn()?;
+            let artifact = match database.owner(&transaction, &self.id)? {
+                Some(owner) if owner == self.owner => {
+                    database.artifact_index.get(&transaction, &self.id, id)
+                }
+                _ => Err(anyhow::anyhow!("Session {} ownership was lost", self.id)),
+            }?;
+            let bytes = database
+                .artifacts
+                .get(&transaction, id)?
+                .ok_or_else(|| anyhow::anyhow!("Artifact {id} is missing"))?;
+            range.page(artifact, std::str::from_utf8(bytes)?)
+        })
     }
 }
 

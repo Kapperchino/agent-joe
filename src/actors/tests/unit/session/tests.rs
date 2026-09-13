@@ -1,4 +1,8 @@
 use super::*;
+use heed::{
+    Database, EnvOpenOptions,
+    types::{Bytes, Str},
+};
 use std::path::PathBuf;
 use tools::tool_defs::{ToolId, ToolInvocation};
 
@@ -46,15 +50,18 @@ fn open(path: &std::path::Path) -> Arc<SessionStore> {
 }
 
 pub(crate) fn invalidate(store: &SessionStore, id: &str) {
-    let mut transaction = store.env.write_txn().unwrap();
-    store
+    let access = store.access().unwrap();
+    let database = &access.current;
+    let mut transaction = database.env.write_txn().unwrap();
+    database
         .snapshots
         .put(&mut transaction, id, br#"{"version":999}"#)
         .unwrap();
     transaction.commit().unwrap();
+    drop(access);
 }
 
-fn history() -> Vec<Message> {
+pub(super) fn history() -> Vec<Message> {
     vec![
         Message::new("workspace".into()),
         Message::new("Keep the user's existing changes and validate the fix".into()),
@@ -129,7 +136,7 @@ fn answering_a_question_atomically_marks_the_saved_plan_for_reconciliation() {
     assert_eq!(saved["answered_questions"], serde_json::json!(["target"]));
 }
 
-fn save_output(session: &Session, content: &str) -> ToolResult {
+pub(super) fn save_output(session: &Session, content: &str) -> ToolResult {
     let mut pending = batch();
     pending.operations.truncate(1);
     pending.assistant.content.truncate(1);
@@ -246,10 +253,12 @@ fn artifact_and_completion_abort_together() {
         serde_json::to_value(session.snapshot().unwrap()).unwrap(),
         before
     );
-    let transaction = store.env.read_txn().unwrap();
-    assert_eq!(store.artifacts.len(&transaction).unwrap(), 0);
+    let access = store.access().unwrap();
+    let database = &access.current;
+    let transaction = database.env.read_txn().unwrap();
+    assert_eq!(database.artifacts.len(&transaction).unwrap(), 0);
     assert!(
-        store
+        database
             .artifact_index
             .list(&transaction, &session.id)
             .unwrap()
@@ -298,8 +307,10 @@ fn original_session_snapshots_resume_and_archive_legacy_inline_outputs() {
     ] {
         saved.as_object_mut().unwrap().remove(field);
     }
-    let mut transaction = store.env.write_txn().unwrap();
-    store
+    let access = store.access().unwrap();
+    let database = &access.current;
+    let mut transaction = database.env.write_txn().unwrap();
+    database
         .snapshots
         .put(
             &mut transaction,
@@ -308,6 +319,7 @@ fn original_session_snapshots_resume_and_archive_legacy_inline_outputs() {
         )
         .unwrap();
     transaction.commit().unwrap();
+    drop(access);
     let id = session.id.clone();
     drop(session);
     let resumed = workspace
@@ -551,9 +563,11 @@ fn existing_stores_build_the_artifact_index_once_and_preserve_fork_boundaries() 
     drop(root);
     drop(store);
     let store = workspace.store();
-    let transaction = store.env.read_txn().unwrap();
+    let access = store.access().unwrap();
+    let database = &access.current;
+    let transaction = database.env.read_txn().unwrap();
     assert_eq!(
-        store
+        database
             .artifact_index
             .list(&transaction, "root")
             .unwrap()
@@ -561,7 +575,7 @@ fn existing_stores_build_the_artifact_index_once_and_preserve_fork_boundaries() 
         2
     );
     assert_eq!(
-        store
+        database
             .artifact_index
             .list(&transaction, "fork")
             .unwrap()
@@ -690,7 +704,7 @@ fn compacted_sessions_reject_replayed_checkpoints_and_isolate_fork_questions() {
     );
 }
 
-fn batch() -> PendingBatch {
+pub(super) fn batch() -> PendingBatch {
     let operations: Vec<_> = ["done", "uncertain", "unstarted"]
         .into_iter()
         .map(|id| Operation {
@@ -719,7 +733,7 @@ fn batch() -> PendingBatch {
     }
 }
 
-fn success(operation: &Operation) -> ToolResult {
+pub(super) fn success(operation: &Operation) -> ToolResult {
     ToolResult {
         id: operation.call.id.clone(),
         invocation: ToolInvocation {
@@ -784,8 +798,10 @@ fn atomic_events_and_snapshots_survive_reopen_with_native_content() {
     );
     assert_eq!(snapshot.usage.input_tokens, 120);
     assert_eq!(snapshot.usage.output_tokens, 35);
-    let transaction = store.env.read_txn().unwrap();
-    let records = store
+    let access = store.access().unwrap();
+    let database = &access.current;
+    let transaction = database.env.read_txn().unwrap();
+    let records = database
         .events
         .prefix_iter(&transaction, &format!("{id}:"))
         .unwrap()
@@ -840,8 +856,10 @@ fn resume_choices_use_recency_and_exclude_workers_empty_current_and_other_provid
         .unwrap();
     let mut saved = serde_json::to_value(older.snapshot().unwrap()).unwrap();
     saved.as_object_mut().unwrap().remove("updated_at");
-    let mut transaction = store.env.write_txn().unwrap();
-    store
+    let access = store.access().unwrap();
+    let database = &access.current;
+    let mut transaction = database.env.write_txn().unwrap();
+    database
         .snapshots
         .put(
             &mut transaction,
@@ -850,6 +868,7 @@ fn resume_choices_use_recency_and_exclude_workers_empty_current_and_other_provid
         )
         .unwrap();
     transaction.commit().unwrap();
+    drop(access);
     let choices = store
         .resume_choices(&SessionProvider::Injected, Some(&current.id))
         .unwrap();
@@ -1007,43 +1026,19 @@ fn invalid_operation_transitions_and_failed_transactions_preserve_the_committed_
             .is_err()
     );
     assert_eq!(session.snapshot().unwrap().sequence, sequence);
-    let mut transaction = store.env.write_txn().unwrap();
     let mut snapshot = session.snapshot().unwrap();
+    let access = store.access().unwrap();
+    let database = &access.current;
+    let mut transaction = database.env.write_txn().unwrap();
     snapshot.history.clear();
     snapshot.sequence += 1;
-    store
+    database
         .write(&mut transaction, &snapshot, Event::Recovered)
         .unwrap();
     transaction.abort();
+    drop(access);
     assert_eq!(session.snapshot().unwrap().sequence, sequence);
     assert_eq!(session.snapshot().unwrap().history.len(), 2);
-}
-
-#[test]
-fn map_exhaustion_keeps_the_last_snapshot_and_event_sequence() {
-    let workspace = Workspace::new();
-    let store = workspace.store();
-    let session = store
-        .create(SessionProvider::Injected, None, history())
-        .unwrap();
-    unsafe { store.env.resize(64 * 1024).unwrap() };
-    let result = session.record(Event::History(vec![Message::new("x".repeat(128 * 1024))]));
-    assert!(result.is_err());
-    assert_eq!(session.snapshot().unwrap().sequence, 1);
-    assert_eq!(session.snapshot().unwrap().history.len(), 2);
-    assert!(
-        store
-            .create(
-                SessionProvider::Injected,
-                None,
-                vec![Message::new("x".repeat(128 * 1024))],
-            )
-            .is_err()
-    );
-    let transaction = store.env.read_txn().unwrap();
-    assert_eq!(store.events.len(&transaction).unwrap(), 1);
-    assert_eq!(store.snapshots.len(&transaction).unwrap(), 1);
-    assert_eq!(store.owners.len(&transaction).unwrap(), 1);
 }
 
 #[test]
@@ -1184,9 +1179,12 @@ fn competing_processes_claim_one_lmdb_owner_and_release_it_on_exit() {
             .count(),
         1
     );
-    let transaction = store.env.read_txn().unwrap();
-    assert!(store.owner(&transaction, &id).unwrap().is_some());
+    let access = store.access().unwrap();
+    let database = &access.current;
+    let transaction = database.env.read_txn().unwrap();
+    assert!(database.owner(&transaction, &id).unwrap().is_some());
     drop(transaction);
+    drop(access);
     assert!(
         workspace
             .resume(&store, &id, &SessionProvider::Injected)
@@ -1245,8 +1243,10 @@ fn stale_handles_cannot_read_write_or_release_a_replacement_owner() {
     let artifact = snapshot.artifacts[0].id.clone();
     let id = session.id.clone();
     let replacement = Owner::new(None, store.storage.new_id()).unwrap();
-    let mut transaction = store.env.write_txn().unwrap();
-    store
+    let access = store.access().unwrap();
+    let database = &access.current;
+    let mut transaction = database.env.write_txn().unwrap();
+    database
         .owners
         .put(
             &mut transaction,
@@ -1255,6 +1255,7 @@ fn stale_handles_cannot_read_write_or_release_a_replacement_owner() {
         )
         .unwrap();
     transaction.commit().unwrap();
+    drop(access);
     assert!(session.snapshot().is_err());
     assert!(
         session
@@ -1267,13 +1268,16 @@ fn stale_handles_cannot_read_write_or_release_a_replacement_owner() {
             .is_err()
     );
     drop(session);
-    let transaction = store.env.read_txn().unwrap();
-    assert!(store.owner(&transaction, &id).unwrap() == Some(replacement.clone()));
+    let access = store.access().unwrap();
+    let database = &access.current;
+    let transaction = database.env.read_txn().unwrap();
+    assert!(database.owner(&transaction, &id).unwrap() == Some(replacement.clone()));
     assert_eq!(
-        store.snapshot(&transaction, &id).unwrap().sequence,
+        database.snapshot(&transaction, &id).unwrap().sequence,
         snapshot.sequence
     );
     drop(transaction);
+    drop(access);
     let current = Session {
         store: store.clone(),
         id: id.clone(),
@@ -1356,8 +1360,10 @@ fn ownership_schema_provider_and_workspace_are_revalidated() {
     assert_eq!(snapshot.sequence, 2);
     drop(session);
     snapshot.workspace = "different project".into();
-    let mut transaction = store.env.write_txn().unwrap();
-    store
+    let access = store.access().unwrap();
+    let database = &access.current;
+    let mut transaction = database.env.write_txn().unwrap();
+    database
         .snapshots
         .put(
             &mut transaction,
@@ -1366,6 +1372,7 @@ fn ownership_schema_provider_and_workspace_are_revalidated() {
         )
         .unwrap();
     transaction.commit().unwrap();
+    drop(access);
     assert!(
         workspace
             .resume(&store, &id, &SessionProvider::Injected)
@@ -1374,12 +1381,15 @@ fn ownership_schema_provider_and_workspace_are_revalidated() {
             .to_string()
             .contains("workspace identity")
     );
-    let mut transaction = store.env.write_txn().unwrap();
-    store
+    let access = store.access().unwrap();
+    let database = &access.current;
+    let mut transaction = database.env.write_txn().unwrap();
+    database
         .snapshots
         .put(&mut transaction, &id, br#"{"version":999}"#)
         .unwrap();
     transaction.commit().unwrap();
+    drop(access);
     assert!(
         workspace
             .resume(&store, &id, &SessionProvider::Injected)
@@ -1475,8 +1485,10 @@ fn crash_fixture() {
         };
         snapshot = snapshot.transition(&event).unwrap();
         snapshot.sequence += 1;
-        let mut transaction = store.env.write_txn().unwrap();
-        store.write(&mut transaction, &snapshot, event).unwrap();
+        let access = store.access().unwrap();
+        let database = &access.current;
+        let mut transaction = database.env.write_txn().unwrap();
+        database.write(&mut transaction, &snapshot, event).unwrap();
         std::process::exit(0);
     }
 }

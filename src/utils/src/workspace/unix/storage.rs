@@ -65,8 +65,10 @@ impl WorkspacePolicy {
                 .join(namespace.0),
             workspace_identity: self.workspace_identity()?,
         };
-        for name in ["data.mdb", "lock.mdb"] {
-            storage.prepare_database_file(name)?;
+        if storage.read_file("generations.json")?.is_none() {
+            ["data.mdb", "lock.mdb"]
+                .into_iter()
+                .try_for_each(|name| storage.open_file(name).map(drop))?;
         }
         storage.directory.sync_all()?;
         Ok(storage)
@@ -74,7 +76,7 @@ impl WorkspacePolicy {
 }
 
 impl PrivateStorage {
-    fn prepare_database_file(&self, filename: &str) -> anyhow::Result<()> {
+    pub fn open_file(&self, filename: &str) -> anyhow::Result<File> {
         let filename = StorageName::new(filename)?;
         let flags = OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK;
         let file = match fs::openat(
@@ -91,7 +93,70 @@ impl PrivateStorage {
         }
         .map_err(io_error)?;
         OrdinaryFileMetadata::new(fs::fstat(&file).map_err(io_error)?, Path::new(filename.0))?;
-        fs::fchmod(&file, Mode::from_raw_mode(0o600)).map_err(io_error)
+        fs::fchmod(&file, Mode::from_raw_mode(0o600)).map_err(io_error)?;
+        Ok(File::from(file))
+    }
+
+    pub fn read_file(&self, filename: &str) -> anyhow::Result<Option<File>> {
+        let filename = StorageName::new(filename)?;
+        let flags = OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK;
+        match fs::openat(&self.directory, filename.0, flags, Mode::empty()) {
+            Ok(file) => {
+                OrdinaryFileMetadata::new(
+                    fs::fstat(&file).map_err(io_error)?,
+                    Path::new(filename.0),
+                )?;
+                Ok(Some(File::from(file)))
+            }
+            Err(rustix::io::Errno::NOENT) => Ok(None),
+            Err(error) => Err(io_error(error)),
+        }
+    }
+
+    pub fn child(&self, name: &str) -> anyhow::Result<Self> {
+        Ok(Self {
+            directory: private_directory(&self.directory, StorageName::new(name)?.0)?,
+            path: self.path.join(name),
+            workspace_identity: self.workspace_identity.clone(),
+        })
+    }
+
+    pub fn publish_file(&self, temporary: &str, name: &str) -> anyhow::Result<()> {
+        let temporary = StorageName::new(temporary)?;
+        let name = StorageName::new(name)?;
+        fs::renameat(&self.directory, temporary.0, &self.directory, name.0).map_err(io_error)?;
+        self.directory.sync_all().map_err(Into::into)
+    }
+
+    pub fn replace_file(&self, name: &str, bytes: &[u8]) -> anyhow::Result<()> {
+        let temporary = format!("{}.tmp", StorageName::new(name)?.0);
+        let mut file = self.open_file(&temporary)?;
+        file.set_len(0)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        self.publish_file(&temporary, name)
+    }
+
+    pub fn remove_file(&self, name: &str) -> anyhow::Result<()> {
+        let name = StorageName::new(name)?;
+        match fs::unlinkat(&self.directory, name.0, AtFlags::empty()) {
+            Ok(()) => self.directory.sync_all().map_err(Into::into),
+            Err(rustix::io::Errno::NOENT) => Ok(()),
+            Err(error) => Err(io_error(error)),
+        }
+    }
+
+    pub fn remove_child(&self, name: &str) -> anyhow::Result<()> {
+        let name = StorageName::new(name)?;
+        match fs::unlinkat(&self.directory, name.0, AtFlags::REMOVEDIR) {
+            Ok(()) => self.directory.sync_all().map_err(Into::into),
+            Err(rustix::io::Errno::NOENT) => Ok(()),
+            Err(error) => Err(io_error(error)),
+        }
+    }
+
+    pub fn sync(&self) -> anyhow::Result<()> {
+        self.directory.sync_all().map_err(Into::into)
     }
 
     pub fn workspace_identity(&self) -> &str {

@@ -91,6 +91,32 @@ without a lockfile and after dependencies change. Builds, build scripts, tests,
 and programs run inside the sandbox without network access. Git dependencies and
 custom registries are not downloaded automatically.
 
+## Session storage
+
+Session databases have a 100 GiB map limit and rotate before the next write once
+usage reaches 90 GiB. The map reserves address space; disk space grows with the
+stored data. A write that exceeds the remaining space is aborted and retried once
+in a new database. This retries persistence, not the tool that produced the result.
+
+The current database accepts writes. The previous database remains available to
+session listing, search, and resume. Resuming an old session moves its conversation
+into the current database. Active conversations, including their workers, event
+history, ownership, and output artifacts, carry forward across rotations.
+
+On the next rotation, the older database is compressed with Zstandard and verified
+before its original files are removed. Archived sessions no longer appear in search
+or the session picker and cannot be resumed directly. The current and previous
+databases remain searchable, with duplicate sessions shown only once.
+
+Storage stays under `.turbo-code/<session-namespace>/`. Existing `data.mdb` files
+are adopted as generation zero. Later databases use `generation-*` directories;
+`generations.json` identifies the current and previous generations. Archives are
+named `archive-*.mdb.zst` and contain the complete LMDB data file. Rotation is
+serialized across processes, and interrupted retirement is completed on restart.
+Compression can take time and needs temporary space for the new database and
+archive. If active conversations alone fill the next database, rotation stops and
+retains the existing databases.
+
 ## Tests
 
 Each crate keeps its tests and fixtures in its own `tests/` directory. Unit tests

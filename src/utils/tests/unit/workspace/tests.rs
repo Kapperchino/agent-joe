@@ -696,3 +696,62 @@ fn worker_restrictions_intersect_parent_policy_and_preserve_safe_discovery() {
     );
     assert!(policy.restricted(&[], RootAccess::ReadWrite).is_err());
 }
+
+#[test]
+fn session_generation_files_are_private_and_reject_links_and_traversal() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let fixture = Fixture::new();
+    let policy = fixture.policy();
+    let storage = policy.session_storage("sessions").unwrap();
+    let generation = storage.child("generation-1").unwrap();
+    let file = generation.open_file("data.mdb").unwrap();
+    assert_eq!(file.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+    assert_eq!(
+        std::fs::metadata(generation.path())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+    assert!(policy.read(&generation.path().join("data.mdb")).is_err());
+    assert!(storage.child("../outside").is_err());
+    assert!(storage.open_file("../outside").is_err());
+    assert!(storage.read_file("../outside").is_err());
+    assert!(storage.remove_file("../outside").is_err());
+    let secret = fixture.outside.join("archive-target");
+    std::fs::write(&secret, "private").unwrap();
+    let temporary = storage.path().join("archive.tmp");
+    symlink(&secret, &temporary).unwrap();
+    assert!(storage.open_file("archive.tmp").is_err());
+    assert!(storage.read_file("archive.tmp").is_err());
+    assert!(storage.replace_file("archive", b"replacement").is_err());
+    assert_eq!(std::fs::read_to_string(secret).unwrap(), "private");
+}
+
+#[test]
+fn session_manifest_replacement_and_generation_removal_preserve_other_files() {
+    use std::io::Read;
+    let fixture = Fixture::new();
+    let storage = fixture.policy().session_storage("sessions").unwrap();
+    assert!(storage.read_file("manifest").unwrap().is_none());
+    storage
+        .replace_file("manifest", b"first generation")
+        .unwrap();
+    storage.replace_file("manifest", b"next").unwrap();
+    let mut saved = String::new();
+    storage
+        .read_file("manifest")
+        .unwrap()
+        .unwrap()
+        .read_to_string(&mut saved)
+        .unwrap();
+    assert_eq!(saved, "next");
+    let generation = storage.child("generation-1").unwrap();
+    generation.open_file("data.mdb").unwrap();
+    assert!(storage.remove_child("generation-1").is_err());
+    generation.remove_file("data.mdb").unwrap();
+    storage.remove_child("generation-1").unwrap();
+    storage.remove_child("generation-1").unwrap();
+    assert!(storage.read_file("manifest").unwrap().is_some());
+}

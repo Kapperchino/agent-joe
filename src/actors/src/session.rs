@@ -1,21 +1,19 @@
-use anyhow::Context;
 use clients::llm::{ContentBlock, Message, Role, SessionProvider};
 use common_models::tui_models::{Lifecycle, SessionSummary, TokenCount};
-use heed::{
-    Database, Env, EnvOpenOptions,
-    types::{Bytes, Str},
-};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tools::{
     tool_defs::{ToolEffect, ToolResult},
     tool_error::{ToolEffects, ToolFailure},
 };
-use utils::workspace::{PrivateStorage, WorkspacePolicy};
+use utils::workspace::WorkspacePolicy;
 
 mod artifact_index;
 pub mod artifacts;
+mod generations;
 mod ownership;
+use generations::SessionDatabase;
+pub use generations::SessionStore;
 use ownership::Owner;
 
 const VERSION: u32 = 1;
@@ -43,16 +41,6 @@ impl From<SchemaVersion> for u32 {
     }
 }
 
-pub struct SessionStore {
-    env: Env,
-    snapshots: Database<Str, Bytes>,
-    events: Database<Str, Bytes>,
-    owners: Database<Str, Bytes>,
-    artifacts: Database<Str, Bytes>,
-    artifact_index: artifact_index::ArtifactIndex,
-    storage: PrivateStorage,
-}
-
 pub(crate) struct Session {
     store: Arc<SessionStore>,
     pub id: String,
@@ -71,32 +59,35 @@ impl ResumableSession {
         provider: &SessionProvider,
     ) -> anyhow::Result<Self> {
         let identity = workspace.workspace_identity()?;
-        let mut transaction = store.env.write_txn()?;
-        let snapshot = match identity == store.storage.workspace_identity() {
-            true => store.snapshot(&transaction, id),
-            false => Err(anyhow::anyhow!(
-                "Session storage does not belong to the current workspace"
-            )),
-        }?;
-        let owner = match snapshot {
-            Snapshot {
-                workspace: saved, ..
-            } if saved != identity => Err(anyhow::anyhow!(
-                "Session workspace identity does not match the current project"
-            )),
-            Snapshot {
-                provider: saved, ..
-            } if &saved != provider => Err(anyhow::anyhow!(
-                "Session provider is incompatible with the current provider route"
-            )),
-            Snapshot {
-                parent: Some(_), ..
-            } => Err(anyhow::anyhow!(
-                "Resume the parent session; worker sessions cannot be resumed interactively"
-            )),
-            _ => store.claim(&mut transaction, id),
-        }?;
-        transaction.commit()?;
+        let owner = store.update(Some(id), |database| {
+            let mut transaction = database.env.write_txn()?;
+            let snapshot = match identity == store.storage.workspace_identity() {
+                true => database.snapshot(&transaction, id),
+                false => Err(anyhow::anyhow!(
+                    "Session storage does not belong to the current workspace"
+                )),
+            }?;
+            let owner = match snapshot {
+                Snapshot {
+                    workspace: saved, ..
+                } if saved != identity => Err(anyhow::anyhow!(
+                    "Session workspace identity does not match the current project"
+                )),
+                Snapshot {
+                    provider: saved, ..
+                } if &saved != provider => Err(anyhow::anyhow!(
+                    "Session provider is incompatible with the current provider route"
+                )),
+                Snapshot {
+                    parent: Some(_), ..
+                } => Err(anyhow::anyhow!(
+                    "Resume the parent session; worker sessions cannot be resumed interactively"
+                )),
+                _ => database.claim(&mut transaction, id),
+            }?;
+            transaction.commit()?;
+            Ok(owner)
+        })?;
         Ok(Self {
             session: Arc::new(Session {
                 store: store.clone(),
@@ -234,7 +225,7 @@ pub(crate) enum OperationState {
     Completed(ToolResult),
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) enum Event {
     Planning(common_models::interaction::Planning),
     Worker(Box<crate::worker_registry::report::WorkerView>),
@@ -293,40 +284,6 @@ fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> anyhow::Result<T> {
 }
 
 impl SessionStore {
-    pub fn open(workspace: &WorkspacePolicy, namespace: &str) -> anyhow::Result<Arc<Self>> {
-        static OPEN: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = OPEN
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Session storage initialization lock poisoned"))?;
-        let storage = workspace
-            .session_storage(namespace)
-            .context("Creating private session storage")?;
-        let env = unsafe {
-            EnvOpenOptions::new()
-                .map_size(1024 * 1024 * 1024)
-                .max_dbs(5)
-                .open(storage.path())
-                .context("Opening the LMDB session environment")?
-        };
-        let mut transaction = env.write_txn()?;
-        let snapshots = env.create_database(&mut transaction, Some("session_snapshots"))?;
-        let events = env.create_database(&mut transaction, Some("session_events"))?;
-        let owners = env.create_database(&mut transaction, Some("session_owners"))?;
-        let artifacts = env.create_database(&mut transaction, Some("session_artifacts"))?;
-        let artifact_index =
-            artifact_index::ArtifactIndex::open(&env, &mut transaction, snapshots)?;
-        transaction.commit()?;
-        Ok(Arc::new(Self {
-            env,
-            snapshots,
-            events,
-            owners,
-            artifacts,
-            artifact_index,
-            storage,
-        }))
-    }
-
     pub(crate) fn create(
         self: &Arc<Self>,
         provider: SessionProvider,
@@ -334,7 +291,7 @@ impl SessionStore {
         history: Vec<Message>,
     ) -> anyhow::Result<Arc<Session>> {
         let id = self.storage.new_id();
-        let mut snapshot = Snapshot {
+        let snapshot = Snapshot {
             version: SchemaVersion,
             sequence: 1,
             changes: Default::default(),
@@ -358,49 +315,23 @@ impl SessionStore {
             processes: Default::default(),
             process_reports: Default::default(),
         };
-        let mut transaction = self.env.write_txn()?;
-        if let Some(parent) = &snapshot.parent {
-            self.snapshot(&transaction, parent)?;
-            snapshot.artifacts = self.artifact_index.list(&transaction, parent)?;
-        }
-        let owner = self.claim(&mut transaction, &id)?;
-        self.write(&mut transaction, &snapshot, Event::Created)?;
-        transaction.commit()?;
+        let owner = self.update(snapshot.parent.as_deref(), |database| {
+            let mut snapshot = snapshot.clone();
+            let mut transaction = database.env.write_txn()?;
+            if let Some(parent) = &snapshot.parent {
+                database.snapshot(&transaction, parent)?;
+                snapshot.artifacts = database.artifact_index.list(&transaction, parent)?;
+            }
+            let owner = database.claim(&mut transaction, &id)?;
+            database.write(&mut transaction, &snapshot, Event::Created)?;
+            transaction.commit()?;
+            Ok(owner)
+        })?;
         Ok(Arc::new(Session {
             store: self.clone(),
             id,
             owner,
         }))
-    }
-
-    fn owner(&self, transaction: &heed::RoTxn<'_>, id: &str) -> anyhow::Result<Option<Owner>> {
-        self.owners.get(transaction, id)?.map(decode).transpose()
-    }
-
-    fn claim(&self, transaction: &mut heed::RwTxn<'_>, id: &str) -> anyhow::Result<Owner> {
-        let owner = Owner::new(self.owner(transaction, id)?, self.storage.new_id())?;
-        self.owners
-            .put(transaction, id, &serde_json::to_vec(&owner)?)?;
-        Ok(owner)
-    }
-
-    fn snapshot(&self, transaction: &heed::RoTxn<'_>, id: &str) -> anyhow::Result<Snapshot> {
-        let bytes = self
-            .snapshots
-            .get(transaction, id)?
-            .ok_or_else(|| anyhow::anyhow!("Session {id} does not exist"))?;
-        decode(bytes)
-    }
-
-    pub(crate) fn list(&self) -> anyhow::Result<Vec<Snapshot>> {
-        let transaction = self.env.read_txn()?;
-        self.snapshots
-            .iter(&transaction)?
-            .map(|entry| {
-                let (_, bytes) = entry?;
-                decode(bytes)
-            })
-            .collect()
     }
 
     pub(crate) fn resume_choices(
@@ -425,6 +356,46 @@ impl SessionStore {
                 .then_with(|| left.id.cmp(&right.id))
         });
         Ok(choices)
+    }
+}
+
+impl SessionDatabase {
+    pub(super) fn owner(
+        &self,
+        transaction: &heed::RoTxn<'_>,
+        id: &str,
+    ) -> anyhow::Result<Option<Owner>> {
+        self.owners.get(transaction, id)?.map(decode).transpose()
+    }
+
+    fn claim(&self, transaction: &mut heed::RwTxn<'_>, id: &str) -> anyhow::Result<Owner> {
+        let owner = Owner::new(self.owner(transaction, id)?, self.storage.new_id())?;
+        self.owners
+            .put(transaction, id, &serde_json::to_vec(&owner)?)?;
+        Ok(owner)
+    }
+
+    pub(super) fn snapshot(
+        &self,
+        transaction: &heed::RoTxn<'_>,
+        id: &str,
+    ) -> anyhow::Result<Snapshot> {
+        let bytes = self
+            .snapshots
+            .get(transaction, id)?
+            .ok_or_else(|| anyhow::anyhow!("Session {id} does not exist"))?;
+        decode(bytes)
+    }
+
+    pub(crate) fn list(&self) -> anyhow::Result<Vec<Snapshot>> {
+        let transaction = self.env.read_txn()?;
+        self.snapshots
+            .iter(&transaction)?
+            .map(|entry| {
+                let (_, bytes) = entry?;
+                decode(bytes)
+            })
+            .collect()
     }
 
     fn write(
@@ -453,31 +424,33 @@ impl SessionStore {
 
 impl Session {
     pub fn fork(&self) -> anyhow::Result<Arc<Session>> {
-        let mut transaction = self.store.env.write_txn()?;
-        let ForkableSnapshot(mut snapshot) =
-            ForkableSnapshot::try_from(self.owned_snapshot(&transaction)?)?;
-        snapshot.artifacts = self.store.artifact_index.list(&transaction, &snapshot.id)?;
-        snapshot.id = self.store.storage.new_id();
-        snapshot.sequence = 1;
-        snapshot.changes = Default::default();
-        snapshot.parent = None;
-        snapshot.forked_from = Some(self.id.clone());
-        snapshot.status = Lifecycle::Ready;
-        snapshot.updated_at = Some(std::time::SystemTime::now());
-        let owner = self.store.claim(&mut transaction, &snapshot.id)?;
-        self.store.write(
-            &mut transaction,
-            &snapshot,
-            Event::Forked {
-                source: self.id.clone(),
-            },
-        )?;
-        transaction.commit()?;
-        Ok(Arc::new(Session {
-            store: self.store.clone(),
-            id: snapshot.id,
-            owner,
-        }))
+        self.store.update(Some(&self.id), |database| {
+            let mut transaction = database.env.write_txn()?;
+            let ForkableSnapshot(mut snapshot) =
+                ForkableSnapshot::try_from(self.owned_snapshot(database, &transaction)?)?;
+            snapshot.artifacts = database.artifact_index.list(&transaction, &snapshot.id)?;
+            snapshot.id = self.store.storage.new_id();
+            snapshot.sequence = 1;
+            snapshot.changes = Default::default();
+            snapshot.parent = None;
+            snapshot.forked_from = Some(self.id.clone());
+            snapshot.status = Lifecycle::Ready;
+            snapshot.updated_at = Some(std::time::SystemTime::now());
+            let owner = database.claim(&mut transaction, &snapshot.id)?;
+            database.write(
+                &mut transaction,
+                &snapshot,
+                Event::Forked {
+                    source: self.id.clone(),
+                },
+            )?;
+            transaction.commit()?;
+            Ok(Arc::new(Session {
+                store: self.store.clone(),
+                id: snapshot.id,
+                owner,
+            }))
+        })
     }
 
     pub fn key(&self, id: impl std::fmt::Display) -> String {
@@ -485,25 +458,34 @@ impl Session {
     }
 
     pub fn snapshot(&self) -> anyhow::Result<Snapshot> {
-        let transaction = self.store.env.read_txn()?;
-        self.owned_snapshot(&transaction)
+        self.store.read(&self.id, |database| {
+            let transaction = database.env.read_txn()?;
+            self.owned_snapshot(database, &transaction)
+        })
     }
 
-    fn owned_snapshot(&self, transaction: &heed::RoTxn<'_>) -> anyhow::Result<Snapshot> {
-        match self.store.owner(transaction, &self.id)? {
-            Some(owner) if owner == self.owner => self.store.snapshot(transaction, &self.id),
+    fn owned_snapshot(
+        &self,
+        database: &SessionDatabase,
+        transaction: &heed::RoTxn<'_>,
+    ) -> anyhow::Result<Snapshot> {
+        match database.owner(transaction, &self.id)? {
+            Some(owner) if owner == self.owner => database.snapshot(transaction, &self.id),
             _ => Err(anyhow::anyhow!("Session {} ownership was lost", self.id)),
         }
     }
 
     pub fn record(&self, event: Event) -> anyhow::Result<()> {
-        let transaction = self.store.env.write_txn()?;
-        let snapshot = self.owned_snapshot(&transaction)?;
-        self.commit_event(transaction, snapshot, event)
+        self.store.update(Some(&self.id), |database| {
+            let transaction = database.env.write_txn()?;
+            let snapshot = self.owned_snapshot(database, &transaction)?;
+            self.commit_event(database, transaction, snapshot, event.clone())
+        })
     }
 
     fn commit_event(
         &self,
+        database: &SessionDatabase,
         mut transaction: heed::RwTxn<'_>,
         snapshot: Snapshot,
         event: Event,
@@ -511,21 +493,23 @@ impl Session {
         let mut snapshot = snapshot.transition(&event)?;
         snapshot.sequence += 1;
         snapshot.updated_at = Some(std::time::SystemTime::now());
-        self.store.write(&mut transaction, &snapshot, event)?;
+        database.write(&mut transaction, &snapshot, event)?;
         transaction.commit()?;
         Ok(())
     }
 
     fn release(&self) -> anyhow::Result<()> {
-        let mut transaction = self.store.env.write_txn()?;
-        match self.store.owner(&transaction, &self.id)? {
-            Some(owner) if owner == self.owner => {
-                self.store.owners.delete(&mut transaction, &self.id)?;
-                transaction.commit()?;
-                Ok(())
+        self.store.update(Some(&self.id), |database| {
+            let mut transaction = database.env.write_txn()?;
+            match database.owner(&transaction, &self.id)? {
+                Some(owner) if owner == self.owner => {
+                    database.owners.delete(&mut transaction, &self.id)?;
+                    transaction.commit()?;
+                    Ok(())
+                }
+                _ => Ok(()),
             }
-            _ => Ok(()),
-        }
+        })
     }
 }
 

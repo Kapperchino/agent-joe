@@ -9,6 +9,12 @@ pub(super) struct Owner {
 }
 
 impl Owner {
+    pub fn is_running(&self) -> anyhow::Result<bool> {
+        self.process
+            .state()
+            .map(|state| matches!(state, ProcessState::Running))
+    }
+
     pub fn new(previous: Option<Self>, token: String) -> anyhow::Result<Self> {
         let state = previous.map(|owner| owner.process.state()).transpose()?;
         match state {
