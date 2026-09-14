@@ -8,6 +8,45 @@ use std::{
 const LINUX_RLIMIT_NOFILE: u32 = 7;
 const OPEN_FILE_LIMIT: libc::rlim_t = 65536;
 
+struct HostResources {
+    vcpus: u8,
+    memory_mib: u32,
+}
+
+impl HostResources {
+    fn detect() -> anyhow::Result<Self> {
+        Self::new(
+            unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) },
+            unsafe { libc::sysconf(libc::_SC_PHYS_PAGES) },
+            unsafe { libc::sysconf(libc::_SC_PAGESIZE) },
+        )
+        .context("Cannot size sandbox resources to match the host")
+    }
+
+    fn new(
+        cpu_count: libc::c_long,
+        physical_pages: libc::c_long,
+        page_size: libc::c_long,
+    ) -> anyhow::Result<Self> {
+        let vcpus =
+            u8::try_from(cpu_count).context("Host CPU count does not fit libkrun's vCPU range")?;
+        let physical_pages =
+            u64::try_from(physical_pages).context("Cannot read the host's physical page count")?;
+        let page_size = u64::try_from(page_size).context("Cannot read the host's page size")?;
+        let memory_bytes = physical_pages
+            .checked_mul(page_size)
+            .context("Host physical memory size overflows a byte count")?;
+        let memory_mib = u32::try_from(memory_bytes / (1024 * 1024))
+            .context("Host physical memory does not fit libkrun's memory range")?;
+        match vcpus > 0 && memory_mib > 0 {
+            true => Ok(Self { vcpus, memory_mib }),
+            false => Err(anyhow::anyhow!(
+                "Host must report at least one CPU and 1 MiB of physical memory"
+            )),
+        }
+    }
+}
+
 struct Filesystem {
     tag: &'static CStr,
     path: PathBuf,
@@ -26,9 +65,10 @@ impl KrunContext {
     }
 
     fn configure(&self, configuration: Configuration) -> anyhow::Result<()> {
+        let resources = HostResources::detect()?;
         result(
             "krun_set_vm_config",
-            krun::krun_set_vm_config(self.id, 2, 4096),
+            krun::krun_set_vm_config(self.id, resources.vcpus, resources.memory_mib),
         )?;
         let limits = [CString::new(format!(
             "{LINUX_RLIMIT_NOFILE}={OPEN_FILE_LIMIT}:{OPEN_FILE_LIMIT}"
