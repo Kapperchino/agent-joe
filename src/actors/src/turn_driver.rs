@@ -269,14 +269,19 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 .workers
                 .pending(&self.dependency.worker_owner());
             let update = match update {
-                ProviderUpdate::Finished(Ok(crate::turn::AcceptedResponse::Complete(_)))
-                    if self.planning.review()
-                        == common_models::interaction::PlanReview::Required =>
+                ProviderUpdate::Finished(Ok(crate::turn::AcceptedResponse::Complete(message)))
+                    if self.request_mode == crate::context::RequestMode::Continue
+                        && matches!(self.dependency.runtime.role, ExecutionRole::Root)
+                        && self.planning.review()
+                            == common_models::interaction::PlanReview::Required =>
                 {
-                    ProviderUpdate::Finished(Err(Failure::new(
-                        FailureKind::InvalidInput,
-                        "Requirements changed; reconcile the saved plan with update_plan before completing the turn",
-                    )))
+                    ProviderUpdate::ReconcilePlan {
+                        message,
+                        instruction: format!(
+                            "Runtime plan review: this turn is still active. Requirements changed; reconcile the saved plan with update_plan using revision={} and requirements_revision={} from the current planning state. Reopen completed steps for review, then continue the user's request before completing the turn.",
+                            self.planning.plan.revision, self.planning.requirements_revision,
+                        ),
+                    }
                 }
                 ProviderUpdate::Finished(Ok(crate::turn::AcceptedResponse::Complete(_)))
                     if !pending.is_empty() =>
@@ -299,7 +304,10 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                     "Provider request failed"
                 );
             }
-            if matches!(update, ProviderUpdate::Finished(_)) {
+            if matches!(
+                update,
+                ProviderUpdate::Finished(_) | ProviderUpdate::ReconcilePlan { .. }
+            ) {
                 self.persist(crate::session::Event::Usage(
                     self.stream_processor.token_count.clone(),
                 ));

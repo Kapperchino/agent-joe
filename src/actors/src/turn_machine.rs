@@ -60,6 +60,10 @@ pub(crate) enum SessionEvent {
 pub(crate) enum ProviderUpdate {
     Progress(StreamNextStep),
     Finished(Result<AcceptedResponse, Failure>),
+    ReconcilePlan {
+        message: llm::Message,
+        instruction: String,
+    },
 }
 
 impl ProviderUpdate {
@@ -377,6 +381,10 @@ impl Session {
                         ProviderUpdate::Finished(Err(failure)) => {
                             self.provider_failed(turn, failure, effects);
                         }
+                        ProviderUpdate::ReconcilePlan {
+                            message,
+                            instruction,
+                        } => self.reconcile_plan(turn, message, instruction, effects),
                     }
                 }
                 obsolete => self.state = obsolete,
@@ -522,6 +530,39 @@ impl Session {
                     effects,
                 );
             }
+        }
+    }
+
+    fn reconcile_plan(
+        &mut self,
+        mut turn: Turn<ProviderRun>,
+        message: llm::Message,
+        instruction: String,
+        effects: &mut Vec<Effect>,
+    ) {
+        effects.push(Effect::AppendHistory(vec![
+            message,
+            llm::Message::new(instruction),
+        ]));
+        match (self.mode, turn.plan_reconciliations) {
+            (RequestMode::Continue, 0..2) => {
+                turn.plan_reconciliations += 1;
+                effects.push(Effect::operation(
+                    turn.phase.tag,
+                    Lifecycle::Completed,
+                    "Continuing to reconcile the saved plan",
+                ));
+                let previous = turn.phase.scope.clone();
+                self.launch_provider(turn.provider(), Some(previous), effects);
+            }
+            _ => self.provider_failed(
+                turn,
+                Failure::new(
+                    clients::failure::FailureKind::InvalidInput,
+                    "The saved plan still needs reconciliation after automatic recovery; use update_plan before completing the turn",
+                ),
+                effects,
+            ),
         }
     }
 

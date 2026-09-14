@@ -96,6 +96,7 @@ pub struct Turn<P> {
     pub id: TurnId,
     pub scope: OwnedScope,
     pub failures: FailureTracker,
+    pub plan_reconciliations: u8,
     pub phase: P,
 }
 impl Turn<ProviderRun> {
@@ -105,6 +106,7 @@ impl Turn<ProviderRun> {
             id,
             scope: OwnedScope::new(scope),
             failures: FailureTracker::default(),
+            plan_reconciliations: 0,
             phase,
         }
     }
@@ -115,6 +117,7 @@ impl<P> Turn<P> {
             id: self.id,
             scope: self.scope,
             failures: self.failures,
+            plan_reconciliations: self.plan_reconciliations,
             phase: phase(self.phase),
         }
     }

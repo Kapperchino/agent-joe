@@ -164,6 +164,75 @@ fn single_response_preserves_transport_failures_without_retrying() {
 }
 
 #[test]
+fn plan_reconciliation_preserves_the_turn_and_is_bounded_across_tool_batches() {
+    let mut machine = machine();
+    let initial = start(&mut machine);
+    for _ in 0..2 {
+        let tag = provider(&machine).tag;
+        let effects = machine.transition(SessionEvent::Provider {
+            tag,
+            update: ProviderUpdate::ReconcilePlan {
+                message: llm::Message {
+                    role: llm::Role::Assistant,
+                    content: vec![llm::ContentBlock::MessageBlock {
+                        text: "Premature completion".into(),
+                        phase: None,
+                    }],
+                },
+                instruction: "Reconcile with update_plan".into(),
+            },
+        });
+        let retry = provider(&machine).tag;
+        assert_eq!(retry.turn, initial.turn);
+        assert_ne!(retry.operation, tag.operation);
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::AppendHistory(messages)
+                if messages.len() == 2
+                    && matches!(messages[0].role, llm::Role::Assistant)
+                    && messages[1].text() == "Reconcile with update_plan"
+        )));
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LaunchProvider {
+                previous: Some(_),
+                ..
+            }
+        )));
+        assert!(
+            !effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::BeginTurn(_) | Effect::Cleanup { .. }))
+        );
+        assert!(response(&mut machine, tag, Ok(complete_response())).is_empty());
+        let batch = begin_tools(&mut machine, retry);
+        for job in &batch.jobs {
+            complete_tool(&mut machine, batch.tag, job);
+        }
+        tool(&mut machine, batch.tag, ToolEvent::Finished(Ok(())));
+    }
+    let tag = provider(&machine).tag;
+    let effects = machine.transition(SessionEvent::Provider {
+        tag,
+        update: ProviderUpdate::ReconcilePlan {
+            message: llm::Message {
+                role: llm::Role::Assistant,
+                content: vec![],
+            },
+            instruction: "Reconcile with update_plan".into(),
+        },
+    });
+    assert!(!launches_provider(&effects));
+    let effects = machine.transition(SessionEvent::CleanupFinished(initial.turn));
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::Report(ActorToTuiPacket::TurnChanged {
+            state: Lifecycle::Failed, detail: Some(detail), ..
+        }) if detail.contains("after automatic recovery")
+    )));
+}
+
+#[test]
 fn retries_replace_only_the_request_and_stop_at_the_budget() {
     let mut machine = machine();
     let initial = start(&mut machine);

@@ -535,6 +535,88 @@ async fn resume_pending_questions_restores_mode_and_clear_and_new_reset_interact
 }
 
 #[tokio::test]
+async fn stale_plan_completion_recovers_and_persists_the_reconciled_plan() {
+    let workspace = crate::session::tests::Workspace::new();
+    let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
+    let store = runtime.sessions.clone().unwrap();
+    let h = Harness::with_runtime(vec![], runtime).await;
+    h.start("Investigate the binary");
+    answer(
+        h.request().await.1,
+        response(vec![tool(
+            "update_plan",
+            "plan",
+            serde_json::to_value(PlanUpdate {
+                revision: 0,
+                requirements_revision: 0,
+                steps: vec![step("inspect")],
+            })
+            .unwrap(),
+        )]),
+    );
+    answer(h.request().await.1, response(vec![text("Plan saved")]));
+    h.terminal(Lifecycle::Completed).await;
+    h.start("Investigate the library instead");
+    answer(
+        h.request().await.1,
+        response(vec![text("Premature completion")]),
+    );
+    let (request, reply) = h.request().await;
+    let feedback = request.messages.last().unwrap().text();
+    assert!(feedback.contains("update_plan"));
+    assert!(feedback.contains("revision=1"));
+    assert!(feedback.contains("requirements_revision=1"));
+    assert!(
+        request
+            .messages
+            .iter()
+            .any(|message| message.text() == "Premature completion")
+    );
+    let snapshot = store.list().unwrap().into_iter().next().unwrap();
+    assert_eq!(snapshot.planning.requirements_revision, 1);
+    assert_eq!(snapshot.planning.plan.requirements_revision, 0);
+    assert!(
+        snapshot
+            .history
+            .last()
+            .unwrap()
+            .text()
+            .contains("update_plan")
+    );
+    answer(
+        reply,
+        response(vec![tool(
+            "update_plan",
+            "revised",
+            serde_json::to_value(PlanUpdate {
+                revision: 1,
+                requirements_revision: 1,
+                steps: vec![step("inspect_library")],
+            })
+            .unwrap(),
+        )]),
+    );
+    answer(
+        h.request().await.1,
+        response(vec![text("Revised plan saved")]),
+    );
+    h.terminal(Lifecycle::Completed).await;
+    let snapshot = store.list().unwrap().into_iter().next().unwrap();
+    assert_eq!(snapshot.planning.requirements_revision, 1);
+    assert_eq!(snapshot.planning.plan.requirements_revision, 1);
+    assert_eq!(snapshot.planning.plan.steps[0].id, "inspect_library");
+    assert_eq!(
+        snapshot.history.last().unwrap().text(),
+        "Revised plan saved"
+    );
+    assert_eq!(
+        serde_json::to_value(snapshot.history).unwrap(),
+        serde_json::to_value(h.history().await).unwrap()
+    );
+    h.stop().await;
+}
+
+#[tokio::test]
 async fn steering_cancels_active_tools_and_queue_then_reconciles_plan() {
     let (write, entered) = gate("write", ToolEffect::Write);
     let active = write.active.clone();
@@ -575,6 +657,16 @@ async fn steering_cancels_active_tools_and_queue_then_reconciles_plan() {
             .messages
             .iter()
             .any(|message| message.text().contains("\"requirements_revision\":1"))
+    );
+    answer(reply, response(vec![text("Premature revised completion")]));
+    let (request, reply) = h.request().await;
+    assert!(
+        request
+            .messages
+            .last()
+            .unwrap()
+            .text()
+            .contains("update_plan")
     );
     answer(reply, response(vec![call("write", "stale")]));
     let (request, reply) = h.request().await;
