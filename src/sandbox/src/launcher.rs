@@ -20,7 +20,7 @@ impl HostResources {
             unsafe { libc::sysconf(libc::_SC_PHYS_PAGES) },
             unsafe { libc::sysconf(libc::_SC_PAGESIZE) },
         )
-        .context("Cannot size sandbox resources to match the host")
+        .context("Cannot size sandbox resources from the host")
     }
 
     fn new(
@@ -36,12 +36,12 @@ impl HostResources {
         let memory_bytes = physical_pages
             .checked_mul(page_size)
             .context("Host physical memory size overflows a byte count")?;
-        let memory_mib = u32::try_from(memory_bytes / (1024 * 1024))
-            .context("Host physical memory does not fit libkrun's memory range")?;
+        let memory_mib = u32::try_from(memory_bytes / 2 / (1024 * 1024))
+            .context("Half of host physical memory does not fit libkrun's memory range")?;
         match vcpus > 0 && memory_mib > 0 {
             true => Ok(Self { vcpus, memory_mib }),
             false => Err(anyhow::anyhow!(
-                "Host must report at least one CPU and 1 MiB of physical memory"
+                "Host must report at least one CPU and 2 MiB of physical memory"
             )),
         }
     }
