@@ -1,22 +1,93 @@
 use super::*;
 
 #[test]
+fn qualified_worker_tools_use_registered_names() {
+    for allowed_tools in [
+        "find_files\nread_file",
+        " functions.find_files \n\n functions.read_file ",
+    ] {
+        let request = WorkerRequest::new(
+            WorkerRequestInput {
+                objective: "Inspect selected files".into(),
+                allowed_tools: allowed_tools.into(),
+                allowed_paths: "src".into(),
+                completion_criteria: "Report evidence".into(),
+                ..Default::default()
+            },
+            |name| match name {
+                "find_files" | "read_file" => Some(ToolEffect::Read),
+                _ => None,
+            },
+        )
+        .unwrap();
+        assert_eq!(request.allowed_tools, ["find_files", "read_file"]);
+        assert_eq!(request.role, WorkerRole::Read);
+        assert!(request.allows_tool("find_files"));
+        assert!(request.allows_tool("read_file"));
+        assert!(!request.allows_tool("apply_patch"));
+    }
+}
+
+#[test]
+fn qualified_worker_tools_cannot_bypass_availability_or_delegation_checks() {
+    for name in [
+        "missing",
+        "functions.missing",
+        "functions.",
+        "other.read_file",
+        "functions.functions.read_file",
+        "start_worker",
+        "functions.start_worker",
+        "functions.make_changes",
+    ] {
+        let result = WorkerRequest::new(
+            WorkerRequestInput {
+                objective: "Inspect selected files".into(),
+                allowed_tools: name.into(),
+                allowed_paths: "src".into(),
+                completion_criteria: "Report evidence".into(),
+                ..Default::default()
+            },
+            |name| match name {
+                "read_file" => Some(ToolEffect::Read),
+                "start_worker" => Some(ToolEffect::DelegateRead),
+                "make_changes" => Some(ToolEffect::DelegateWrite),
+                _ => None,
+            },
+        );
+        let error = result.unwrap_err().to_string();
+        match name {
+            "start_worker" | "functions.start_worker" | "functions.make_changes" => {
+                assert!(
+                    error.contains("delegates; maximum delegation depth is one"),
+                    "{error}"
+                );
+            }
+            _ => {
+                assert!(error.ends_with("is unavailable"), "{error}");
+                assert!(!error.contains("delegation"), "{error}");
+            }
+        }
+    }
+}
+
+#[test]
 fn followups_recheck_handoff_bounds_and_preserve_the_original_constraints() {
     let request = WorkerRequest::new(
         WorkerRequestInput {
             objective: "Inspect selected files".into(),
             constraints: "Preserve public APIs".into(),
-            allowed_tools: "read_file".into(),
+            allowed_tools: "functions.read_file".into(),
             allowed_paths: "src".into(),
             completion_criteria: "Report evidence".into(),
             ..Default::default()
         },
-        |_| Some(ToolEffect::Read),
+        |name| (name == "read_file").then_some(ToolEffect::Read),
     )
     .unwrap();
     let followup = request
-        .follow_up("Confirm finding".into(), "Selected report".into(), |_| {
-            Some(ToolEffect::Read)
+        .follow_up("Confirm finding".into(), "Selected report".into(), |name| {
+            (name == "read_file").then_some(ToolEffect::Read)
         })
         .unwrap();
     assert_eq!(followup.constraints, request.constraints);

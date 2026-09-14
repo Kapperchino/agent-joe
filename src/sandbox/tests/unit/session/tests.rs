@@ -90,12 +90,19 @@ async fn aborted_startup_waits_reuse_one_published_launcher() {
     assert!(first.await.is_err_and(|error| error.is_cancelled()));
     assert!(owner.session.get().is_some());
     let second = start();
+    let concurrent = start();
     std::fs::write(fixture.root.join("ready"), "ready").unwrap();
     let session = tokio::time::timeout(std::time::Duration::from_secs(5), second)
         .await
         .unwrap()
         .unwrap()
         .unwrap();
+    let concurrent = tokio::time::timeout(std::time::Duration::from_secs(5), concurrent)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(Arc::ptr_eq(&session, &concurrent));
     assert!(!session.cancel.is_cancelled());
     assert_eq!(
         std::fs::read_to_string(fixture.root.join("started")).unwrap(),

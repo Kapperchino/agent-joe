@@ -415,6 +415,82 @@ async fn root_modes_complete_small_changes_directly_and_simple_has_no_delegation
 }
 
 #[tokio::test]
+async fn qualified_worker_tools_execute_with_scoped_read_access() {
+    let workspace = crate::session::tests::Workspace::new();
+    std::fs::create_dir(workspace.path.join("assigned")).unwrap();
+    std::fs::write(
+        workspace.path.join("assigned/evidence.txt"),
+        "Read evidence marker",
+    )
+    .unwrap();
+    std::fs::write(workspace.path.join("secret.txt"), "Secret marker").unwrap();
+    let actor = RepositoryActor::new(BaseWorker::new(), workspace.path.clone()).await;
+    let started = StartedWorker::new(
+        &actor,
+        worker_input("functions.find_files\nfunctions.read_file", "assigned"),
+    )
+    .await;
+    let names = started
+        .child
+        .0
+        .tools
+        .iter()
+        .filter_map(|tool| match tool {
+            ToolDefinition::Client { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["find_files", "read_file"]);
+    answer(
+        started.child.1,
+        response(vec![tool("find_files", "discover", json!({"pattern":""}))]),
+    );
+    let (discovered, reply) = actor.request().await;
+    assert!(result_text(&discovered).contains("assigned/evidence.txt"));
+    assert!(!result_text(&discovered).contains("secret.txt"));
+    answer(
+        reply,
+        response(vec![tool(
+            "read_file",
+            "denied",
+            json!({"file_path":"secret.txt"}),
+        )]),
+    );
+    let (denied, reply) = actor.request().await;
+    assert!(result_text(&denied).contains("Worker path access denied"));
+    assert!(!result_text(&denied).contains("Secret marker"));
+    answer(
+        reply,
+        response(vec![tool(
+            "read_file",
+            "read",
+            json!({"file_path":"assigned/evidence.txt"}),
+        )]),
+    );
+    let (read, reply) = actor.request().await;
+    assert!(result_text(&read).contains("Read evidence marker"));
+    answer(
+        reply,
+        response(vec![text("Scoped investigation complete.")]),
+    );
+    answer(
+        started.parent.1,
+        response(vec![tool(
+            "worker_status",
+            "collect",
+            json!({"action":"wait","worker_id":started.id,"seconds":2}),
+        )]),
+    );
+    let (parent, reply) = actor.request().await;
+    let report = &latest_result(&parent)["workers"][0]["report"];
+    assert_eq!(report["status"], "completed");
+    assert_eq!(report["budget"]["tool_calls"], 3);
+    assert_eq!(report["changed_files"], json!([]));
+    completed_root(&actor, reply).await;
+    actor.stop().await;
+}
+
+#[tokio::test]
 async fn bounded_worker_inherits_constraints_denies_other_paths_and_returns_observed_changes() {
     let workspace = crate::session::tests::Workspace::new();
     std::fs::create_dir_all(workspace.path.join("assigned")).unwrap();

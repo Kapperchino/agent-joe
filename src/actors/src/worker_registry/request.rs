@@ -12,7 +12,10 @@ pub struct WorkerRequestInput {
         required
     )]
     pub constraints: String,
-    #[tool(description = "Allowed tool names separated by newlines", required)]
+    #[tool(
+        description = "Allowed tool names separated by newlines, such as find_files and read_file; functions. prefixes are accepted",
+        required
+    )]
     pub allowed_tools: String,
     #[tool(
         description = "Allowed project-relative files or directories separated by newlines; . allows the project",
@@ -122,6 +125,7 @@ impl WorkerRequest {
             .lines()
             .map(str::trim)
             .filter(|s| !s.is_empty())
+            .map(|name| name.strip_prefix("functions.").unwrap_or(name))
             .map(str::to_owned)
             .collect::<Vec<_>>();
         let paths = input
@@ -149,12 +153,16 @@ impl WorkerRequest {
                         .any(|part| matches!(part, std::path::Component::ParentDir))
             })
             && encoded.len() <= 64 * 1024;
-        let effects = tools.iter().map(|tool| {
-            match available(tool) {
+        let effects = tools
+            .iter()
+            .map(|tool| match available(tool) {
                 Some(effect) if !effect.delegates() => Ok(effect),
-                _ => Err(anyhow::anyhow!("Worker tool `{tool}` is unavailable or delegates; maximum delegation depth is one")),
-            }
-        }).collect::<anyhow::Result<Vec<_>>>()?;
+                Some(_) => Err(anyhow::anyhow!(
+                    "Worker tool `{tool}` delegates; maximum delegation depth is one"
+                )),
+                None => Err(anyhow::anyhow!("Worker tool `{tool}` is unavailable")),
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
         let role = match effects
             .iter()
             .any(|effect| matches!(effect, ToolEffect::Write | ToolEffect::Validate))

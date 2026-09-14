@@ -105,14 +105,15 @@ async fn run(cli: &Cli, terminal: DefaultTerminal) -> Result<()> {
     };
     let config_context = ConfigContext::new(config.prepare().await?);
     let (tx, rx) = flume::unbounded();
+    let root = std::env::current_dir()?;
     let RunningActor {
         actor: joe,
         handle: actor_handle,
         scope,
     } = if cli.simple {
-        get_actor(cli, SimpleWorker::new(), tx, config_context.clone()).await
+        get_actor(cli, SimpleWorker::new(), tx, config_context.clone(), root).await
     } else {
-        get_actor(cli, BaseWorker::new(), tx, config_context.clone()).await
+        get_actor(cli, BaseWorker::new(), tx, config_context.clone(), root).await
     }?;
 
     terminal.clear().ok();
@@ -140,11 +141,10 @@ async fn get_actor<W: Worker<C = RustContext>>(
     worker: W,
     chan: Sender<ActorToTui>,
     config_context: ConfigContext,
+    root: std::path::PathBuf,
 ) -> Result<RunningActor> {
-    let mut runtime = actors::runtime::Runtime::with_session_namespace(
-        std::env::current_dir()?,
-        &cli.session_namespace,
-    )?;
+    let mut runtime =
+        actors::runtime::Runtime::with_session_namespace(root, &cli.session_namespace)?;
     runtime.context_budget =
         actors::context::ContextBudget::new(cli.context_tokens, cli.response_tokens)?;
     runtime
@@ -152,11 +152,6 @@ async fn get_actor<W: Worker<C = RustContext>>(
         .resolve(config_context.get_config().context_window())?;
     runtime.native_compaction = cli.native_compaction;
     let scope = utils::execution::OwnedScope::new(runtime.scope.clone());
-    scope
-        .sandbox()?
-        .start()
-        .await
-        .context("Failed to start the project sandbox")?;
     let workspace = runtime.scope.workspace()?;
     let mut context = runtime
         .scope
@@ -202,3 +197,7 @@ async fn get_actor<W: Worker<C = RustContext>>(
         scope,
     })
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/main/tests.rs"]
+mod tests;
