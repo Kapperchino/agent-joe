@@ -36,6 +36,9 @@ pub enum Message {
         reply: RpcReplyPort<Result<String, String>>,
     },
     StartWork(Option<String>),
+    ResolveMerge {
+        turn: TurnId,
+    },
     #[cfg(test)]
     Inspect(RpcReplyPort<Vec<clients::llm::Message>>),
     RunWorker(RpcReplyPort<Result<String, WorkerFailure>>),
@@ -153,6 +156,11 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
                         state
                             .dispatch(SessionEvent::Start(FollowUp::new(prompt)))
                             .await
+                    }
+                    Message::ResolveMerge { turn } => {
+                        if let Some(input) = state.merge_input(turn) {
+                            state.dispatch(SessionEvent::Start(input)).await;
+                        }
                     }
                     Message::RunWorker(reply) => {
                         state.dispatch(SessionEvent::StartWorker(reply)).await

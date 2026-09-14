@@ -28,6 +28,15 @@ pub trait Context: Send + Sync {
         None
     }
     fn clear_task_context(&mut self) {}
+    fn analysis_project(&self) -> Option<crate::rust_proj::RustProject> {
+        None
+    }
+    fn relocate(&mut self, root: PathBuf) -> anyhow::Result<()> {
+        match self.get_root() == root {
+            true => Ok(()),
+            false => Err(anyhow::anyhow!("This context cannot switch workspaces")),
+        }
+    }
     fn get_root(&self) -> PathBuf;
     async fn get_files(&self) -> anyhow::Result<Vec<PathBuf>>;
     async fn line_index_creator(&self) -> anyhow::Result<Box<Self::LineIndexCreator>>;

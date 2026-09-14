@@ -8,6 +8,7 @@ use snapshot::{WorktreeSnapshot, changed_paths};
 use state::WorktreeEvent;
 use std::path::PathBuf;
 
+pub mod session;
 mod snapshot;
 mod state;
 

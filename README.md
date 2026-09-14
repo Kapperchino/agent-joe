@@ -70,8 +70,9 @@ package. Keep both executables in the same directory when installing Joe. Other
 applications using the sandbox crate can set `JOE_SANDBOX_LAUNCHER` to the launcher
 path. Workspace checks and tests include the launcher.
 
-Joe starts one sandbox VM during startup and keeps it until Joe exits. Cargo
-operations share that VM and its build cache. Each command runs in its own PID
+Cargo operations within a session share a sandbox VM and its build cache.
+Switching session worktrees starts a separate sandbox for that workspace.
+Each command runs in its own PID
 namespace, so timeouts and turn cancellation stop its descendants without
 shutting down the VM. Workspace hard links are checked before every command, and
 each command receives fresh protection mounts for read-only and hidden paths.
@@ -92,6 +93,33 @@ and programs run inside the sandbox without network access. Git dependencies and
 custom registries are not downloaded automatically.
 
 ## Session storage
+
+In Git repositories, each interactive session uses its own branch,
+`joe/session/<session-id>`, checked out under `.joe-worktrees/<session-id>/`.
+New sessions start from the committed local `main` branch; existing edits in the
+original checkout stay there. A committed `main` branch is required. Workers use
+their parent session's worktree. Projects without Git continue using their
+original directory.
+
+After a task completes successfully, Joe commits the session's changes and asks
+whether to merge them into `main`. Answer the displayed question with its `merge`
+or `keep` choice using `/answer <question-id> choice <choice>`. Only explicit
+acceptance updates `main`; ending a session, cancelling a task, or starting a new
+session does not merge it. Starting another task invalidates the previous merge
+question. Approval covers the commit shown in the question and any merge conflict
+resolution; a new task requires a fresh question.
+
+Merges preserve concurrent changes through a three-way merge. If conflicts arise
+after approval, Joe resolves them in the session worktree, validates the result,
+and retries the merge automatically without asking for approval again. `main`
+stays unchanged until resolution succeeds; unresolved conflict markers block the
+merge. Interrupting resolution stops the automatic merge. Local edits in the
+`main` checkout or `main` checked out in another worktree stop the merge and leave
+the session available for recovery. Resolve the blocker and retry the answer, or
+complete another task to prepare a fresh merge proposal.
+Session branches and worktrees remain available after merging. `/resume` reopens
+the saved worktree; `/fork` creates a separate worktree including the current
+session's edits. Session storage stays in the original project.
 
 Session databases have a 100 GiB map limit and rotate before the next write once
 usage reaches 90 GiB. The map reserves address space; disk space grows with the

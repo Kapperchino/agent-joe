@@ -1,0 +1,316 @@
+use super::*;
+use std::path::Path;
+
+struct Fixture {
+    root: PathBuf,
+    workspace: WorkspacePolicy,
+    repo: git2::Repository,
+}
+
+impl Fixture {
+    fn new() -> Self {
+        let root =
+            std::env::temp_dir().join(format!("joe-session-worktree-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let repo = git2::Repository::init(&root).unwrap();
+        repo.set_head("refs/heads/main").unwrap();
+        let workspace = WorkspacePolicy::workspace(root.clone()).unwrap();
+        let fixture = Self {
+            root,
+            workspace,
+            repo,
+        };
+        fixture.commit("file.txt", "base\n");
+        fixture
+    }
+
+    fn commit(&self, path: &str, text: &str) -> Oid {
+        std::fs::write(self.root.join(path), text).unwrap();
+        let mut index = self.repo.index().unwrap();
+        index.add_path(Path::new(path)).unwrap();
+        index.write().unwrap();
+        let tree = self.repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let parent = self
+            .repo
+            .head()
+            .ok()
+            .and_then(|head| head.peel_to_commit().ok());
+        let signature = Signature::now("Fixture", "fixture@example.com").unwrap();
+        self.repo
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                "fixture",
+                &tree,
+                &parent.iter().collect::<Vec<_>>(),
+            )
+            .unwrap()
+    }
+
+    fn session(&self) -> SessionWorktree {
+        SessionWorktree::create(&self.workspace, &uuid::Uuid::new_v4().to_string(), None)
+            .unwrap()
+            .unwrap()
+    }
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+#[test]
+fn sessions_are_isolated_and_proposals_do_not_merge_without_approval() {
+    let fixture = Fixture::new();
+    let first = fixture.session();
+    let second = fixture.session();
+    let base = fixture.repo.refname_to_id("HEAD").unwrap();
+    std::fs::write(first.path.join("file.txt"), "first\n").unwrap();
+    std::fs::write(first.path.join("added.txt"), "new\n").unwrap();
+    let commit = first.proposal(&fixture.workspace).unwrap().unwrap();
+    assert_eq!(fixture.repo.refname_to_id("HEAD").unwrap(), base);
+    assert_eq!(
+        std::fs::read_to_string(second.path.join("file.txt")).unwrap(),
+        "base\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.root.join("file.txt")).unwrap(),
+        "base\n"
+    );
+    assert!(matches!(
+        first.merge(&fixture.workspace, &commit).unwrap(),
+        MergeOutcome::Merged { .. }
+    ));
+    assert_eq!(
+        std::fs::read_to_string(fixture.root.join("file.txt")).unwrap(),
+        "first\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.root.join("added.txt")).unwrap(),
+        "new\n"
+    );
+    assert!(
+        GitRepository::required(&fixture.workspace)
+            .unwrap()
+            .status(&fixture.workspace)
+            .unwrap()
+            .entries
+            .is_empty()
+    );
+    assert!(first.proposal(&fixture.workspace).unwrap().is_none());
+    assert!(first.workspace(&fixture.workspace).is_ok());
+}
+
+#[test]
+fn concurrent_sessions_merge_with_two_parents_and_preserve_both_changes() {
+    let fixture = Fixture::new();
+    let first = fixture.session();
+    let second = fixture.session();
+    std::fs::write(first.path.join("first.txt"), "first\n").unwrap();
+    std::fs::remove_file(second.path.join("file.txt")).unwrap();
+    let first_commit = first.proposal(&fixture.workspace).unwrap().unwrap();
+    let second_commit = second.proposal(&fixture.workspace).unwrap().unwrap();
+    first.merge(&fixture.workspace, &first_commit).unwrap();
+    second.merge(&fixture.workspace, &second_commit).unwrap();
+    assert_eq!(
+        fixture
+            .repo
+            .head()
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .parent_count(),
+        2
+    );
+    assert!(fixture.root.join("first.txt").exists());
+    assert!(!fixture.root.join("file.txt").exists());
+}
+
+#[test]
+fn conflicts_and_dirty_main_retain_work_and_allow_retry() {
+    let fixture = Fixture::new();
+    let session = fixture.session();
+    std::fs::write(session.path.join("file.txt"), "session\n").unwrap();
+    let commit = session.proposal(&fixture.workspace).unwrap().unwrap();
+    std::fs::write(fixture.root.join("file.txt"), "user\n").unwrap();
+    let index = std::fs::read(fixture.repo.path().join("index")).unwrap();
+    let base = fixture.repo.refname_to_id("HEAD").unwrap();
+    assert!(session.merge(&fixture.workspace, &commit).is_err());
+    assert_eq!(fixture.repo.refname_to_id("HEAD").unwrap(), base);
+    assert_eq!(
+        std::fs::read(fixture.repo.path().join("index")).unwrap(),
+        index
+    );
+    let target = fixture.commit("file.txt", "user\n");
+    assert!(session.merge(&fixture.workspace, &commit).is_err());
+    assert_eq!(fixture.repo.refname_to_id("HEAD").unwrap(), target);
+    assert_eq!(
+        std::fs::read_to_string(session.path.join("file.txt")).unwrap(),
+        "session\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.root.join("file.txt")).unwrap(),
+        "user\n"
+    );
+    std::fs::write(session.path.join("file.txt"), "user\n").unwrap();
+    let retry = session.proposal(&fixture.workspace).unwrap().unwrap();
+    session.merge(&fixture.workspace, &retry).unwrap();
+}
+
+#[test]
+fn fork_copies_pending_edits_and_stale_approval_cannot_merge_new_changes() {
+    let fixture = Fixture::new();
+    let session = fixture.session();
+    std::fs::write(session.path.join("file.txt"), "fork base\n").unwrap();
+    let fork = SessionWorktree::create(
+        &fixture.workspace,
+        &uuid::Uuid::new_v4().to_string(),
+        Some(&session),
+    )
+    .unwrap()
+    .unwrap();
+    assert_ne!(fork.path, session.path);
+    assert_eq!(
+        std::fs::read_to_string(fork.path.join("file.txt")).unwrap(),
+        "fork base\n"
+    );
+    let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+    let target = fixture.repo.refname_to_id("HEAD").unwrap();
+    std::fs::write(session.path.join("file.txt"), "later edits\n").unwrap();
+    assert!(session.merge(&fixture.workspace, &approved).is_err());
+    assert_eq!(fixture.repo.refname_to_id("HEAD").unwrap(), target);
+    assert_eq!(
+        std::fs::read_to_string(fork.path.join("file.txt")).unwrap(),
+        "fork base\n"
+    );
+}
+
+#[test]
+fn main_is_required_and_saved_identity_cannot_redirect_workspace_access() {
+    let fixture = Fixture::new();
+    let mut session = fixture.session();
+    session.path = fixture.root.clone();
+    assert!(session.workspace(&fixture.workspace).is_err());
+    fixture
+        .repo
+        .find_branch("main", git2::BranchType::Local)
+        .unwrap()
+        .rename("master", false)
+        .unwrap();
+    assert!(
+        SessionWorktree::create(&fixture.workspace, &uuid::Uuid::new_v4().to_string(), None)
+            .is_err()
+    );
+}
+
+#[test]
+fn merging_cannot_overwrite_ignored_files_in_main() {
+    let fixture = Fixture::new();
+    let main = fixture.commit(".gitignore", "local.txt\n");
+    std::fs::write(fixture.root.join("local.txt"), "private local data\n").unwrap();
+    let session = fixture.session();
+    std::fs::remove_file(session.path.join(".gitignore")).unwrap();
+    std::fs::write(session.path.join("local.txt"), "session data\n").unwrap();
+    let commit = session.proposal(&fixture.workspace).unwrap().unwrap();
+    let index = std::fs::read(fixture.repo.path().join("index")).unwrap();
+    assert!(session.merge(&fixture.workspace, &commit).is_err());
+    assert_eq!(fixture.repo.refname_to_id("HEAD").unwrap(), main);
+    assert_eq!(
+        std::fs::read(fixture.repo.path().join("index")).unwrap(),
+        index
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.root.join("local.txt")).unwrap(),
+        "private local data\n"
+    );
+}
+
+#[test]
+fn conflicts_are_resolved_in_the_session_and_record_both_parents_before_merging() {
+    let fixture = Fixture::new();
+    let session = fixture.session();
+    std::fs::write(session.path.join("file.txt"), "session\n").unwrap();
+    let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+    fixture.commit("file.txt", "main\n");
+    let target = fixture.commit("incoming.txt", "incoming\n");
+    let error = session.merge(&fixture.workspace, &approved).err().unwrap();
+    let conflict = error.downcast_ref::<MergeConflict>().unwrap();
+    assert!(
+        session
+            .finish_resolution(&fixture.workspace, conflict)
+            .is_err()
+    );
+    session
+        .prepare_resolution(&fixture.workspace, conflict)
+        .unwrap();
+    let markers = std::fs::read_to_string(session.path.join("file.txt")).unwrap();
+    assert!(markers.contains("<<<<<<< Joe session"));
+    assert!(markers.contains(">>>>>>> main"));
+    assert!(markers.contains("session\n"));
+    assert!(markers.contains("main\n"));
+    assert_eq!(
+        std::fs::read_to_string(session.path.join("incoming.txt")).unwrap(),
+        "incoming\n"
+    );
+    assert_eq!(fixture.repo.refname_to_id("HEAD").unwrap(), target);
+    assert!(
+        session
+            .finish_resolution(&fixture.workspace, conflict)
+            .is_err()
+    );
+    std::fs::write(session.path.join("file.txt"), "combined\n").unwrap();
+    let resolved = session
+        .finish_resolution(&fixture.workspace, conflict)
+        .unwrap();
+    let commit = fixture
+        .repo
+        .find_commit(Oid::from_str(&resolved).unwrap())
+        .unwrap();
+    assert_eq!(commit.parent_count(), 2);
+    assert_eq!(commit.parent_id(0).unwrap().to_string(), approved);
+    assert_eq!(commit.parent_id(1).unwrap(), target);
+    fixture.commit("later.txt", "later main work\n");
+    session.merge(&fixture.workspace, &resolved).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(fixture.root.join("file.txt")).unwrap(),
+        "combined\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.root.join("incoming.txt")).unwrap(),
+        "incoming\n"
+    );
+    assert!(fixture.root.join("later.txt").exists());
+}
+
+#[test]
+fn failed_resolution_preparation_cannot_discard_main_changes() {
+    let fixture = Fixture::new();
+    fixture.commit(".gitignore", "local.txt\n");
+    let session = fixture.session();
+    std::fs::write(session.path.join("local.txt"), "private local data\n").unwrap();
+    std::fs::write(session.path.join("file.txt"), "session\n").unwrap();
+    let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+    fixture.commit("file.txt", "main\n");
+    fixture.commit(".gitignore", "");
+    let target = fixture.commit("local.txt", "main data\n");
+    let error = session.merge(&fixture.workspace, &approved).err().unwrap();
+    let conflict = error.downcast_ref::<MergeConflict>().unwrap();
+    assert!(
+        session
+            .prepare_resolution(&fixture.workspace, conflict)
+            .is_err()
+    );
+    assert!(
+        session
+            .finish_resolution(&fixture.workspace, conflict)
+            .is_err()
+    );
+    assert_eq!(fixture.repo.refname_to_id("HEAD").unwrap(), target);
+    assert_eq!(
+        std::fs::read_to_string(session.path.join("local.txt")).unwrap(),
+        "private local data\n"
+    );
+}

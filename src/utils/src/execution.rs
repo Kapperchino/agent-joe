@@ -31,7 +31,11 @@ tokio::task_local! { static CURRENT: ExecutionScope; }
 
 impl ExecutionScope {
     pub fn with_workspace(workspace: crate::workspace::WorkspacePolicy) -> Self {
-        let scope = Self::default();
+        Self::default().relocated(workspace)
+    }
+
+    pub fn relocated(&self, workspace: crate::workspace::WorkspacePolicy) -> Self {
+        let scope = self.clone();
         let workspace = Arc::new(workspace);
         #[cfg(unix)]
         let sandbox = Some(sandbox::Sandbox::new(

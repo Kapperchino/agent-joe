@@ -3,4 +3,5 @@
 *.log.*
 /logs
 /.turbo-code
+/.joe-worktrees
 /.idea

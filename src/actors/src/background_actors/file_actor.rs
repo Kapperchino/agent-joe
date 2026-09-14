@@ -30,8 +30,8 @@ enum Refresh {
     Dirty,
 }
 
-#[derive(Debug)]
 pub enum Message {
+    Relocate(RustProject),
     Changed(Vec<PathBuf>),
     ApplyVFS,
 }
@@ -46,22 +46,7 @@ impl Actor for FileActor {
         myself: ActorRef<Self::Msg>,
         dependency: Dependency,
     ) -> Result<Self::State, ActorProcessingErr> {
-        let config = FileWatcherConfig {
-            directories: vec![dependency.context.cur_dir.clone()],
-            files: Vec::new(),
-        };
-        let (watcher, _) =
-            Actor::spawn_linked(None, FileWatcher, config, myself.get_cell()).await?;
-        match call!(watcher, |reply| FileWatcherMessage::Subscribe(
-            myself.get_id(),
-            Box::new(Forwarder {
-                actor: myself.get_cell()
-            }),
-            reply
-        ))? {
-            SubscriptionResult::Ok => Ok(()),
-            _ => Err(anyhow!("Could not subscribe to workspace changes")),
-        }?;
+        let watcher = watch(&dependency.context.cur_dir, &myself).await?;
         myself.send_interval(Duration::from_secs(1), || Message::ApplyVFS);
         Ok(FileActorState {
             context: dependency.context,
@@ -73,11 +58,25 @@ impl Actor for FileActor {
 
     async fn handle(
         &self,
-        _myself: ActorRef<Self::Msg>,
+        myself: ActorRef<Self::Msg>,
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
+            Message::Relocate(project) => {
+                let root = project.workspace().root().to_path_buf();
+                if root != state.context.get_root() {
+                    state.watcher.unlink(myself.get_cell());
+                    state.watcher.stop_and_wait(None, None).await?;
+                    state.watcher = watch(&root, &myself).await?;
+                    state.scope = state
+                        .scope
+                        .relocated(utils::workspace::WorkspacePolicy::workspace(root.clone())?);
+                }
+                state.context.cur_dir = root;
+                state.context.rust_proj = project;
+                state.refresh = Refresh::Dirty;
+            }
             Message::Changed(paths) => {
                 if paths
                     .iter()
@@ -107,6 +106,27 @@ impl Actor for FileActor {
         state.scope.finish().await;
         state.watcher.stop_and_wait(None, None).await?;
         Ok(())
+    }
+}
+
+async fn watch(
+    root: &std::path::Path,
+    actor: &ActorRef<Message>,
+) -> Result<ActorRef<FileWatcherMessage>, ActorProcessingErr> {
+    let config = FileWatcherConfig {
+        directories: vec![root.to_path_buf()],
+        files: Vec::new(),
+    };
+    let (watcher, _) = Actor::spawn_linked(None, FileWatcher, config, actor.get_cell()).await?;
+    match call!(watcher, |reply| FileWatcherMessage::Subscribe(
+        actor.get_id(),
+        Box::new(Forwarder {
+            actor: actor.get_cell()
+        }),
+        reply
+    ))? {
+        SubscriptionResult::Ok => Ok(watcher),
+        _ => Err(anyhow!("Could not subscribe to workspace changes").into()),
     }
 }
 

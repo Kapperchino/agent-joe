@@ -31,6 +31,8 @@ use tools::tool_defs::{
 use utils::utils::FnvHashMap;
 
 type Events = BoxStream<'static, anyhow::Result<StreamEvent>>;
+#[path = "session_worktrees/tests.rs"]
+mod session_worktrees;
 type Request = (llm::ClientRequest, oneshot::Sender<anyhow::Result<Events>>);
 struct Provider(flume::Sender<Request>);
 impl StreamProvider for Provider {

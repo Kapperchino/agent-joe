@@ -21,6 +21,15 @@ use tools::tool_defs::ToolResult;
 
 impl<C: Context + Clone + 'static> ActorState<C> {
     pub(crate) async fn dispatch(&mut self, event: impl Into<Event>) {
+        let event = event.into();
+        if matches!(
+            &event,
+            Event::StopRequested
+                | Event::Shutdown
+                | Event::Session(SessionEvent::Interrupt(_) | SessionEvent::Steer(_))
+        ) {
+            self.pause_merge();
+        }
         let mut effects = VecDeque::from(self.turn.transition(event));
         while let Some(effect) = effects.pop_front() {
             let outcome = self.execute(effect).await;
@@ -80,7 +89,22 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                     *state = common_models::tui_models::Lifecycle::Failed;
                     *detail = Some(failure.to_string());
                 }
+                let completed = match &packet {
+                    ActorToTuiPacket::TurnChanged {
+                        turn_id,
+                        state: common_models::tui_models::Lifecycle::Completed,
+                        ..
+                    } => Some(*turn_id),
+                    _ => None,
+                };
                 self.reporter.send(packet);
+                if let Some(turn) = completed
+                    && let Err(error) = self.offer_merge(turn).await
+                {
+                    self.reporter.send(ActorToTuiPacket::SessionError(format!(
+                        "Session merge could not continue: {error:#}"
+                    )));
+                }
                 EffectOutcome::Applied
             }
             Effect::LaunchProvider {

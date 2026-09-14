@@ -28,6 +28,7 @@ pub struct ActorState<C: Context> {
     pub(crate) compact_turn: Option<TurnId>,
     pub(crate) questions: Questions,
     pub(crate) persistence: Persistence,
+    pub(crate) merge_approval: crate::session_merge::MergeApproval,
     pub cur_context: C,
     pub(crate) turn: TurnMachine,
     pub history: Vec<Message>,
@@ -125,6 +126,7 @@ impl SessionTransition {
             }
             None => runtime.session,
         };
+        runtime.activate_session(None)?;
         runtime.scope.changes = match self {
             Self::Start => {
                 if let ExecutionRole::Worker { execution } = &runtime.role {
@@ -164,7 +166,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     ) -> anyhow::Result<Self> {
         let dependency = mode.configure(dependency);
         let history = Self::initial_history(&dependency.context).await;
-        let dependency = Dependency {
+        let mut dependency = Dependency {
             runtime: SessionTransition::Start.apply(
                 dependency.runtime,
                 &dependency.client,
@@ -172,6 +174,12 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             )?,
             ..dependency
         };
+        Self::relocate_context(&mut dependency.context, &dependency.runtime)?;
+        let history = Self::initial_history(&dependency.context).await;
+        if let (Some(watcher), Some(project)) = (&file_actor, dependency.context.analysis_project())
+        {
+            watcher.send_message(file_actor::Message::Relocate(project))?;
+        }
         let stream_log = Self::stream_log(&dependency)?;
         let request_mode = mode.request_mode();
         let reporter = mode.reporter(&dependency);
@@ -187,6 +195,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             compact_turn: None,
             questions: Default::default(),
             persistence: Persistence::Ready,
+            merge_approval: Default::default(),
             cur_context: dependency.context.clone(),
             history,
             llm: dependency.client.clone(),
@@ -215,7 +224,13 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                     .unwrap_or_default()
                     .as_secs();
                 let path = PathBuf::from(format!("./logs/stream_{timestamp}.jsonl"));
-                let file = dependency.runtime.scope.workspace()?.open_append(&path)?;
+                let workspace = dependency
+                    .runtime
+                    .project
+                    .clone()
+                    .map(Ok)
+                    .unwrap_or_else(|| dependency.runtime.scope.workspace())?;
+                let file = workspace.open_append(&path)?;
                 Ok(Some(tokio::fs::File::from_std(file)))
             }
             _ => Ok(None),
@@ -289,9 +304,15 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         let mut context = self.cur_context.clone();
         context.clear_task_context();
         let history = Self::initial_history(&context).await;
-        self.dependency.runtime =
+        let runtime =
             SessionTransition::Clear.apply(self.dependency.runtime.clone(), &self.llm, &history)?;
+        Self::relocate_context(&mut context, &runtime)?;
+        let history = Self::initial_history(&context).await;
+        self.dependency.runtime = runtime;
+        self.dependency.context = context.clone();
         self.cur_context = context;
+        self.relocate_watcher()?;
+        self.merge_approval = Default::default();
         self.history = history;
         self.context_checkpoint = Default::default();
         self.compact_turn = None;
@@ -302,6 +323,24 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         self.refresh_interaction();
         self.persistence = Persistence::Ready;
         self.stream_processor.token_count = Default::default();
+        Ok(())
+    }
+
+    pub(crate) fn relocate_context(context: &mut C, runtime: &Runtime) -> anyhow::Result<()> {
+        if let Some(session) = &runtime.session
+            && session.snapshot()?.worktree.is_some()
+        {
+            context.relocate(runtime.scope.workspace()?.root().to_path_buf())?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn relocate_watcher(&self) -> anyhow::Result<()> {
+        if let (Some(watcher), Some(project)) =
+            (&self.file_actor, self.cur_context.analysis_project())
+        {
+            watcher.send_message(file_actor::Message::Relocate(project))?;
+        }
         Ok(())
     }
 

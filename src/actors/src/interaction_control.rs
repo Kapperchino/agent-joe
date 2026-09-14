@@ -32,7 +32,13 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             self.reporter
                 .send(ActorToTuiPacket::InteractionUpdated(InteractionView {
                     planning: self.planning.clone(),
-                    questions: self.questions.pending().to_vec(),
+                    questions: self
+                        .questions
+                        .pending()
+                        .iter()
+                        .cloned()
+                        .chain(self.merge_approval.question())
+                        .collect(),
                 }));
         }
     }
@@ -98,16 +104,30 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         let result = match &command {
             Command::Plan => self.set_work_mode(WorkMode::Plan),
             Command::Implement => self.set_work_mode(WorkMode::Implement),
-            Command::Questions => Ok(match self.questions.pending().is_empty() {
-                true => "No pending questions.".into(),
-                false => self
-                    .questions
-                    .pending()
-                    .iter()
-                    .map(Question::display)
-                    .collect::<Vec<_>>()
-                    .join("\n\n"),
-            }),
+            Command::Questions => Ok(
+                match self.questions.pending().is_empty()
+                    && self.merge_approval.question().is_none()
+                {
+                    true => "No pending questions.".into(),
+                    false => self
+                        .questions
+                        .pending()
+                        .iter()
+                        .cloned()
+                        .chain(self.merge_approval.question())
+                        .map(|question| question.display())
+                        .collect::<Vec<_>>()
+                        .join("\n\n"),
+                },
+            ),
+            Command::Answer(input)
+                if self
+                    .merge_approval
+                    .question()
+                    .is_some_and(|question| question.id == input.id) =>
+            {
+                self.answer_merge(&input.answer).await
+            }
             Command::Answer(input) => {
                 let result = self.answer_question(&input.id, input.answer.clone());
                 if result.is_ok() {
@@ -129,7 +149,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         };
         self.reporter.send(ActorToTuiPacket::CommandResult(
             command,
-            result.unwrap_or_else(|error| error.to_string()),
+            result.unwrap_or_else(|error| format!("{error:#}")),
         ));
     }
 

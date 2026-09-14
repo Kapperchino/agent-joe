@@ -95,6 +95,19 @@ impl Context for RustContext {
         self.cur_dir.clone()
     }
 
+    fn relocate(&mut self, root: PathBuf) -> anyhow::Result<()> {
+        let project = RustProject::new(&root)?;
+        let guidance = self.guidance.relocated(project.workspace())?;
+        self.cur_dir = project.workspace().root().to_path_buf();
+        self.rust_proj = project;
+        self.guidance = guidance;
+        Ok(())
+    }
+
+    fn analysis_project(&self) -> Option<RustProject> {
+        Some(self.rust_proj.clone())
+    }
+
     async fn get_files(&self) -> anyhow::Result<Vec<PathBuf>> {
         let workspace = self.rust_proj.workspace();
         utils::execution::ExecutionScope::current()

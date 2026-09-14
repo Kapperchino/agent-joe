@@ -48,6 +48,7 @@ pub struct Runtime {
     pub context_budget: crate::context::ContextBudget,
     pub native_compaction: crate::context::NativeCompaction,
     pub sessions: Option<Arc<crate::session::SessionStore>>,
+    pub(crate) project: Option<Arc<utils::workspace::WorkspacePolicy>>,
     pub(crate) session: Option<Arc<crate::session::Session>>,
     pub workspace: Arc<Workspace>,
     pub scope: ExecutionScope,
@@ -65,6 +66,7 @@ impl Default for Runtime {
             context_budget: Default::default(),
             native_compaction: Default::default(),
             sessions: None,
+            project: None,
             session: None,
             workspace: Arc::new(Workspace::new(4)),
             scope: ExecutionScope::default(),
@@ -86,6 +88,9 @@ impl Runtime {
         let sessions = crate::session::SessionStore::open(&workspace, namespace)?;
         Ok(Self {
             sessions: Some(sessions),
+            project: Some(Arc::new(utils::workspace::WorkspacePolicy::workspace(
+                workspace.root().to_path_buf(),
+            )?)),
             scope: ExecutionScope::with_workspace(workspace),
             ..Self::default()
         })
@@ -97,6 +102,33 @@ impl Runtime {
             scope,
             ..self.clone()
         }
+    }
+
+    pub(crate) fn activate_session(
+        &mut self,
+        source: Option<&utils::git::worktrees::session::SessionWorktree>,
+    ) -> anyhow::Result<()> {
+        if let (ExecutionRole::Root, Some(project), Some(session)) =
+            (&self.role, &self.project, &self.session)
+        {
+            let worktree = match session.snapshot()?.worktree {
+                Some(worktree) => Some(worktree),
+                None => {
+                    let worktree = utils::git::worktrees::session::SessionWorktree::create(
+                        project,
+                        &session.id,
+                        source,
+                    )?;
+                    session.record(crate::session::Event::Worktree(worktree.clone()))?;
+                    worktree
+                }
+            };
+            if let Some(worktree) = worktree {
+                self.scope = self.scope.relocated(worktree.workspace(project)?);
+                self.workspace = Arc::new(Workspace::new(self.workspace.read_limit()));
+            }
+        }
+        Ok(())
     }
 }
 

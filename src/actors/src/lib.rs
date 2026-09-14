@@ -22,6 +22,7 @@ mod runtime_test;
 mod scheduler;
 pub mod session;
 mod session_control;
+mod session_merge;
 
 mod compactor;
 pub mod context;

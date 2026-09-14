@@ -66,6 +66,15 @@ impl Instructions {
         }
     }
 
+    pub fn relocated(&self, workspace: Arc<WorkspacePolicy>) -> anyhow::Result<Self> {
+        let instructions = Self {
+            workspace,
+            ..self.reset()
+        };
+        instructions.sources()?;
+        Ok(instructions)
+    }
+
     pub fn discover(&self, paths: &[PathBuf]) -> anyhow::Result<()> {
         let paths = paths
             .iter()

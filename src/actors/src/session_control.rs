@@ -1,6 +1,7 @@
 use crate::{
     actor_state::ActorState,
     session::{Event, PendingBatch, QueuedInput, ResumableSession, Session, SessionStore},
+    session_merge::MergeEvent,
     turn::FollowUp,
 };
 use analysis::contexts::context::Context;
@@ -153,7 +154,11 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     }
 
     pub(crate) async fn begin_turn(&mut self, input: FollowUp) {
-        if input.prompt.is_some() {
+        if let Err(error) = self.record_merge(MergeEvent::TaskStarted { turn: input.id }) {
+            self.persistence_failed(error);
+        }
+        self.refresh_interaction();
+        if input.prompt.is_some() && self.merge_approval.resolution(input.id).is_none() {
             self.reconcile_plan();
         }
         let scope = self.dependency.runtime.scope.clone();
@@ -247,11 +252,17 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 .map(SessionReply::Choices),
             SessionAction::Current { id } => Ok(SessionReply::Resumed(self.session_transcript(id))),
             SessionAction::Resume { id } => {
-                let workspace = self.dependency.runtime.scope.workspace()?;
+                let workspace = self
+                    .dependency
+                    .runtime
+                    .project
+                    .clone()
+                    .map(Ok)
+                    .unwrap_or_else(|| self.dependency.runtime.scope.workspace())?;
                 let session =
                     ResumableSession::new(&store, id, &workspace, &self.llm.session_provider())?
                         .resume()?;
-                self.restore_session(session).await?;
+                self.restore_session(session, None).await?;
                 Ok(SessionReply::Resumed(self.session_transcript(id)))
             }
             SessionAction::New => {
@@ -269,6 +280,14 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 ))
             }
             SessionAction::Fork => {
+                let source = self
+                    .dependency
+                    .runtime
+                    .session
+                    .as_ref()
+                    .map(|session| session.snapshot())
+                    .transpose()?
+                    .and_then(|snapshot| snapshot.worktree);
                 let session = self
                     .dependency
                     .runtime
@@ -277,9 +296,15 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                     .ok_or_else(|| anyhow::anyhow!("There is no current session"))?
                     .fork()?;
                 let id = session.id.clone();
-                self.restore_session(session).await?;
+                self.restore_session(session, source.as_ref()).await?;
+                let workspace = match source {
+                    Some(_) => "The conversation uses a separate Git worktree.",
+                    None => {
+                        "Both conversations use the same workspace; filesystem changes are shared."
+                    }
+                };
                 Ok(SessionReply::Message(format!(
-                    "Forked conversation into session {id}. Both conversations use the same workspace; filesystem changes are shared."
+                    "Forked conversation into session {id}. {workspace}"
                 )))
             }
         }
@@ -369,15 +394,28 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         ))
     }
 
-    async fn restore_session(&mut self, session: Arc<Session>) -> anyhow::Result<()> {
+    async fn restore_session(
+        &mut self,
+        session: Arc<Session>,
+        source: Option<&utils::git::worktrees::session::SessionWorktree>,
+    ) -> anyhow::Result<()> {
+        let mut runtime = self.dependency.runtime.clone();
+        runtime.session = Some(session.clone());
+        runtime.activate_session(source)?;
         let snapshot = session.snapshot()?;
+        runtime.scope.changes = session.change_tracker(snapshot.changes);
         let mut context = self.cur_context.clone();
         context.clear_task_context();
+        Self::relocate_context(&mut context, &runtime)?;
+        self.dependency.runtime = runtime;
+        self.dependency.context = context.clone();
         let fresh = llm::Message::new(context.get_ctx().await);
         self.history = std::iter::once(fresh)
             .chain(snapshot.history.into_iter().skip(1))
             .collect();
         self.cur_context = context;
+        self.relocate_watcher()?;
+        self.merge_approval = snapshot.merge_approval;
         self.stream_processor.clear();
         self.stream_processor.token_count = snapshot.usage;
         self.context_checkpoint = snapshot.context;
@@ -394,7 +432,6 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             .runtime
             .workers
             .restore(&session.id, snapshot.workers);
-        self.dependency.runtime.scope.changes = session.change_tracker(snapshot.changes);
         self.dependency.runtime.session = Some(session);
         self.persistence = Persistence::Ready;
         self.reporter.send(ActorToTuiPacket::TokensUpdated(

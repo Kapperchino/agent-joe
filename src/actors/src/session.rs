@@ -110,6 +110,10 @@ pub(crate) struct Snapshot {
     pub sequence: u64,
     #[serde(default)]
     pub changes: utils::changes::ChangeSnapshot,
+    #[serde(default)]
+    pub worktree: Option<utils::git::worktrees::session::SessionWorktree>,
+    #[serde(default)]
+    pub merge_approval: crate::session_merge::MergeApproval,
     pub id: String,
     workspace: String,
     provider: SessionProvider,
@@ -227,6 +231,8 @@ pub(crate) enum OperationState {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) enum Event {
+    Worktree(Option<utils::git::worktrees::session::SessionWorktree>),
+    MergeApproval(crate::session_merge::MergeApproval),
     Planning(common_models::interaction::Planning),
     Worker(Box<crate::worker_registry::report::WorkerView>),
     Created,
@@ -295,6 +301,8 @@ impl SessionStore {
             version: SchemaVersion,
             sequence: 1,
             changes: Default::default(),
+            worktree: None,
+            merge_approval: Default::default(),
             id: id.clone(),
             workspace: self.storage.workspace_identity().to_owned(),
             provider,
@@ -432,6 +440,8 @@ impl Session {
             snapshot.id = self.store.storage.new_id();
             snapshot.sequence = 1;
             snapshot.changes = Default::default();
+            snapshot.worktree = None;
+            snapshot.merge_approval = Default::default();
             snapshot.parent = None;
             snapshot.forked_from = Some(self.id.clone());
             snapshot.status = Lifecycle::Ready;
@@ -573,6 +583,13 @@ impl Snapshot {
                     .insert(worker.worker_id.clone(), worker.as_ref().clone());
             }
             Event::Changes(changes) => self.changes = changes.clone(),
+            Event::Worktree(worktree) => {
+                if self.worktree.is_none() && worktree.is_some() {
+                    self.changes = Default::default();
+                }
+                self.worktree = worktree.clone();
+            }
+            Event::MergeApproval(approval) => self.merge_approval = approval.clone(),
             Event::Created | Event::Forked { .. } => {
                 Err(anyhow::anyhow!("Session already exists"))?
             }

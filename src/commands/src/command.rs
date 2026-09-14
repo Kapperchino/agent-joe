@@ -43,7 +43,7 @@ pub enum Command {
     New,
     #[strum(message = "lists saved sessions in this project")]
     Sessions,
-    #[strum(message = "forks this conversation in the same workspace")]
+    #[strum(message = "forks this conversation into a separate Git worktree")]
     Fork,
     #[strum(message = "compacts older context while preserving the saved transcript")]
     Compact,
