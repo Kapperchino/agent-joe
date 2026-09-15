@@ -125,6 +125,88 @@ enum MergeState {
     Diverged,
 }
 
+struct SessionCleanup<'repo> {
+    reference: String,
+    worktree: git2::Worktree,
+    transaction: git2::Transaction<'repo>,
+}
+
+impl<'repo> SessionCleanup<'repo> {
+    fn new(
+        session: &SessionWorktree,
+        project: &WorkspacePolicy,
+        git: &'repo GitRepository,
+        approved: &str,
+    ) -> anyhow::Result<Self> {
+        let workspace = session.workspace(project)?;
+        let child = GitRepository::required(&workspace)?;
+        let reference = format!("refs/heads/{}", session.branch());
+        let target_reference = format!("refs/heads/{}", session.target);
+        let mut transaction = git.repo.transaction()?;
+        transaction.lock_ref(&reference)?;
+        transaction.lock_ref(&target_reference)?;
+        transaction.lock_ref("HEAD")?;
+        let approved_id = Oid::from_str(approved)?;
+        let target = git.repo.refname_to_id(&target_reference)?;
+        let expected = WorktreeSnapshot::base(git, approved)?;
+        let actual = WorktreeSnapshot::complete(&workspace, &child)?;
+        let integrated =
+            target == approved_id || git.repo.graph_descendant_of(target, approved_id)?;
+        let unchanged = git.repo.refname_to_id(&reference)? == approved_id
+            && actual.head == expected.head
+            && actual.files == expected.files
+            && child.repo.state() == RepositoryState::Clean
+            && child.status(&workspace)?.entries.is_empty();
+        match integrated && unchanged {
+            true => Ok(()),
+            false => Err(anyhow::anyhow!(
+                "Cleanup conflict: session has unmerged commits, local edits, ignored files, private data, or a pending Git operation"
+            )),
+        }?;
+        match git.repo.head()?.name()? == reference {
+            true => Err(anyhow::anyhow!(
+                "Session branch is checked out in the source repository"
+            )),
+            false => Ok(()),
+        }?;
+        let worktree = git.repo.find_worktree(&session.id)?;
+        let cleanup = match worktree.path() == session.path {
+            true => Ok(Self {
+                reference,
+                worktree,
+                transaction,
+            }),
+            false => Err(anyhow::anyhow!("Session worktree registration changed")),
+        }?;
+        git.repo
+            .worktrees()?
+            .iter()
+            .try_fold(cleanup, |cleanup, name| {
+                let name = name?.ok_or_else(|| anyhow::anyhow!("Worktree name is not UTF-8"))?;
+                let checked_out = name != session.id
+                    && git2::Repository::open(git.repo.find_worktree(name)?.path())?
+                        .head()?
+                        .name()?
+                        == cleanup.reference;
+                match checked_out {
+                    true => Err(anyhow::anyhow!(
+                        "Session branch is checked out in another worktree"
+                    )),
+                    false => Ok(cleanup),
+                }
+            })
+    }
+
+    fn execute(mut self) -> anyhow::Result<()> {
+        let mut options = git2::WorktreePruneOptions::new();
+        options.valid(true).working_tree(true);
+        self.worktree.prune(Some(&mut options))?;
+        self.transaction.remove(&self.reference)?;
+        self.transaction.commit()?;
+        Ok(())
+    }
+}
+
 impl SessionWorktree {
     pub fn create(
         project: &WorkspacePolicy,
@@ -372,61 +454,8 @@ impl SessionWorktree {
     }
 
     pub fn cleanup(&self, project: &WorkspacePolicy, approved: &str) -> anyhow::Result<()> {
-        let workspace = self.workspace(project)?;
         let git = GitRepository::source(project)?;
-        let child = GitRepository::required(&workspace)?;
-        let reference = format!("refs/heads/{}", self.branch());
-        let target_reference = format!("refs/heads/{}", self.target);
-        let mut transaction = git.repo.transaction()?;
-        transaction.lock_ref(&reference)?;
-        transaction.lock_ref(&target_reference)?;
-        transaction.lock_ref("HEAD")?;
-        let approved_id = Oid::from_str(approved)?;
-        let target = git.repo.refname_to_id(&target_reference)?;
-        let expected = WorktreeSnapshot::base(&git, approved)?;
-        let actual = WorktreeSnapshot::complete(&workspace, &child)?;
-        let integrated =
-            target == approved_id || git.repo.graph_descendant_of(target, approved_id)?;
-        let unchanged = git.repo.refname_to_id(&reference)? == approved_id
-            && actual.head == expected.head
-            && actual.files == expected.files
-            && child.repo.state() == RepositoryState::Clean
-            && child.status(&workspace)?.entries.is_empty();
-        match integrated && unchanged {
-            true => Ok(()),
-            false => Err(anyhow::anyhow!(
-                "Cleanup conflict: session has unmerged commits, local edits, ignored files, private data, or a pending Git operation"
-            )),
-        }?;
-        match git.repo.head()?.name()? == reference {
-            true => Err(anyhow::anyhow!(
-                "Session branch is checked out in the source repository"
-            )),
-            false => Ok(()),
-        }?;
-        for name in git.repo.worktrees()?.iter() {
-            let name = name?.ok_or_else(|| anyhow::anyhow!("Worktree name is not UTF-8"))?;
-            if name != self.id {
-                let linked = git2::Repository::open(git.repo.find_worktree(name)?.path())?;
-                match linked.head()?.name()? == reference {
-                    true => Err(anyhow::anyhow!(
-                        "Session branch is checked out in another worktree"
-                    )),
-                    false => Ok(()),
-                }?;
-            }
-        }
-        let worktree = git.repo.find_worktree(&self.id)?;
-        match worktree.path() == self.path {
-            true => Ok(()),
-            false => Err(anyhow::anyhow!("Session worktree registration changed")),
-        }?;
-        let mut options = git2::WorktreePruneOptions::new();
-        options.valid(true).working_tree(true);
-        worktree.prune(Some(&mut options))?;
-        transaction.remove(&reference)?;
-        transaction.commit()?;
-        Ok(())
+        SessionCleanup::new(self, project, &git, approved)?.execute()
     }
 
     fn merge_into_target(

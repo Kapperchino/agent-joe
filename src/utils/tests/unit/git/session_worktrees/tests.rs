@@ -480,3 +480,64 @@ fn cleanup_preserves_locked_worktrees_and_allows_retry() {
             .is_err()
     );
 }
+
+#[test]
+fn cleanup_preserves_a_session_branch_checked_out_in_the_source_repository() {
+    let fixture = Fixture::new();
+    let session = fixture.session();
+    std::fs::write(session.path.join("file.txt"), "session\n").unwrap();
+    let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+    session.merge(&fixture.workspace, &approved).unwrap();
+    let reference = format!("refs/heads/{}", session.branch());
+    std::fs::write(
+        fixture.repo.path().join("HEAD"),
+        format!("ref: {reference}\n"),
+    )
+    .unwrap();
+    let error = session.cleanup(&fixture.workspace, &approved).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("checked out in the source repository")
+    );
+    assert!(session.workspace(&fixture.workspace).is_ok());
+    assert_eq!(
+        fixture.repo.refname_to_id(&reference).unwrap().to_string(),
+        approved
+    );
+    fixture.repo.set_head("refs/heads/main").unwrap();
+    session.cleanup(&fixture.workspace, &approved).unwrap();
+    assert!(!session.path.exists());
+    assert!(fixture.repo.find_reference(&reference).is_err());
+}
+
+#[test]
+fn cleanup_preserves_a_session_branch_checked_out_in_another_worktree() {
+    let fixture = Fixture::new();
+    let session = fixture.session();
+    std::fs::write(session.path.join("file.txt"), "session\n").unwrap();
+    let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+    session.merge(&fixture.workspace, &approved).unwrap();
+    let other = fixture.session();
+    let linked = git2::Repository::open(&other.path).unwrap();
+    let reference = format!("refs/heads/{}", session.branch());
+    std::fs::write(linked.path().join("HEAD"), format!("ref: {reference}\n")).unwrap();
+    let error = session.cleanup(&fixture.workspace, &approved).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("checked out in another worktree")
+    );
+    assert!(session.workspace(&fixture.workspace).is_ok());
+    assert_eq!(
+        fixture.repo.refname_to_id(&reference).unwrap().to_string(),
+        approved
+    );
+    linked
+        .set_head(&format!("refs/heads/{}", other.branch()))
+        .unwrap();
+    session.cleanup(&fixture.workspace, &approved).unwrap();
+    assert!(!session.path.exists());
+    assert!(fixture.repo.find_reference(&reference).is_err());
+    assert!(other.workspace(&fixture.workspace).is_ok());
+}
