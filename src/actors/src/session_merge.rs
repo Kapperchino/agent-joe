@@ -93,6 +93,11 @@ struct MergeWorkspace {
     worktree: SessionWorktree,
 }
 
+struct CompletedMerge {
+    outcome: MergeOutcome,
+    cleanup: anyhow::Result<()>,
+}
+
 impl MergeWorkspace {
     fn new(runtime: &Runtime, persistence: &Persistence) -> anyhow::Result<Self> {
         match persistence {
@@ -267,20 +272,41 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             .acquire(tools::tool_defs::ToolEffect::Write, &runtime.scope)
             .await?;
         let outcome = tokio::task::spawn_blocking(move || {
-            workspace.worktree.merge(&workspace.project, &commit)
+            let outcome = workspace.worktree.merge(&workspace.project, &commit)?;
+            let cleanup = workspace.worktree.cleanup(&workspace.project, &commit);
+            Ok::<_, anyhow::Error>(CompletedMerge { outcome, cleanup })
         })
         .await?;
         drop(lease);
         match outcome {
-            Ok(outcome) => {
-                self.record_merge(MergeEvent::Finished)?;
-                self.refresh_interaction();
-                Ok(match outcome {
+            Ok(completed) => {
+                let message = match completed.outcome {
                     MergeOutcome::Unchanged => "Session changes are already in main.".into(),
                     MergeOutcome::Merged { target, commit } => {
                         format!("Merged session into {target}: {commit}")
                     }
-                })
+                };
+                let message = match completed.cleanup {
+                    Ok(()) => {
+                        self.persist(Event::Worktree(None));
+                        self.record_merge(MergeEvent::Finished)?;
+                        let mut runtime = self.dependency.runtime.clone();
+                        let project = runtime
+                            .project
+                            .as_ref()
+                            .ok_or_else(|| anyhow::anyhow!("Session project is not configured"))?;
+                        runtime.scope = runtime
+                            .scope
+                            .relocated(WorkspacePolicy::workspace(project.root().to_path_buf())?);
+                        self.relocate_session_workspace(runtime).await?;
+                        format!("{message}\nCleaned up the session workspace and branch.")
+                    }
+                    Err(error) => format!(
+                        "{message}\nCleanup could not finish; the session workspace and branch remain recorded for inspection: {error:#}. Retry the merge after resolving the cleanup issue."
+                    ),
+                };
+                self.refresh_interaction();
+                Ok(message)
             }
             Err(error) => match error.downcast_ref::<MergeConflict>().cloned() {
                 Some(conflict) => self.resolve_merge(conflict).await,

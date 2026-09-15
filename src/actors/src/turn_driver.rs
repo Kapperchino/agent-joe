@@ -22,6 +22,21 @@ use tools::tool_defs::ToolResult;
 impl<C: Context + Clone + 'static> ActorState<C> {
     pub(crate) async fn dispatch(&mut self, event: impl Into<Event>) {
         let event = event.into();
+        if self.turn.is_idle()
+            && matches!(
+                &event,
+                Event::Session(
+                    SessionEvent::Start(_)
+                        | SessionEvent::Steer(_)
+                        | SessionEvent::QuestionsChanged(
+                            common_models::interaction::QuestionGate::Open
+                        )
+                )
+            )
+            && let Err(error) = self.prepare_session_workspace().await
+        {
+            self.persistence_failed(error);
+        }
         if matches!(
             &event,
             Event::StopRequested

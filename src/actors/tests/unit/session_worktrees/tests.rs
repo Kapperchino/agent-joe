@@ -274,6 +274,14 @@ async fn approving_a_conflicted_merge_resolves_and_merges_without_another_questi
         h.snapshot(&id).merge_approval,
         crate::session_merge::MergeApproval::None
     ));
+    assert!(h.snapshot(&id).worktree.is_none());
+    assert!(!worktree.path.exists());
+    assert!(h.repo.find_worktree(&id).is_err());
+    assert!(
+        h.repo
+            .find_branch(&format!("joe/session/{id}"), git2::BranchType::Local)
+            .is_err()
+    );
     assert_eq!(
         h.repo
             .head()
@@ -289,6 +297,8 @@ async fn approving_a_conflicted_merge_resolves_and_merges_without_another_questi
 #[tokio::test]
 async fn incomplete_conflict_resolution_cannot_merge_even_after_model_completion() {
     let h = GitHarness::new().await;
+    let id = h.store.list().unwrap()[0].id.clone();
+    let worktree = h.snapshot(&id).worktree.unwrap();
     let question = h.complete(Some(PATCH)).await;
     let target = h.commit_main("pub fn value() -> u32 { 3 }\n");
     assert!(
@@ -305,6 +315,13 @@ async fn incomplete_conflict_resolution_cannot_merge_even_after_model_completion
         matches!(packet, ActorToTuiPacket::SessionError(message) if message.contains("Unresolved conflict markers"))
     );
     assert_eq!(h.repo.refname_to_id("HEAD").unwrap(), target);
+    assert!(h.snapshot(&id).worktree.is_some());
+    assert!(worktree.path.exists());
+    assert!(
+        h.repo
+            .find_branch(&format!("joe/session/{id}"), git2::BranchType::Local)
+            .is_ok()
+    );
     h.stop().await;
 }
 
@@ -434,10 +451,21 @@ async fn successful_tasks_prompt_and_only_explicit_acceptance_updates_main() {
     );
     assert_eq!(h.repo.refname_to_id("HEAD").unwrap(), base);
     let question = h.complete(None).await;
+    assert!(h.snapshot(&id).worktree.is_some());
+    assert!(worktree.path.exists());
+    let message = h.answer_merge(&question, "merge").await;
+    assert!(message.contains("Merged session into main"), "{message}");
     assert!(
-        h.answer_merge(&question, "merge")
-            .await
-            .contains("Merged session into main")
+        message.contains("Cleaned up the session workspace and branch"),
+        "{message}"
+    );
+    assert!(h.snapshot(&id).worktree.is_none());
+    assert!(!worktree.path.exists());
+    assert!(h.repo.find_worktree(&id).is_err());
+    assert!(
+        h.repo
+            .find_branch(&format!("joe/session/{id}"), git2::BranchType::Local)
+            .is_err()
     );
     assert_ne!(h.repo.refname_to_id("HEAD").unwrap(), base);
     assert!(
@@ -532,6 +560,149 @@ async fn new_fork_and_resume_keep_distinct_workspaces_and_switch_context() {
         std::fs::read_to_string(h.workspace.path.join("lib.rs"))
             .unwrap()
             .contains("{ 1 }")
+    );
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn another_task_after_merge_gets_a_fresh_isolated_workspace() {
+    let h = GitHarness::new().await;
+    let id = h.store.list().unwrap()[0].id.clone();
+    let worktree = h.snapshot(&id).worktree.unwrap();
+    let question = h.complete(Some(PATCH)).await;
+    assert!(
+        h.answer_merge(&question, "merge")
+            .await
+            .contains("Cleaned up")
+    );
+    assert!(h.snapshot(&id).worktree.is_none());
+    assert!(!worktree.path.exists());
+    let merged = h.repo.refname_to_id("HEAD").unwrap();
+    let history = h.snapshot(&id).history.len();
+    let patch = "*** Begin Patch\n*** Update File: lib.rs\n@@\n-pub fn value() -> u32 { 2 }\n+pub fn value() -> u32 { 4 }\n*** End Patch";
+    let question = h.complete(Some(patch)).await;
+    assert_eq!(h.snapshot(&id).worktree.unwrap().path, worktree.path);
+    assert!(h.snapshot(&id).history.len() > history);
+    assert_eq!(h.repo.refname_to_id("HEAD").unwrap(), merged);
+    assert!(
+        std::fs::read_to_string(h.workspace.path.join("lib.rs"))
+            .unwrap()
+            .contains("{ 2 }")
+    );
+    assert!(
+        std::fs::read_to_string(worktree.path.join("lib.rs"))
+            .unwrap()
+            .contains("{ 4 }")
+    );
+    assert!(
+        h.answer_merge(&question, "merge")
+            .await
+            .contains("Cleaned up")
+    );
+    assert!(!worktree.path.exists());
+    assert!(h.snapshot(&id).worktree.is_none());
+    assert!(
+        std::fs::read_to_string(h.workspace.path.join("lib.rs"))
+            .unwrap()
+            .contains("{ 4 }")
+    );
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn merged_session_can_be_resumed_from_current_main() {
+    let h = GitHarness::new().await;
+    let id = h.store.list().unwrap()[0].id.clone();
+    let worktree = h.snapshot(&id).worktree.unwrap();
+    let question = h.complete(Some(PATCH)).await;
+    assert!(
+        h.answer_merge(&question, "merge")
+            .await
+            .contains("Cleaned up")
+    );
+    h.command(Command::New).await;
+    let main = h.commit_main("pub fn value() -> u32 { 8 }\n");
+    h.actor
+        .send_message(Message::Command(Command::Resume(ResumeTarget::Session {
+            id: id.clone(),
+        })))
+        .unwrap();
+    assert!(matches!(
+        h.event(|packet| matches!(packet, ActorToTuiPacket::SessionResumed(_)))
+            .await,
+        ActorToTuiPacket::SessionResumed(Ok(_))
+    ));
+    assert_eq!(h.snapshot(&id).worktree.unwrap().path, worktree.path);
+    assert_eq!(
+        git2::Repository::open(&worktree.path)
+            .unwrap()
+            .refname_to_id("HEAD")
+            .unwrap(),
+        main
+    );
+    h.actor
+        .send_message(Message::StartWork(Some(
+            "Inspect the resumed workspace".into(),
+        )))
+        .unwrap();
+    let (request, reply) = within(h.requests.recv_async()).await.unwrap();
+    assert!(
+        request.messages[0]
+            .text()
+            .contains(worktree.path.to_str().unwrap())
+    );
+    answer(reply, response(vec![text("Inspected")]));
+    h.event(|packet| {
+        matches!(
+            packet,
+            ActorToTuiPacket::TurnChanged {
+                state: Lifecycle::Completed,
+                ..
+            }
+        )
+    })
+    .await;
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn cleanup_failure_reports_successful_merge_and_preserves_data_for_retry() {
+    let h = GitHarness::new().await;
+    let id = h.store.list().unwrap()[0].id.clone();
+    let worktree = h.snapshot(&id).worktree.unwrap();
+    std::fs::write(worktree.path.join(".gitignore"), "private.txt\n").unwrap();
+    let question = h.complete(Some(PATCH)).await;
+    std::fs::write(worktree.path.join("private.txt"), "private data\n").unwrap();
+    let message = h.answer_merge(&question, "merge").await;
+    assert!(message.contains("Merged session into main"), "{message}");
+    assert!(message.contains("Cleanup could not finish"), "{message}");
+    assert!(!message.contains("Cleaned up"), "{message}");
+    assert!(h.snapshot(&id).worktree.is_some());
+    assert_eq!(
+        std::fs::read_to_string(worktree.path.join("private.txt")).unwrap(),
+        "private data\n"
+    );
+    assert!(
+        h.repo
+            .find_branch(&format!("joe/session/{id}"), git2::BranchType::Local)
+            .is_ok()
+    );
+    assert!(
+        std::fs::read_to_string(h.workspace.path.join("lib.rs"))
+            .unwrap()
+            .contains("{ 2 }")
+    );
+    std::fs::remove_file(worktree.path.join("private.txt")).unwrap();
+    let message = h.answer_merge(&question, "merge").await;
+    assert!(message.contains("already in main"), "{message}");
+    assert!(message.contains("Cleaned up"), "{message}");
+    assert!(h.snapshot(&id).worktree.is_none());
+    assert!(!worktree.path.exists());
+    assert!(h.repo.find_worktree(&id).is_err());
+    assert!(
+        h.repo
+            .find_branch(&format!("joe/session/{id}"), git2::BranchType::Local)
+            .is_err()
     );
     h.stop().await;
 }

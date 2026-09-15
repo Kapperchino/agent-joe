@@ -102,6 +102,17 @@ fn sessions_are_isolated_and_proposals_do_not_merge_without_approval() {
     );
     assert!(first.proposal(&fixture.workspace).unwrap().is_none());
     assert!(first.workspace(&fixture.workspace).is_ok());
+    first.cleanup(&fixture.workspace, &commit).unwrap();
+    assert!(!first.path.exists());
+    assert!(fixture.repo.find_worktree(&first.id).is_err());
+    assert!(
+        fixture
+            .repo
+            .find_branch(&first.branch(), git2::BranchType::Local)
+            .is_err()
+    );
+    assert!(second.workspace(&fixture.workspace).is_ok());
+    assert_eq!(fixture.repo.worktrees().unwrap().len(), 1);
 }
 
 #[test]
@@ -127,6 +138,11 @@ fn concurrent_sessions_merge_with_two_parents_and_preserve_both_changes() {
     );
     assert!(fixture.root.join("first.txt").exists());
     assert!(!fixture.root.join("file.txt").exists());
+    first.cleanup(&fixture.workspace, &first_commit).unwrap();
+    second.cleanup(&fixture.workspace, &second_commit).unwrap();
+    assert!(!first.path.exists());
+    assert!(!second.path.exists());
+    assert_eq!(fixture.repo.worktrees().unwrap().len(), 0);
 }
 
 #[test]
@@ -147,6 +163,8 @@ fn conflicts_and_dirty_main_retain_work_and_allow_retry() {
     let target = fixture.commit("file.txt", "user\n");
     assert!(session.merge(&fixture.workspace, &commit).is_err());
     assert_eq!(fixture.repo.refname_to_id("HEAD").unwrap(), target);
+    assert!(session.cleanup(&fixture.workspace, &commit).is_err());
+    assert!(session.workspace(&fixture.workspace).is_ok());
     assert_eq!(
         std::fs::read_to_string(session.path.join("file.txt")).unwrap(),
         "session\n"
@@ -283,6 +301,14 @@ fn conflicts_are_resolved_in_the_session_and_record_both_parents_before_merging(
         "incoming\n"
     );
     assert!(fixture.root.join("later.txt").exists());
+    session.cleanup(&fixture.workspace, &resolved).unwrap();
+    assert!(!session.path.exists());
+    assert!(
+        fixture
+            .repo
+            .find_branch(&session.branch(), git2::BranchType::Local)
+            .is_err()
+    );
 }
 
 #[test]
@@ -312,5 +338,145 @@ fn failed_resolution_preparation_cannot_discard_main_changes() {
     assert_eq!(
         std::fs::read_to_string(session.path.join("local.txt")).unwrap(),
         "private local data\n"
+    );
+}
+
+#[test]
+fn cleanup_of_an_already_integrated_session_preserves_source_changes_and_index() {
+    let fixture = Fixture::new();
+    let session = fixture.session();
+    std::fs::write(session.path.join("file.txt"), "merged\n").unwrap();
+    let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+    session.merge(&fixture.workspace, &approved).unwrap();
+    fixture.commit("later.txt", "later main commit\n");
+    assert!(matches!(
+        session.merge(&fixture.workspace, &approved).unwrap(),
+        MergeOutcome::Unchanged
+    ));
+    let head = fixture.repo.refname_to_id("HEAD").unwrap();
+    std::fs::write(fixture.root.join("file.txt"), "staged\n").unwrap();
+    let mut index = fixture.repo.index().unwrap();
+    index.add_path(Path::new("file.txt")).unwrap();
+    index.write().unwrap();
+    std::fs::write(fixture.root.join("file.txt"), "unstaged\n").unwrap();
+    let index = std::fs::read(fixture.repo.path().join("index")).unwrap();
+    session.cleanup(&fixture.workspace, &approved).unwrap();
+    assert!(!session.path.exists());
+    assert!(fixture.repo.find_worktree(&session.id).is_err());
+    assert!(
+        fixture
+            .repo
+            .find_branch(&session.branch(), git2::BranchType::Local)
+            .is_err()
+    );
+    assert_eq!(fixture.repo.refname_to_id("HEAD").unwrap(), head);
+    assert_eq!(
+        std::fs::read(fixture.repo.path().join("index")).unwrap(),
+        index
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.root.join("file.txt")).unwrap(),
+        "unstaged\n"
+    );
+}
+
+#[test]
+fn cleanup_refuses_unmerged_and_post_merge_commits() {
+    let fixture = Fixture::new();
+    let session = fixture.session();
+    std::fs::write(session.path.join("file.txt"), "session\n").unwrap();
+    let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+    assert!(session.cleanup(&fixture.workspace, &approved).is_err());
+    assert!(session.workspace(&fixture.workspace).is_ok());
+    session.merge(&fixture.workspace, &approved).unwrap();
+    std::fs::write(session.path.join("file.txt"), "later work\n").unwrap();
+    let later = session.proposal(&fixture.workspace).unwrap().unwrap();
+    assert!(session.cleanup(&fixture.workspace, &approved).is_err());
+    assert!(session.cleanup(&fixture.workspace, &later).is_err());
+    assert!(session.workspace(&fixture.workspace).is_ok());
+    assert_eq!(
+        fixture
+            .repo
+            .refname_to_id(&format!("refs/heads/{}", session.branch()))
+            .unwrap()
+            .to_string(),
+        later
+    );
+}
+
+#[test]
+fn cleanup_preserves_local_ignored_and_private_files() {
+    for path in [
+        "file.txt",
+        "untracked.txt",
+        "ignored.txt",
+        ".turbo-code/private.txt",
+    ] {
+        let fixture = Fixture::new();
+        fixture.commit(".gitignore", "ignored.txt\n");
+        let session = fixture.session();
+        std::fs::write(session.path.join("file.txt"), "session\n").unwrap();
+        let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+        session.merge(&fixture.workspace, &approved).unwrap();
+        let local = session.path.join(path);
+        std::fs::create_dir_all(local.parent().unwrap()).unwrap();
+        std::fs::write(&local, "preserve local data\n").unwrap();
+        assert!(
+            session.cleanup(&fixture.workspace, &approved).is_err(),
+            "{path}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(local).unwrap(),
+            "preserve local data\n"
+        );
+        assert!(session.workspace(&fixture.workspace).is_ok());
+        assert!(
+            fixture
+                .repo
+                .find_branch(&session.branch(), git2::BranchType::Local)
+                .is_ok()
+        );
+    }
+}
+
+#[test]
+fn cleanup_preserves_index_only_changes() {
+    let fixture = Fixture::new();
+    let session = fixture.session();
+    std::fs::write(session.path.join("file.txt"), "session\n").unwrap();
+    let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+    session.merge(&fixture.workspace, &approved).unwrap();
+    let child = git2::Repository::open(&session.path).unwrap();
+    std::fs::write(session.path.join("file.txt"), "staged\n").unwrap();
+    let mut index = child.index().unwrap();
+    index.add_path(Path::new("file.txt")).unwrap();
+    index.write().unwrap();
+    std::fs::write(session.path.join("file.txt"), "session\n").unwrap();
+    let before = std::fs::read(child.path().join("index")).unwrap();
+    assert!(session.cleanup(&fixture.workspace, &approved).is_err());
+    assert_eq!(std::fs::read(child.path().join("index")).unwrap(), before);
+    assert!(session.workspace(&fixture.workspace).is_ok());
+}
+
+#[test]
+fn cleanup_preserves_locked_worktrees_and_allows_retry() {
+    let fixture = Fixture::new();
+    let session = fixture.session();
+    std::fs::write(session.path.join("file.txt"), "session\n").unwrap();
+    let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+    session.merge(&fixture.workspace, &approved).unwrap();
+    let child = git2::Repository::open(&session.path).unwrap();
+    let lock = child.path().join("locked");
+    std::fs::write(&lock, "keep this worktree\n").unwrap();
+    assert!(session.cleanup(&fixture.workspace, &approved).is_err());
+    assert!(session.workspace(&fixture.workspace).is_ok());
+    std::fs::remove_file(lock).unwrap();
+    session.cleanup(&fixture.workspace, &approved).unwrap();
+    assert!(!session.path.exists());
+    assert!(
+        fixture
+            .repo
+            .find_branch(&session.branch(), git2::BranchType::Local)
+            .is_err()
     );
 }

@@ -291,6 +291,20 @@ impl TurnMachine {
         )
     }
 
+    pub fn relocate(&mut self, scope: ExecutionScope) -> anyhow::Result<()> {
+        match &mut self.state {
+            SessionState::Running(session)
+                if matches!(session.state, TurnState::Idle | TurnState::Waiting(_)) =>
+            {
+                session.scope = scope;
+                Ok(())
+            }
+            _ => Err(anyhow::anyhow!(
+                "Finish the active turn before switching workspaces"
+            )),
+        }
+    }
+
     pub fn batch(&self) -> Option<&crate::turn::ToolBatch> {
         match &self.state {
             SessionState::Running(session) | SessionState::Closing(session) => {

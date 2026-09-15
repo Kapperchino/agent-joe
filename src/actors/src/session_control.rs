@@ -153,6 +153,46 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         }
     }
 
+    pub(crate) async fn prepare_session_workspace(&mut self) -> anyhow::Result<()> {
+        let mut runtime = self.dependency.runtime.clone();
+        if let (crate::runtime::ExecutionRole::Root, Some(session)) =
+            (&runtime.role, &runtime.session)
+            && runtime.project.is_some()
+            && session.snapshot()?.worktree.is_none()
+        {
+            let session = session.clone();
+            runtime.activate_session(None)?;
+            let snapshot = session.snapshot()?;
+            match snapshot.worktree {
+                Some(_) => {
+                    runtime.scope.changes = session.change_tracker(snapshot.changes);
+                    self.relocate_session_workspace(runtime).await?;
+                }
+                None => {}
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn relocate_session_workspace(
+        &mut self,
+        runtime: crate::runtime::Runtime,
+    ) -> anyhow::Result<()> {
+        let mut context = self.cur_context.clone();
+        context.clear_task_context();
+        context.relocate(runtime.scope.workspace()?.root().to_path_buf())?;
+        let fresh = llm::Message::new(context.get_ctx().await);
+        self.turn.relocate(runtime.scope.clone())?;
+        self.dependency.runtime = runtime;
+        self.dependency.context = context.clone();
+        self.cur_context = context;
+        if let Some(initial) = self.history.first_mut() {
+            *initial = fresh;
+        }
+        self.relocate_watcher()?;
+        Ok(())
+    }
+
     pub(crate) async fn begin_turn(&mut self, input: FollowUp) {
         if let Err(error) = self.record_merge(MergeEvent::TaskStarted { turn: input.id }) {
             self.persistence_failed(error);
