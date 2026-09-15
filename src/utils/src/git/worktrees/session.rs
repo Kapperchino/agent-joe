@@ -125,6 +125,74 @@ enum MergeState {
     Diverged,
 }
 
+#[derive(Default)]
+struct CommitSummary {
+    added: Vec<String>,
+    updated: Vec<String>,
+    removed: Vec<String>,
+}
+
+impl CommitSummary {
+    fn new(
+        repo: &git2::Repository,
+        before: &git2::Tree<'_>,
+        after: &git2::Tree<'_>,
+    ) -> anyhow::Result<Self> {
+        let diff = repo.diff_tree_to_tree(Some(before), Some(after), None)?;
+        diff.deltas()
+            .try_fold(Self::default(), |mut summary, delta| {
+                let path = delta
+                    .new_file()
+                    .path()
+                    .or_else(|| delta.old_file().path())
+                    .ok_or_else(|| anyhow::anyhow!("Changed file has no Git path"))?
+                    .to_string_lossy()
+                    .escape_debug()
+                    .to_string();
+                match delta.status() {
+                    git2::Delta::Added => summary.added.push(path),
+                    git2::Delta::Deleted => summary.removed.push(path),
+                    _ => summary.updated.push(path),
+                }
+                Ok(summary)
+            })
+    }
+
+    fn subject(&self) -> String {
+        let detailed = self.describe(true);
+        let mut subject = match detailed.chars().count() {
+            0 => "Merge session changes already present in main".to_owned(),
+            ..=72 => detailed,
+            _ => self.describe(false),
+        };
+        if let Some(first) = subject.get_mut(..1) {
+            first.make_ascii_uppercase();
+        }
+        subject
+    }
+
+    fn describe(&self, detailed: bool) -> String {
+        [
+            Self::describe_paths("add", &self.added, detailed),
+            Self::describe_paths("update", &self.updated, detailed),
+            Self::describe_paths("remove", &self.removed, detailed),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("; ")
+    }
+
+    fn describe_paths(action: &str, paths: &[String], detailed: bool) -> Option<String> {
+        match paths.len() {
+            0 => None,
+            _ if detailed => Some(format!("{action} {}", paths.join(", "))),
+            1 => Some(format!("{action} 1 file")),
+            count => Some(format!("{action} {count} files")),
+        }
+    }
+}
+
 struct SessionCleanup<'repo> {
     reference: String,
     worktree: git2::Worktree,
@@ -352,14 +420,18 @@ impl SessionWorktree {
             .collect::<Vec<_>>();
         let commit = match tree.id() == parent.tree_id() && target.is_none() {
             true => parent.id(),
-            false => git.repo.commit(
-                None,
-                &signature,
-                &signature,
-                &format!("Joe session {}", self.id),
-                &tree,
-                &parents,
-            )?,
+            false => {
+                let before = target.as_ref().unwrap_or(&parent).tree()?;
+                let summary = CommitSummary::new(&git.repo, &before, &tree)?;
+                git.repo.commit(
+                    None,
+                    &signature,
+                    &signature,
+                    &summary.subject(),
+                    &tree,
+                    &parents,
+                )?
+            }
         };
         transaction.set_target(
             &reference,
@@ -524,11 +596,12 @@ impl SessionWorktree {
                             false => Ok(()),
                         }?;
                         let tree = git.repo.find_tree(index.write_tree_to(&git.repo)?)?;
+                        let summary = CommitSummary::new(&git.repo, &target.tree()?, &tree)?;
                         git.repo.commit(
                             None,
                             &signature,
                             &signature,
-                            &format!("Merge Joe session {}", self.id),
+                            &summary.subject(),
                             &tree,
                             &[&target, &session],
                         )?

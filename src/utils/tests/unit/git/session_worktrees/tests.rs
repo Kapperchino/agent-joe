@@ -63,6 +63,104 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn fast_forward_commit_summarizes_added_updated_and_removed_files() {
+    let fixture = Fixture::new();
+    fixture.commit("removed.txt", "remove me\n");
+    let session = fixture.session();
+    std::fs::write(session.path.join("added.txt"), "new\n").unwrap();
+    std::fs::write(session.path.join("file.txt"), "updated\n").unwrap();
+    std::fs::remove_file(session.path.join("removed.txt")).unwrap();
+    let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+    assert_eq!(
+        session.proposal(&fixture.workspace).unwrap().unwrap(),
+        approved
+    );
+    session.merge(&fixture.workspace, &approved).unwrap();
+    let commit = fixture.repo.head().unwrap().peel_to_commit().unwrap();
+    assert_eq!(commit.id().to_string(), approved);
+    assert_eq!(commit.parent_count(), 1);
+    assert_eq!(
+        commit.message().unwrap(),
+        "Add added.txt; update file.txt; remove removed.txt"
+    );
+}
+
+#[test]
+fn divergent_merge_summarizes_all_session_changes_but_not_main_only_changes() {
+    let fixture = Fixture::new();
+    fixture.commit("removed.txt", "remove me\n");
+    let session = fixture.session();
+    std::fs::write(session.path.join("added.txt"), "new\n").unwrap();
+    session.proposal(&fixture.workspace).unwrap().unwrap();
+    std::fs::write(session.path.join("file.txt"), "updated\n").unwrap();
+    std::fs::remove_file(session.path.join("removed.txt")).unwrap();
+    let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+    let target = fixture.commit("main-only.txt", "main work\n");
+    session.merge(&fixture.workspace, &approved).unwrap();
+    let commit = fixture.repo.head().unwrap().peel_to_commit().unwrap();
+    assert_eq!(commit.parent_count(), 2);
+    assert_eq!(commit.parent_id(0).unwrap(), target);
+    assert_eq!(commit.parent_id(1).unwrap().to_string(), approved);
+    assert_eq!(
+        commit.message().unwrap(),
+        "Add added.txt; update file.txt; remove removed.txt"
+    );
+}
+
+#[test]
+fn large_commit_summaries_use_brief_file_counts() {
+    let fixture = Fixture::new();
+    fixture.commit("removed.txt", "remove me\n");
+    let session = fixture.session();
+    for number in 0..10 {
+        std::fs::write(session.path.join(format!("added-{number}.txt")), "new\n").unwrap();
+    }
+    std::fs::write(session.path.join("file.txt"), "updated\n").unwrap();
+    std::fs::remove_file(session.path.join("removed.txt")).unwrap();
+    let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+    session.merge(&fixture.workspace, &approved).unwrap();
+    let commit = fixture.repo.head().unwrap().peel_to_commit().unwrap();
+    assert_eq!(
+        commit.message().unwrap(),
+        "Add 10 files; update 1 file; remove 1 file"
+    );
+}
+
+#[test]
+fn commit_summaries_handle_unicode_long_paths_and_binary_changes() {
+    for name in ["résumé.txt".to_owned(), format!("{}.bin", "長".repeat(75))] {
+        let fixture = Fixture::new();
+        let session = fixture.session();
+        std::fs::write(session.path.join(&name), [0, 1, 2, 255]).unwrap();
+        let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+        let commit = fixture
+            .repo
+            .find_commit(Oid::from_str(&approved).unwrap())
+            .unwrap();
+        let expected = match name.chars().count() {
+            ..=68 => format!("Add {name}"),
+            _ => "Add 1 file".to_owned(),
+        };
+        assert_eq!(commit.message().unwrap(), expected);
+        assert!(commit.message().unwrap().chars().count() <= 72);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn commit_summaries_escape_control_characters_in_paths() {
+    let fixture = Fixture::new();
+    let session = fixture.session();
+    std::fs::write(session.path.join("new\nfile.txt"), "new\n").unwrap();
+    let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+    let commit = fixture
+        .repo
+        .find_commit(Oid::from_str(&approved).unwrap())
+        .unwrap();
+    assert_eq!(commit.message().unwrap(), "Add new\\nfile.txt");
+}
+
+#[test]
 fn sessions_are_isolated_and_proposals_do_not_merge_without_approval() {
     let fixture = Fixture::new();
     let first = fixture.session();
@@ -176,6 +274,17 @@ fn conflicts_and_dirty_main_retain_work_and_allow_retry() {
     std::fs::write(session.path.join("file.txt"), "user\n").unwrap();
     let retry = session.proposal(&fixture.workspace).unwrap().unwrap();
     session.merge(&fixture.workspace, &retry).unwrap();
+    assert_eq!(
+        fixture
+            .repo
+            .head()
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .message()
+            .unwrap(),
+        "Merge session changes already present in main"
+    );
 }
 
 #[test]
@@ -290,8 +399,20 @@ fn conflicts_are_resolved_in_the_session_and_record_both_parents_before_merging(
     assert_eq!(commit.parent_count(), 2);
     assert_eq!(commit.parent_id(0).unwrap().to_string(), approved);
     assert_eq!(commit.parent_id(1).unwrap(), target);
+    assert_eq!(commit.message().unwrap(), "Update file.txt");
     fixture.commit("later.txt", "later main work\n");
     session.merge(&fixture.workspace, &resolved).unwrap();
+    assert_eq!(
+        fixture
+            .repo
+            .head()
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .message()
+            .unwrap(),
+        "Update file.txt"
+    );
     assert_eq!(
         std::fs::read_to_string(fixture.root.join("file.txt")).unwrap(),
         "combined\n"
