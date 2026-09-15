@@ -217,7 +217,7 @@ impl<'repo> SessionCleanup<'repo> {
         let approved_id = Oid::from_str(approved)?;
         let target = git.repo.refname_to_id(&target_reference)?;
         let expected = WorktreeSnapshot::base(git, approved)?;
-        let actual = WorktreeSnapshot::complete(&workspace, &child)?;
+        let actual = WorktreeSnapshot::for_cleanup(&workspace, &child, &expected)?;
         let integrated =
             target == approved_id || git.repo.graph_descendant_of(target, approved_id)?;
         let unchanged = git.repo.refname_to_id(&reference)? == approved_id

@@ -353,7 +353,7 @@ impl<'repo> WorktreeRemoval<'repo> {
         let expected = record.state.cleanup_snapshot(git, &record.base)?;
         let child = record.child_workspace(workspace, git)?;
         let child_git = GitRepository::required(&child)?;
-        let actual = WorktreeSnapshot::complete(&child, &child_git)?;
+        let actual = WorktreeSnapshot::for_cleanup(&child, &child_git, &expected)?;
         let unchanged = actual.files == expected.files
             && actual.head == expected.head
             && !child_git.repo.index()?.has_conflicts()

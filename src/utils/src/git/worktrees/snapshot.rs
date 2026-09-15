@@ -37,7 +37,11 @@ impl WorktreeSnapshot {
         })
     }
 
-    pub fn complete(workspace: &WorkspacePolicy, git: &GitRepository) -> anyhow::Result<Self> {
+    pub fn for_cleanup(
+        workspace: &WorkspacePolicy,
+        git: &GitRepository,
+        expected: &Self,
+    ) -> anyhow::Result<Self> {
         let mut scan = DirectoryScan {
             pending: vec![workspace.root().to_path_buf()],
             contents: SnapshotFiles::default(),
@@ -47,7 +51,7 @@ impl WorktreeSnapshot {
             scan = workspace
                 .entries(&directory)?
                 .into_iter()
-                .try_fold(scan, |scan, entry| scan.visit(workspace, entry))?;
+                .try_fold(scan, |scan, entry| scan.visit(workspace, expected, entry))?;
         }
         Ok(Self {
             files: scan.contents.files,
@@ -137,7 +141,12 @@ struct DirectoryScan {
 }
 
 impl DirectoryScan {
-    fn visit(mut self, workspace: &WorkspacePolicy, entry: DirectoryEntry) -> anyhow::Result<Self> {
+    fn visit(
+        mut self,
+        workspace: &WorkspacePolicy,
+        expected: &WorktreeSnapshot,
+        entry: DirectoryEntry,
+    ) -> anyhow::Result<Self> {
         self.visited += 1;
         match entry.path {
             _ if self.visited > 250_000 => {
@@ -149,11 +158,25 @@ impl DirectoryScan {
                 Ok(self)
             }
             path => {
-                let version = workspace.file_version(&path)?;
-                self.contents = self
-                    .contents
-                    .with_file(workspace.relative_path(&path, Access::Read)?, version)?;
-                Ok(self)
+                let relative = workspace.relative_path(&path, Access::Read)?;
+                match expected.files.get(&relative) {
+                    Some(version)
+                        if workspace.file_size(&path)? == version.bytes().len() as u64 =>
+                    {
+                        self.contents = self
+                            .contents
+                            .with_file(relative, workspace.file_version(&path)?)?;
+                        Ok(self)
+                    }
+                    Some(_) => Err(anyhow::anyhow!(
+                        "Cleanup conflict: file size changed: {}. Preserve or restore this local change before retrying",
+                        relative.display()
+                    )),
+                    None => Err(anyhow::anyhow!(
+                        "Cleanup conflict: unrecorded file: {}. Move it out of the worktree or remove it before retrying",
+                        relative.display()
+                    )),
+                }
             }
         }
     }

@@ -561,6 +561,87 @@ fn cleanup_preserves_local_ignored_and_private_files() {
 }
 
 #[test]
+fn cleanup_reports_oversized_files_and_allows_retry() {
+    for path in ["file.txt", "untracked.bin", "target/debug/build.bin"] {
+        let fixture = Fixture::new();
+        fixture.commit(".gitignore", "/target\n");
+        let session = fixture.session();
+        std::fs::write(session.path.join("file.txt"), "session\n").unwrap();
+        let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+        session.merge(&fixture.workspace, &approved).unwrap();
+        let child = git2::Repository::open(&session.path).unwrap();
+        let index = std::fs::read(child.path().join("index")).unwrap();
+        let local = session.path.join(path);
+        std::fs::create_dir_all(local.parent().unwrap()).unwrap();
+        std::fs::write(&local, "preserve local data\n").unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&local)
+            .unwrap()
+            .set_len(16 * 1024 * 1024 + 1)
+            .unwrap();
+        let error = session
+            .cleanup(&fixture.workspace, &approved)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Cleanup conflict"), "{error}");
+        assert!(error.contains(path), "{error}");
+        assert!(!error.contains("read limit"), "{error}");
+        assert_eq!(
+            std::fs::metadata(&local).unwrap().len(),
+            16 * 1024 * 1024 + 1
+        );
+        let mut prefix = [0; b"preserve local data\n".len()];
+        std::io::Read::read_exact(&mut std::fs::File::open(&local).unwrap(), &mut prefix).unwrap();
+        assert_eq!(&prefix, b"preserve local data\n");
+        assert_eq!(std::fs::read(child.path().join("index")).unwrap(), index);
+        assert!(session.workspace(&fixture.workspace).is_ok());
+        assert_eq!(
+            fixture
+                .repo
+                .refname_to_id(&format!("refs/heads/{}", session.branch()))
+                .unwrap()
+                .to_string(),
+            approved
+        );
+        match path {
+            "file.txt" => std::fs::write(&local, "session\n").unwrap(),
+            _ => std::fs::remove_file(&local).unwrap(),
+        }
+        session.cleanup(&fixture.workspace, &approved).unwrap();
+        assert!(!session.path.exists());
+        assert!(
+            fixture
+                .repo
+                .find_branch(&session.branch(), git2::BranchType::Local)
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn cleanup_preserves_same_size_edits_and_missing_files() {
+    for content in [Some("changed\n"), None] {
+        let fixture = Fixture::new();
+        let session = fixture.session();
+        std::fs::write(session.path.join("file.txt"), "session\n").unwrap();
+        let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+        session.merge(&fixture.workspace, &approved).unwrap();
+        let local = session.path.join("file.txt");
+        match content {
+            Some(content) => std::fs::write(&local, content).unwrap(),
+            None => std::fs::remove_file(&local).unwrap(),
+        }
+        assert!(session.cleanup(&fixture.workspace, &approved).is_err());
+        assert!(session.workspace(&fixture.workspace).is_ok());
+        assert_eq!(std::fs::read_to_string(&local).ok().as_deref(), content);
+        std::fs::write(&local, "session\n").unwrap();
+        session.cleanup(&fixture.workspace, &approved).unwrap();
+        assert!(!session.path.exists());
+    }
+}
+
+#[test]
 fn cleanup_preserves_index_only_changes() {
     let fixture = Fixture::new();
     let session = fixture.session();

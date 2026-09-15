@@ -362,17 +362,31 @@ fn worktree_integration_is_guarded_journaled_and_undoable() {
         .unwrap()
         .id
         .clone();
-    std::fs::write(record.path.join("ignored.tmp"), "retain this").unwrap();
-    assert!(
-        ManagedWorktree::execute(
-            &fixture.workspace,
-            &tracker,
-            WorktreeOperation::Remove {
-                id: record.id.clone()
-            }
-        )
-        .is_err()
+    let local = record.path.join("ignored.tmp");
+    std::fs::File::create(&local)
+        .unwrap()
+        .set_len(16 * 1024 * 1024 + 1)
+        .unwrap();
+    let error = ManagedWorktree::execute(
+        &fixture.workspace,
+        &tracker,
+        WorktreeOperation::Remove {
+            id: record.id.clone(),
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("Cleanup conflict"), "{error}");
+    assert!(error.contains("ignored.tmp"), "{error}");
+    assert!(!error.contains("read limit"), "{error}");
+    assert_eq!(
+        std::fs::metadata(&local).unwrap().len(),
+        16 * 1024 * 1024 + 1
     );
+    assert!(matches!(
+        tracker.snapshot().unwrap().worktrees[0].state,
+        worktrees::WorktreeState::Integrated { .. }
+    ));
     std::fs::remove_file(record.path.join("ignored.tmp")).unwrap();
     ManagedWorktree::execute(
         &fixture.workspace,
