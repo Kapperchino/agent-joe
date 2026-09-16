@@ -162,6 +162,14 @@ automatically.
 cargo test --workspace
 ```
 
+Sandbox integration tests require a host that can start a VM. On Linux, the test
+helper checks access to `/dev/kvm` before looking for the launcher or provisioning
+the runtime. Inside Joe's guest, KVM is unavailable, so these tests skip with a
+diagnostic; other tests still run. Set `JOE_SANDBOX_REQUIRED=1` on the host to make
+unavailable sandbox support fail the test run. A package-only run such as
+`cargo test -p actors --lib` also needs a built launcher: run
+`cargo build -p sandbox --bin joe-sandbox` first.
+
 ## Keybindings
 
 The TUI is similar to claude code and codex with one major difference. Vim bindings are foced upon you.

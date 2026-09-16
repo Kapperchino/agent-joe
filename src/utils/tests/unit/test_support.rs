@@ -24,6 +24,40 @@ enum SandboxAvailability {
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 impl SandboxAvailability {
     fn probe() -> anyhow::Result<Self> {
+        #[cfg(target_os = "linux")]
+        let availability = Self::kvm(
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open("/dev/kvm"),
+        )?;
+        #[cfg(target_os = "macos")]
+        let availability = Self::Available;
+        match availability {
+            Self::Available => Self::probe_sandbox(),
+            restricted => Ok(restricted),
+        }
+    }
+
+    #[cfg(any(test, target_os = "linux"))]
+    fn kvm<T>(result: std::io::Result<T>) -> anyhow::Result<Self> {
+        match result {
+            Ok(_) => Ok(Self::Available),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+                ) =>
+            {
+                Ok(Self::Restricted(format!(
+                    "Cannot access /dev/kvm to start a sandbox VM: {error}"
+                )))
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn probe_sandbox() -> anyhow::Result<Self> {
         std::thread::spawn(|| {
             let directory =
                 std::env::temp_dir().join(format!("joe-krun-probe-{}", uuid::Uuid::new_v4()));

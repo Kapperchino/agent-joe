@@ -18,6 +18,32 @@ fn successful_probe_enables_sandbox_tests() {
 }
 
 #[test]
+fn missing_or_inaccessible_kvm_restricts_sandbox_tests() {
+    for kind in [
+        std::io::ErrorKind::NotFound,
+        std::io::ErrorKind::PermissionDenied,
+    ] {
+        assert!(matches!(
+            SandboxAvailability::kvm::<()>(Err(kind.into())).unwrap(),
+            SandboxAvailability::Restricted(reason) if reason.contains("/dev/kvm")
+        ));
+    }
+}
+
+#[test]
+fn accessible_kvm_allows_the_sandbox_probe() {
+    assert!(matches!(
+        SandboxAvailability::kvm(Ok(())).unwrap(),
+        SandboxAvailability::Available
+    ));
+}
+
+#[test]
+fn unexpected_kvm_errors_are_not_skipped() {
+    assert!(SandboxAvailability::kvm::<()>(Err(std::io::ErrorKind::InvalidInput.into())).is_err());
+}
+
+#[test]
 fn restricted_runners_skip_sandbox_tests() {
     for message in [
         "sandbox-exec: sandbox_apply: Operation not permitted",
@@ -46,10 +72,53 @@ fn unexpected_probe_failures_are_not_skipped() {
         "sandbox-exec: invalid profile",
         "bwrap: Unknown option",
         "Cannot load libkrun: Permission denied",
+        "Cannot find sandbox launcher at /tmp/joe-sandbox",
+        "Sandbox launcher is not an executable file: /tmp/joe-sandbox",
+        "krun_start_enter: Invalid argument (os error 22)",
     ] {
         assert!(SandboxAvailability::from_output(output(1, message)).is_err());
         let error = anyhow::anyhow!(message).context("Sandbox session stopped");
         assert!(SandboxAvailability::from_error(error).is_err());
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn unavailable_kvm_is_reported_before_missing_launcher() {
+    let availability = SandboxAvailability::kvm(
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/kvm"),
+    )
+    .unwrap();
+    if matches!(availability, SandboxAvailability::Restricted(_)) {
+        for required in [false, true] {
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "sandbox::tests::drains_both_pipes_beyond_pipe_capacity",
+                    "--nocapture",
+                ])
+                .env("JOE_SANDBOX_LAUNCHER", "/dev/null/joe-sandbox")
+                .env_remove("JOE_SANDBOX_REQUIRED");
+            if required {
+                command.env("JOE_SANDBOX_REQUIRED", "1");
+            }
+            let output = command.output().unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(output.status.success(), !required, "{stderr}");
+            assert!(stderr.contains("/dev/kvm"), "{stderr}");
+            assert!(!stderr.contains("Cannot find sandbox launcher"), "{stderr}");
+            match required {
+                true => assert!(
+                    stderr.contains("Required libkrun sandbox unavailable"),
+                    "{stderr}"
+                ),
+                false => assert!(stderr.contains("Skipping test:"), "{stderr}"),
+            }
+        }
     }
 }
 
