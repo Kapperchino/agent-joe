@@ -151,7 +151,15 @@ impl TUIApp {
                 KeyHint::new("Enter", "resume"),
                 KeyHint::new("Esc", "cancel"),
             ],
+            InputMode::CommandMenu(CommandMenu::QuestionSelector) => {
+                self.input_box.question_picker.hints()
+            }
         };
+        if !self.interaction.questions.is_empty()
+            && matches!(self.input_mode, InputMode::HomeMenu(HomeMenu::Normal))
+        {
+            shortcuts.insert(0, KeyHint::new("?", "questions"));
+        }
         if self.root_busy && matches!(self.input_mode, InputMode::HomeMenu(HomeMenu::Normal)) {
             shortcuts.insert(0, KeyHint::new("Ctrl+c", "interrupt"));
         }

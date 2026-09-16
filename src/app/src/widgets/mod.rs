@@ -2,6 +2,7 @@ pub mod command_box;
 pub mod input_box;
 pub mod message_box;
 pub mod model_box;
+pub(crate) mod question_box;
 mod select_list;
 pub(crate) mod session_box;
 pub(crate) mod welcome;

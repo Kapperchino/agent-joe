@@ -92,6 +92,21 @@ without a lockfile and after dependencies change. Builds, build scripts, tests,
 and programs run inside the sandbox without network access. Git dependencies and
 custom registries are not downloaded automatically.
 
+## Answering questions
+
+Pending questions have a TUI picker that opens automatically when the message
+editor is idle and empty. Press `?` in normal mode or run `/questions` to reopen
+it. Use `↑`/`↓` or `j`/`k` to select an answer and `Enter` to submit it; no question
+or choice IDs need to be typed. `Tab` and `Shift+Tab` switch between pending
+questions. `PgUp`/`PgDn` scroll long prompts.
+
+When free text is allowed, choose **Other (type an answer)**, or type directly for
+text-only questions. `Enter` submits, `Ctrl+n` inserts a newline, and `Ctrl+u`
+clears the answer. `Esc` returns from text entry to the choices or dismisses the
+picker without answering; message drafts are preserved. Required questions remain
+pending until answered. Manual `/answer <id> choice <id>` and
+`/answer <id> text <answer>` commands remain available.
+
 ## Session storage
 
 In Git repositories, each interactive session uses its own branch,
@@ -102,8 +117,8 @@ their parent session's worktree. Projects without Git continue using their
 original directory.
 
 After a task completes successfully, Joe commits the session's changes and asks
-whether to merge them into `main`. Answer the displayed question with its `merge`
-or `keep` choice using `/answer <question-id> choice <choice>`. Only explicit
+whether to merge them into `main`. Select the merge or keep choice in the question
+picker and press `Enter` (or use `/answer <question-id> choice <choice>`). Only explicit
 acceptance updates `main`; ending a session, cancelling a task, or starting a new
 session does not merge it. Starting another task invalidates the previous merge
 question. Approval covers the commit shown in the question and any merge conflict

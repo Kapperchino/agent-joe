@@ -1,5 +1,7 @@
 use super::*;
 use clients::{ClaudeAuthConfig, ClaudeConfig, ClaudeEffort, ClaudeKeyConfig, config::Config};
+use commands::command::{Answer, QuestionAnswer};
+use common_models::interaction::{Choice, InteractionView, Question, QuestionInput};
 use common_models::tui_models::{Lifecycle, SessionSummary};
 use ractor::{Actor, ActorProcessingErr};
 
@@ -73,6 +75,13 @@ impl Fixture {
     fn key(&mut self, code: KeyCode) {
         self.app
             .handle_key_event(&KeyEvent::new(code, KeyModifiers::NONE));
+    }
+
+    fn questions(&mut self, questions: Vec<Question>) {
+        self.packet(ActorToTuiPacket::InteractionUpdated(InteractionView {
+            planning: self.app.interaction.planning.clone(),
+            questions,
+        }));
     }
 
     async fn command(&self) -> Command {
@@ -267,6 +276,7 @@ async fn interaction_commands_questions_and_queue_preserve_vim_and_transcript() 
     assert!(rendered.contains("PLAN"));
     assert!(rendered.contains("plan 0/0"));
     assert!(rendered.contains("questions 1"));
+    fixture.key(KeyCode::Esc);
     fixture.key(KeyCode::Char('/'));
     fixture.app.input_box.paste("answer target text Library");
     fixture.key(KeyCode::Enter);
@@ -533,6 +543,10 @@ async fn all_input_modes_render_within_small_terminal_bounds() {
         .app
         .input_box
         .paste(&"A long prompt with Unicode: 日本語\n".repeat(20));
+    let mut pending = question("long-question", true);
+    pending.prompt = "A long question with Unicode: 日本語\n".repeat(20);
+    pending.choices[0].label = "A long choice with Unicode: 日本語 ".repeat(6);
+    fixture.questions(vec![pending]);
     for area in [
         Rect::new(0, 0, 100, 24),
         Rect::new(0, 0, 60, 16),
@@ -546,6 +560,7 @@ async fn all_input_modes_render_within_small_terminal_bounds() {
             InputMode::HomeMenu(HomeMenu::InputCommand),
             InputMode::CommandMenu(CommandMenu::ModelSelector),
             InputMode::CommandMenu(CommandMenu::SessionSelector),
+            InputMode::CommandMenu(CommandMenu::QuestionSelector),
         ] {
             fixture.app.update_input_mode(mode);
             let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
@@ -553,5 +568,404 @@ async fn all_input_modes_render_within_small_terminal_bounds() {
             assert!(area.contains(terminal.get_cursor_position().unwrap()));
         }
     }
+    fixture.stop().await;
+}
+
+fn question(id: &str, allow_free_text: bool) -> Question {
+    Question::try_from(QuestionInput {
+        id: id.into(),
+        prompt: "Which target should be built?".into(),
+        required: true,
+        choices: vec![
+            Choice {
+                id: "library-id".into(),
+                label: "Library target".into(),
+            },
+            Choice {
+                id: "binary-id".into(),
+                label: "Binary target".into(),
+            },
+        ],
+        allow_free_text,
+    })
+    .unwrap()
+}
+
+#[tokio::test]
+async fn question_picker_selects_and_submits_a_choice_only_once() {
+    let mut fixture = Fixture::new().await;
+    fixture.questions(vec![question("target", false)]);
+    assert!(matches!(
+        fixture.app.input_mode,
+        InputMode::CommandMenu(CommandMenu::QuestionSelector)
+    ));
+    let rendered = fixture.render();
+    assert!(rendered.contains("Question 1/1"));
+    assert!(rendered.contains("required"));
+    assert!(rendered.contains("Library target"));
+    assert!(rendered.contains("Binary target"));
+    assert!(!rendered.contains("Other (type an answer)"));
+    fixture.key(KeyCode::Down);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+    terminal.draw(|frame| fixture.app.draw(frame)).unwrap();
+    assert!(
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .any(|cell| { cell.symbol() == "B" && cell.bg == theme::SELECTION })
+    );
+    fixture
+        .app
+        .handle_term_event(&Event::Paste("not an allowed answer".into()));
+    fixture.questions(vec![question("target", false)]);
+    fixture.app.handle_key_event(&KeyEvent::new_with_kind(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        crossterm::event::KeyEventKind::Release,
+    ));
+    assert!(fixture.messages.is_empty());
+    fixture.key(KeyCode::Enter);
+    let expected = Command::Answer(QuestionAnswer {
+        id: "target".into(),
+        answer: Answer::Choice {
+            choice_id: "binary-id".into(),
+        },
+    });
+    assert_eq!(fixture.command().await, expected);
+    assert!(fixture.render().contains("Submitting answer"));
+    fixture.key(KeyCode::Enter);
+    fixture.questions(vec![question("target", false)]);
+    fixture.key(KeyCode::Enter);
+    fixture.key(KeyCode::Esc);
+    fixture.key(KeyCode::Char('?'));
+    fixture.key(KeyCode::Enter);
+    fixture.questions(vec![]);
+    fixture.packet(ActorToTuiPacket::CommandResult(
+        expected,
+        "Answer accepted".into(),
+    ));
+    assert!(matches!(
+        fixture.app.input_mode,
+        InputMode::HomeMenu(HomeMenu::Normal)
+    ));
+    assert!(fixture.app.input_box.question_picker.is_empty());
+    assert!(fixture.messages.is_empty());
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn question_picker_preserves_drafts_and_can_be_reopened_without_answering() {
+    let mut fixture = Fixture::new().await;
+    fixture.key(KeyCode::Char('i'));
+    fixture.app.input_box.paste("Keep this message draft");
+    fixture.questions(vec![question("target", false)]);
+    assert!(matches!(
+        fixture.app.input_mode,
+        InputMode::HomeMenu(HomeMenu::Editing)
+    ));
+    fixture.key(KeyCode::Esc);
+    fixture.key(KeyCode::Char('?'));
+    fixture.key(KeyCode::Char('j'));
+    fixture.key(KeyCode::Esc);
+    fixture.questions(vec![question("target", false)]);
+    assert!(matches!(
+        fixture.app.input_mode,
+        InputMode::HomeMenu(HomeMenu::Normal)
+    ));
+    assert_eq!(fixture.app.input_box.get_input(), "Keep this message draft");
+    fixture.key(KeyCode::Char('?'));
+    fixture.key(KeyCode::Enter);
+    assert_eq!(
+        fixture.command().await,
+        Command::Answer(QuestionAnswer {
+            id: "target".into(),
+            answer: Answer::Choice {
+                choice_id: "binary-id".into()
+            }
+        })
+    );
+    fixture.questions(vec![]);
+    for kind in [KeyEventKind::Release, KeyEventKind::Repeat] {
+        fixture.app.handle_key_event(&KeyEvent::new_with_kind(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+            kind,
+        ));
+    }
+    assert_eq!(fixture.app.input_box.get_input(), "Keep this message draft");
+    assert!(fixture.messages.is_empty());
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn questions_command_reopens_the_picker_and_empty_questions_use_the_actor() {
+    let mut fixture = Fixture::new().await;
+    fixture.questions(vec![question("target", false)]);
+    fixture.key(KeyCode::Esc);
+    fixture.key(KeyCode::Char('/'));
+    fixture.app.input_box.paste("questions");
+    fixture.key(KeyCode::Enter);
+    assert!(matches!(
+        fixture.app.input_mode,
+        InputMode::CommandMenu(CommandMenu::QuestionSelector)
+    ));
+    assert!(fixture.messages.is_empty());
+    fixture.questions(vec![]);
+    fixture.key(KeyCode::Char('/'));
+    fixture.app.input_box.paste("questions");
+    fixture.key(KeyCode::Enter);
+    assert_eq!(fixture.command().await, Command::Questions);
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn question_picker_validates_and_sends_free_text_without_command_syntax() {
+    let mut fixture = Fixture::new().await;
+    fixture.questions(vec![question("target", true)]);
+    fixture.key(KeyCode::Up);
+    fixture.key(KeyCode::Enter);
+    assert!(fixture.render().contains("Your answer:"));
+    fixture.key(KeyCode::Enter);
+    assert!(fixture.messages.is_empty());
+    assert!(fixture.render().contains("nonempty permitted text"));
+    fixture
+        .app
+        .handle_term_event(&Event::Paste("Custom 日本語 🦀".into()));
+    fixture.key(KeyCode::Backspace);
+    fixture.key(KeyCode::Char('k'));
+    fixture.key(KeyCode::Esc);
+    fixture.key(KeyCode::Enter);
+    fixture.questions(vec![question("target", true)]);
+    assert!(
+        fixture
+            .render()
+            .split_whitespace()
+            .collect::<String>()
+            .contains("Custom日本語k")
+    );
+    fixture
+        .app
+        .handle_key_event(&KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+    fixture
+        .app
+        .handle_term_event(&Event::Paste("/literal answer".into()));
+    fixture.key(KeyCode::Enter);
+    assert_eq!(
+        fixture.command().await,
+        Command::Answer(QuestionAnswer {
+            id: "target".into(),
+            answer: Answer::Text("Custom 日本語 k\n/literal answer".into())
+        })
+    );
+    assert!(fixture.app.input_box.is_empty());
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn question_picker_handles_text_only_questions_and_enforces_the_answer_limit() {
+    let mut fixture = Fixture::new().await;
+    let mut pending = question("details", true);
+    pending.choices.clear();
+    fixture.questions(vec![pending]);
+    assert!(fixture.render().contains("Your answer:"));
+    fixture.app.handle_term_event(&Event::Paste(" ".into()));
+    fixture.key(KeyCode::Enter);
+    fixture
+        .app
+        .handle_term_event(&Event::Paste("a".repeat(8192)));
+    fixture.key(KeyCode::Enter);
+    assert!(fixture.messages.is_empty());
+    fixture
+        .app
+        .handle_key_event(&KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+    fixture
+        .app
+        .handle_term_event(&Event::Paste("Use the workspace".into()));
+    fixture.key(KeyCode::Enter);
+    assert_eq!(
+        fixture.command().await,
+        Command::Answer(QuestionAnswer {
+            id: "details".into(),
+            answer: Answer::Text("Use the workspace".into())
+        })
+    );
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn question_picker_navigates_pending_questions_and_recovers_from_rejected_answers() {
+    let mut fixture = Fixture::new().await;
+    let first = question("first", false);
+    let mut second = question("second", false);
+    second.required = false;
+    fixture.questions(vec![first.clone(), second.clone()]);
+    fixture.key(KeyCode::Tab);
+    assert!(fixture.render().contains("Question 2/2"));
+    assert!(fixture.render().contains("optional"));
+    fixture.key(KeyCode::BackTab);
+    assert!(fixture.render().contains("Question 1/2"));
+    fixture.key(KeyCode::Tab);
+    fixture.key(KeyCode::Up);
+    fixture.questions(vec![first.clone(), second.clone()]);
+    fixture.key(KeyCode::Enter);
+    let submitted = Command::Answer(QuestionAnswer {
+        id: "second".into(),
+        answer: Answer::Choice {
+            choice_id: "binary-id".into(),
+        },
+    });
+    assert_eq!(fixture.command().await, submitted);
+    fixture.packet(ActorToTuiPacket::CommandResult(
+        submitted.clone(),
+        "Could not save answer".into(),
+    ));
+    assert!(fixture.render().contains("Could not save answer"));
+    fixture.key(KeyCode::Enter);
+    assert_eq!(fixture.command().await, submitted);
+    fixture.questions(vec![first]);
+    fixture.packet(ActorToTuiPacket::CommandResult(
+        submitted,
+        "Answer accepted".into(),
+    ));
+    assert!(fixture.render().contains("Question 1/1 · first"));
+    fixture.key(KeyCode::Enter);
+    assert_eq!(
+        fixture.command().await,
+        Command::Answer(QuestionAnswer {
+            id: "first".into(),
+            answer: Answer::Choice {
+                choice_id: "library-id".into()
+            }
+        })
+    );
+    fixture.questions(vec![]);
+    assert!(matches!(
+        fixture.app.input_mode,
+        InputMode::HomeMenu(HomeMenu::Normal)
+    ));
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn question_picker_reopens_restored_questions_and_clears_stale_session_state() {
+    let mut fixture = Fixture::new().await;
+    fixture.questions(vec![question("target", true)]);
+    fixture.key(KeyCode::Enter);
+    fixture.command().await;
+    fixture.key(KeyCode::Esc);
+    fixture
+        .app
+        .resume(ResumeTarget::Session { id: "saved".into() });
+    fixture.command().await;
+    fixture.questions(vec![question("target", true)]);
+    assert!(matches!(
+        fixture.app.input_mode,
+        InputMode::CommandMenu(CommandMenu::SessionSelector)
+    ));
+    fixture.packet(ActorToTuiPacket::SessionResumed(Ok(SessionTranscript {
+        id: "saved".into(),
+        messages: vec![],
+    })));
+    assert!(matches!(
+        fixture.app.input_mode,
+        InputMode::CommandMenu(CommandMenu::QuestionSelector)
+    ));
+    assert!(fixture.render().contains("Library target"));
+    fixture.packet(ActorToTuiPacket::SessionChanged);
+    assert!(fixture.app.input_box.question_picker.is_empty());
+    assert!(matches!(
+        fixture.app.input_mode,
+        InputMode::HomeMenu(HomeMenu::Normal)
+    ));
+    fixture.key(KeyCode::Char('?'));
+    assert!(fixture.messages.is_empty());
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn question_picker_ignores_worker_interactions_and_answer_results() {
+    let mut fixture = Fixture::new().await;
+    fixture.app.handle_actor_msg(ActorToTui {
+        actor_id: 1,
+        packet: ActorToTuiPacket::InteractionUpdated(InteractionView {
+            planning: Default::default(),
+            questions: vec![question("worker", false)],
+        }),
+    });
+    assert!(fixture.app.input_box.question_picker.is_empty());
+    fixture.questions(vec![question("root", false)]);
+    fixture.key(KeyCode::Enter);
+    let submitted = fixture.command().await;
+    fixture.app.handle_actor_msg(ActorToTui {
+        actor_id: 1,
+        packet: ActorToTuiPacket::CommandResult(submitted, "Worker result".into()),
+    });
+    fixture.key(KeyCode::Enter);
+    fixture.questions(vec![]);
+    fixture.key(KeyCode::Enter);
+    assert!(fixture.messages.is_empty());
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn question_picker_scrolls_long_prompts_and_keeps_the_selected_choice_visible() {
+    let mut fixture = Fixture::new().await;
+    let mut pending = question("long", false);
+    pending.prompt = (0..24)
+        .map(|index| format!("Prompt line {index:02}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    pending.choices = (0..6)
+        .map(|index| Choice {
+            id: format!("choice-{index}"),
+            label: format!("Answer {index}"),
+        })
+        .collect();
+    fixture.questions(vec![pending]);
+    let render = |app: &mut TUIApp| {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(40, 12)).unwrap();
+        terminal
+            .draw(|frame| {
+                frame.render_stateful_widget(InputBox::new(), frame.area(), &mut app.input_box);
+            })
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>()
+    };
+    let initial = render(&mut fixture.app);
+    assert!(initial.contains("Prompt line 00"));
+    assert!(!initial.contains("Prompt line 23"));
+    fixture.key(KeyCode::Up);
+    for _ in 0..8 {
+        fixture.key(KeyCode::PageDown);
+        render(&mut fixture.app);
+    }
+    let scrolled = render(&mut fixture.app);
+    assert!(scrolled.contains("Prompt line 23"));
+    assert!(!scrolled.contains("Prompt line 00"));
+    assert!(scrolled.contains("Answer 5"));
+    for _ in 0..8 {
+        fixture.key(KeyCode::PageUp);
+        render(&mut fixture.app);
+    }
+    assert!(render(&mut fixture.app).contains("Prompt line 00"));
+    fixture.key(KeyCode::Enter);
+    assert_eq!(
+        fixture.command().await,
+        Command::Answer(QuestionAnswer {
+            id: "long".into(),
+            answer: Answer::Choice {
+                choice_id: "choice-5".into(),
+            },
+        })
+    );
     fixture.stop().await;
 }

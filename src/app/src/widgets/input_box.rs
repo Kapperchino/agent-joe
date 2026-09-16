@@ -3,6 +3,7 @@ use crate::theme;
 use crate::tui::{CommandMenu, HomeMenu, InputMode};
 use crate::widgets::command_box::CommandBox;
 use crate::widgets::model_box::{ModelBox, ModelBoxResult, ModelBoxState};
+use crate::widgets::question_box::{QuestionBox, QuestionPickerState};
 use crate::widgets::session_box::{SessionBox, SessionPickerState};
 use clients::config::Config;
 use commands::command::CommandContext;
@@ -23,6 +24,7 @@ pub struct InputBoxState {
     command_context: CommandContext,
     model_box_state: ModelBoxState,
     pub(crate) session_picker: SessionPickerState,
+    pub(crate) question_picker: QuestionPickerState,
 }
 
 struct InputViewport {
@@ -111,6 +113,9 @@ impl StatefulWidget for InputBox {
                 CommandMenu::SessionSelector => {
                     SessionBox.render(area, buf, &mut state.session_picker)
                 }
+                CommandMenu::QuestionSelector => {
+                    QuestionBox.render(area, buf, &mut state.question_picker)
+                }
             },
             InputMode::None => (),
         }
@@ -154,6 +159,7 @@ impl InputBoxState {
             command_context: CommandContext::new(),
             model_box_state,
             session_picker: SessionPickerState::default(),
+            question_picker: QuestionPickerState::default(),
         }
     }
 
@@ -252,6 +258,7 @@ impl InputBoxState {
             InputMode::HomeMenu(HomeMenu::InputCommand) => command_input_lines as u16 + 9,
             InputMode::CommandMenu(CommandMenu::ModelSelector) => self.model_box_state.height(),
             InputMode::CommandMenu(CommandMenu::SessionSelector) => 18,
+            InputMode::CommandMenu(CommandMenu::QuestionSelector) => 18,
             InputMode::HomeMenu(HomeMenu::Normal | HomeMenu::Editing) | InputMode::None => {
                 editing_input_lines as u16 + 2
             }
