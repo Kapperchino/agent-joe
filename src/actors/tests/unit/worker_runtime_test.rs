@@ -667,6 +667,53 @@ async fn writer_ownership_rejects_overlapping_workers_and_root_edits_until_clean
 }
 
 #[tokio::test]
+async fn worker_completes_multiple_tool_rounds_with_reconciled_token_usage() {
+    let workspace = crate::session::tests::Workspace::new();
+    let actor = RepositoryActor::new(BaseWorker::new(), workspace.path.clone()).await;
+    let mut input = worker_input("find_files", ".");
+    input["tokens"] = json!(16000);
+    let started = StartedWorker::new(&actor, input).await;
+    let mut child = started.child;
+    for round in 0..4 {
+        let mut events = response(vec![tool(
+            "find_files",
+            &format!("inspect-{round}"),
+            json!({"pattern":"AGENTS.md"}),
+        )]);
+        if let Some(StreamEvent::MessageDelta { usage, .. }) = events.last_mut() {
+            usage.input_tokens = 1000;
+            usage.output_tokens = 100;
+        }
+        answer(child.1, events);
+        child = actor.request().await;
+    }
+    let mut events = response(vec![text("Inspection complete")]);
+    if let Some(StreamEvent::MessageDelta { usage, .. }) = events.last_mut() {
+        usage.input_tokens = 1000;
+        usage.output_tokens = 100;
+    }
+    answer(child.1, events);
+    answer(
+        started.parent.1,
+        response(vec![tool(
+            "worker_status",
+            "collect",
+            json!({"action":"wait", "worker_id":started.id, "seconds":2}),
+        )]),
+    );
+    let (parent, reply) = actor.request().await;
+    let result = latest_result(&parent);
+    let report = &result["workers"][0]["report"];
+    assert_eq!(report["status"], "completed");
+    assert_eq!(report["findings"], "Inspection complete");
+    assert_eq!(report["budget"]["requests"], 5);
+    assert_eq!(report["budget"]["tool_calls"], 4);
+    assert_eq!(report["budget"]["reserved_tokens"], 5500);
+    completed_root(&actor, reply).await;
+    actor.stop().await;
+}
+
+#[tokio::test]
 async fn timeout_failure_and_request_budget_are_reported_with_cleanup() {
     for failure in [
         WorkerStatus::TimedOut,

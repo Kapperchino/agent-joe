@@ -348,8 +348,12 @@ impl TUIApp {
                     }
                 }
                 if state.terminal() || detail.is_some() {
+                    let owner = match msg.actor_id {
+                        0 => "Turn".to_owned(),
+                        worker => format!("Worker {worker} turn"),
+                    };
                     self.message_box.append(Msg::Message(format!(
-                        "Turn {turn_id}: {state:?}{}",
+                        "{owner} {turn_id}: {state:?}{}",
                         detail.map(|text| format!(" — {text}")).unwrap_or_default()
                     )));
                 }

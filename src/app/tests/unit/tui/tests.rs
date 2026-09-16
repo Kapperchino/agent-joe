@@ -355,6 +355,31 @@ async fn worker_streams_update_progress_without_replacing_the_root_stream() {
         detail: "Provider request".into(),
     });
     assert!(fixture.render().contains("last test Passed"));
+    let root_turn = common_models::runtime_ids::TurnId::new();
+    fixture.packet(ActorToTuiPacket::TurnChanged {
+        turn_id: root_turn,
+        state: Lifecycle::Running,
+        detail: None,
+    });
+    let worker_turn = common_models::runtime_ids::TurnId::new();
+    fixture.app.handle_actor_msg(ActorToTui {
+        actor_id: 1,
+        packet: ActorToTuiPacket::TurnChanged {
+            turn_id: worker_turn,
+            state: Lifecycle::Failed,
+            detail: Some("Worker request budget exhausted (1/1 requests)".into()),
+        },
+    });
+    assert!(
+        fixture
+            .render()
+            .contains(&format!("Worker 1 turn {worker_turn}: Failed"))
+    );
+    assert!(fixture.app.root_busy);
+    assert!(matches!(
+        fixture.app.progress,
+        Progress::Turn(Lifecycle::Running)
+    ));
     fixture.stop().await;
 }
 

@@ -13,7 +13,7 @@ pub struct WorkerRequestInput {
     )]
     pub constraints: String,
     #[tool(
-        description = "Allowed tool names separated by newlines, such as find_files and read_file; functions. prefixes are accepted",
+        description = "Allowed tool names separated by newlines, such as find_files and read_file; functions. prefixes are accepted. inspect_context, git, review_changes, worktree and cargo require allowed_paths: .; use scoped file tools for narrower paths",
         required
     )]
     pub allowed_tools: String,
@@ -33,7 +33,7 @@ pub struct WorkerRequestInput {
     )]
     pub completion_criteria: String,
     #[tool(
-        description = "Conservative total input/output token budget, 1024 to 500000; default 120000"
+        description = "Total input/output tokens across all provider requests, including repeated instructions, tool definitions, history and tool results; 1024 to 500000, default 120000. Prefer the default for repository inspection"
     )]
     pub tokens: Option<usize>,
     #[tool(description = "Wall-clock budget in seconds, 1 to 300; default 180")]

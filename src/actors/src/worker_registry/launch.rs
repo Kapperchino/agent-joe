@@ -103,7 +103,7 @@ impl PreparedWorker {
                 match access.is_none_or(|access| workspace.permits_workspace_access(access)) {
                     true => Ok(tool),
                     false => Err(anyhow::anyhow!(
-                        "Repository inspection, worktree management and Cargo require whole-project paths; use scoped file tools or ask the root to review and validate"
+                        "Tool `{name}` requires allowed_paths: .; repository inspection, worktree management and Cargo require whole-project paths. For narrower paths use find_files, list_directory, grep and read_file; ask the root to review and validate"
                     )),
                 }
             })
