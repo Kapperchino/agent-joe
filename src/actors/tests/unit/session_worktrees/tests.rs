@@ -133,6 +133,24 @@ impl GitHarness {
     }
 
     async fn complete(&self, patch: Option<&str>) -> common_models::interaction::Question {
+        self.complete_with_subject(patch, "Make value return 2 instead of 1")
+            .await
+    }
+
+    async fn summarize(&self, subject: &str) -> llm::ClientRequest {
+        let (request, reply) = within(self.requests.recv_async()).await.unwrap();
+        assert!(request.tools.is_empty());
+        assert_eq!(request.messages.len(), 1);
+        assert!(request.messages[0].text().contains("diff --git"));
+        answer(reply, response(vec![text(subject)]));
+        request
+    }
+
+    async fn complete_with_subject(
+        &self,
+        patch: Option<&str>,
+        subject: &str,
+    ) -> common_models::interaction::Question {
         self.actor
             .send_message(Message::StartWork(Some("Update the function".into())))
             .unwrap();
@@ -162,6 +180,7 @@ impl GitHarness {
             None => reply,
         };
         answer(reply, response(vec![text("Task completed")]));
+        self.summarize(subject).await;
         let packet = self.event(|packet| matches!(packet, ActorToTuiPacket::InteractionUpdated(view) if view.questions.iter().any(|question| question.id.starts_with("merge-")))).await;
         match packet {
             ActorToTuiPacket::InteractionUpdated(view) => view
@@ -194,6 +213,64 @@ impl GitHarness {
 }
 
 const PATCH: &str = "*** Begin Patch\n*** Update File: lib.rs\n@@\n-pub fn value() -> u32 { 1 }\n+pub fn value() -> u32 { 2 }\n*** End Patch";
+
+#[tokio::test]
+async fn invalid_commit_subjects_do_not_block_approved_merges() {
+    let h = GitHarness::new().await;
+    let base = h.repo.refname_to_id("HEAD").unwrap();
+    let question = h.complete_with_subject(Some(PATCH), "").await;
+    assert_eq!(h.repo.refname_to_id("HEAD").unwrap(), base);
+    assert!(
+        h.answer_merge(&question, "merge")
+            .await
+            .contains("Cleaned up")
+    );
+    assert_eq!(
+        h.repo
+            .head()
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .message()
+            .unwrap(),
+        "Update lib.rs"
+    );
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn unchanged_tasks_do_not_request_a_commit_subject_or_merge() {
+    let h = GitHarness::new().await;
+    let id = h.store.list().unwrap()[0].id.clone();
+    let base = h.repo.refname_to_id("HEAD").unwrap();
+    h.actor
+        .send_message(Message::StartWork(Some("Inspect the function".into())))
+        .unwrap();
+    let (_, reply) = within(h.requests.recv_async()).await.unwrap();
+    answer(reply, response(vec![text("No changes needed")]));
+    h.event(|packet| {
+        matches!(
+            packet,
+            ActorToTuiPacket::TurnChanged {
+                state: Lifecycle::Completed,
+                ..
+            }
+        )
+    })
+    .await;
+    let (reply, receive) = oneshot::channel();
+    h.actor
+        .send_message(Message::Inspect(reply.into()))
+        .unwrap();
+    within(receive).await.unwrap();
+    assert!(h.requests.is_empty());
+    assert_eq!(h.repo.refname_to_id("HEAD").unwrap(), base);
+    assert!(matches!(
+        h.snapshot(&id).merge_approval,
+        crate::session_merge::MergeApproval::None
+    ));
+    h.stop().await;
+}
 
 #[tokio::test]
 async fn approving_a_conflicted_merge_resolves_and_merges_without_another_question() {
@@ -252,6 +329,19 @@ async fn approving_a_conflicted_merge_resolves_and_merges_without_another_questi
         request.messages
     );
     answer(reply, response(vec![text("Conflicts resolved")]));
+    let summary = h
+        .summarize("Resolve conflicting return values by returning 5")
+        .await;
+    assert!(
+        summary.messages[0]
+            .text()
+            .contains("-pub fn value() -> u32 { 3 }")
+    );
+    assert!(
+        summary.messages[0]
+            .text()
+            .contains("+pub fn value() -> u32 { 5 }")
+    );
     let packet = h
         .event(|packet| match packet {
             ActorToTuiPacket::ContextNotice(message) => {
@@ -290,6 +380,16 @@ async fn approving_a_conflicted_merge_resolves_and_merges_without_another_questi
             .unwrap()
             .parent_count(),
         2
+    );
+    assert_eq!(
+        h.repo
+            .head()
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .message()
+            .unwrap(),
+        "Resolve conflicting return values by returning 5"
     );
     h.stop().await;
 }
@@ -468,6 +568,16 @@ async fn successful_tasks_prompt_and_only_explicit_acceptance_updates_main() {
             .is_err()
     );
     assert_ne!(h.repo.refname_to_id("HEAD").unwrap(), base);
+    assert_eq!(
+        h.repo
+            .head()
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .message()
+            .unwrap(),
+        "Make value return 2 instead of 1"
+    );
     assert!(
         std::fs::read_to_string(h.workspace.path.join("lib.rs"))
             .unwrap()

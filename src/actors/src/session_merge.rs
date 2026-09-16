@@ -15,7 +15,7 @@ use common_models::{
 use std::sync::Arc;
 use tools::tool_defs::ToolEffect;
 use utils::{
-    git::worktrees::session::{MergeConflict, MergeOutcome, SessionWorktree},
+    git::worktrees::session::{CommitMessage, MergeConflict, MergeOutcome, SessionWorktree},
     workspace::WorkspacePolicy,
 };
 
@@ -118,6 +118,11 @@ struct MergeWorkspace {
     worktree: SessionWorktree,
 }
 
+struct ProposedCommit {
+    workspace: MergeWorkspace,
+    commit: String,
+}
+
 enum MergeResult {
     Cleaned {
         message: String,
@@ -178,7 +183,7 @@ impl MergeWorkspace {
         }
     }
 
-    fn proposal(self, approval: &MergeApproval) -> anyhow::Result<Option<String>> {
+    fn proposal(&self, approval: &MergeApproval) -> anyhow::Result<Option<String>> {
         match approval {
             MergeApproval::Resolving { conflict, .. } => self
                 .worktree
@@ -292,8 +297,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 .acquire(ToolEffect::Write, &runtime.scope)
                 .await?;
             let approval = self.merge_approval.clone();
-            let commit =
-                tokio::task::spawn_blocking(move || workspace.proposal(&approval)).await??;
+            let commit = self.describe_merge(workspace, approval).await?;
             drop(lease);
             let proposal = MergeProposal::new(&self.merge_approval, turn, commit);
             self.record_merge(proposal.event())?;
@@ -308,6 +312,59 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             }
         }
         Ok(())
+    }
+
+    async fn describe_merge(
+        &self,
+        workspace: MergeWorkspace,
+        approval: MergeApproval,
+    ) -> anyhow::Result<Option<String>> {
+        let proposal = tokio::task::spawn_blocking(move || {
+            let commit = workspace.proposal(&approval)?;
+            Ok::<_, anyhow::Error>(commit.map(|commit| ProposedCommit { workspace, commit }))
+        })
+        .await??;
+        match proposal {
+            None => Ok(None),
+            Some(ProposedCommit { workspace, commit }) => {
+                let described = workspace.worktree.clone();
+                let project = workspace.project.clone();
+                let expected = commit.clone();
+                let diff = tokio::task::spawn_blocking(move || {
+                    described.proposal_diff(&project, &expected)
+                })
+                .await?;
+                let message = match diff {
+                    Ok(diff) if diff.is_empty() => {
+                        CommitMessage::new("Merge session changes already present in main")
+                    }
+                    Ok(diff) => {
+                        crate::commit_message::generate(
+                            self.llm.snapshot(),
+                            diff,
+                            self.dependency.runtime.request_timeout,
+                        )
+                        .await
+                    }
+                    Err(error) => Err(error),
+                };
+                match message {
+                    Ok(message) => tokio::task::spawn_blocking(move || {
+                        workspace
+                            .worktree
+                            .describe_proposal(&workspace.project, &commit, &message)
+                    })
+                    .await?
+                    .map(Some),
+                    Err(error) => {
+                        self.reporter.send(ActorToTuiPacket::ContextNotice(format!(
+                            "Could not generate a descriptive commit message; keeping the existing commit message: {error:#}"
+                        )));
+                        Ok(Some(commit))
+                    }
+                }
+            }
+        }
     }
 
     pub(crate) async fn answer_merge(&mut self, answer: &Answer) -> anyhow::Result<String> {

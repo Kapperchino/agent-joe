@@ -31,6 +31,8 @@ use tools::tool_defs::{
 use utils::utils::FnvHashMap;
 
 type Events = BoxStream<'static, anyhow::Result<StreamEvent>>;
+#[path = "commit_message/tests.rs"]
+mod commit_message;
 #[path = "session_worktrees/tests.rs"]
 mod session_worktrees;
 type Request = (llm::ClientRequest, oneshot::Sender<anyhow::Result<Events>>);

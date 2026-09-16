@@ -108,7 +108,7 @@ fn divergent_merge_summarizes_all_session_changes_but_not_main_only_changes() {
 }
 
 #[test]
-fn large_commit_summaries_use_brief_file_counts() {
+fn fallback_commit_summaries_use_brief_file_counts() {
     let fixture = Fixture::new();
     fixture.commit("removed.txt", "remove me\n");
     let session = fixture.session();
@@ -158,6 +158,181 @@ fn commit_summaries_escape_control_characters_in_paths() {
         .find_commit(Oid::from_str(&approved).unwrap())
         .unwrap();
     assert_eq!(commit.message().unwrap(), "Add new\\nfile.txt");
+}
+
+#[test]
+fn commit_messages_require_brief_plain_text_subjects() {
+    for text in [
+        "",
+        "  ",
+        "Fix\nmore",
+        "Fix\0value",
+        "```Fix```",
+        "\"Fix\"",
+        &"x".repeat(73),
+    ] {
+        assert!(CommitMessage::new(text).is_err(), "{text:?}");
+    }
+    assert_eq!(
+        CommitMessage::new("  Raise retry limit to five\n")
+            .unwrap()
+            .as_str(),
+        "Raise retry limit to five"
+    );
+    assert!(CommitMessage::new(&"長".repeat(72)).is_ok());
+}
+
+#[test]
+fn descriptive_messages_survive_fast_forward_and_divergent_merges() {
+    for diverged in [false, true] {
+        let fixture = Fixture::new();
+        let session = fixture.session();
+        std::fs::write(
+            session.path.join("retry.txt"),
+            "Retry failed requests five times\n",
+        )
+        .unwrap();
+        session.proposal(&fixture.workspace).unwrap().unwrap();
+        std::fs::write(session.path.join("file.txt"), "retries = 5\n").unwrap();
+        let original = session.proposal(&fixture.workspace).unwrap().unwrap();
+        if diverged {
+            fixture.commit("main-only.txt", "Unrelated main work\n");
+        }
+        let diff = session
+            .proposal_diff(&fixture.workspace, &original)
+            .unwrap();
+        assert!(diff.contains("+retries = 5"));
+        assert!(diff.contains("+Retry failed requests five times"));
+        assert!(!diff.contains("main-only.txt"));
+        let child = git2::Repository::open(&session.path).unwrap();
+        let index = std::fs::read(child.path().join("index")).unwrap();
+        let main_index = std::fs::read(fixture.repo.path().join("index")).unwrap();
+        let main = fixture.repo.refname_to_id("HEAD").unwrap();
+        let subject =
+            CommitMessage::new("Raise retry limit to five and document retry behavior").unwrap();
+        let described = session
+            .describe_proposal(&fixture.workspace, &original, &subject)
+            .unwrap();
+        let before = fixture
+            .repo
+            .find_commit(Oid::from_str(&original).unwrap())
+            .unwrap();
+        let after = fixture
+            .repo
+            .find_commit(Oid::from_str(&described).unwrap())
+            .unwrap();
+        assert_eq!(before.tree_id(), after.tree_id());
+        assert_eq!(
+            before.parent_ids().collect::<Vec<_>>(),
+            after.parent_ids().collect::<Vec<_>>()
+        );
+        assert_eq!(fixture.repo.refname_to_id("HEAD").unwrap(), main);
+        assert_eq!(std::fs::read(child.path().join("index")).unwrap(), index);
+        assert_eq!(
+            std::fs::read(fixture.repo.path().join("index")).unwrap(),
+            main_index
+        );
+        assert_eq!(
+            session.proposal(&fixture.workspace).unwrap().unwrap(),
+            described
+        );
+        session.merge(&fixture.workspace, &described).unwrap();
+        let merged = fixture.repo.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(merged.message().unwrap(), subject.as_str());
+        assert_eq!(merged.parent_count(), if diverged { 2 } else { 1 });
+        session.cleanup(&fixture.workspace, &described).unwrap();
+        assert!(!session.path.exists());
+    }
+}
+
+#[test]
+fn describing_a_stale_proposal_preserves_newer_changes_and_references() {
+    let fixture = Fixture::new();
+    let session = fixture.session();
+    std::fs::write(session.path.join("file.txt"), "retries = 5\n").unwrap();
+    let original = session.proposal(&fixture.workspace).unwrap().unwrap();
+    let subject = CommitMessage::new("Raise retry limit to five").unwrap();
+    std::fs::write(session.path.join("file.txt"), "retries = 7\n").unwrap();
+    let child = git2::Repository::open(&session.path).unwrap();
+    assert!(
+        session
+            .describe_proposal(&fixture.workspace, &original, &subject)
+            .is_err()
+    );
+    assert_eq!(child.refname_to_id("HEAD").unwrap().to_string(), original);
+    let newer = session.proposal(&fixture.workspace).unwrap().unwrap();
+    assert!(
+        session
+            .describe_proposal(&fixture.workspace, &original, &subject)
+            .is_err()
+    );
+    assert_eq!(child.refname_to_id("HEAD").unwrap().to_string(), newer);
+    assert_eq!(
+        std::fs::read_to_string(session.path.join("file.txt")).unwrap(),
+        "retries = 7\n"
+    );
+}
+
+#[test]
+fn proposal_diffs_exclude_changes_already_in_main() {
+    let fixture = Fixture::new();
+    let session = fixture.session();
+    std::fs::write(session.path.join("file.txt"), "shared change\n").unwrap();
+    std::fs::write(session.path.join("session.txt"), "new session behavior\n").unwrap();
+    let commit = session.proposal(&fixture.workspace).unwrap().unwrap();
+    fixture.commit("file.txt", "shared change\n");
+    let diff = session.proposal_diff(&fixture.workspace, &commit).unwrap();
+    assert!(diff.contains("+new session behavior"));
+    assert!(!diff.contains("file.txt"));
+    assert!(!diff.contains("shared change"));
+}
+
+#[test]
+fn conflicted_proposal_diffs_describe_only_the_session_changes() {
+    let fixture = Fixture::new();
+    let session = fixture.session();
+    std::fs::write(session.path.join("file.txt"), "session behavior\n").unwrap();
+    let commit = session.proposal(&fixture.workspace).unwrap().unwrap();
+    fixture.commit("file.txt", "main behavior\n");
+    fixture.commit("main-only.txt", "unrelated work\n");
+    let diff = session.proposal_diff(&fixture.workspace, &commit).unwrap();
+    assert!(diff.contains("-base"));
+    assert!(diff.contains("+session behavior"));
+    assert!(!diff.contains("main behavior"));
+    assert!(!diff.contains("main-only.txt"));
+}
+
+#[test]
+fn integrated_proposals_cannot_be_rewritten() {
+    let fixture = Fixture::new();
+    let session = fixture.session();
+    std::fs::write(session.path.join("file.txt"), "session behavior\n").unwrap();
+    let commit = session.proposal(&fixture.workspace).unwrap().unwrap();
+    session.merge(&fixture.workspace, &commit).unwrap();
+    assert!(
+        session
+            .proposal_diff(&fixture.workspace, &commit)
+            .unwrap()
+            .is_empty()
+    );
+    let message = CommitMessage::new("Change session behavior").unwrap();
+    assert!(
+        session
+            .describe_proposal(&fixture.workspace, &commit, &message)
+            .is_err()
+    );
+    assert_eq!(
+        fixture.repo.refname_to_id("HEAD").unwrap().to_string(),
+        commit
+    );
+    assert_eq!(
+        git2::Repository::open(&session.path)
+            .unwrap()
+            .refname_to_id("HEAD")
+            .unwrap()
+            .to_string(),
+        commit
+    );
 }
 
 #[test]
