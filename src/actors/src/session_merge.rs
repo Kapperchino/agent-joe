@@ -1,6 +1,10 @@
 use crate::{
-    actor_state::ActorState, runtime::Runtime, session::Event, session_control::Persistence,
-    turn::FollowUp, turn_machine::TurnMachine,
+    actor_state::ActorState,
+    runtime::{ExecutionRole, Runtime},
+    session::Event,
+    session_control::Persistence,
+    turn::FollowUp,
+    turn_machine::TurnMachine,
 };
 use analysis::contexts::context::Context;
 use common_models::{
@@ -9,6 +13,7 @@ use common_models::{
     tui_models::ActorToTuiPacket,
 };
 use std::sync::Arc;
+use tools::tool_defs::ToolEffect;
 use utils::{
     git::worktrees::session::{MergeConflict, MergeOutcome, SessionWorktree},
     workspace::WorkspacePolicy,
@@ -53,9 +58,29 @@ pub(crate) enum MergeEvent {
     Finished,
 }
 
-enum MergeContinuation {
-    Ask,
-    Merge { commit: String },
+enum MergeProposal {
+    Empty,
+    AwaitingApproval { commit: String },
+    Approved { commit: String },
+}
+
+impl MergeProposal {
+    fn new(approval: &MergeApproval, turn: TurnId, commit: Option<String>) -> Self {
+        match commit {
+            Some(commit) if approval.resolution(turn).is_some() => Self::Approved { commit },
+            Some(commit) => Self::AwaitingApproval { commit },
+            None => Self::Empty,
+        }
+    }
+
+    fn event(&self) -> MergeEvent {
+        match self {
+            Self::Empty => MergeEvent::Finished,
+            Self::AwaitingApproval { commit } | Self::Approved { commit } => MergeEvent::Proposed {
+                commit: commit.clone(),
+            },
+        }
+    }
 }
 
 enum MergeDecision {
@@ -93,7 +118,7 @@ struct MergeWorkspace {
     worktree: SessionWorktree,
 }
 
-enum CompletedMerge {
+enum MergeResult {
     Cleaned {
         message: String,
     },
@@ -101,15 +126,38 @@ enum CompletedMerge {
         message: String,
         error: anyhow::Error,
     },
+    Conflicted {
+        conflict: MergeConflict,
+    },
 }
 
 impl MergeWorkspace {
+    fn for_offer(
+        runtime: &Runtime,
+        turn: &TurnMachine,
+        persistence: &Persistence,
+        compacting: bool,
+    ) -> anyhow::Result<Option<Self>> {
+        match (&runtime.role, &runtime.project, &runtime.session) {
+            (ExecutionRole::Root, Some(project), Some(session))
+                if turn.is_idle()
+                    && runtime.interaction.authorize(ToolEffect::Write).is_ok()
+                    && !compacting
+                    && matches!(persistence, Persistence::Ready) =>
+            {
+                Ok(session.snapshot()?.worktree.map(|worktree| Self {
+                    project: project.clone(),
+                    worktree,
+                }))
+            }
+            _ => Ok(None),
+        }
+    }
+
     fn new(runtime: &Runtime, persistence: &Persistence) -> anyhow::Result<Self> {
         match persistence {
             Persistence::Ready => {
-                runtime
-                    .interaction
-                    .authorize(tools::tool_defs::ToolEffect::Write)?;
+                runtime.interaction.authorize(ToolEffect::Write)?;
                 let project = runtime
                     .project
                     .clone()
@@ -130,17 +178,34 @@ impl MergeWorkspace {
         }
     }
 
-    fn merge(self, commit: &str) -> anyhow::Result<CompletedMerge> {
-        let message = match self.worktree.merge(&self.project, commit)? {
-            MergeOutcome::Unchanged => "Session changes are already in main.".into(),
-            MergeOutcome::Merged { target, commit } => {
-                format!("Merged session into {target}: {commit}")
+    fn proposal(self, approval: &MergeApproval) -> anyhow::Result<Option<String>> {
+        match approval {
+            MergeApproval::Resolving { conflict, .. } => self
+                .worktree
+                .finish_resolution(&self.project, conflict)
+                .map(Some),
+            _ => self.worktree.proposal(&self.project),
+        }
+    }
+
+    fn merge(self, commit: &str) -> anyhow::Result<MergeResult> {
+        match self.worktree.merge(&self.project, commit) {
+            Ok(outcome) => {
+                let message = match outcome {
+                    MergeOutcome::Unchanged => "Session changes are already in main.".into(),
+                    MergeOutcome::Merged { target, commit } => {
+                        format!("Merged session into {target}: {commit}")
+                    }
+                };
+                Ok(match self.worktree.cleanup(&self.project, commit) {
+                    Ok(()) => MergeResult::Cleaned { message },
+                    Err(error) => MergeResult::Retained { message, error },
+                })
             }
-        };
-        Ok(match self.worktree.cleanup(&self.project, commit) {
-            Ok(()) => CompletedMerge::Cleaned { message },
-            Err(error) => CompletedMerge::Retained { message, error },
-        })
+            Err(error) => error
+                .downcast::<MergeConflict>()
+                .map(|conflict| MergeResult::Conflicted { conflict }),
+        }
     }
 }
 
@@ -156,42 +221,35 @@ impl MergeApproval {
     }
 
     fn transition(&self, event: MergeEvent) -> Option<Self> {
-        match event {
-            MergeEvent::TaskStarted { .. } if matches!(self, Self::Awaiting { .. }) => {
-                Some(Self::None)
-            }
-            MergeEvent::TaskStarted { turn } if self.resolution(turn).is_none() => {
-                self.transition(MergeEvent::Paused)
-            }
-            MergeEvent::TaskStarted { .. } => None,
-            MergeEvent::Proposed { commit } => Some(Self::Awaiting {
-                question: format!("merge-{}", OperationId::new()),
-                commit,
-            }),
-            MergeEvent::Conflicted { conflict, turn } => Some(Self::Resolving {
-                conflict,
-                activity: ResolutionActivity::Running { turn },
-            }),
-            MergeEvent::Paused => match self {
+        match (self, event) {
+            (Self::Awaiting { .. }, MergeEvent::TaskStarted { .. }) => Some(Self::None),
+            (
+                Self::Resolving {
+                    activity: ResolutionActivity::Running { turn: approved },
+                    ..
+                },
+                MergeEvent::TaskStarted { turn },
+            ) if *approved == turn => None,
+            (
                 Self::Resolving {
                     conflict,
                     activity: ResolutionActivity::Running { .. },
-                } => Some(Self::Resolving {
-                    conflict: conflict.clone(),
-                    activity: ResolutionActivity::Paused,
-                }),
-                _ => None,
-            },
-            MergeEvent::Finished => Some(Self::None),
-        }
-    }
-
-    fn continuation(&self, turn: TurnId, commit: &Option<String>) -> MergeContinuation {
-        match commit {
-            Some(commit) if self.resolution(turn).is_some() => MergeContinuation::Merge {
-                commit: commit.clone(),
-            },
-            _ => MergeContinuation::Ask,
+                },
+                MergeEvent::TaskStarted { .. } | MergeEvent::Paused,
+            ) => Some(Self::Resolving {
+                conflict: conflict.clone(),
+                activity: ResolutionActivity::Paused,
+            }),
+            (_, MergeEvent::TaskStarted { .. } | MergeEvent::Paused) => None,
+            (_, MergeEvent::Proposed { commit }) => Some(Self::Awaiting {
+                question: format!("merge-{}", OperationId::new()),
+                commit,
+            }),
+            (_, MergeEvent::Conflicted { conflict, turn }) => Some(Self::Resolving {
+                conflict,
+                activity: ResolutionActivity::Running { turn },
+            }),
+            (_, MergeEvent::Finished) => Some(Self::None),
         }
     }
 
@@ -222,50 +280,31 @@ impl MergeApproval {
 
 impl<C: Context + Clone + 'static> ActorState<C> {
     pub(crate) async fn offer_merge(&mut self, turn: TurnId) -> anyhow::Result<()> {
-        if matches!(
-            self.dependency.runtime.role,
-            crate::runtime::ExecutionRole::Root
-        ) && self.turn.is_idle()
-            && self
-                .dependency
-                .runtime
-                .interaction
-                .authorize(tools::tool_defs::ToolEffect::Write)
-                .is_ok()
-            && self.compact_turn != Some(turn)
-            && matches!(self.persistence, Persistence::Ready)
-            && let (Some(project), Some(session)) = (
-                &self.dependency.runtime.project,
-                &self.dependency.runtime.session,
-            )
-            && let Some(worktree) = session.snapshot()?.worktree
-        {
+        if let Some(workspace) = MergeWorkspace::for_offer(
+            &self.dependency.runtime,
+            &self.turn,
+            &self.persistence,
+            self.compact_turn == Some(turn),
+        )? {
             let runtime = &self.dependency.runtime;
             let lease = runtime
                 .workspace
-                .acquire(tools::tool_defs::ToolEffect::Write, &runtime.scope)
+                .acquire(ToolEffect::Write, &runtime.scope)
                 .await?;
-            let project = project.clone();
             let approval = self.merge_approval.clone();
-            let commit = tokio::task::spawn_blocking(move || match approval {
-                MergeApproval::Resolving { conflict, .. } => {
-                    worktree.finish_resolution(&project, &conflict).map(Some)
-                }
-                _ => worktree.proposal(&project),
-            })
-            .await??;
+            let commit =
+                tokio::task::spawn_blocking(move || workspace.proposal(&approval)).await??;
             drop(lease);
-            let continuation = self.merge_approval.continuation(turn, &commit);
-            self.record_merge(match commit {
-                Some(commit) => MergeEvent::Proposed { commit },
-                None => MergeEvent::Finished,
-            })?;
-            match continuation {
-                MergeContinuation::Merge { commit } => {
+            let proposal = MergeProposal::new(&self.merge_approval, turn, commit);
+            self.record_merge(proposal.event())?;
+            match proposal {
+                MergeProposal::Approved { commit } => {
                     let message = self.merge_commit(commit).await?;
                     self.reporter.send(ActorToTuiPacket::ContextNotice(message));
                 }
-                MergeContinuation::Ask => self.refresh_interaction(),
+                MergeProposal::Empty | MergeProposal::AwaitingApproval { .. } => {
+                    self.refresh_interaction()
+                }
             }
         }
         Ok(())
@@ -287,13 +326,13 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         let runtime = &self.dependency.runtime;
         let lease = runtime
             .workspace
-            .acquire(tools::tool_defs::ToolEffect::Write, &runtime.scope)
+            .acquire(ToolEffect::Write, &runtime.scope)
             .await?;
         runtime.scope.shutdown_sandbox().await?;
         let outcome = tokio::task::spawn_blocking(move || workspace.merge(&commit)).await?;
         drop(lease);
         match outcome {
-            Ok(CompletedMerge::Cleaned { message }) => {
+            Ok(MergeResult::Cleaned { message }) => {
                 self.persist(Event::Worktree(None));
                 self.record_merge(MergeEvent::Finished)?;
                 let mut runtime = self.dependency.runtime.clone();
@@ -310,19 +349,17 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                     "{message}\nCleaned up the session workspace and branch."
                 ))
             }
-            Ok(CompletedMerge::Retained { message, error }) => {
+            Ok(MergeResult::Retained { message, error }) => {
                 self.refresh_interaction();
                 Ok(format!(
                     "{message}\nCleanup could not finish; the session workspace and branch remain recorded for inspection: {error:#}. Retry the merge after resolving the cleanup issue."
                 ))
             }
-            Err(error) => match error.downcast_ref::<MergeConflict>().cloned() {
-                Some(conflict) => self.resolve_merge(conflict).await,
-                None => {
-                    self.refresh_interaction();
-                    Err(error)
-                }
-            },
+            Ok(MergeResult::Conflicted { conflict }) => self.resolve_merge(conflict).await,
+            Err(error) => {
+                self.refresh_interaction();
+                Err(error)
+            }
         }
     }
 
@@ -336,7 +373,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         let runtime = &self.dependency.runtime;
         let lease = runtime
             .workspace
-            .acquire(tools::tool_defs::ToolEffect::Write, &runtime.scope)
+            .acquire(ToolEffect::Write, &runtime.scope)
             .await?;
         tokio::task::spawn_blocking(move || {
             workspace
@@ -353,8 +390,10 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     }
 
     pub(crate) fn merge_input(&self, turn: TurnId) -> Option<FollowUp> {
-        match self.merge_approval.resolution(turn) {
-            Some(conflict) if self.turn.is_idle() => Some(FollowUp {
+        self.merge_approval
+            .resolution(turn)
+            .filter(|_| self.turn.is_idle())
+            .map(|conflict| FollowUp {
                 id: turn,
                 prompt: Some(format!(
                     "The user approved merging this session into main, including resolving merge conflicts. Resolve the conflicts in the current session worktree, preserving the intended changes from both branches. The worktree includes main's nonconflicting changes and conflict markers where applicable. Session commit: {}. Main commit: {}. Conflicting paths: {}. Read the current conflicting files with read_file and inspect the original versions with git show as needed, edit the affected files, remove all conflict markers, and run focused validation. Do not ask for merge approval again. When this task completes successfully, the runtime will commit the resolution and retry merging into main automatically. If resolution is blocked, explain the blocker instead of claiming success.",
@@ -367,9 +406,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                         .collect::<Vec<_>>()
                         .join(", ")
                 )),
-            }),
-            _ => None,
-        }
+            })
     }
 
     pub(crate) fn record_merge(&mut self, event: MergeEvent) -> anyhow::Result<()> {
@@ -389,3 +426,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/session_merge/tests.rs"]
+mod tests;
