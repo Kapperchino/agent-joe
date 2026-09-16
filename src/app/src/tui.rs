@@ -10,13 +10,14 @@ use std::time::Duration;
 use crate::widgets::input_box::{InputBox, InputBoxState};
 use crate::widgets::message_box::message_box::{MessageBox, MessageBoxState, Msg};
 use crate::widgets::model_box::ModelBoxResult;
+use crate::widgets::question_box::QuestionAction;
 use crate::widgets::session_box::{PickerAction, SessionPickerState};
 use clients::config::ConfigContext;
 use color_eyre::Result;
 use commands::command::{Command, ResumeTarget};
 use crossterm::{
     cursor::SetCursorStyle,
-    event::{EventStream, KeyEvent, KeyModifiers},
+    event::{EventStream, KeyEvent, KeyEventKind, KeyModifiers},
     queue,
 };
 use flume::Receiver;
@@ -106,6 +107,7 @@ pub enum CommandMenu {
     #[default]
     ModelSelector,
     SessionSelector,
+    QuestionSelector,
 }
 
 impl TUIApp {
@@ -165,6 +167,9 @@ impl TUIApp {
                     self.update_input_mode(InputMode::CommandMenu(CommandMenu::ModelSelector));
                 }
                 Ok(Command::Resume(target)) => self.resume(target),
+                Ok(Command::Questions) if !self.input_box.question_picker.is_empty() => {
+                    self.open_questions();
+                }
                 Ok(command) => {
                     if let Err(error) = self.actor_ref.send_message(Message::Command(command)) {
                         self.message_box.append(Msg::Message(error.to_string()));
@@ -213,11 +218,54 @@ impl TUIApp {
         self.input_box.clear();
         self.input_box.force_normal_mode();
         self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
+        self.input_box.question_picker = Default::default();
+        self.sync_questions();
     }
 
     fn update_input_mode(&mut self, mode: InputMode) {
         self.input_mode = mode;
         self.input_box.input_mode = mode;
+    }
+
+    fn open_questions(&mut self) {
+        if !self.input_box.question_picker.is_empty() {
+            self.update_input_mode(InputMode::CommandMenu(CommandMenu::QuestionSelector));
+        }
+    }
+
+    fn sync_questions(&mut self) {
+        let has_new = self
+            .input_box
+            .question_picker
+            .sync(&self.interaction.questions);
+        match self.input_mode {
+            InputMode::CommandMenu(CommandMenu::QuestionSelector)
+                if self.input_box.question_picker.is_empty() =>
+            {
+                self.sync_input_mode_from_engine();
+            }
+            InputMode::HomeMenu(HomeMenu::Normal) if has_new && self.input_box.is_empty() => {
+                self.open_questions()
+            }
+            _ => {}
+        }
+    }
+
+    fn question_key(&mut self, key: &KeyEvent) {
+        match self.input_box.question_picker.key(key) {
+            QuestionAction::Stay => {}
+            QuestionAction::Close => self.sync_input_mode_from_engine(),
+            QuestionAction::Submit(answer) => {
+                if let Err(error) = self
+                    .actor_ref
+                    .send_message(Message::Command(Command::Answer(answer.clone())))
+                {
+                    self.input_box
+                        .question_picker
+                        .answered(&answer, error.to_string());
+                }
+            }
+        }
     }
 
     fn update_actor_state(&mut self, state: State) {
@@ -297,9 +345,15 @@ impl TUIApp {
                             .iter()
                             .any(|previous| previous.id == question.id)
                     })
-                    .map(|question| Msg::Message(question.display()))
+                    .map(|question| {
+                        Msg::Message(format!(
+                            "Question {}: {}\nUse the question picker (? or /questions) to answer.",
+                            question.id, question.prompt
+                        ))
+                    })
                     .for_each(|message| self.message_box.append(message));
                 self.interaction = view;
+                self.sync_questions();
             }
             ActorToTuiPacket::InputAccepted { turn_id, kind } if msg.actor_id == 0 => {
                 self.queued.remove(&turn_id);
@@ -319,7 +373,11 @@ impl TUIApp {
                     self.restore_transcript(transcript);
                 }
             }
-            ActorToTuiPacket::SessionChanged => self.clear_messages_and_terminal(),
+            ActorToTuiPacket::SessionChanged => {
+                self.clear_messages_and_terminal();
+                self.interaction = Default::default();
+                self.sync_questions();
+            }
             ActorToTuiPacket::SessionError(message) => {
                 self.message_box.append(Msg::Message(message))
             }
@@ -400,6 +458,13 @@ impl TUIApp {
                 if matches!(command, Command::Clear) {
                     self.clear_messages_and_terminal();
                 }
+                if let Command::Answer(answer) = &command
+                    && msg.actor_id == 0
+                {
+                    self.input_box
+                        .question_picker
+                        .answered(answer, command_res.clone());
+                }
                 self.message_box.append(Msg::Message(command_res));
                 match command {
                     Command::Logout => self.kill(),
@@ -444,6 +509,9 @@ impl TUIApp {
                 InputMode::CommandMenu(CommandMenu::SessionSelector) => {
                     self.input_box.session_picker.paste(text)
                 }
+                InputMode::CommandMenu(CommandMenu::QuestionSelector) => {
+                    self.input_box.question_picker.paste(text)
+                }
                 InputMode::HomeMenu(HomeMenu::Editing | HomeMenu::InputCommand) => {
                     self.input_box.paste(text);
                 }
@@ -457,6 +525,8 @@ impl TUIApp {
 
     fn handle_key_event(&mut self, key: &KeyEvent) {
         match self.input_mode {
+            _ if key.kind == KeyEventKind::Release
+                || (key.kind == KeyEventKind::Repeat && key.code == KeyCode::Enter) => {}
             InputMode::HomeMenu(HomeMenu::Normal) | InputMode::None => match key.code {
                 KeyCode::Enter => {
                     self.submit_message();
@@ -467,6 +537,7 @@ impl TUIApp {
                     self.update_input_mode(InputMode::HomeMenu(HomeMenu::InputCommand));
                 }
                 KeyCode::Char('q') => self.kill(),
+                KeyCode::Char('?') => self.open_questions(),
                 KeyCode::Char('c') => {
                     if key.modifiers.contains(KeyModifiers::CONTROL) {
                         if !self.input_box.is_empty() {
@@ -568,6 +639,7 @@ impl TUIApp {
                 _ => {}
             },
             InputMode::CommandMenu(menu) => match menu {
+                CommandMenu::QuestionSelector => self.question_key(key),
                 CommandMenu::SessionSelector => match self.input_box.session_picker.key(key) {
                     PickerAction::Stay => {}
                     PickerAction::Cancel => {
