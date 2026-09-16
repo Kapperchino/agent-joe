@@ -11,7 +11,7 @@ use std::{
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, BufReader},
     process::ChildStdout,
-    sync::{OnceCell, mpsc, watch},
+    sync::{OnceCell, RwLock, mpsc, watch},
 };
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use uuid::Uuid;
@@ -23,14 +23,14 @@ pub use command::RunningProcess;
 use transport::Launcher;
 
 pub(crate) struct SessionOwner {
-    session: OnceCell<Arc<Session>>,
+    session: RwLock<OnceCell<Arc<Session>>>,
     cancel: CancellationToken,
 }
 
 impl SessionOwner {
     pub(crate) fn new(cancel: CancellationToken) -> Self {
         Self {
-            session: OnceCell::new(),
+            session: RwLock::new(OnceCell::new()),
             cancel: cancel.child_token(),
         }
     }
@@ -56,7 +56,7 @@ impl SessionOwner {
                             )
                         })
                         .await??;
-                    Session::start(prepared, self.cancel.clone(), tasks)
+                    Session::start(prepared, self.cancel.child_token(), tasks)
                 })
                 .await
             }
@@ -67,8 +67,24 @@ impl SessionOwner {
         &self,
         startup: impl std::future::Future<Output = anyhow::Result<Arc<Session>>>,
     ) -> anyhow::Result<Arc<Session>> {
-        let session = self.session.get_or_try_init(|| startup).await?;
+        let slot = self.session.read().await;
+        let session = slot.get_or_try_init(|| startup).await?;
         session.ready().await
+    }
+
+    pub(crate) async fn shutdown(&self) -> anyhow::Result<()> {
+        let mut slot = self.session.write().await;
+        if let Some(session) = slot.get() {
+            session.cancel.cancel();
+            session
+                .state
+                .clone()
+                .wait_for(|state| matches!(state, SessionState::Stopped { .. }))
+                .await
+                .context("Sandbox shutdown stopped before completion")?;
+        }
+        slot.take();
+        Ok(())
     }
 }
 

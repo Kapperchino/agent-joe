@@ -89,6 +89,11 @@ impl Sandbox {
     }
 
     #[cfg(unix)]
+    pub async fn shutdown(&self) -> anyhow::Result<()> {
+        self.session.shutdown().await
+    }
+
+    #[cfg(unix)]
     pub async fn launch(
         &self,
         command: Command,

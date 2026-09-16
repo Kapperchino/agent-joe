@@ -526,15 +526,9 @@ fn cleanup_refuses_unmerged_and_post_merge_commits() {
 }
 
 #[test]
-fn cleanup_preserves_local_ignored_and_private_files() {
-    for path in [
-        "file.txt",
-        "untracked.txt",
-        "ignored.txt",
-        ".turbo-code/private.txt",
-    ] {
+fn cleanup_preserves_uncommitted_source_files() {
+    for path in ["file.txt", "untracked.txt", "target/notes.txt"] {
         let fixture = Fixture::new();
-        fixture.commit(".gitignore", "ignored.txt\n");
         let session = fixture.session();
         std::fs::write(session.path.join("file.txt"), "session\n").unwrap();
         let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
@@ -561,10 +555,80 @@ fn cleanup_preserves_local_ignored_and_private_files() {
 }
 
 #[test]
-fn cleanup_reports_oversized_files_and_allows_retry() {
-    for path in ["file.txt", "untracked.bin", "target/debug/build.bin"] {
+fn cleanup_removes_the_entire_session_directory_including_large_build_caches() {
+    for ignore in [None, Some("/target\n/ignored.txt\n")] {
         let fixture = Fixture::new();
-        fixture.commit(".gitignore", "/target\n");
+        if let Some(ignore) = ignore {
+            fixture.commit(".gitignore", ignore);
+        }
+        let session = fixture.session();
+        for path in [
+            "target/.joe/linux/build/debug/build.bin",
+            "target/.joe/linux/cargo/registry/src/dependency.bin",
+            "target/.joe/tmp/leftover/output.bin",
+            ".turbo-code/private.bin",
+        ] {
+            let path = session.path.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::File::create(path)
+                .unwrap()
+                .set_len(128 * 1024 * 1024)
+                .unwrap();
+        }
+        if ignore.is_some() {
+            std::fs::write(session.path.join("ignored.txt"), "discard with session\n").unwrap();
+            std::fs::write(session.path.join("target/host-build.bin"), "build output\n").unwrap();
+        }
+        std::fs::write(session.path.join("file.txt"), "session\n").unwrap();
+        let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+        session.merge(&fixture.workspace, &approved).unwrap();
+        session.cleanup(&fixture.workspace, &approved).unwrap();
+        assert!(!session.path.exists());
+        assert!(fixture.repo.find_worktree(&session.id).is_err());
+        assert!(
+            fixture
+                .repo
+                .find_branch(&session.branch(), git2::BranchType::Local)
+                .is_err()
+        );
+        assert_eq!(
+            fixture.repo.refname_to_id("HEAD").unwrap().to_string(),
+            approved
+        );
+        assert_eq!(
+            std::fs::read_to_string(fixture.root.join("file.txt")).unwrap(),
+            "session\n"
+        );
+        assert!(!fixture.root.join("target").exists());
+        assert!(!fixture.root.join(".turbo-code").exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn cleanup_removes_cache_links_without_following_them() {
+    let fixture = Fixture::new();
+    let outside = Fixture::new();
+    let session = fixture.session();
+    let cache = session.path.join("target/.joe/linux/cargo/registry");
+    std::fs::create_dir_all(&cache).unwrap();
+    std::os::unix::fs::symlink(&outside.root, cache.join("index")).unwrap();
+    std::fs::write(session.path.join("file.txt"), "session\n").unwrap();
+    let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+    session.merge(&fixture.workspace, &approved).unwrap();
+    session.cleanup(&fixture.workspace, &approved).unwrap();
+    assert!(!session.path.exists());
+    assert_eq!(
+        std::fs::read_to_string(outside.root.join("file.txt")).unwrap(),
+        "base\n"
+    );
+    assert!(outside.repo.head().is_ok());
+}
+
+#[test]
+fn cleanup_reports_oversized_files_and_allows_retry() {
+    for path in ["file.txt", "untracked.bin", "target/notes.bin"] {
+        let fixture = Fixture::new();
         let session = fixture.session();
         std::fs::write(session.path.join("file.txt"), "session\n").unwrap();
         let approved = session.proposal(&fixture.workspace).unwrap().unwrap();

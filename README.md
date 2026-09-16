@@ -117,9 +117,12 @@ merge. Interrupting resolution stops the automatic merge. Local edits in the
 `main` checkout or `main` checked out in another worktree stop the merge and leave
 the session available for recovery. Resolve the blocker and retry the answer, or
 complete another task to prepare a fresh merge proposal.
-Session branches and worktrees remain available after merging. `/resume` reopens
-the saved worktree; `/fork` creates a separate worktree including the current
-session's edits. Session storage stays in the original project.
+After merging, Joe stops the session sandbox and deletes the session branch and
+the entire worktree directory, including ignored files and build caches. Unmerged
+commits, uncommitted source changes, and pending Git operations block cleanup.
+Session history stays in the original project. `/resume` or another task creates
+a fresh worktree from current `main` after cleanup; `/fork` creates a separate
+worktree including the current session's edits.
 
 Session databases have a 100 GiB map limit and rotate before the next write once
 usage reaches 90 GiB. The map reserves address space; disk space grows with the

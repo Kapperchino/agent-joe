@@ -73,7 +73,7 @@ async fn aborted_startup_waits_reuse_one_published_launcher() {
         tokio::spawn(async move {
             owner
                 .initialize(async {
-                    Session::start(fixture.command(), owner.cancel.clone(), &tasks)
+                    Session::start(fixture.command(), owner.cancel.child_token(), &tasks)
                 })
                 .await
         })
@@ -88,7 +88,7 @@ async fn aborted_startup_waits_reuse_one_published_launcher() {
     .unwrap();
     first.abort();
     assert!(first.await.is_err_and(|error| error.is_cancelled()));
-    assert!(owner.session.get().is_some());
+    assert!(owner.session.read().await.get().is_some());
     let second = start();
     let concurrent = start();
     std::fs::write(fixture.root.join("ready"), "ready").unwrap();
@@ -121,6 +121,46 @@ async fn aborted_startup_waits_reuse_one_published_launcher() {
             .count(),
         0
     );
+}
+
+#[tokio::test]
+async fn shutdown_waits_for_cleanup_and_allows_a_fresh_launcher() {
+    let fixture = Fixture::new();
+    let cancel = CancellationToken::new();
+    let owner = SessionOwner::new(cancel.clone());
+    let tasks = TaskTracker::new();
+    owner.shutdown().await.unwrap();
+    std::fs::write(fixture.root.join("ready"), "ready").unwrap();
+    for _ in 0..2 {
+        let session = owner
+            .initialize(async {
+                Session::start(fixture.command(), owner.cancel.child_token(), &tasks)
+            })
+            .await
+            .unwrap();
+        let temporary = fixture
+            .root
+            .join("target/.joe/tmp")
+            .join(session.temporary.id().to_string());
+        assert!(temporary.exists());
+        tokio::time::timeout(std::time::Duration::from_secs(5), owner.shutdown())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!temporary.exists());
+        assert!(session.ready().await.is_err());
+        assert!(!cancel.is_cancelled());
+        assert!(!owner.cancel.is_cancelled());
+        assert!(owner.session.read().await.get().is_none());
+    }
+    assert_eq!(
+        std::fs::read_to_string(fixture.root.join("started")).unwrap(),
+        "started\nstarted\n"
+    );
+    tasks.close();
+    tokio::time::timeout(std::time::Duration::from_secs(5), tasks.wait())
+        .await
+        .unwrap();
 }
 
 #[tokio::test]

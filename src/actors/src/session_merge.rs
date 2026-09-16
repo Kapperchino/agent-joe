@@ -201,7 +201,7 @@ impl MergeApproval {
             Self::Awaiting { question, commit } => Some(Question {
                 id: question.clone(),
                 prompt: format!(
-                    "Task completed successfully. Merge session commit {commit} into main, resolving any conflicts?"
+                    "Task completed successfully. Merge session commit {commit} into main, resolving any conflicts, then delete the entire session workspace, including ignored files and build caches?"
                 ),
                 required: false,
                 choices: vec![
@@ -289,6 +289,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             .workspace
             .acquire(tools::tool_defs::ToolEffect::Write, &runtime.scope)
             .await?;
+        runtime.scope.shutdown_sandbox().await?;
         let outcome = tokio::task::spawn_blocking(move || workspace.merge(&commit)).await?;
         drop(lease);
         match outcome {

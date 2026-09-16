@@ -77,9 +77,7 @@ impl Inventory {
             }
             for entry in entries {
                 let kind = workspace.is_directory(&entry.path);
-                let excluded = [".git", ".turbo-code", ".joe-worktrees"]
-                    .iter()
-                    .any(|name| entry.name.eq_ignore_ascii_case(name))
+                let excluded = crate::git::excluded(entry.path.strip_prefix(workspace.root())?)
                     || (matches!(mode, InventoryMode::Discovery)
                         && entry.name.eq_ignore_ascii_case("target"));
                 match kind {

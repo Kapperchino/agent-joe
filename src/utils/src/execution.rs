@@ -66,6 +66,14 @@ impl ExecutionScope {
         }
     }
 
+    pub async fn shutdown_sandbox(&self) -> anyhow::Result<()> {
+        #[cfg(unix)]
+        if let Some(sandbox) = &self.sandbox {
+            sandbox.shutdown().await?;
+        }
+        Ok(())
+    }
+
     pub fn workspace(&self) -> anyhow::Result<Arc<crate::workspace::WorkspacePolicy>> {
         match &self.workspace {
             WorkspaceAccess::Configured(workspace) => Ok(workspace.clone()),

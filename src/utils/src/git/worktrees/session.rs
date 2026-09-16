@@ -217,18 +217,23 @@ impl<'repo> SessionCleanup<'repo> {
         let approved_id = Oid::from_str(approved)?;
         let target = git.repo.refname_to_id(&target_reference)?;
         let expected = WorktreeSnapshot::base(git, approved)?;
-        let actual = WorktreeSnapshot::for_cleanup(&workspace, &child, &expected)?;
+        let actual = WorktreeSnapshot::for_session_cleanup(&workspace, &child, &expected)?;
+        if let Some(entry) = child.status(&workspace)?.entries.first() {
+            Err(anyhow::anyhow!(
+                "Cleanup conflict: uncommitted change: {}. Preserve or restore this local change before retrying",
+                entry.path.display()
+            ))?;
+        }
         let integrated =
             target == approved_id || git.repo.graph_descendant_of(target, approved_id)?;
         let unchanged = git.repo.refname_to_id(&reference)? == approved_id
             && actual.head == expected.head
             && actual.files == expected.files
-            && child.repo.state() == RepositoryState::Clean
-            && child.status(&workspace)?.entries.is_empty();
+            && child.repo.state() == RepositoryState::Clean;
         match integrated && unchanged {
             true => Ok(()),
             false => Err(anyhow::anyhow!(
-                "Cleanup conflict: session has unmerged commits, local edits, ignored files, private data, or a pending Git operation"
+                "Cleanup conflict: session has unmerged commits, local edits, or a pending Git operation"
             )),
         }?;
         match git.repo.head()?.name()? == reference {

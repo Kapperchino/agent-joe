@@ -183,7 +183,7 @@ impl GitRepository {
             std::iter::empty::<&Path>(),
         )?;
         repo.set_config(&git2::Config::new()?)?;
-        repo.add_ignore_rule(".[tT][uU][rR][bB][oO]-[cC][oO][dD][eE]/\n.[jJ][oO][eE]-[wW][oO][rR][kK][tT][rR][eE][eE][sS]/")?;
+        repo.add_ignore_rule(".[tT][uU][rR][bB][oO]-[cC][oO][dD][eE]/\n.[jJ][oO][eE]-[wW][oO][rR][kK][tT][rR][eE][eE][sS]/\n/target/.joe/")?;
         let workdir = repo
             .workdir()
             .ok_or_else(|| anyhow::anyhow!("Bare repositories are not task workspaces"))?
@@ -496,12 +496,13 @@ impl GitPath {
 }
 
 pub(crate) fn excluded(path: &Path) -> bool {
-    path.components().any(|component| match component {
-        Component::Normal(name) => [".git", ".turbo-code", ".joe-worktrees"]
-            .iter()
-            .any(|excluded| name.eq_ignore_ascii_case(excluded)),
-        _ => false,
-    })
+    path.starts_with("target/.joe")
+        || path.components().any(|component| match component {
+            Component::Normal(name) => [".git", ".turbo-code", ".joe-worktrees"]
+                .iter()
+                .any(|excluded| name.eq_ignore_ascii_case(excluded)),
+            _ => false,
+        })
 }
 
 enum StatusArea {

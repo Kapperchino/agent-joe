@@ -569,6 +569,14 @@ async fn another_task_after_merge_gets_a_fresh_isolated_workspace() {
     let h = GitHarness::new().await;
     let id = h.store.list().unwrap()[0].id.clone();
     let worktree = h.snapshot(&id).worktree.unwrap();
+    let cache = worktree
+        .path
+        .join("target/.joe/linux/build/debug/build.bin");
+    std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
+    std::fs::File::create(&cache)
+        .unwrap()
+        .set_len(128 * 1024 * 1024)
+        .unwrap();
     let question = h.complete(Some(PATCH)).await;
     assert!(
         h.answer_merge(&question, "merge")
@@ -577,11 +585,22 @@ async fn another_task_after_merge_gets_a_fresh_isolated_workspace() {
     );
     assert!(h.snapshot(&id).worktree.is_none());
     assert!(!worktree.path.exists());
+    assert!(h.repo.find_worktree(&id).is_err());
+    assert!(
+        h.repo
+            .find_branch(&format!("joe/session/{id}"), git2::BranchType::Local)
+            .is_err()
+    );
+    assert!(matches!(
+        h.snapshot(&id).merge_approval,
+        crate::session_merge::MergeApproval::None
+    ));
     let merged = h.repo.refname_to_id("HEAD").unwrap();
     let history = h.snapshot(&id).history.len();
     let patch = "*** Begin Patch\n*** Update File: lib.rs\n@@\n-pub fn value() -> u32 { 2 }\n+pub fn value() -> u32 { 4 }\n*** End Patch";
     let question = h.complete(Some(patch)).await;
     assert_eq!(h.snapshot(&id).worktree.unwrap().path, worktree.path);
+    assert!(!cache.exists());
     assert!(h.snapshot(&id).history.len() > history);
     assert_eq!(h.repo.refname_to_id("HEAD").unwrap(), merged);
     assert!(
@@ -673,6 +692,9 @@ async fn cleanup_failure_reports_successful_merge_and_preserves_data_for_retry()
     std::fs::write(worktree.path.join(".gitignore"), "private.txt\n").unwrap();
     let question = h.complete(Some(PATCH)).await;
     std::fs::write(worktree.path.join("private.txt"), "private data\n").unwrap();
+    let child = git2::Repository::open(&worktree.path).unwrap();
+    let lock = child.path().join("locked");
+    std::fs::write(&lock, "keep this worktree\n").unwrap();
     let message = h.answer_merge(&question, "merge").await;
     assert!(message.contains("Merged session into main"), "{message}");
     assert!(message.contains("Cleanup could not finish"), "{message}");
@@ -692,7 +714,7 @@ async fn cleanup_failure_reports_successful_merge_and_preserves_data_for_retry()
             .unwrap()
             .contains("{ 2 }")
     );
-    std::fs::remove_file(worktree.path.join("private.txt")).unwrap();
+    std::fs::remove_file(lock).unwrap();
     let message = h.answer_merge(&question, "merge").await;
     assert!(message.contains("already in main"), "{message}");
     assert!(message.contains("Cleaned up"), "{message}");

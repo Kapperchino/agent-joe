@@ -60,6 +60,31 @@ impl WorktreeSnapshot {
                 .ok_or_else(|| anyhow::anyhow!("Worktree HEAD is missing"))?,
         })
     }
+
+    pub fn for_session_cleanup(
+        workspace: &WorkspacePolicy,
+        git: &GitRepository,
+        expected: &Self,
+    ) -> anyhow::Result<Self> {
+        let contents = expected.files.iter().try_fold(
+            SnapshotFiles::default(),
+            |files, (path, version)| match workspace.file_size(path)?
+                == version.bytes().len() as u64
+            {
+                true => files.with_file(path.clone(), workspace.file_version(path)?),
+                false => Err(anyhow::anyhow!(
+                    "Cleanup conflict: file size changed: {}. Preserve or restore this local change before retrying",
+                    path.display()
+                )),
+            },
+        )?;
+        Ok(Self {
+            files: contents.files,
+            head: git
+                .head()?
+                .ok_or_else(|| anyhow::anyhow!("Worktree HEAD is missing"))?,
+        })
+    }
 }
 
 #[derive(Default)]
