@@ -128,7 +128,7 @@ impl WorkerBudget {
         self.ledger.lock().unwrap().usage.clone()
     }
 
-    pub fn reserve(&self, request: &mut clients::llm::ClientRequest) -> anyhow::Result<()> {
+    pub fn reserve(&self, request: &clients::llm::ClientRequest) -> anyhow::Result<()> {
         let mut ledger = self.ledger.lock().unwrap();
         let usage = &mut ledger.usage;
         let input = crate::context::estimated_tokens(request)?;
@@ -137,8 +137,7 @@ impl WorkerBudget {
                 .reported_input_tokens
                 .saturating_add(usage.reported_output_tokens),
         );
-        let remaining = self.limits.tokens().saturating_sub(charged);
-        let output = remaining.saturating_sub(input).min(4096) as u32;
+        let output = request.max_output_tokens.unwrap_or_default() as usize;
         match usage.state {
             BudgetState::Exhausted => Err(anyhow::anyhow!("Worker budget already exhausted")),
             BudgetState::Available if usage.requests >= self.limits.requests() => {
@@ -149,20 +148,11 @@ impl WorkerBudget {
                 );
                 Err(usage.exhausted(&message))
             }
-            BudgetState::Available if output < 256 => {
-                let message = format!(
-                    "Worker token budget exhausted ({charged}/{} tokens charged; {remaining} remaining; next request needs {input} input tokens and at least 256 output tokens)",
-                    self.limits.tokens()
-                );
-                Err(usage.exhausted(&message))
-            }
             BudgetState::Available => {
-                let output = request.max_output_tokens.unwrap_or(output).min(output);
-                request.max_output_tokens = Some(output);
-                usage.reserved_tokens = charged + input + output as usize;
+                usage.reserved_tokens = charged.saturating_add(input).saturating_add(output);
                 usage.requests += 1;
                 ledger.request = RequestState::Reserved(RequestUsage {
-                    reserved_tokens: input + output as usize,
+                    reserved_tokens: input + output,
                     estimated_input_tokens: input,
                     input_tokens: 0,
                     output_tokens: 0,
@@ -177,16 +167,8 @@ impl WorkerBudget {
         ledger.observe(event);
         let usage = &mut ledger.usage;
         match usage.state {
-            BudgetState::Available
-                if usage.reserved_tokens.max(
-                    usage
-                        .reported_input_tokens
-                        .saturating_add(usage.reported_output_tokens),
-                ) <= self.limits.tokens() =>
-            {
-                Ok(())
-            }
-            _ => Err(usage.exhausted("Provider-reported worker token budget exhausted")),
+            BudgetState::Available => Ok(()),
+            BudgetState::Exhausted => Err(anyhow::anyhow!("Worker budget already exhausted")),
         }
     }
 

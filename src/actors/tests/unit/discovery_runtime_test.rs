@@ -92,7 +92,16 @@ impl RepositoryActor {
         root: std::path::PathBuf,
         debug_mode: bool,
     ) -> Self {
-        let runtime = Runtime::for_workspace(root.clone()).unwrap();
+        let runtime = Runtime::for_workspace(root).unwrap();
+        Self::with_runtime(worker, runtime, debug_mode).await
+    }
+
+    async fn with_runtime<W: Worker<C = RustContext>>(
+        worker: W,
+        runtime: Runtime,
+        debug_mode: bool,
+    ) -> Self {
+        let root = runtime.scope.workspace().unwrap().root().to_path_buf();
         let context = runtime
             .scope
             .enter(RustContext::new(W::init_prompt(None), 0, root))

@@ -2,14 +2,13 @@ use super::*;
 use launch::WorkerOutcome;
 use request::WorkerRequestInput;
 
-fn request(tokens: usize) -> WorkerRequest {
+fn request() -> WorkerRequest {
     WorkerRequest::new(
         WorkerRequestInput {
             objective: "Investigate a bounded question".into(),
             allowed_tools: "read_file".into(),
             allowed_paths: ".".into(),
             completion_criteria: "Report evidence".into(),
-            tokens: Some(tokens),
             ..Default::default()
         },
         |_| Some(tools::tool_defs::ToolEffect::Read),
@@ -22,7 +21,7 @@ fn cancellation_and_late_updates_preserve_reports_until_collection() {
     let registry = WorkerRegistry::default();
     let scope = ExecutionScope::default();
     let worker = registry
-        .register("parent", scope.clone(), request(1024))
+        .register("parent", scope.clone(), request())
         .unwrap();
     assert_eq!(
         registry.status("parent", &worker.id).unwrap().status,
@@ -75,7 +74,7 @@ fn cancellation_and_late_updates_preserve_reports_until_collection() {
 fn recovery_requires_a_matching_terminal_report_and_preserves_completed_evidence() {
     let registry = WorkerRegistry::default();
     let worker = registry
-        .register("parent", ExecutionScope::default(), request(1024))
+        .register("parent", ExecutionScope::default(), request())
         .unwrap();
     let report = worker.report(
         WorkerOutcome::Completed("Saved evidence".into()),
@@ -128,18 +127,18 @@ fn recovery_requires_a_matching_terminal_report_and_preserves_completed_evidence
 }
 
 #[tokio::test]
-async fn registry_retains_immediate_completions_and_enforces_owner_count_and_total_budgets() {
+async fn registry_retains_immediate_completions_and_enforces_owner_and_worker_counts() {
     let registry = WorkerRegistry::default();
     let workers = (0..4)
         .map(|_| {
             registry
-                .register("parent", ExecutionScope::default(), request(1024))
+                .register("parent", ExecutionScope::default(), request())
                 .unwrap()
         })
         .collect::<Vec<_>>();
     assert!(
         registry
-            .register("parent", ExecutionScope::default(), request(1024))
+            .register("parent", ExecutionScope::default(), request())
             .is_err()
     );
     assert!(registry.status("other", &workers[0].id).is_err());
@@ -160,7 +159,7 @@ async fn registry_retains_immediate_completions_and_enforces_owner_count_and_tot
     assert!(registry.pending("parent").is_empty());
     for _ in 4..32 {
         let worker = registry
-            .register("parent", ExecutionScope::default(), request(1024))
+            .register("parent", ExecutionScope::default(), request())
             .unwrap();
         registry.complete(
             "parent",
@@ -173,24 +172,7 @@ async fn registry_retains_immediate_completions_and_enforces_owner_count_and_tot
     }
     assert!(
         registry
-            .register("parent", ExecutionScope::default(), request(1024))
-            .is_err()
-    );
-    for _ in 0..4 {
-        let worker = registry
-            .register("budget-parent", ExecutionScope::default(), request(500_000))
-            .unwrap();
-        registry.complete(
-            "budget-parent",
-            worker.report(
-                WorkerOutcome::Completed(String::new()),
-                std::time::Instant::now(),
-            ),
-        );
-    }
-    assert!(
-        registry
-            .register("budget-parent", ExecutionScope::default(), request(1024))
+            .register("parent", ExecutionScope::default(), request())
             .is_err()
     );
 }

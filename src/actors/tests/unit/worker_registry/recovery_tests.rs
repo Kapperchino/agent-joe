@@ -8,7 +8,6 @@ fn recovery_exposes_uncertain_work_and_preserves_limits_across_forks() {
             allowed_tools: "read_file".into(),
             allowed_paths: ".".into(),
             completion_criteria: "Report evidence".into(),
-            tokens: Some(500_000),
             ..Default::default()
         },
         |_| Some(tools::tool_defs::ToolEffect::Read),
@@ -24,7 +23,7 @@ fn recovery_exposes_uncertain_work_and_preserves_limits_across_forks() {
     assert_eq!(view.status, WorkerStatus::Interrupted);
     assert!(view.report.as_ref().unwrap().unresolved_issues[0].contains("uncertain"));
     let registry = WorkerRegistry::default();
-    let saved = (0..4)
+    let saved = (0..32)
         .map(|index| {
             let id = format!("saved-{index}");
             (
@@ -38,8 +37,8 @@ fn recovery_exposes_uncertain_work_and_preserves_limits_across_forks() {
         .collect::<BTreeMap<_, _>>();
     registry.restore("source", saved.clone());
     registry.restore("fork", saved);
-    assert_eq!(registry.list("source").len(), 4);
-    assert_eq!(registry.list("fork").len(), 4);
+    assert_eq!(registry.list("source").len(), 32);
+    assert_eq!(registry.list("fork").len(), 32);
     assert!(
         registry
             .register("source", ExecutionScope::default(), request.clone())

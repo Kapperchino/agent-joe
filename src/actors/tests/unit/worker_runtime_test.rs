@@ -517,7 +517,10 @@ async fn bounded_worker_inherits_constraints_denies_other_paths_and_returns_obse
             && handoff.contains("Selected context marker")
     );
     assert_eq!(worker_request.tools.len(), 2);
-    assert!(worker_request.max_output_tokens.unwrap() <= 4096);
+    assert_eq!(
+        worker_request.max_output_tokens,
+        started.parent.0.max_output_tokens
+    );
     answer(
         started.child.1,
         response(vec![tool(
@@ -667,50 +670,66 @@ async fn writer_ownership_rejects_overlapping_workers_and_root_edits_until_clean
 }
 
 #[tokio::test]
-async fn worker_completes_multiple_tool_rounds_with_reconciled_token_usage() {
-    let workspace = crate::session::tests::Workspace::new();
-    let actor = RepositoryActor::new(BaseWorker::new(), workspace.path.clone()).await;
-    let mut input = worker_input("find_files", ".");
-    input["tokens"] = json!(16000);
-    let started = StartedWorker::new(&actor, input).await;
-    let mut child = started.child;
-    for round in 0..4 {
-        let mut events = response(vec![tool(
-            "find_files",
-            &format!("inspect-{round}"),
-            json!({"pattern":"AGENTS.md"}),
-        )]);
+async fn worker_inherits_parent_response_limits_across_rounds_without_a_total_token_budget() {
+    use crate::context::ContextBudget;
+
+    for context_budget in [
+        ContextBudget::default(),
+        ContextBudget::new(Some(128_000), 32_000).unwrap(),
+        ContextBudget::new(None, 2048).unwrap(),
+    ] {
+        let workspace = crate::session::tests::Workspace::new();
+        let runtime = Runtime {
+            context_budget,
+            ..Runtime::for_workspace(workspace.path.clone()).unwrap()
+        };
+        let actor = RepositoryActor::with_runtime(BaseWorker::new(), runtime, false).await;
+        let started = StartedWorker::new(&actor, worker_input("find_files", ".")).await;
+        let mut child = started.child;
+        let output_limit = started.parent.0.max_output_tokens;
+        for round in 0..4 {
+            assert_eq!(child.0.max_output_tokens, output_limit);
+            let mut events = response(vec![tool(
+                "find_files",
+                &format!("inspect-{round}"),
+                json!({"pattern":"AGENTS.md"}),
+            )]);
+            if let Some(StreamEvent::MessageDelta { usage, .. }) = events.last_mut() {
+                usage.input_tokens = 50_000;
+                usage.output_tokens = 100;
+            }
+            answer(child.1, events);
+            child = actor.request().await;
+        }
+        assert_eq!(child.0.max_output_tokens, output_limit);
+        let mut events = response(vec![text("Inspection complete")]);
         if let Some(StreamEvent::MessageDelta { usage, .. }) = events.last_mut() {
-            usage.input_tokens = 1000;
+            usage.input_tokens = 50_000;
             usage.output_tokens = 100;
         }
         answer(child.1, events);
-        child = actor.request().await;
+        answer(
+            started.parent.1,
+            response(vec![tool(
+                "worker_status",
+                "collect",
+                json!({"action":"wait", "worker_id":started.id, "seconds":2}),
+            )]),
+        );
+        let (parent, reply) = actor.request().await;
+        let result = latest_result(&parent);
+        let report = &result["workers"][0]["report"];
+        assert_eq!(report["status"], "completed");
+        assert_eq!(report["findings"], "Inspection complete");
+        assert_eq!(report["budget"]["requests"], 5);
+        assert_eq!(report["budget"]["tool_calls"], 4);
+        assert_eq!(report["budget"]["reserved_tokens"], 250_500);
+        assert_eq!(report["budget"]["reported_input_tokens"], 250_000);
+        assert_eq!(report["budget"]["reported_output_tokens"], 500);
+        assert_eq!(report["budget"]["exhausted"], false);
+        completed_root(&actor, reply).await;
+        actor.stop().await;
     }
-    let mut events = response(vec![text("Inspection complete")]);
-    if let Some(StreamEvent::MessageDelta { usage, .. }) = events.last_mut() {
-        usage.input_tokens = 1000;
-        usage.output_tokens = 100;
-    }
-    answer(child.1, events);
-    answer(
-        started.parent.1,
-        response(vec![tool(
-            "worker_status",
-            "collect",
-            json!({"action":"wait", "worker_id":started.id, "seconds":2}),
-        )]),
-    );
-    let (parent, reply) = actor.request().await;
-    let result = latest_result(&parent);
-    let report = &result["workers"][0]["report"];
-    assert_eq!(report["status"], "completed");
-    assert_eq!(report["findings"], "Inspection complete");
-    assert_eq!(report["budget"]["requests"], 5);
-    assert_eq!(report["budget"]["tool_calls"], 4);
-    assert_eq!(report["budget"]["reserved_tokens"], 5500);
-    completed_root(&actor, reply).await;
-    actor.stop().await;
 }
 
 #[tokio::test]
@@ -810,7 +829,7 @@ fn actor_store(path: &std::path::Path) -> Arc<crate::session::SessionStore> {
 fn worker_contracts_and_conservative_budgets_reject_unbounded_or_widened_requests() {
     let valid =
         || serde_json::from_value::<WorkerRequestInput>(worker_input("read_file", "src")).unwrap();
-    for field in ["tokens", "seconds", "requests"] {
+    for field in ["seconds", "requests"] {
         let mut input = worker_input("read_file", "src");
         input[field] = json!(0);
         assert!(
@@ -826,11 +845,12 @@ fn worker_contracts_and_conservative_budgets_reject_unbounded_or_widened_request
     input.allowed_paths = "../outside".into();
     assert!(WorkerRequest::new(input, |_| Some(ToolEffect::Read)).is_err());
     let budget =
-        crate::worker_registry::budget::WorkerBudget::new(BudgetLimits::new(4096, 1, 1).unwrap());
-    let mut request = llm::ClientRequest::new(vec![llm::Message::new("small request".into())]);
-    budget.reserve(&mut request).unwrap();
-    assert!(request.max_output_tokens.unwrap() <= 4096);
-    assert!(budget.reserve(&mut request).is_err());
+        crate::worker_registry::budget::WorkerBudget::new(BudgetLimits::new(1, 1).unwrap());
+    let request = llm::ClientRequest::new(vec![llm::Message::new("small request".into())])
+        .with_output_limit(32_000);
+    budget.reserve(&request).unwrap();
+    assert_eq!(request.max_output_tokens, Some(32_000));
+    assert!(budget.reserve(&request).is_err());
     assert_eq!(
         budget.usage().state,
         crate::worker_registry::budget::BudgetState::Exhausted

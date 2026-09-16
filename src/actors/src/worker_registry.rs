@@ -30,18 +30,16 @@ struct RegistryState {
 #[derive(Default)]
 struct Allocation {
     workers: usize,
-    tokens: usize,
 }
 
 impl Allocation {
-    fn reserve(&self, active: usize, budget: request::BudgetLimits) -> anyhow::Result<Self> {
-        match active < 4 && self.workers < 32 && self.tokens + budget.tokens() <= 2_000_000 {
+    fn reserve(&self, active: usize) -> anyhow::Result<Self> {
+        match active < 4 && self.workers < 32 {
             true => Ok(Self {
                 workers: self.workers + 1,
-                tokens: self.tokens + budget.tokens(),
             }),
             false => Err(anyhow::anyhow!(
-                "Worker limit exhausted: at most 4 active workers, 32 starts and 2000000 allocated tokens per session"
+                "Worker limit exhausted: at most 4 active workers and 32 starts per session"
             )),
         }
     }
@@ -105,7 +103,7 @@ impl WorkerRegistry {
             .allocations
             .get(owner)
             .unwrap_or(&Allocation::default())
-            .reserve(active, request.budget)?;
+            .reserve(active)?;
         state.allocations.insert(owner.to_owned(), allocation);
         state.next_id += 1;
         let epoch = std::time::SystemTime::now()
@@ -137,10 +135,6 @@ impl WorkerRegistry {
         let mut state = self.state.lock().unwrap();
         let allocation = Allocation {
             workers: workers.len(),
-            tokens: workers
-                .values()
-                .map(|worker| worker.request.budget.tokens())
-                .sum(),
         };
         state.allocations.insert(owner.to_owned(), allocation);
         state.entries.retain(|_, entry| entry.owner != owner);

@@ -94,7 +94,6 @@ fn followups_recheck_handoff_bounds_and_preserve_the_original_constraints() {
     assert_eq!(followup.allowed_tools, request.allowed_tools);
     assert_eq!(followup.allowed_paths, request.allowed_paths);
     assert_eq!(followup.completion_criteria, request.completion_criteria);
-    assert_eq!(followup.budget.tokens(), request.budget.tokens());
     assert_eq!(followup.budget.seconds(), request.budget.seconds());
     assert_eq!(followup.budget.requests(), request.budget.requests());
     assert!(
@@ -119,19 +118,32 @@ fn followups_recheck_handoff_bounds_and_preserve_the_original_constraints() {
 #[test]
 fn deserialized_budgets_cannot_bypass_constructor_limits() {
     for input in [
-        serde_json::json!({"tokens": 1023, "seconds": 1, "requests": 1}),
-        serde_json::json!({"tokens": 500001, "seconds": 1, "requests": 1}),
-        serde_json::json!({"tokens": 1024, "seconds": 0, "requests": 1}),
-        serde_json::json!({"tokens": 1024, "seconds": 301, "requests": 1}),
-        serde_json::json!({"tokens": 1024, "seconds": 1, "requests": 0}),
-        serde_json::json!({"tokens": 1024, "seconds": 1, "requests": 33}),
+        serde_json::json!({"seconds": 0, "requests": 1}),
+        serde_json::json!({"seconds": 301, "requests": 1}),
+        serde_json::json!({"seconds": 1, "requests": 0}),
+        serde_json::json!({"seconds": 1, "requests": 33}),
     ] {
         assert!(serde_json::from_value::<BudgetLimits>(input).is_err());
     }
-    let limits = BudgetLimits::new(500_000, 300, 32).unwrap();
+    let limits = BudgetLimits::new(300, 32).unwrap();
     let restored: BudgetLimits =
         serde_json::from_value(serde_json::to_value(limits).unwrap()).unwrap();
-    assert_eq!(restored.tokens(), limits.tokens());
     assert_eq!(restored.seconds(), limits.seconds());
     assert_eq!(restored.requests(), limits.requests());
+}
+
+#[test]
+fn legacy_token_budgets_can_be_restored_without_retaining_the_token_limit() {
+    let limits: BudgetLimits = serde_json::from_value(serde_json::json!({
+        "tokens": 500_000,
+        "seconds": 300,
+        "requests": 32
+    }))
+    .unwrap();
+    assert_eq!(limits.seconds(), 300);
+    assert_eq!(limits.requests(), 32);
+    assert_eq!(
+        serde_json::to_value(limits).unwrap(),
+        serde_json::json!({"seconds": 300, "requests": 32})
+    );
 }

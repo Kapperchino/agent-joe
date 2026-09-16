@@ -32,10 +32,6 @@ pub struct WorkerRequestInput {
         required
     )]
     pub completion_criteria: String,
-    #[tool(
-        description = "Total input/output tokens across all provider requests, including repeated instructions, tool definitions, history and tool results; 1024 to 500000, default 120000. Prefer the default for repository inspection"
-    )]
-    pub tokens: Option<usize>,
     #[tool(description = "Wall-clock budget in seconds, 1 to 300; default 180")]
     pub seconds: Option<u64>,
     #[tool(description = "Maximum provider requests, 1 to 32; default 16")]
@@ -64,14 +60,12 @@ pub enum WorkerRole {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(try_from = "BudgetLimitsInput")]
 pub struct BudgetLimits {
-    tokens: usize,
     seconds: u64,
     requests: usize,
 }
 
 #[derive(Deserialize)]
 struct BudgetLimitsInput {
-    tokens: usize,
     seconds: u64,
     requests: usize,
 }
@@ -80,29 +74,18 @@ impl TryFrom<BudgetLimitsInput> for BudgetLimits {
     type Error = anyhow::Error;
 
     fn try_from(input: BudgetLimitsInput) -> anyhow::Result<Self> {
-        Self::new(input.tokens, input.seconds, input.requests)
+        Self::new(input.seconds, input.requests)
     }
 }
 
 impl BudgetLimits {
-    pub fn new(tokens: usize, seconds: u64, requests: usize) -> anyhow::Result<Self> {
-        match (1024..=500_000).contains(&tokens)
-            && (1..=300).contains(&seconds)
-            && (1..=32).contains(&requests)
-        {
-            true => Ok(Self {
-                tokens,
-                seconds,
-                requests,
-            }),
+    pub fn new(seconds: u64, requests: usize) -> anyhow::Result<Self> {
+        match (1..=300).contains(&seconds) && (1..=32).contains(&requests) {
+            true => Ok(Self { seconds, requests }),
             false => Err(anyhow::anyhow!(
-                "Invalid worker budget: tokens must be 1024 to 500000, seconds 1 to 300, and requests 1 to 32"
+                "Invalid worker budget: seconds must be 1 to 300 and requests 1 to 32"
             )),
         }
-    }
-
-    pub(super) fn tokens(self) -> usize {
-        self.tokens
     }
 
     pub(super) fn seconds(self) -> u64 {
@@ -135,11 +118,7 @@ impl WorkerRequest {
             .filter(|s| !s.is_empty())
             .map(PathBuf::from)
             .collect::<Vec<_>>();
-        let budget = BudgetLimits::new(
-            input.tokens.unwrap_or(120_000),
-            input.seconds.unwrap_or(180),
-            input.requests.unwrap_or(16),
-        )?;
+        let budget = BudgetLimits::new(input.seconds.unwrap_or(180), input.requests.unwrap_or(16))?;
         let valid = !input.objective.trim().is_empty()
             && !input.completion_criteria.trim().is_empty()
             && !tools.is_empty()
@@ -210,7 +189,6 @@ impl WorkerRequest {
                     .join("\n"),
                 context,
                 completion_criteria: self.completion_criteria.clone(),
-                tokens: Some(self.budget.tokens()),
                 seconds: Some(self.budget.seconds()),
                 requests: Some(self.budget.requests()),
             },

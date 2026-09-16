@@ -127,12 +127,12 @@ impl ProviderTask {
 
     async fn stream(
         &mut self,
-        mut request: clients::llm::ClientRequest,
+        request: clients::llm::ClientRequest,
         mode: crate::context::RequestMode,
     ) -> Result<(), Failure> {
         if let Some(budget) = &self.budget {
             budget
-                .reserve(&mut request)
+                .reserve(&request)
                 .map_err(|error| Failure::new(FailureKind::Worker, error.to_string()))?;
         }
         let limit_mib = match mode {
