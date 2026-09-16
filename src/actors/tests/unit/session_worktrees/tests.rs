@@ -215,6 +215,235 @@ impl GitHarness {
 const PATCH: &str = "*** Begin Patch\n*** Update File: lib.rs\n@@\n-pub fn value() -> u32 { 1 }\n+pub fn value() -> u32 { 2 }\n*** End Patch";
 
 #[tokio::test]
+async fn prune_discards_inactive_worktrees_preserves_history_and_allows_resume() {
+    let h = GitHarness::new().await;
+    let id = h.store.list().unwrap()[0].id.clone();
+    let worktree = h.snapshot(&id).worktree.unwrap();
+    let question = h.complete(Some(PATCH)).await;
+    let saved = h.snapshot(&id);
+    h.command(Command::New).await;
+    let current = h
+        .store
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|snapshot| snapshot.id != id)
+        .unwrap();
+    let current_worktree = current.worktree.unwrap();
+    let main = h.repo.refname_to_id("HEAD").unwrap();
+    let index = std::fs::read(h.repo.path().join("index")).unwrap();
+    let message = h.command(Command::Prune).await;
+    assert!(
+        message.contains("Pruned 1 unmerged session worktree(s)"),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!("Skipped {}", current.id)),
+        "{message}"
+    );
+    assert!(!worktree.path.exists());
+    assert!(h.repo.find_worktree(&id).is_err());
+    assert!(
+        h.repo
+            .find_branch(&format!("joe/session/{id}"), git2::BranchType::Local)
+            .is_err()
+    );
+    assert!(current_worktree.path.exists());
+    assert_eq!(h.repo.refname_to_id("HEAD").unwrap(), main);
+    assert_eq!(std::fs::read(h.repo.path().join("index")).unwrap(), index);
+    let pruned = h.snapshot(&id);
+    assert!(pruned.worktree.is_none());
+    assert!(matches!(
+        pruned.merge_approval,
+        crate::session_merge::MergeApproval::None
+    ));
+    assert_eq!(
+        serde_json::to_value(&pruned.history[..saved.history.len()]).unwrap(),
+        serde_json::to_value(&saved.history).unwrap()
+    );
+    assert!(
+        pruned
+            .history
+            .last()
+            .unwrap()
+            .text()
+            .contains("worktree was pruned")
+    );
+    assert!(h.command(Command::Prune).await.contains("Pruned 0"));
+    let later_main = h.commit_main("pub fn value() -> u32 { 8 }\n");
+    h.actor
+        .send_message(Message::Command(Command::Resume(ResumeTarget::Session {
+            id: id.clone(),
+        })))
+        .unwrap();
+    assert!(matches!(
+        h.event(|packet| matches!(packet, ActorToTuiPacket::SessionResumed(_)))
+            .await,
+        ActorToTuiPacket::SessionResumed(Ok(_))
+    ));
+    assert_eq!(
+        git2::Repository::open(&worktree.path)
+            .unwrap()
+            .refname_to_id("HEAD")
+            .unwrap(),
+        later_main
+    );
+    h.answer_merge(&question, "merge").await;
+    assert_eq!(h.repo.refname_to_id("HEAD").unwrap(), later_main);
+    assert!(worktree.path.exists());
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn prune_skips_live_sessions_and_continues_after_locked_worktrees() {
+    let h = GitHarness::new().await;
+    let project = utils::workspace::WorkspacePolicy::workspace(h.workspace.path.clone()).unwrap();
+    let live = h
+        .store
+        .create(llm::SessionProvider::Injected, None, Vec::new())
+        .unwrap();
+    let live_worktree =
+        utils::git::worktrees::session::SessionWorktree::create(&project, &live.id, None)
+            .unwrap()
+            .unwrap();
+    live.record(crate::session::Event::Worktree(Some(live_worktree.clone())))
+        .unwrap();
+    std::fs::write(live_worktree.path.join("lib.rs"), "live edits\n").unwrap();
+    let locked = h
+        .store
+        .create(llm::SessionProvider::Injected, None, Vec::new())
+        .unwrap();
+    let locked_worktree =
+        utils::git::worktrees::session::SessionWorktree::create(&project, &locked.id, None)
+            .unwrap()
+            .unwrap();
+    locked
+        .record(crate::session::Event::Worktree(Some(
+            locked_worktree.clone(),
+        )))
+        .unwrap();
+    std::fs::write(locked_worktree.path.join("local.txt"), "local\n").unwrap();
+    let child = git2::Repository::open(&locked_worktree.path).unwrap();
+    let lock = child.path().join("locked");
+    std::fs::write(&lock, "keep\n").unwrap();
+    let locked_id = locked.id.clone();
+    drop(locked);
+    let inactive = h
+        .store
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|snapshot| snapshot.id != live.id && snapshot.id != locked_id)
+        .unwrap();
+    let inactive_worktree = inactive.worktree.unwrap();
+    std::fs::write(inactive_worktree.path.join("local.txt"), "discard\n").unwrap();
+    h.command(Command::New).await;
+    let message = h.command(Command::Prune).await;
+    assert!(message.contains("Pruned 1"), "{message}");
+    assert!(
+        message.contains(&format!("Skipped {}", live.id)),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!("Skipped {locked_id}")),
+        "{message}"
+    );
+    assert!(!inactive_worktree.path.exists());
+    assert!(live.snapshot().unwrap().worktree.is_some());
+    assert!(live_worktree.path.exists());
+    assert!(h.snapshot(&locked_id).worktree.is_some());
+    assert!(locked_worktree.path.exists());
+    std::fs::remove_file(lock).unwrap();
+    assert!(h.command(Command::Prune).await.contains("Pruned 1"));
+    assert!(h.snapshot(&locked_id).worktree.is_none());
+    drop(live);
+    assert!(h.command(Command::Prune).await.contains("Pruned 1"));
+    assert!(!live_worktree.path.exists());
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn prune_recovers_interrupted_cleanup_and_clears_saved_worktree_state() {
+    let h = GitHarness::new().await;
+    let id = h.store.list().unwrap()[0].id.clone();
+    let worktree = h.snapshot(&id).worktree.unwrap();
+    h.complete(Some(PATCH)).await;
+    h.command(Command::New).await;
+    let reference = format!("refs/heads/joe/session/{id}");
+    let mut options = git2::WorktreePruneOptions::new();
+    options.valid(true).working_tree(true);
+    h.repo
+        .find_worktree(&id)
+        .unwrap()
+        .prune(Some(&mut options))
+        .unwrap();
+    assert!(h.repo.find_reference(&reference).is_ok());
+    let mut lock = h.repo.transaction().unwrap();
+    lock.lock_ref(&reference).unwrap();
+    let message = h.command(Command::Prune).await;
+    assert!(message.contains("Pruned 0"), "{message}");
+    assert!(h.snapshot(&id).worktree.is_some());
+    drop(lock);
+    let message = h.command(Command::Prune).await;
+    assert!(message.contains("Pruned 1"), "{message}");
+    let snapshot = h.snapshot(&id);
+    assert!(snapshot.worktree.is_none());
+    assert!(matches!(
+        snapshot.merge_approval,
+        crate::session_merge::MergeApproval::None
+    ));
+    assert!(h.repo.find_reference(&reference).is_err());
+    assert!(h.command(Command::Prune).await.contains("Pruned 0"));
+    h.actor
+        .send_message(Message::Command(Command::Resume(ResumeTarget::Session {
+            id,
+        })))
+        .unwrap();
+    assert!(matches!(
+        h.event(|packet| matches!(packet, ActorToTuiPacket::SessionResumed(_)))
+            .await,
+        ActorToTuiPacket::SessionResumed(Ok(_))
+    ));
+    assert!(worktree.path.exists());
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn prune_rejects_plan_mode_and_active_turns() {
+    let h = GitHarness::new().await;
+    let id = h.store.list().unwrap()[0].id.clone();
+    let worktree = h.snapshot(&id).worktree.unwrap();
+    std::fs::write(worktree.path.join("local.txt"), "unmerged\n").unwrap();
+    h.command(Command::New).await;
+    h.command(Command::Plan).await;
+    let message = h.command(Command::Prune).await;
+    assert!(message.contains("Plan mode"), "{message}");
+    assert!(worktree.path.exists());
+    h.command(Command::Implement).await;
+    h.actor
+        .send_message(Message::StartWork(Some("Inspect".into())))
+        .unwrap();
+    let (_, reply) = within(h.requests.recv_async()).await.unwrap();
+    let message = h.command(Command::Prune).await;
+    assert!(message.contains("Interrupt the active turn"), "{message}");
+    assert!(worktree.path.exists());
+    h.actor.send_message(Message::Interrupt).unwrap();
+    h.event(|packet| {
+        matches!(
+            packet,
+            ActorToTuiPacket::TurnChanged {
+                state: Lifecycle::Cancelled,
+                ..
+            }
+        )
+    })
+    .await;
+    drop(reply);
+    assert!(h.command(Command::Prune).await.contains("Pruned 1"));
+    h.stop().await;
+}
+
+#[tokio::test]
 async fn invalid_commit_subjects_do_not_block_approved_merges() {
     let h = GitHarness::new().await;
     let base = h.repo.refname_to_id("HEAD").unwrap();

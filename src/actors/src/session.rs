@@ -12,6 +12,7 @@ mod artifact_index;
 pub mod artifacts;
 mod generations;
 mod ownership;
+mod prune;
 use generations::SessionDatabase;
 pub use generations::SessionStore;
 use ownership::Owner;
@@ -232,6 +233,7 @@ pub(crate) enum OperationState {
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) enum Event {
     Worktree(Option<utils::git::worktrees::session::SessionWorktree>),
+    WorktreePruned,
     MergeApproval(crate::session_merge::MergeApproval),
     Planning(common_models::interaction::Planning),
     Worker(Box<crate::worker_registry::report::WorkerView>),
@@ -588,6 +590,14 @@ impl Snapshot {
                     self.changes = Default::default();
                 }
                 self.worktree = worktree.clone();
+            }
+            Event::WorktreePruned => {
+                self.worktree = None;
+                self.changes = Default::default();
+                self.merge_approval = Default::default();
+                self.history.push(Message::new(
+                    "The session worktree was pruned. Its unmerged commits and local files were discarded. Resuming creates a fresh worktree from current main; previous edits and merge approvals no longer apply.".into(),
+                ));
             }
             Event::MergeApproval(approval) => self.merge_approval = approval.clone(),
             Event::Created | Event::Forked { .. } => {

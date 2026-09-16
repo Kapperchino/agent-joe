@@ -301,6 +301,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     }
 
     pub async fn clear_history(&mut self) -> anyhow::Result<()> {
+        self.dependency.runtime.scope.shutdown_sandbox().await?;
         let mut context = self.cur_context.clone();
         context.clear_task_context();
         let history = Self::initial_history(&context).await;

@@ -45,6 +45,10 @@ pub enum Command {
     Sessions,
     #[strum(message = "forks this conversation into a separate Git worktree")]
     Fork,
+    #[strum(
+        message = "permanently discards inactive, unmerged session worktrees and their local changes"
+    )]
+    Prune,
     #[strum(message = "compacts older context while preserving the saved transcript")]
     Compact,
     #[strum(message = "opens the saved-session picker; /resume <id> resumes directly")]

@@ -41,6 +41,7 @@ enum SessionAction<'a> {
     Current { id: &'a str },
     New,
     Fork,
+    Prune,
 }
 
 impl<'a> SessionAction<'a> {
@@ -51,6 +52,9 @@ impl<'a> SessionAction<'a> {
     ) -> anyhow::Result<Self> {
         match command {
             Command::Sessions => Ok(Self::List),
+            Command::Prune if !turn.is_idle() => Err(anyhow::anyhow!(
+                "Interrupt the active turn before pruning worktrees"
+            )),
             Command::Resume(_) | Command::New | Command::Fork if !turn.is_idle() => Err(
                 anyhow::anyhow!("Interrupt the active turn before switching sessions"),
             ),
@@ -61,6 +65,7 @@ impl<'a> SessionAction<'a> {
             Command::Resume(ResumeTarget::Session { id }) => Ok(Self::Resume { id }),
             Command::New => Ok(Self::New),
             Command::Fork => Ok(Self::Fork),
+            Command::Prune => Ok(Self::Prune),
             _ => Err(anyhow::anyhow!("Unsupported session command")),
         }
     }
@@ -287,6 +292,19 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             .map(|session| session.id.as_str());
         match SessionAction::new(command, &self.turn, current)? {
             SessionAction::List => Self::list_sessions(&store, current).map(SessionReply::Message),
+            SessionAction::Prune => {
+                let runtime = &self.dependency.runtime;
+                runtime
+                    .interaction
+                    .authorize(tools::tool_defs::ToolEffect::Write)?;
+                let project = runtime
+                    .project
+                    .clone()
+                    .ok_or_else(|| anyhow::anyhow!("Session project is not configured"))?;
+                let report =
+                    tokio::task::spawn_blocking(move || store.prune_worktrees(&project)).await??;
+                Ok(SessionReply::Message(report))
+            }
             SessionAction::Pick => store
                 .resume_choices(&self.llm.session_provider(), current)
                 .map(SessionReply::Choices),
@@ -439,6 +457,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         session: Arc<Session>,
         source: Option<&utils::git::worktrees::session::SessionWorktree>,
     ) -> anyhow::Result<()> {
+        self.dependency.runtime.scope.shutdown_sandbox().await?;
         let mut runtime = self.dependency.runtime.clone();
         runtime.session = Some(session.clone());
         runtime.activate_session(source)?;

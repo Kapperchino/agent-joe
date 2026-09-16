@@ -139,6 +139,17 @@ Session history stays in the original project. `/resume` or another task creates
 a fresh worktree from current `main` after cleanup; `/fork` creates a separate
 worktree including the current session's edits.
 
+Use `/prune` to permanently discard inactive session worktrees with unmerged
+commits or local changes. This deletes their branches and entire worktree
+directories, including untracked files, ignored files, and build caches; it does
+not merge anything into `main`. The current session and sessions open in another
+actor or process are skipped, as are worktrees with no unmerged changes. Locked
+worktrees or changed Git identities are retained and reported individually.
+Pruning requires implementation mode and an idle turn. It operates on saved
+sessions in the current project's session namespace, not arbitrary Git worktrees.
+Conversation history is retained, but `/resume` starts a fresh worktree from
+current `main`; it does not restore the discarded changes or merge approval.
+
 Session databases have a 100 GiB map limit and rotate before the next write once
 usage reaches 90 GiB. The map reserves address space; disk space grows with the
 stored data. A write that exceeds the remaining space is aborted and retried once

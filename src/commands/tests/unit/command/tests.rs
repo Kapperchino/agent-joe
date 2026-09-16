@@ -11,6 +11,9 @@ fn session_commands_accept_only_their_expected_arguments() {
     assert!(Command::parse("diff extra").is_err());
     assert_eq!(Command::parse("sessions"), Ok(Command::Sessions));
     assert_eq!(Command::parse("fork"), Ok(Command::Fork));
+    assert_eq!(Command::parse("prune"), Ok(Command::Prune));
+    assert!(Command::print_all().contains(&"prune".to_owned()));
+    assert!(Command::parse("prune extra").is_err());
     assert_eq!(Command::parse("compact"), Ok(Command::Compact));
     assert!(Command::parse("fork workspace").is_err());
     assert!(Command::parse("compact extra").is_err());

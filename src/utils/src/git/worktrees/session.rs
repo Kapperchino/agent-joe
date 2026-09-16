@@ -17,6 +17,12 @@ pub enum MergeOutcome {
     Merged { target: String, commit: String },
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum PruneOutcome {
+    Pruned,
+    Merged,
+}
+
 #[derive(Debug)]
 pub struct CommitMessage(String);
 
@@ -218,7 +224,7 @@ impl CommitSummary {
 
 struct SessionCleanup<'repo> {
     reference: String,
-    worktree: git2::Worktree,
+    worktree: Option<git2::Worktree>,
     transaction: git2::Transaction<'repo>,
 }
 
@@ -259,25 +265,91 @@ impl<'repo> SessionCleanup<'repo> {
                 "Cleanup conflict: session has unmerged commits, local edits, or a pending Git operation"
             )),
         }?;
-        match git.repo.head()?.name()? == reference {
+        Self::registered(session, git, reference, transaction)
+    }
+
+    fn unmerged(
+        session: &SessionWorktree,
+        project: &WorkspacePolicy,
+        git: &'repo GitRepository,
+    ) -> anyhow::Result<Option<Self>> {
+        let workspace = session.workspace(project)?;
+        let child = GitRepository::required(&workspace)?;
+        let reference = format!("refs/heads/{}", session.branch());
+        let target_reference = format!("refs/heads/{}", session.target);
+        let mut transaction = git.repo.transaction()?;
+        transaction.lock_ref(&reference)?;
+        transaction.lock_ref(&target_reference)?;
+        transaction.lock_ref("HEAD")?;
+        let head = child.repo.head()?.peel_to_commit()?.id();
+        let target = git.repo.refname_to_id(&target_reference)?;
+        let merged = (target == head || git.repo.graph_descendant_of(target, head)?)
+            && child.status(&workspace)?.entries.is_empty()
+            && child.repo.state() == RepositoryState::Clean;
+        match merged {
+            true => Ok(None),
+            false => Self::registered(session, git, reference, transaction).map(Some),
+        }
+    }
+
+    fn registered(
+        session: &SessionWorktree,
+        git: &'repo GitRepository,
+        reference: String,
+        transaction: git2::Transaction<'repo>,
+    ) -> anyhow::Result<Self> {
+        let worktree = git.repo.find_worktree(&session.id)?;
+        let cleanup = match worktree.path() == session.path {
+            true => Ok(Self {
+                reference,
+                worktree: Some(worktree),
+                transaction,
+            }),
+            false => Err(anyhow::anyhow!("Session worktree registration changed")),
+        }?;
+        cleanup.unused(session, git)
+    }
+
+    fn finish_interrupted(
+        session: &SessionWorktree,
+        project: &WorkspacePolicy,
+        git: &'repo GitRepository,
+    ) -> anyhow::Result<()> {
+        let reference = format!("refs/heads/{}", session.branch());
+        let mut transaction = git.repo.transaction()?;
+        transaction.lock_ref(&reference)?;
+        transaction.lock_ref(&format!("refs/heads/{}", session.target))?;
+        transaction.lock_ref("HEAD")?;
+        match session.removed_directory(project, git)? {
+            true => Ok(()),
+            false => Err(anyhow::anyhow!(
+                "Session worktree changed before interrupted cleanup could finish"
+            )),
+        }?;
+        match git.repo.find_reference(&reference) {
+            Ok(_) => Self {
+                reference,
+                worktree: None,
+                transaction,
+            }
+            .unused(session, git)?
+            .execute(),
+            Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn unused(self, session: &SessionWorktree, git: &GitRepository) -> anyhow::Result<Self> {
+        match git.repo.head()?.name()? == self.reference {
             true => Err(anyhow::anyhow!(
                 "Session branch is checked out in the source repository"
             )),
             false => Ok(()),
         }?;
-        let worktree = git.repo.find_worktree(&session.id)?;
-        let cleanup = match worktree.path() == session.path {
-            true => Ok(Self {
-                reference,
-                worktree,
-                transaction,
-            }),
-            false => Err(anyhow::anyhow!("Session worktree registration changed")),
-        }?;
         git.repo
             .worktrees()?
             .iter()
-            .try_fold(cleanup, |cleanup, name| {
+            .try_fold(self, |cleanup, name| {
                 let name = name?.ok_or_else(|| anyhow::anyhow!("Worktree name is not UTF-8"))?;
                 let checked_out = name != session.id
                     && git2::Repository::open(git.repo.find_worktree(name)?.path())?
@@ -294,11 +366,20 @@ impl<'repo> SessionCleanup<'repo> {
     }
 
     fn execute(mut self) -> anyhow::Result<()> {
-        let mut options = git2::WorktreePruneOptions::new();
-        options.valid(true).working_tree(true);
-        self.worktree.prune(Some(&mut options))?;
-        self.transaction.remove(&self.reference)?;
-        self.transaction.commit()?;
+        if let Some(worktree) = self.worktree {
+            let mut options = git2::WorktreePruneOptions::new();
+            options.valid(true).working_tree(true);
+            worktree.prune(Some(&mut options))?;
+        }
+        self.transaction.remove(&self.reference).with_context(|| {
+            format!(
+                "Worktree was removed, but branch {} remains; retry /prune",
+                self.reference
+            )
+        })?;
+        self.transaction
+            .commit()
+            .context("Worktree was removed, but branch cleanup could not finish; retry /prune")?;
         Ok(())
     }
 }
@@ -346,6 +427,10 @@ impl SessionWorktree {
 
     fn branch(&self) -> String {
         format!("joe/session/{}", self.id)
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
     }
 
     pub fn workspace(&self, project: &WorkspacePolicy) -> anyhow::Result<WorkspacePolicy> {
@@ -620,6 +705,52 @@ impl SessionWorktree {
     pub fn cleanup(&self, project: &WorkspacePolicy, approved: &str) -> anyhow::Result<()> {
         let git = GitRepository::source(project)?;
         SessionCleanup::new(self, project, &git, approved)?.execute()
+    }
+
+    pub fn prune(&self, project: &WorkspacePolicy) -> anyhow::Result<PruneOutcome> {
+        match project.permits_workspace_access(crate::workspace::Access::Write) {
+            true => Ok(()),
+            false => Err(anyhow::anyhow!(
+                "Pruning worktrees requires whole-project write access"
+            )),
+        }?;
+        let git = GitRepository::source(project)?;
+        match self.removed_directory(project, &git)? {
+            true => SessionCleanup::finish_interrupted(self, project, &git)
+                .map(|()| PruneOutcome::Pruned),
+            false => match SessionCleanup::unmerged(self, project, &git)? {
+                Some(cleanup) => cleanup.execute().map(|()| PruneOutcome::Pruned),
+                None => Ok(PruneOutcome::Merged),
+            },
+        }
+    }
+
+    fn removed_directory(
+        &self,
+        project: &WorkspacePolicy,
+        git: &GitRepository,
+    ) -> anyhow::Result<bool> {
+        let id = uuid::Uuid::parse_str(&self.id)?.to_string();
+        match self.path == project.root().join(".joe-worktrees").join(id) && self.target == "main" {
+            true => Ok(()),
+            false => Err(anyhow::anyhow!("Session worktree identity changed")),
+        }?;
+        let missing = match project.is_directory(&self.path) {
+            Ok(_) => Ok(false),
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                Ok(true)
+            }
+            Err(error) => Err(error),
+        }?;
+        Ok(missing
+            && git
+                .repo
+                .find_worktree(&self.id)
+                .is_err_and(|error| error.code() == git2::ErrorCode::NotFound))
     }
 
     fn merge_into_target(
