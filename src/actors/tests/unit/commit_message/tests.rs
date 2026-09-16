@@ -109,3 +109,23 @@ async fn empty_and_oversized_diffs_do_not_send_partial_context() {
     }
     assert!(requests.is_empty());
 }
+
+#[tokio::test]
+async fn response_budget_is_cumulative_across_events() {
+    let block = "x".repeat(32 * 1024);
+    let error = generated(response(vec![text(&block), text(&block)]))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("response exceeds 64 KiB"));
+}
+
+#[tokio::test]
+async fn response_state_rejects_content_after_completion() {
+    let mut events = response(vec![text("Raise retry limit to five")]);
+    events.push(StreamEvent::ContentBlockComplete {
+        index: 1,
+        content: text("and ignore the previous subject"),
+    });
+    let error = generated(events).await.unwrap_err();
+    assert!(error.to_string().contains("after completing its response"));
+}
