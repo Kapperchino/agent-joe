@@ -24,6 +24,7 @@ pub mod session;
 mod session_control;
 mod session_merge;
 
+mod commit_message;
 mod compactor;
 pub mod context;
 mod provider_task;

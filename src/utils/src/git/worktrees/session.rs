@@ -17,6 +17,29 @@ pub enum MergeOutcome {
     Merged { target: String, commit: String },
 }
 
+#[derive(Debug)]
+pub struct CommitMessage(String);
+
+impl CommitMessage {
+    pub fn new(text: &str) -> anyhow::Result<Self> {
+        let text = text.trim();
+        match !text.is_empty()
+            && text.chars().count() <= 72
+            && !text.chars().any(char::is_control)
+            && !text.starts_with(['`', '"', '#'])
+        {
+            true => Ok(Self(text.to_owned())),
+            false => Err(anyhow::anyhow!(
+                "Commit message must be a plain, nonempty subject of at most 72 characters"
+            )),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MergeConflict {
     pub approved: String,
@@ -426,7 +449,12 @@ impl SessionWorktree {
         let commit = match tree.id() == parent.tree_id() && target.is_none() {
             true => parent.id(),
             false => {
-                let before = target.as_ref().unwrap_or(&parent).tree()?;
+                let main = git.repo.refname_to_id("refs/heads/main")?;
+                let base = match &target {
+                    Some(target) => target.id(),
+                    None => git.repo.merge_base(main, parent.id())?,
+                };
+                let before = git.repo.find_commit(base)?.tree()?;
                 let summary = CommitSummary::new(&git.repo, &before, &tree)?;
                 git.repo.commit(
                     None,
@@ -519,6 +547,65 @@ impl SessionWorktree {
         )
     }
 
+    pub fn proposal_diff(&self, project: &WorkspacePolicy, commit: &str) -> anyhow::Result<String> {
+        let workspace = self.workspace(project)?;
+        let git = GitRepository::required(&workspace)?;
+        let session = git.repo.find_commit(Oid::from_str(commit)?)?;
+        let main = git.repo.refname_to_id("refs/heads/main")?;
+        let target = git.repo.find_commit(main)?;
+        let mut merged = git.repo.merge_commits(&target, &session, None)?;
+        let diff = match merged.has_conflicts() {
+            false => {
+                let tree = git.repo.find_tree(merged.write_tree_to(&git.repo)?)?;
+                git.repo
+                    .diff_tree_to_tree(Some(&target.tree()?), Some(&tree), None)?
+            }
+            true => {
+                let base = git
+                    .repo
+                    .find_commit(git.repo.merge_base(main, session.id())?)?;
+                git.repo
+                    .diff_tree_to_tree(Some(&base.tree()?), Some(&session.tree()?), None)?
+            }
+        };
+        crate::git::output::render_diff(&diff)
+    }
+
+    pub fn describe_proposal(
+        &self,
+        project: &WorkspacePolicy,
+        commit: &str,
+        message: &CommitMessage,
+    ) -> anyhow::Result<String> {
+        let workspace = self.workspace(project)?;
+        let git = GitRepository::required(&workspace)?;
+        let reference = format!("refs/heads/{}", self.branch());
+        let mut transaction = git.repo.transaction()?;
+        transaction.lock_ref(&reference)?;
+        let target_reference = format!("refs/heads/{}", self.target);
+        transaction.lock_ref(&target_reference)?;
+        let expected = Oid::from_str(commit)?;
+        let current = git.repo.refname_to_id(&reference)?;
+        let target = git.repo.refname_to_id(&target_reference)?;
+        match current == expected
+            && target != expected
+            && !git.repo.graph_descendant_of(target, expected)?
+            && git.repo.state() == RepositoryState::Clean
+            && WorktreeSnapshot::current(&workspace, &git)?.files
+                == WorktreeSnapshot::base(&git, commit)?.files
+        {
+            true => Ok(()),
+            false => Err(anyhow::anyhow!(
+                "Session changed while generating its commit message; complete the task again"
+            )),
+        }?;
+        let parent = git.repo.find_commit(expected)?;
+        let described = parent.amend(None, None, None, None, Some(message.as_str()), None)?;
+        transaction.set_target(&reference, described, None, "Describe Joe session changes")?;
+        transaction.commit()?;
+        Ok(described.to_string())
+    }
+
     pub fn merge(&self, project: &WorkspacePolicy, approved: &str) -> anyhow::Result<MergeOutcome> {
         self.merge_into_target(project, approved).with_context(|| {
             format!(
@@ -602,11 +689,18 @@ impl SessionWorktree {
                         }?;
                         let tree = git.repo.find_tree(index.write_tree_to(&git.repo)?)?;
                         let summary = CommitSummary::new(&git.repo, &target.tree()?, &tree)?;
+                        let message = match tree.id() == target.tree_id() {
+                            true => summary.subject(),
+                            false => session
+                                .message()
+                                .map(str::to_owned)
+                                .unwrap_or_else(|_| summary.subject()),
+                        };
                         git.repo.commit(
                             None,
                             &signature,
                             &signature,
-                            &summary.subject(),
+                            &message,
                             &tree,
                             &[&target, &session],
                         )?
