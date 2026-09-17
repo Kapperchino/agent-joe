@@ -14,6 +14,7 @@ use common_models::tui_models::{
     ActorToTuiPacket, SessionMessage, SessionSummary, SessionTranscript, TokenCount,
 };
 use std::sync::Arc;
+use utils::git::worktrees::session::PruneMode;
 
 pub(crate) enum Persistence {
     Ready,
@@ -41,7 +42,7 @@ enum SessionAction<'a> {
     Current { id: &'a str },
     New,
     Fork,
-    Prune,
+    Prune(PruneMode),
 }
 
 impl<'a> SessionAction<'a> {
@@ -52,7 +53,7 @@ impl<'a> SessionAction<'a> {
     ) -> anyhow::Result<Self> {
         match command {
             Command::Sessions => Ok(Self::List),
-            Command::Prune if !turn.is_idle() => Err(anyhow::anyhow!(
+            Command::Prune(_) if !turn.is_idle() => Err(anyhow::anyhow!(
                 "Interrupt the active turn before pruning worktrees"
             )),
             Command::Resume(_) | Command::New | Command::Fork if !turn.is_idle() => Err(
@@ -65,7 +66,10 @@ impl<'a> SessionAction<'a> {
             Command::Resume(ResumeTarget::Session { id }) => Ok(Self::Resume { id }),
             Command::New => Ok(Self::New),
             Command::Fork => Ok(Self::Fork),
-            Command::Prune => Ok(Self::Prune),
+            Command::Prune(mode) => Ok(Self::Prune(match mode {
+                commands::command::PruneMode::Merged => PruneMode::Merged,
+                commands::command::PruneMode::Force => PruneMode::Force,
+            })),
             _ => Err(anyhow::anyhow!("Unsupported session command")),
         }
     }
@@ -296,7 +300,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             .map(|session| session.id.as_str());
         match SessionAction::new(command, &self.turn, current)? {
             SessionAction::List => Self::list_sessions(&store, current).map(SessionReply::Message),
-            SessionAction::Prune => {
+            SessionAction::Prune(mode) => {
                 let runtime = &self.dependency.runtime;
                 runtime
                     .interaction
@@ -306,7 +310,8 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                     .clone()
                     .ok_or_else(|| anyhow::anyhow!("Session project is not configured"))?;
                 let report =
-                    tokio::task::spawn_blocking(move || store.prune_worktrees(&project)).await??;
+                    tokio::task::spawn_blocking(move || store.prune_worktrees(&project, mode))
+                        .await??;
                 Ok(SessionReply::Message(report))
             }
             SessionAction::Pick => store

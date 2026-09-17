@@ -1,6 +1,6 @@
 use super::*;
 use analysis::contexts::rust_context::RustContext;
-use commands::command::{Answer, Command, QuestionAnswer, ResumeTarget};
+use commands::command::{Answer, Command, PruneMode, QuestionAnswer, ResumeTarget};
 
 struct GitHarness {
     workspace: crate::session::tests::Workspace,
@@ -215,7 +215,24 @@ impl GitHarness {
 const PATCH: &str = "*** Begin Patch\n*** Update File: lib.rs\n@@\n-pub fn value() -> u32 { 1 }\n+pub fn value() -> u32 { 2 }\n*** End Patch";
 
 #[tokio::test]
-async fn prune_discards_inactive_worktrees_preserves_history_and_allows_resume() {
+async fn prune_removes_inactive_merged_worktrees() {
+    let h = GitHarness::new().await;
+    let id = h.store.list().unwrap()[0].id.clone();
+    let worktree = h.snapshot(&id).worktree.unwrap();
+    h.command(Command::New).await;
+    let message = h.command(Command::parse("prune").unwrap()).await;
+    assert!(
+        message.contains("Pruned 1 session worktree(s); skipped 1"),
+        "{message}"
+    );
+    assert!(!worktree.path.exists());
+    assert!(h.repo.find_worktree(&id).is_err());
+    assert!(h.snapshot(&id).worktree.is_none());
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn force_prune_discards_inactive_worktrees_preserves_history_and_allows_resume() {
     let h = GitHarness::new().await;
     let id = h.store.list().unwrap()[0].id.clone();
     let worktree = h.snapshot(&id).worktree.unwrap();
@@ -232,9 +249,18 @@ async fn prune_discards_inactive_worktrees_preserves_history_and_allows_resume()
     let current_worktree = current.worktree.unwrap();
     let main = h.repo.refname_to_id("HEAD").unwrap();
     let index = std::fs::read(h.repo.path().join("index")).unwrap();
-    let message = h.command(Command::Prune).await;
+    let message = h.command(Command::Prune(PruneMode::Merged)).await;
+    assert!(message.contains("Pruned 0"), "{message}");
+    assert!(message.contains("use /prune --force"), "{message}");
+    assert!(worktree.path.exists());
+    assert!(h.snapshot(&id).worktree.is_some());
+    assert_eq!(
+        serde_json::to_value(&h.snapshot(&id).history).unwrap(),
+        serde_json::to_value(&saved.history).unwrap()
+    );
+    let message = h.command(Command::parse("prune --force").unwrap()).await;
     assert!(
-        message.contains("Pruned 1 unmerged session worktree(s)"),
+        message.contains("Pruned 1 session worktree(s)"),
         "{message}"
     );
     assert!(
@@ -269,7 +295,11 @@ async fn prune_discards_inactive_worktrees_preserves_history_and_allows_resume()
             .text()
             .contains("worktree was pruned")
     );
-    assert!(h.command(Command::Prune).await.contains("Pruned 0"));
+    assert!(
+        h.command(Command::Prune(PruneMode::Force))
+            .await
+            .contains("Pruned 0")
+    );
     let later_main = h.commit_main("pub fn value() -> u32 { 8 }\n");
     h.actor
         .send_message(Message::Command(Command::Resume(ResumeTarget::Session {
@@ -338,7 +368,7 @@ async fn prune_skips_live_sessions_and_continues_after_locked_worktrees() {
     let inactive_worktree = inactive.worktree.unwrap();
     std::fs::write(inactive_worktree.path.join("local.txt"), "discard\n").unwrap();
     h.command(Command::New).await;
-    let message = h.command(Command::Prune).await;
+    let message = h.command(Command::Prune(PruneMode::Force)).await;
     assert!(message.contains("Pruned 1"), "{message}");
     assert!(
         message.contains(&format!("Skipped {}", live.id)),
@@ -354,10 +384,18 @@ async fn prune_skips_live_sessions_and_continues_after_locked_worktrees() {
     assert!(h.snapshot(&locked_id).worktree.is_some());
     assert!(locked_worktree.path.exists());
     std::fs::remove_file(lock).unwrap();
-    assert!(h.command(Command::Prune).await.contains("Pruned 1"));
+    assert!(
+        h.command(Command::Prune(PruneMode::Force))
+            .await
+            .contains("Pruned 1")
+    );
     assert!(h.snapshot(&locked_id).worktree.is_none());
     drop(live);
-    assert!(h.command(Command::Prune).await.contains("Pruned 1"));
+    assert!(
+        h.command(Command::Prune(PruneMode::Force))
+            .await
+            .contains("Pruned 1")
+    );
     assert!(!live_worktree.path.exists());
     h.stop().await;
 }
@@ -380,11 +418,16 @@ async fn prune_recovers_interrupted_cleanup_and_clears_saved_worktree_state() {
     assert!(h.repo.find_reference(&reference).is_ok());
     let mut lock = h.repo.transaction().unwrap();
     lock.lock_ref(&reference).unwrap();
-    let message = h.command(Command::Prune).await;
+    let message = h.command(Command::Prune(PruneMode::Force)).await;
     assert!(message.contains("Pruned 0"), "{message}");
     assert!(h.snapshot(&id).worktree.is_some());
     drop(lock);
-    let message = h.command(Command::Prune).await;
+    let message = h.command(Command::Prune(PruneMode::Merged)).await;
+    assert!(message.contains("Pruned 0"), "{message}");
+    assert!(message.contains("use /prune --force"), "{message}");
+    assert!(h.snapshot(&id).worktree.is_some());
+    assert!(h.repo.find_reference(&reference).is_ok());
+    let message = h.command(Command::Prune(PruneMode::Force)).await;
     assert!(message.contains("Pruned 1"), "{message}");
     let snapshot = h.snapshot(&id);
     assert!(snapshot.worktree.is_none());
@@ -393,7 +436,11 @@ async fn prune_recovers_interrupted_cleanup_and_clears_saved_worktree_state() {
         crate::session_merge::MergeApproval::None
     ));
     assert!(h.repo.find_reference(&reference).is_err());
-    assert!(h.command(Command::Prune).await.contains("Pruned 0"));
+    assert!(
+        h.command(Command::Prune(PruneMode::Force))
+            .await
+            .contains("Pruned 0")
+    );
     h.actor
         .send_message(Message::Command(Command::Resume(ResumeTarget::Session {
             id,
@@ -416,16 +463,20 @@ async fn prune_rejects_plan_mode_and_active_turns() {
     std::fs::write(worktree.path.join("local.txt"), "unmerged\n").unwrap();
     h.command(Command::New).await;
     h.command(Command::Plan).await;
-    let message = h.command(Command::Prune).await;
-    assert!(message.contains("Plan mode"), "{message}");
+    for mode in [PruneMode::Merged, PruneMode::Force] {
+        let message = h.command(Command::Prune(mode)).await;
+        assert!(message.contains("Plan mode"), "{message}");
+    }
     assert!(worktree.path.exists());
     h.command(Command::Implement).await;
     h.actor
         .send_message(Message::StartWork(Some("Inspect".into())))
         .unwrap();
     let (_, reply) = within(h.requests.recv_async()).await.unwrap();
-    let message = h.command(Command::Prune).await;
-    assert!(message.contains("Interrupt the active turn"), "{message}");
+    for mode in [PruneMode::Merged, PruneMode::Force] {
+        let message = h.command(Command::Prune(mode)).await;
+        assert!(message.contains("Interrupt the active turn"), "{message}");
+    }
     assert!(worktree.path.exists());
     h.actor.send_message(Message::Interrupt).unwrap();
     h.event(|packet| {
@@ -439,7 +490,11 @@ async fn prune_rejects_plan_mode_and_active_turns() {
     })
     .await;
     drop(reply);
-    assert!(h.command(Command::Prune).await.contains("Pruned 1"));
+    assert!(
+        h.command(Command::Prune(PruneMode::Force))
+            .await
+            .contains("Pruned 1")
+    );
     h.stop().await;
 }
 

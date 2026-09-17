@@ -481,7 +481,7 @@ impl TUIApp {
                     | Command::New
                     | Command::Sessions
                     | Command::Fork
-                    | Command::Prune
+                    | Command::Prune(_)
                     | Command::Compact
                     | Command::Resume(_)
                     | Command::PrintContext

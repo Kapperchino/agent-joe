@@ -1079,22 +1079,29 @@ fn prune_recovers_removed_worktrees_without_deleting_branches_checked_out_elsewh
     assert!(!session.path.exists());
     assert!(fixture.repo.find_reference(&reference).is_ok());
     std::fs::write(linked.path().join("HEAD"), format!("ref: {reference}\n")).unwrap();
-    assert!(session.prune(&fixture.workspace).is_err());
+    assert!(session.prune(&fixture.workspace, PruneMode::Force).is_err());
     assert!(fixture.repo.find_reference(&reference).is_ok());
     linked
         .set_head(&format!("refs/heads/{}", other.branch()))
         .unwrap();
     fixture.repo.set_head(&reference).unwrap();
-    assert!(session.prune(&fixture.workspace).is_err());
+    assert!(session.prune(&fixture.workspace, PruneMode::Force).is_err());
     assert!(fixture.repo.find_reference(&reference).is_ok());
     fixture.repo.set_head("refs/heads/main").unwrap();
     std::fs::create_dir(&session.path).unwrap();
     std::fs::write(session.path.join("private.txt"), "replacement directory\n").unwrap();
-    assert!(session.prune(&fixture.workspace).is_err());
+    assert!(session.prune(&fixture.workspace, PruneMode::Force).is_err());
     assert!(session.path.join("private.txt").exists());
     std::fs::remove_dir_all(&session.path).unwrap();
     assert_eq!(
-        session.prune(&fixture.workspace).unwrap(),
+        session
+            .prune(&fixture.workspace, PruneMode::Merged)
+            .unwrap(),
+        PruneOutcome::Unmerged
+    );
+    assert!(fixture.repo.find_reference(&reference).is_ok());
+    assert_eq!(
+        session.prune(&fixture.workspace, PruneMode::Force).unwrap(),
         PruneOutcome::Pruned
     );
     assert!(fixture.repo.find_reference(&reference).is_err());
@@ -1102,13 +1109,27 @@ fn prune_recovers_removed_worktrees_without_deleting_branches_checked_out_elsewh
 }
 
 #[test]
-fn prune_discards_unmerged_commits_and_all_files_without_changing_main_or_its_index() {
+fn force_prune_discards_unmerged_commits_and_all_files_without_changing_main_or_its_index() {
     let fixture = Fixture::new();
     fixture.commit(".gitignore", "ignored.bin\n/target\n");
     let session = fixture.session();
     let other = fixture.session();
     std::fs::write(session.path.join("file.txt"), "unmerged\n").unwrap();
-    session.proposal(&fixture.workspace).unwrap().unwrap();
+    let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+    assert_eq!(
+        session
+            .prune(&fixture.workspace, PruneMode::Merged)
+            .unwrap(),
+        PruneOutcome::Unmerged
+    );
+    assert_eq!(
+        fixture
+            .repo
+            .refname_to_id(&format!("refs/heads/{}", session.branch()))
+            .unwrap()
+            .to_string(),
+        approved
+    );
     std::fs::write(session.path.join("file.txt"), "unstaged\n").unwrap();
     std::fs::write(session.path.join("untracked.txt"), "untracked\n").unwrap();
     std::fs::File::create(session.path.join("ignored.bin"))
@@ -1125,7 +1146,7 @@ fn prune_discards_unmerged_commits_and_all_files_without_changing_main_or_its_in
     let before_index = std::fs::read(fixture.repo.path().join("index")).unwrap();
     let main = fixture.repo.refname_to_id("refs/heads/main").unwrap();
     assert_eq!(
-        session.prune(&fixture.workspace).unwrap(),
+        session.prune(&fixture.workspace, PruneMode::Force).unwrap(),
         PruneOutcome::Pruned
     );
     assert!(!session.path.exists());
@@ -1147,42 +1168,60 @@ fn prune_discards_unmerged_commits_and_all_files_without_changing_main_or_its_in
     );
     assert!(other.workspace(&fixture.workspace).is_ok());
     assert_eq!(
-        session.prune(&fixture.workspace).unwrap(),
+        session
+            .prune(&fixture.workspace, PruneMode::Merged)
+            .unwrap(),
         PruneOutcome::Pruned
     );
 }
 
 #[test]
-fn prune_keeps_commits_already_merged_into_main() {
-    let fixture = Fixture::new();
-    let session = fixture.session();
-    assert_eq!(
-        session.prune(&fixture.workspace).unwrap(),
-        PruneOutcome::Merged
-    );
-    std::fs::write(session.path.join("file.txt"), "merged\n").unwrap();
-    let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
-    session.merge(&fixture.workspace, &approved).unwrap();
-    fixture.commit("other.txt", "later main commit\n");
-    assert_eq!(
-        session.prune(&fixture.workspace).unwrap(),
-        PruneOutcome::Merged
-    );
-    assert!(session.workspace(&fixture.workspace).is_ok());
-    std::fs::write(session.path.join("file.txt"), "unmerged local work\n").unwrap();
-    assert_eq!(
-        session.prune(&fixture.workspace).unwrap(),
-        PruneOutcome::Pruned
-    );
+fn prune_removes_clean_worktrees_and_commits_already_merged_into_main() {
+    assert_eq!(PruneMode::default(), PruneMode::Merged);
+    for mode in [PruneMode::Merged, PruneMode::Force] {
+        let fixture = Fixture::new();
+        let clean = fixture.session();
+        assert_eq!(
+            clean.prune(&fixture.workspace, mode).unwrap(),
+            PruneOutcome::Pruned
+        );
+        assert!(!clean.path.exists());
+        let session = fixture.session();
+        std::fs::write(session.path.join("file.txt"), "merged\n").unwrap();
+        let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+        session.merge(&fixture.workspace, &approved).unwrap();
+        fixture.commit("other.txt", "later main commit\n");
+        assert_eq!(
+            session.prune(&fixture.workspace, mode).unwrap(),
+            PruneOutcome::Pruned
+        );
+        assert!(!session.path.exists());
+        assert!(fixture.repo.find_worktree(session.id()).is_err());
+        assert!(
+            fixture
+                .repo
+                .find_branch(&session.branch(), git2::BranchType::Local)
+                .is_err()
+        );
+    }
 }
 
 #[test]
-fn prune_discards_local_changes_without_unmerged_commits() {
-    for change in ["unstaged", "staged", "untracked"] {
+fn prune_requires_force_for_local_changes_without_unmerged_commits() {
+    for change in ["unstaged", "staged", "untracked", "pending merge"] {
         let fixture = Fixture::new();
         let session = fixture.session();
         match change {
             "untracked" => std::fs::write(session.path.join("new.txt"), "local\n").unwrap(),
+            "pending merge" => {
+                let child = git2::Repository::open(&session.path).unwrap();
+                std::fs::write(
+                    child.path().join("MERGE_HEAD"),
+                    format!("{}\n", child.refname_to_id("HEAD").unwrap()),
+                )
+                .unwrap();
+                assert_eq!(child.state(), RepositoryState::Merge);
+            }
             "staged" => {
                 let child = git2::Repository::open(&session.path).unwrap();
                 std::fs::write(session.path.join("file.txt"), "index only\n").unwrap();
@@ -1194,10 +1233,19 @@ fn prune_discards_local_changes_without_unmerged_commits() {
             _ => std::fs::write(session.path.join("file.txt"), "local\n").unwrap(),
         }
         assert_eq!(
-            session.prune(&fixture.workspace).unwrap(),
+            session
+                .prune(&fixture.workspace, PruneMode::Merged)
+                .unwrap(),
+            PruneOutcome::Unmerged,
+            "{change}"
+        );
+        assert!(session.workspace(&fixture.workspace).is_ok());
+        assert_eq!(
+            session.prune(&fixture.workspace, PruneMode::Force).unwrap(),
             PruneOutcome::Pruned,
             "{change}"
         );
+        assert!(!session.path.exists());
     }
 }
 
@@ -1209,25 +1257,25 @@ fn prune_retains_locked_worktrees_and_changed_identities() {
     let child = git2::Repository::open(&session.path).unwrap();
     let lock = child.path().join("locked");
     std::fs::write(&lock, "keep\n").unwrap();
-    assert!(session.prune(&fixture.workspace).is_err());
+    assert!(session.prune(&fixture.workspace, PruneMode::Force).is_err());
     assert!(session.workspace(&fixture.workspace).is_ok());
     std::fs::remove_file(lock).unwrap();
     let mut altered = session.clone();
     altered.path = fixture.root.clone();
-    assert!(altered.prune(&fixture.workspace).is_err());
+    assert!(altered.prune(&fixture.workspace, PruneMode::Force).is_err());
     altered = session.clone();
     altered.target = session.branch();
-    assert!(altered.prune(&fixture.workspace).is_err());
+    assert!(altered.prune(&fixture.workspace, PruneMode::Force).is_err());
     child
         .set_head_detached(child.refname_to_id("HEAD").unwrap())
         .unwrap();
-    assert!(session.prune(&fixture.workspace).is_err());
+    assert!(session.prune(&fixture.workspace, PruneMode::Force).is_err());
     assert!(session.path.join("file.txt").exists());
     child
         .set_head(&format!("refs/heads/{}", session.branch()))
         .unwrap();
     assert_eq!(
-        session.prune(&fixture.workspace).unwrap(),
+        session.prune(&fixture.workspace, PruneMode::Force).unwrap(),
         PruneOutcome::Pruned
     );
 }
@@ -1238,7 +1286,6 @@ fn prune_requires_original_root_and_whole_project_write_access() {
     let session = fixture.session();
     std::fs::write(session.path.join("file.txt"), "local\n").unwrap();
     let child = session.workspace(&fixture.workspace).unwrap();
-    assert!(session.prune(&child).is_err());
     let readonly = fixture
         .workspace
         .restricted(
@@ -1246,7 +1293,6 @@ fn prune_requires_original_root_and_whole_project_write_access() {
             crate::workspace::RootAccess::ReadOnly,
         )
         .unwrap();
-    assert!(session.prune(&readonly).is_err());
     let restricted = fixture
         .workspace
         .restricted(
@@ -1254,7 +1300,11 @@ fn prune_requires_original_root_and_whole_project_write_access() {
             crate::workspace::RootAccess::ReadWrite,
         )
         .unwrap();
-    assert!(session.prune(&restricted).is_err());
+    for mode in [PruneMode::Merged, PruneMode::Force] {
+        assert!(session.prune(&child, mode).is_err());
+        assert!(session.prune(&readonly, mode).is_err());
+        assert!(session.prune(&restricted, mode).is_err());
+    }
     assert!(session.workspace(&fixture.workspace).is_ok());
 }
 
@@ -1269,12 +1319,12 @@ fn prune_retains_a_branch_checked_out_elsewhere() {
         format!("ref: {reference}\n"),
     )
     .unwrap();
-    assert!(session.prune(&fixture.workspace).is_err());
+    assert!(session.prune(&fixture.workspace, PruneMode::Force).is_err());
     fixture.repo.set_head("refs/heads/main").unwrap();
     let other = fixture.session();
     let linked = git2::Repository::open(&other.path).unwrap();
     std::fs::write(linked.path().join("HEAD"), format!("ref: {reference}\n")).unwrap();
-    assert!(session.prune(&fixture.workspace).is_err());
+    assert!(session.prune(&fixture.workspace, PruneMode::Force).is_err());
     assert!(session.workspace(&fixture.workspace).is_ok());
     assert!(other.path.exists());
 }

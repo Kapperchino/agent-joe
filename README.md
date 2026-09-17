@@ -148,12 +148,15 @@ Session history stays in the original project. `/resume` or another task creates
 a fresh worktree from current `main` after cleanup; `/fork` creates a separate
 worktree including the current session's edits.
 
-Use `/prune` to permanently discard inactive session worktrees with unmerged
-commits or local changes. This deletes their branches and entire worktree
-directories, including untracked files, ignored files, and build caches; it does
-not merge anything into `main`. The current session and sessions open in another
-actor or process are skipped, as are worktrees with no unmerged changes. Locked
-worktrees or changed Git identities are retained and reported individually.
+Use `/prune` to remove inactive session worktrees whose commits are already merged
+into `main` and which have no local changes or pending Git operations. Use
+`/prune --force` (or `/prune -f`) to also permanently discard worktrees with
+unmerged commits, local changes, or pending Git operations. Pruning deletes their
+branches and entire worktree directories, including ignored files and build
+caches; forced pruning also discards untracked files. It does not merge anything
+into `main`. Both modes skip the current session and sessions open in another
+actor or process. Locked worktrees or changed Git identities are retained and
+reported individually, even with `--force`.
 Pruning requires implementation mode and an idle turn. It operates on saved
 sessions in the current project's session namespace, not arbitrary Git worktrees.
 Conversation history is retained, but `/resume` starts a fresh worktree from

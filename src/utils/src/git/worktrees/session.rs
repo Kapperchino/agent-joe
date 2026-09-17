@@ -17,10 +17,17 @@ pub enum MergeOutcome {
     Merged { target: String, commit: String },
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PruneMode {
+    #[default]
+    Merged,
+    Force,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum PruneOutcome {
     Pruned,
-    Merged,
+    Unmerged,
 }
 
 #[derive(Debug)]
@@ -303,10 +310,11 @@ impl<'repo> SessionCleanup<'repo> {
         Self::registered(session, git, reference, transaction)
     }
 
-    fn unmerged(
+    fn for_prune(
         session: &SessionWorktree,
         project: &WorkspacePolicy,
         git: &'repo GitRepository,
+        mode: PruneMode,
     ) -> anyhow::Result<Option<Self>> {
         let workspace = session.workspace(project)?;
         let child = GitRepository::required(&workspace)?;
@@ -321,9 +329,9 @@ impl<'repo> SessionCleanup<'repo> {
         let merged = (target == head || git.repo.graph_descendant_of(target, head)?)
             && child.status(&workspace)?.entries.is_empty()
             && child.repo.state() == RepositoryState::Clean;
-        match merged {
-            true => Ok(None),
-            false => Self::registered(session, git, reference, transaction).map(Some),
+        match mode {
+            PruneMode::Merged if !merged => Ok(None),
+            _ => Self::registered(session, git, reference, transaction).map(Some),
         }
     }
 
@@ -349,11 +357,13 @@ impl<'repo> SessionCleanup<'repo> {
         session: &SessionWorktree,
         project: &WorkspacePolicy,
         git: &'repo GitRepository,
-    ) -> anyhow::Result<()> {
+        mode: PruneMode,
+    ) -> anyhow::Result<PruneOutcome> {
         let reference = format!("refs/heads/{}", session.branch());
+        let target_reference = format!("refs/heads/{}", session.target);
         let mut transaction = git.repo.transaction()?;
         transaction.lock_ref(&reference)?;
-        transaction.lock_ref(&format!("refs/heads/{}", session.target))?;
+        transaction.lock_ref(&target_reference)?;
         transaction.lock_ref("HEAD")?;
         match session.removed_directory(project, git)? {
             true => Ok(()),
@@ -362,14 +372,23 @@ impl<'repo> SessionCleanup<'repo> {
             )),
         }?;
         match git.repo.find_reference(&reference) {
-            Ok(_) => Self {
-                reference,
-                worktree: None,
-                transaction,
+            Ok(branch) => {
+                let head = branch.peel_to_commit()?.id();
+                let target = git.repo.refname_to_id(&target_reference)?;
+                let merged = target == head || git.repo.graph_descendant_of(target, head)?;
+                match mode {
+                    PruneMode::Merged if !merged => Ok(PruneOutcome::Unmerged),
+                    _ => Self {
+                        reference,
+                        worktree: None,
+                        transaction,
+                    }
+                    .unused(session, git)?
+                    .execute()
+                    .map(|()| PruneOutcome::Pruned),
+                }
             }
-            .unused(session, git)?
-            .execute(),
-            Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(()),
+            Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(PruneOutcome::Pruned),
             Err(error) => Err(error.into()),
         }
     }
@@ -739,7 +758,11 @@ impl SessionWorktree {
         SessionCleanup::new(self, project, &git, approved)?.execute()
     }
 
-    pub fn prune(&self, project: &WorkspacePolicy) -> anyhow::Result<PruneOutcome> {
+    pub fn prune(
+        &self,
+        project: &WorkspacePolicy,
+        mode: PruneMode,
+    ) -> anyhow::Result<PruneOutcome> {
         match project.permits_workspace_access(crate::workspace::Access::Write) {
             true => Ok(()),
             false => Err(anyhow::anyhow!(
@@ -748,11 +771,10 @@ impl SessionWorktree {
         }?;
         let git = GitRepository::source(project)?;
         match self.removed_directory(project, &git)? {
-            true => SessionCleanup::finish_interrupted(self, project, &git)
-                .map(|()| PruneOutcome::Pruned),
-            false => match SessionCleanup::unmerged(self, project, &git)? {
+            true => SessionCleanup::finish_interrupted(self, project, &git, mode),
+            false => match SessionCleanup::for_prune(self, project, &git, mode)? {
                 Some(cleanup) => cleanup.execute().map(|()| PruneOutcome::Pruned),
-                None => Ok(PruneOutcome::Merged),
+                None => Ok(PruneOutcome::Unmerged),
             },
         }
     }

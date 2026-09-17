@@ -46,9 +46,9 @@ pub enum Command {
     #[strum(message = "forks this conversation into a separate Git worktree")]
     Fork,
     #[strum(
-        message = "permanently discards inactive, unmerged session worktrees and their local changes"
+        message = "prunes inactive, merged session worktrees; /prune --force also discards unmerged changes"
     )]
-    Prune,
+    Prune(PruneMode),
     #[strum(message = "compacts older context while preserving the saved transcript")]
     Compact,
     #[strum(message = "opens the saved-session picker; /resume <id> resumes directly")]
@@ -56,6 +56,13 @@ pub enum Command {
     #[strum(serialize = "model")]
     #[strum(message = "changes the model name effort")]
     ChangeModel(String, String),
+}
+
+#[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
+pub enum PruneMode {
+    #[default]
+    Merged,
+    Force,
 }
 
 #[derive(Debug, Default, PartialEq, Clone)]
@@ -174,6 +181,9 @@ impl Command {
                 id: (*id).to_owned(),
             })),
             ["resume"] => Ok(Self::Resume(ResumeTarget::Picker)),
+            ["prune"] => Ok(Self::Prune(PruneMode::Merged)),
+            ["prune", "--force" | "-f"] => Ok(Self::Prune(PruneMode::Force)),
+            ["prune", ..] => Err("Use /prune [--force]".into()),
             [name] => Self::from_str(name).map_err(|error| error.to_string()),
             _ => Err("Invalid command arguments".into()),
         }

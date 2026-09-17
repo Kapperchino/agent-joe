@@ -11,7 +11,10 @@ fn session_commands_accept_only_their_expected_arguments() {
     assert!(Command::parse("diff extra").is_err());
     assert_eq!(Command::parse("sessions"), Ok(Command::Sessions));
     assert_eq!(Command::parse("fork"), Ok(Command::Fork));
-    assert_eq!(Command::parse("prune"), Ok(Command::Prune));
+    assert_eq!(
+        Command::parse("prune"),
+        Ok(Command::Prune(PruneMode::Merged))
+    );
     assert!(Command::print_all().contains(&"prune".to_owned()));
     assert!(Command::parse("prune extra").is_err());
     assert_eq!(Command::parse("compact"), Ok(Command::Compact));
@@ -31,6 +34,23 @@ fn session_commands_accept_only_their_expected_arguments() {
     assert!(Command::parse("resume one two").is_err());
     assert!(Command::parse("clear extra").is_err());
     assert_eq!(Command::parse("context"), Ok(Command::PrintContext));
+}
+
+#[test]
+fn prune_requires_an_explicit_force_flag_to_discard_unmerged_changes() {
+    assert_eq!(PruneMode::default(), PruneMode::Merged);
+    for input in ["prune --force", "prune -f", " prune  --force "] {
+        assert_eq!(Command::parse(input), Ok(Command::Prune(PruneMode::Force)));
+    }
+    for input in [
+        "prune force",
+        "prune --force extra",
+        "prune --force --force",
+        "prune --force=false",
+        "prune --unknown",
+    ] {
+        assert_eq!(Command::parse(input), Err("Use /prune [--force]".into()));
+    }
 }
 
 #[test]

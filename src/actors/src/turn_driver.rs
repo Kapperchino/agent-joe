@@ -385,7 +385,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         match command {
             Command::Plan | Command::Implement | Command::Questions | Command::Answer(..) | Command::Steer(_) => self.interaction_command(command).await,
             Command::Diff | Command::Undo(_) => self.change_command(command).await,
-            Command::Sessions | Command::Resume(_) | Command::New | Command::Fork | Command::Prune => {
+            Command::Sessions | Command::Resume(_) | Command::New | Command::Fork | Command::Prune(_) => {
                 self.session_command(command).await
             }
             Command::Compact => {

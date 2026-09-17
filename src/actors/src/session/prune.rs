@@ -1,12 +1,16 @@
 use super::{Event, Session, SessionStore};
 use anyhow::Context;
 use std::sync::Arc;
-use utils::{git::worktrees::session::PruneOutcome, workspace::WorkspacePolicy};
+use utils::{
+    git::worktrees::session::{PruneMode, PruneOutcome},
+    workspace::WorkspacePolicy,
+};
 
 impl SessionStore {
     pub(crate) fn prune_worktrees(
         self: &Arc<Self>,
         project: &WorkspacePolicy,
+        mode: PruneMode,
     ) -> anyhow::Result<String> {
         let identity = project.workspace_identity()?;
         match identity == self.storage.workspace_identity() {
@@ -22,14 +26,14 @@ impl SessionStore {
             .into_iter()
             .filter(|snapshot| snapshot.parent.is_none() && snapshot.worktree.is_some())
             .map(
-                |snapshot| match self.prune_worktree(&snapshot.id, project) {
+                |snapshot| match self.prune_worktree(&snapshot.id, project, mode) {
                     Ok(PruneOutcome::Pruned) => {
                         removed += 1;
                         format!("Pruned {}", snapshot.id)
                     }
-                    Ok(PruneOutcome::Merged) => {
+                    Ok(PruneOutcome::Unmerged) => {
                         skipped += 1;
-                        format!("Skipped {}: no unmerged changes", snapshot.id)
+                        format!("Skipped {}: unmerged commits, local changes, or a pending Git operation; use /prune --force to discard", snapshot.id)
                     }
                     Err(error) => {
                         skipped += 1;
@@ -39,7 +43,7 @@ impl SessionStore {
             )
             .collect::<Vec<_>>();
         Ok(format!(
-            "Pruned {removed} unmerged session worktree(s); skipped {skipped}.\n{}\nDiscarded worktree changes cannot be restored by /resume. Saved conversations remain; resuming a pruned session creates a fresh worktree from main.",
+            "Pruned {removed} session worktree(s); skipped {skipped}.\n{}\nDiscarded worktree changes cannot be restored by /resume. Saved conversations remain; resuming a pruned session creates a fresh worktree from main.",
             rows.join("\n")
         ))
     }
@@ -48,6 +52,7 @@ impl SessionStore {
         self: &Arc<Self>,
         id: &str,
         project: &WorkspacePolicy,
+        mode: PruneMode,
     ) -> anyhow::Result<PruneOutcome> {
         let owner = self.update(Some(id), |database| {
             let mut transaction = database.env.write_txn()?;
@@ -77,7 +82,7 @@ impl SessionStore {
                 "Session worktree ID does not match its owner"
             )),
         }?;
-        let outcome = worktree.prune(project)?;
+        let outcome = worktree.prune(project, mode)?;
         if outcome == PruneOutcome::Pruned {
             session.record(Event::WorktreePruned).context(
                 "Worktree was removed but session metadata could not be updated; retry /prune",
