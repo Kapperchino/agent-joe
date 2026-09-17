@@ -124,7 +124,7 @@ impl WorkerRegistry {
         );
         Ok(Arc::new(WorkerExecution {
             id,
-            budget: Arc::new(WorkerBudget::new(request.budget)),
+            budget: Arc::new(WorkerBudget::default()),
             request,
             evidence: Mutex::new(Evidence::default()),
             session: Mutex::new(None),

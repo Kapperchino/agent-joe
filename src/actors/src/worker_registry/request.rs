@@ -34,8 +34,6 @@ pub struct WorkerRequestInput {
     pub completion_criteria: String,
     #[tool(description = "Wall-clock budget in seconds, 1 to 300; default 180")]
     pub seconds: Option<u64>,
-    #[tool(description = "Maximum provider requests, 1 to 32; default 16")]
-    pub requests: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,39 +59,33 @@ pub enum WorkerRole {
 #[serde(try_from = "BudgetLimitsInput")]
 pub struct BudgetLimits {
     seconds: u64,
-    requests: usize,
 }
 
 #[derive(Deserialize)]
 struct BudgetLimitsInput {
     seconds: u64,
-    requests: usize,
 }
 
 impl TryFrom<BudgetLimitsInput> for BudgetLimits {
     type Error = anyhow::Error;
 
     fn try_from(input: BudgetLimitsInput) -> anyhow::Result<Self> {
-        Self::new(input.seconds, input.requests)
+        Self::new(input.seconds)
     }
 }
 
 impl BudgetLimits {
-    pub fn new(seconds: u64, requests: usize) -> anyhow::Result<Self> {
-        match (1..=300).contains(&seconds) && (1..=32).contains(&requests) {
-            true => Ok(Self { seconds, requests }),
+    pub fn new(seconds: u64) -> anyhow::Result<Self> {
+        match (1..=300).contains(&seconds) {
+            true => Ok(Self { seconds }),
             false => Err(anyhow::anyhow!(
-                "Invalid worker budget: seconds must be 1 to 300 and requests 1 to 32"
+                "Invalid worker budget: seconds must be 1 to 300"
             )),
         }
     }
 
     pub(super) fn seconds(self) -> u64 {
         self.seconds
-    }
-
-    pub(super) fn requests(self) -> usize {
-        self.requests
     }
 }
 
@@ -118,7 +110,7 @@ impl WorkerRequest {
             .filter(|s| !s.is_empty())
             .map(PathBuf::from)
             .collect::<Vec<_>>();
-        let budget = BudgetLimits::new(input.seconds.unwrap_or(180), input.requests.unwrap_or(16))?;
+        let budget = BudgetLimits::new(input.seconds.unwrap_or(180))?;
         let valid = !input.objective.trim().is_empty()
             && !input.completion_criteria.trim().is_empty()
             && !tools.is_empty()
@@ -190,7 +182,6 @@ impl WorkerRequest {
                 context,
                 completion_criteria: self.completion_criteria.clone(),
                 seconds: Some(self.budget.seconds()),
-                requests: Some(self.budget.requests()),
             },
             available,
         )

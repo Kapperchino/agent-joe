@@ -1,7 +1,7 @@
 use super::*;
 use crate::worker_registry::{
     report::WorkerStatus,
-    request::{BudgetLimits, WorkerRequest, WorkerRequestInput},
+    request::{WorkerRequest, WorkerRequestInput},
 };
 
 fn worker_input(tools: &str, paths: &str) -> Value {
@@ -681,7 +681,7 @@ async fn writer_ownership_rejects_overlapping_workers_and_root_edits_until_clean
 }
 
 #[tokio::test]
-async fn worker_inherits_parent_response_limits_across_rounds_without_a_total_token_budget() {
+async fn worker_inherits_parent_response_limits_without_total_token_or_request_budgets() {
     use crate::context::ContextBudget;
 
     for context_budget in [
@@ -698,7 +698,8 @@ async fn worker_inherits_parent_response_limits_across_rounds_without_a_total_to
         let started = StartedWorker::new(&actor, worker_input("find_files", ".")).await;
         let mut child = started.child;
         let output_limit = started.parent.0.max_output_tokens;
-        for round in 0..4 {
+        let rounds = 40;
+        for round in 0..rounds {
             assert_eq!(child.0.max_output_tokens, output_limit);
             let mut events = response(vec![tool(
                 "find_files",
@@ -732,11 +733,17 @@ async fn worker_inherits_parent_response_limits_across_rounds_without_a_total_to
         let report = &result["workers"][0]["report"];
         assert_eq!(report["status"], "completed");
         assert_eq!(report["findings"], "Inspection complete");
-        assert_eq!(report["budget"]["requests"], 5);
-        assert_eq!(report["budget"]["tool_calls"], 4);
-        assert_eq!(report["budget"]["reserved_tokens"], 250_500);
-        assert_eq!(report["budget"]["reported_input_tokens"], 250_000);
-        assert_eq!(report["budget"]["reported_output_tokens"], 500);
+        assert_eq!(report["budget"]["requests"], rounds + 1);
+        assert_eq!(report["budget"]["tool_calls"], rounds);
+        assert_eq!(report["budget"]["reserved_tokens"], (rounds + 1) * 50_100);
+        assert_eq!(
+            report["budget"]["reported_input_tokens"],
+            (rounds + 1) * 50_000
+        );
+        assert_eq!(
+            report["budget"]["reported_output_tokens"],
+            (rounds + 1) * 100
+        );
         assert_eq!(report["budget"]["exhausted"], false);
         completed_root(&actor, reply).await;
         actor.stop().await;
@@ -744,7 +751,7 @@ async fn worker_inherits_parent_response_limits_across_rounds_without_a_total_to
 }
 
 #[tokio::test]
-async fn timeout_failure_and_request_budget_are_reported_with_cleanup() {
+async fn timeout_failure_and_tool_budget_are_reported_with_cleanup() {
     for failure in [
         WorkerStatus::TimedOut,
         WorkerStatus::Failed,
@@ -753,8 +760,10 @@ async fn timeout_failure_and_request_budget_are_reported_with_cleanup() {
         let workspace = crate::session::tests::Workspace::new();
         let actor = RepositoryActor::new(BaseWorker::new(), workspace.path.clone()).await;
         let mut input = worker_input("find_files", ".");
-        input["seconds"] = json!(1);
-        input["requests"] = json!(1);
+        input["seconds"] = match failure {
+            WorkerStatus::TimedOut => json!(1),
+            _ => json!(30),
+        };
         let started = StartedWorker::new(&actor, input).await;
         match failure {
             WorkerStatus::Failed => {
@@ -772,7 +781,17 @@ async fn timeout_failure_and_request_budget_are_reported_with_cleanup() {
             }
             WorkerStatus::BudgetExhausted => answer(
                 started.child.1,
-                response(vec![tool("find_files", "read", json!({"pattern":""}))]),
+                response(
+                    (0..129)
+                        .map(|index| {
+                            tool(
+                                "find_files",
+                                &format!("read-{index}"),
+                                json!({"pattern":""}),
+                            )
+                        })
+                        .collect(),
+                ),
             ),
             _ => {}
         }
@@ -837,12 +856,12 @@ fn actor_store(path: &std::path::Path) -> Arc<crate::session::SessionStore> {
 }
 
 #[test]
-fn worker_contracts_and_conservative_budgets_reject_unbounded_or_widened_requests() {
+fn worker_contracts_reject_invalid_deadlines_and_widened_permissions() {
     let valid =
         || serde_json::from_value::<WorkerRequestInput>(worker_input("read_file", "src")).unwrap();
-    for field in ["seconds", "requests"] {
+    for seconds in [0, 301] {
         let mut input = worker_input("read_file", "src");
-        input[field] = json!(0);
+        input["seconds"] = json!(seconds);
         assert!(
             WorkerRequest::new(serde_json::from_value(input).unwrap(), |_| Some(
                 ToolEffect::Read
@@ -855,17 +874,6 @@ fn worker_contracts_and_conservative_budgets_reject_unbounded_or_widened_request
     let mut input = valid();
     input.allowed_paths = "../outside".into();
     assert!(WorkerRequest::new(input, |_| Some(ToolEffect::Read)).is_err());
-    let budget =
-        crate::worker_registry::budget::WorkerBudget::new(BudgetLimits::new(1, 1).unwrap());
-    let request = llm::ClientRequest::new(vec![llm::Message::new("small request".into())])
-        .with_output_limit(32_000);
-    budget.reserve(&request).unwrap();
-    assert_eq!(request.max_output_tokens, Some(32_000));
-    assert!(budget.reserve(&request).is_err());
-    assert_eq!(
-        budget.usage().state,
-        crate::worker_registry::budget::BudgetState::Exhausted
-    );
 }
 
 #[tokio::test]
