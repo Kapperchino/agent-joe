@@ -97,11 +97,16 @@ pub(crate) async fn generate(
     mut client: LLmClient,
     diff: String,
     timeout: Duration,
+    prompt_cache_key: Option<String>,
 ) -> anyhow::Result<CommitMessage> {
     let CommitRequest { request } = CommitRequest::new(diff, client.context_window())?;
     tokio::time::timeout(timeout.min(Duration::from_secs(30)), async {
         client
-            .chat_stream(request)
+            .chat_stream(
+                request
+                    .with_prompt_cache_key(prompt_cache_key)
+                    .with_purpose(clients::llm::RequestPurpose::Commit),
+            )
             .await?
             .try_fold(CommitResponse::new(), CommitResponse::process)
             .await?

@@ -12,6 +12,7 @@ use common_models::tui_models::{RequestContext, TokenCount};
 #[derive(Debug)]
 pub struct ContextUpdate {
     pub(crate) checkpoint: Option<Checkpoint>,
+    pub(crate) runtime_update: Option<clients::llm::Message>,
     pub(crate) request: RequestContext,
 }
 
@@ -25,12 +26,14 @@ impl PreparedRequest {
         request: ClientRequest,
         checkpoint: Option<Checkpoint>,
         limits: ContextLimits,
+        runtime_update: Option<clients::llm::Message>,
     ) -> anyhow::Result<Self> {
         let estimated_tokens = estimated_tokens(&request)?;
         Ok(Self {
             request,
             update: ContextUpdate {
                 checkpoint,
+                runtime_update,
                 request: RequestContext {
                     estimated_tokens,
                     ceiling: limits.ceiling(),
@@ -46,7 +49,12 @@ pub(crate) async fn prepare(
     task: &mut ProviderTask,
 ) -> anyhow::Result<PreparedRequest> {
     match input.plan()? {
-        BudgetPlan::Ready(request) => PreparedRequest::new(request, None, input.limits),
+        BudgetPlan::Ready(request) => PreparedRequest::new(
+            request,
+            None,
+            input.limits,
+            input.runtime_update(&input.checkpoint),
+        ),
         BudgetPlan::Compact(plan) => {
             let method = CompactionMethod::new(input, task)?;
             task.target.send(ProviderEvent::ContextNotice(format!(
@@ -68,7 +76,13 @@ pub(crate) async fn prepare(
                 }
             };
             let checkpoint = input.compacted(&plan, memory)?;
-            PreparedRequest::new(input.request(&checkpoint)?, Some(checkpoint), input.limits)
+            let runtime_update = input.runtime_update(&checkpoint);
+            PreparedRequest::new(
+                input.request(&checkpoint)?,
+                Some(checkpoint),
+                input.limits,
+                runtime_update,
+            )
         }
     }
 }

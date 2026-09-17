@@ -125,6 +125,8 @@ pub(crate) struct Checkpoint {
     pub through: usize,
     pub generation: u64,
     pub memory: Option<Memory>,
+    #[serde(default)]
+    pub runtime_from: usize,
 }
 
 impl Default for Checkpoint {
@@ -133,6 +135,7 @@ impl Default for Checkpoint {
             through: 1,
             generation: 0,
             memory: None,
+            runtime_from: 0,
         }
     }
 }
@@ -150,6 +153,7 @@ impl Checkpoint {
                 through,
                 generation,
                 memory: Some(memory),
+                runtime_from: history.len(),
             }),
             false => Err(anyhow::anyhow!(
                 "Compaction must end at a complete exchange"
@@ -266,10 +270,11 @@ impl ExchangeState {
 
 #[derive(Clone)]
 pub(crate) struct ContextInput {
-    pub planning: Option<common_models::interaction::Planning>,
+    pub runtime: Option<clients::runtime_update::RuntimeSnapshot>,
+    pub prompt_cache_key: Option<String>,
+    pub purpose: clients::llm::RequestPurpose,
     pub history: Vec<Message>,
     pub checkpoint: Checkpoint,
-    pub questions: Vec<crate::session::PendingQuestion>,
     pub instructions: String,
     pub tools: Vec<ToolDefinition>,
     pub limits: ContextLimits,
@@ -302,6 +307,8 @@ impl CompactionPlan {
         let messages = input.prefix(&input.checkpoint, through)?;
         let request = ClientRequest::new(messages)
             .with_system(input.instructions.clone())
+            .with_prompt_cache_key(input.prompt_cache_key.clone())
+            .with_purpose(clients::llm::RequestPurpose::Compaction)
             .with_output_limit(input.limits.response());
         match estimated_tokens(&request)? <= input.limits.input() {
             true => Ok(Self { through, request }),
@@ -318,6 +325,8 @@ impl ContextInput {
             RequestMode::SingleResponse => {
                 let request = ClientRequest::new(self.history.clone())
                     .with_system(self.instructions.clone())
+                    .with_prompt_cache_key(self.prompt_cache_key.clone())
+                    .with_purpose(self.purpose)
                     .with_output_limit(self.limits.response().min(4096));
                 match estimated_tokens(&request)? <= self.limits.input() {
                     true => Ok(BudgetPlan::Ready(request)),
@@ -350,40 +359,70 @@ impl ContextInput {
             .map(Memory::message)
             .collect::<Vec<_>>();
         messages.extend(protected(&self.history, checkpoint.through)?);
-        messages.extend_from_slice(remaining);
+        messages.extend(
+            remaining
+                .iter()
+                .enumerate()
+                .filter_map(|(offset, message)| {
+                    let content = message
+                        .content
+                        .iter()
+                        .filter(|block| {
+                            checkpoint.through + offset >= checkpoint.runtime_from
+                                || !matches!(block, ContentBlock::RuntimeUpdate(_))
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    (!content.is_empty()).then(|| Message {
+                        role: message.role.clone(),
+                        content,
+                    })
+                }),
+        );
         Ok(messages)
     }
 
     pub fn request(&self, checkpoint: &Checkpoint) -> anyhow::Result<ClientRequest> {
         let mut messages = self.prefix(checkpoint, self.history.len())?;
-        if let Some(planning) = &self.planning {
-            messages.insert(0, Message::new(format!("Current planning state (runtime record; evidence source IDs may be cited by update_plan): {}", serde_json::to_string(planning)?)));
-        }
-        if !self.questions.is_empty() {
-            messages.push(Message::new(format!(
-                "Pending user questions (unanswered): {}",
-                serde_json::to_string(&self.questions)?
-            )));
-        }
+        messages.extend(self.runtime_update(checkpoint));
         let mut request = ClientRequest::new(messages)
             .with_system(self.instructions.clone())
+            .with_prompt_cache_key(self.prompt_cache_key.clone())
+            .with_purpose(self.purpose)
             .with_tools(self.tools.clone())
             .with_output_limit(self.limits.response())
             .with_thinking();
-        let essential = estimated_tokens(&request)?;
-        let available = self
-            .limits
-            .trigger()
-            .saturating_sub(essential)
-            .saturating_sub(512)
-            .min(16 * 1024);
-        if available > 128
-            && let Some(workspace) = self.history.first()
-        {
-            let text = crate::session::artifacts::preview(&workspace.text(), available / 6);
+        if let Some(workspace) = self.history.first() {
+            let bytes = (self.limits.trigger() / 4).min(16 * 1024) / 6;
+            let text = crate::session::artifacts::preview(&workspace.text(), bytes);
             request.messages.insert(0, Message::new(text));
         }
         Ok(request)
+    }
+
+    pub fn runtime_update(&self, checkpoint: &Checkpoint) -> Option<Message> {
+        let previous = self
+            .history
+            .iter()
+            .skip(checkpoint.runtime_from)
+            .flat_map(|message| &message.content)
+            .filter_map(|block| match block {
+                ContentBlock::RuntimeUpdate(update) => Some(update),
+                _ => None,
+            })
+            .fold(
+                None,
+                |state: Option<clients::runtime_update::RuntimeSnapshot>, update| {
+                    Some(state.unwrap_or_default().apply(update))
+                },
+            );
+        self.runtime
+            .as_ref()
+            .and_then(|runtime| runtime.update(previous.as_ref()))
+            .map(|update| Message {
+                role: Role::User,
+                content: vec![ContentBlock::RuntimeUpdate(update)],
+            })
     }
 
     pub fn compacted(&self, plan: &CompactionPlan, memory: Memory) -> anyhow::Result<Checkpoint> {

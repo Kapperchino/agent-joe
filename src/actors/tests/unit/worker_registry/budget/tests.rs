@@ -10,6 +10,7 @@ fn usage(input_tokens: u32, output_tokens: u32, stop_reason: Option<StopReason>)
         usage: UsageDelta {
             input_tokens,
             output_tokens,
+            ..Default::default()
         },
     }
 }
@@ -75,6 +76,32 @@ fn cumulative_usage_counts_cached_input_and_output_once_per_request() {
         .observe(&usage(0, 100, Some(StopReason::EndTurn)))
         .unwrap();
     budget.observe(&StreamEvent::MessageStop).unwrap();
+    assert_eq!(budget.usage().reported_input_tokens, 600);
+    assert_eq!(budget.usage().reported_output_tokens, 100);
+    assert_eq!(budget.usage().reserved_tokens, 700);
+}
+
+#[test]
+fn openai_usage_subtotals_are_already_included_in_reported_totals() {
+    let budget = WorkerBudget::new(BudgetLimits::new(30, 8).unwrap());
+    budget
+        .reserve(&ClientRequest::new(vec![Message::new(
+            "Inspect files".into(),
+        )]))
+        .unwrap();
+    budget
+        .observe(&StreamEvent::MessageDelta {
+            delta: clients::llm::MessageDeltaContent {
+                stop_reason: Some(StopReason::EndTurn),
+            },
+            usage: UsageDelta {
+                input_tokens: 600,
+                output_tokens: 100,
+                cached_input_tokens: 550,
+                reasoning_tokens: 80,
+            },
+        })
+        .unwrap();
     assert_eq!(budget.usage().reported_input_tokens, 600);
     assert_eq!(budget.usage().reported_output_tokens, 100);
     assert_eq!(budget.usage().reserved_tokens, 700);

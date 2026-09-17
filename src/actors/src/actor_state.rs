@@ -21,6 +21,7 @@ use tools::tool_defs::{ToolDefinition, erased_tool};
 use utils::execution::ExecutionScope;
 
 pub struct ActorState<C: Context> {
+    pub(crate) prompt_cache_key: String,
     pub(crate) planning: Planning,
     pub(crate) deferred_input: Vec<Message>,
     pub(crate) request_mode: RequestMode,
@@ -185,6 +186,12 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         let reporter = mode.reporter(&dependency);
 
         Ok(Self {
+            prompt_cache_key: dependency
+                .runtime
+                .session
+                .as_ref()
+                .map(|session| session.id.clone())
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
             planning: Planning {
                 mode: dependency.runtime.interaction.mode(),
                 ..Default::default()
@@ -260,31 +267,46 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         turn: TurnId,
         client: &LLmClient,
     ) -> anyhow::Result<ContextInput> {
-        let pending = self
-            .dependency
-            .runtime
-            .workers
-            .pending(&self.dependency.worker_owner());
         let interaction = match self.request_mode {
             RequestMode::SingleResponse => None,
             RequestMode::Continue | RequestMode::Compact => Some(self.interaction_instructions()),
         };
         let instructions = std::iter::once(self.cur_context.effective_instructions()?)
             .chain(interaction)
-            .chain(pending)
             .collect::<Vec<_>>()
             .join("\n");
-        let planning = match self.request_mode {
+        let runtime = match self.request_mode {
             RequestMode::SingleResponse => None,
-            _ if !matches!(self.dependency.runtime.role, ExecutionRole::Root) => None,
-            _ if self.planning.plan.steps.is_empty() && self.planning.evidence.is_empty() => None,
-            _ => Some(self.planning.clone()),
+            _ => Some(clients::runtime_update::RuntimeSnapshot {
+                planning: match self.dependency.runtime.role {
+                    ExecutionRole::Root => (&self.planning).into(),
+                    _ => clients::runtime_update::PlanningState {
+                        mode: self.dependency.runtime.interaction.mode(),
+                        ..Default::default()
+                    },
+                },
+                evidence: match self.dependency.runtime.role {
+                    ExecutionRole::Root => self.planning.evidence.clone(),
+                    _ => Default::default(),
+                },
+                questions: self.questions.pending().to_vec(),
+                workers: self
+                    .dependency
+                    .runtime
+                    .workers
+                    .pending(&self.dependency.worker_owner()),
+            }),
         };
         Ok(ContextInput {
-            planning,
+            runtime,
+            prompt_cache_key: Some(self.prompt_cache_key.clone()),
+            purpose: match (&self.dependency.runtime.role, self.request_mode) {
+                (_, RequestMode::SingleResponse) => clients::llm::RequestPurpose::Compaction,
+                (ExecutionRole::Root, _) => clients::llm::RequestPurpose::Conversation,
+                _ => clients::llm::RequestPurpose::Worker,
+            },
             history: self.history.clone(),
             checkpoint: self.context_checkpoint.clone(),
-            questions: self.questions.pending().to_vec(),
             instructions,
             tools: self.tool_definitions(),
             limits: self
@@ -309,6 +331,11 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             SessionTransition::Clear.apply(self.dependency.runtime.clone(), &self.llm, &history)?;
         Self::relocate_context(&mut context, &runtime)?;
         let history = Self::initial_history(&context).await;
+        self.prompt_cache_key = runtime
+            .session
+            .as_ref()
+            .map(|session| session.id.clone())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         self.dependency.runtime = runtime;
         self.dependency.context = context.clone();
         self.cur_context = context;

@@ -134,6 +134,42 @@ async fn harness() -> Harness {
     harness_with_runtime(Default::default()).await
 }
 
+#[tokio::test]
+async fn runtime_state_is_excluded_from_inherited_worker_constraints() {
+    let mut h = harness().await;
+    h.state
+        .history
+        .push(llm::Message::new("Preserve this user constraint".into()));
+    h.state.history.push(llm::Message {
+        role: llm::Role::User,
+        content: vec![llm::ContentBlock::RuntimeUpdate(
+            clients::runtime_update::RuntimeUpdate::Snapshot(
+                clients::runtime_update::RuntimeSnapshot {
+                    workers: vec!["Old worker status marker".into()],
+                    ..Default::default()
+                },
+            ),
+        )],
+    });
+    let executor = h.state.executor(h.state.dependency.runtime.scope.child());
+    assert!(
+        executor
+            .dependency
+            .runtime
+            .inherited_constraints
+            .iter()
+            .any(|text| text == "Preserve this user constraint")
+    );
+    assert!(
+        executor
+            .dependency
+            .runtime
+            .inherited_constraints
+            .iter()
+            .all(|text| !text.contains("Old worker status marker"))
+    );
+}
+
 async fn harness_with_runtime(runtime: crate::runtime::Runtime) -> Harness {
     let (actor, _) = Actor::spawn(None, IdleActor, ()).await.unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
@@ -193,8 +229,12 @@ async fn helpers_preserve_parent_interaction_without_root_tools_or_plan_context(
         .state
         .context_input(common_models::runtime_ids::TurnId::new(), &h.state.llm)
         .unwrap();
-    assert!(input.planning.is_none());
-    assert!(input.instructions.contains("Work mode: Plan"));
+    assert!(input.runtime.as_ref().unwrap().evidence.is_empty());
+    assert_eq!(
+        input.runtime.as_ref().unwrap().planning.mode,
+        WorkMode::Plan
+    );
+    assert!(input.instructions.contains("Runtime state updates"));
     let scope = h.state.dependency.runtime.scope.clone();
     assert!(crate::interaction_control::Interaction::new(&mut h.state, &scope).is_err());
     h.state.clear_history().await.unwrap();

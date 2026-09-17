@@ -77,7 +77,11 @@ impl CompactionWorker {
             },
             task.target.actor.clone(),
         )
-        .await?;
+        .await
+        .map_err(|error| match error {
+            crate::worker::WorkerFailure::Turn(failure) => anyhow::Error::new(failure),
+            error => error.into(),
+        })?;
         Memory::summary(text, limits)
     }
 }

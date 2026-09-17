@@ -190,7 +190,7 @@ async fn automatic_compaction_survives_restart_and_forks() {
         .unwrap();
     assert_eq!(saved.context.generation, 1);
     assert_eq!(saved.usage.input_tokens, 500);
-    assert_eq!(saved.history.len(), original.len() + 2);
+    assert_eq!(saved.history.len(), original.len() + 3);
     h.stop().await;
     drop(store);
     let runtime = configured_runtime(&workspace);
@@ -263,7 +263,7 @@ async fn manual_compaction_preserves_the_transcript_and_queued_followups() {
             .iter()
             .any(|message| message.text() == "Keep the corrected requirement too")
     );
-    let history = h.history().await;
+    let history = transcript(&h.history().await);
     assert_eq!(
         serde_json::to_value(&history[..history.len() - 1]).unwrap(),
         before
@@ -443,6 +443,7 @@ async fn compaction_worker_reports_partial_usage_and_is_drained_on_shutdown() {
             usage: llm::UsageDelta {
                 input_tokens: 0,
                 output_tokens: 12,
+                ..Default::default()
             },
         }))
         .unwrap();
@@ -692,6 +693,60 @@ async fn oversized_mandatory_context_fails_without_calling_the_provider() {
     h.terminal(Lifecycle::Failed).await;
     assert!(h.requests.is_empty());
     assert!(h.history().await.last().unwrap().text().len() > 4096);
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn quota_exhaustion_during_summary_stops_without_continuation_or_history_loss() {
+    let workspace = crate::session::tests::Workspace::new();
+    let runtime = configured_runtime(&workspace);
+    let store = runtime.sessions.clone().unwrap();
+    let id = saved_history(&store);
+    let h = Harness::with_runtime(vec![], runtime).await;
+    resume(&h, &id).await;
+    let history = serde_json::to_value(h.history().await).unwrap();
+    h.actor
+        .send_message(Message::Command(Command::Compact))
+        .unwrap();
+    let (request, reply) = h.request().await;
+    assert!(matches!(request.purpose, llm::RequestPurpose::Compaction));
+    assert!(
+        reply
+            .send(Err(Failure::http(
+                429,
+                json!({"error":{"type":"usage_limit_reached","message":"Reset in 7200 seconds"}})
+                    .to_string()
+            )
+            .into()))
+            .is_ok()
+    );
+    let event = h
+        .event(|packet| {
+            matches!(
+                packet,
+                ActorToTuiPacket::TurnChanged {
+                    state: Lifecycle::Failed,
+                    ..
+                }
+            )
+        })
+        .await;
+    assert!(
+        matches!(event, ActorToTuiPacket::TurnChanged { detail: Some(detail), .. } if detail.contains("UsageLimit") && detail.contains("7200"))
+    );
+    assert!(h.requests.is_empty());
+    assert_eq!(serde_json::to_value(h.history().await).unwrap(), history);
+    assert_eq!(
+        store
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|snapshot| snapshot.id == id)
+            .unwrap()
+            .context
+            .generation,
+        0
+    );
     h.stop().await;
 }
 

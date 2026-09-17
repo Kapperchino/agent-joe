@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+common-models = { path = "../common-models" }
 analysis = { path = "../analysis" }
 tools = { path = "../tools" }
 utils = { path = "../utils" }

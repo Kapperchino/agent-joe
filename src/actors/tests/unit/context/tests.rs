@@ -3,10 +3,11 @@ use tools::tool_defs::ToolId;
 
 fn input() -> ContextInput {
     ContextInput {
-        planning: None,
+        runtime: None,
+        prompt_cache_key: Some("fixture-session".into()),
+        purpose: clients::llm::RequestPurpose::Conversation,
         history: vec![Message::new("workspace".into())],
         checkpoint: Checkpoint::default(),
-        questions: vec![],
         instructions: "Current operating instructions".into(),
         tools: vec![],
         limits: ContextLimits::new(12_000, 2048).unwrap(),
@@ -86,13 +87,19 @@ fn repeated_compaction_preserves_requirements_questions_evidence_and_recent_pair
             false,
         );
     }
-    input.questions.push(crate::session::PendingQuestion {
-        choices: Vec::new(),
-        allow_free_text: true,
-        id: "target".into(),
-        prompt: "Which target?".into(),
-        required: true,
-    });
+    input.runtime = Some(Default::default());
+    input
+        .runtime
+        .as_mut()
+        .unwrap()
+        .questions
+        .push(crate::session::PendingQuestion {
+            choices: Vec::new(),
+            allow_free_text: true,
+            id: "target".into(),
+            prompt: "Which target?".into(),
+            required: true,
+        });
     for generation in 1..=3 {
         let BudgetPlan::Compact(plan) = input.plan().unwrap() else {
             panic!("compaction expected")
@@ -231,4 +238,106 @@ fn summary_cannot_discard_irreducible_requirements_or_exceed_the_budget() {
             )
             .is_err()
     );
+}
+
+#[test]
+fn runtime_deltas_preserve_prefixes_and_compaction_resets_the_snapshot() {
+    use clients::runtime_update::{RuntimeSnapshot, RuntimeUpdate};
+    let mut input = input();
+    input.mode = RequestMode::Continue;
+    input.history[0] = Message::new("workspace symbol ".repeat(10_000));
+    input
+        .history
+        .push(Message::new("Keep this requirement".into()));
+    input.runtime = Some(RuntimeSnapshot::default());
+    let mut previous = input.request(&input.checkpoint).unwrap();
+    input
+        .history
+        .extend(input.runtime_update(&input.checkpoint));
+    for index in 0..4 {
+        exchange(
+            &mut input.history,
+            &format!("read-{index}"),
+            "read_file",
+            &"source ".repeat(300),
+            false,
+        );
+        let state = input.runtime.as_mut().unwrap();
+        state
+            .evidence
+            .insert(format!("tool:read-{index}"), "Inspected source".into());
+        state.workers = vec![format!("worker: cycle {index}")];
+        let request = input.request(&input.checkpoint).unwrap();
+        assert_eq!(
+            serde_json::to_value(&request.messages[..previous.messages.len()]).unwrap(),
+            serde_json::to_value(&previous.messages).unwrap()
+        );
+        assert_eq!(request.system, previous.system);
+        assert_eq!(request.prompt_cache_key, previous.prompt_cache_key);
+        let update = input.runtime_update(&input.checkpoint).unwrap();
+        assert!(
+            matches!(&update.content[0], ContentBlock::RuntimeUpdate(RuntimeUpdate::Changes(changes)) if changes.planning.is_none() && changes.questions.is_none() && changes.evidence.len() == 1)
+        );
+        input.history.push(update);
+        assert!(input.runtime_update(&input.checkpoint).is_none());
+        previous = request;
+    }
+    let stored = serde_json::to_vec(&input.history).unwrap();
+    input.history = serde_json::from_slice(&stored).unwrap();
+    assert_eq!(
+        serde_json::to_value(input.request(&input.checkpoint).unwrap().messages).unwrap(),
+        serde_json::to_value(&previous.messages).unwrap()
+    );
+    input.mode = RequestMode::Compact;
+    let BudgetPlan::Compact(plan) = input.plan().unwrap() else {
+        panic!("expected compaction")
+    };
+    input.checkpoint = input
+        .compacted(&plan, Memory::Summary("Earlier files inspected".into()))
+        .unwrap();
+    let snapshot = input.runtime_update(&input.checkpoint).unwrap();
+    assert!(
+        matches!(&snapshot.content[0], ContentBlock::RuntimeUpdate(RuntimeUpdate::Snapshot(state)) if Some(state) == input.runtime.as_ref())
+    );
+    let request = input.request(&input.checkpoint).unwrap();
+    let updates = request
+        .messages
+        .iter()
+        .flat_map(|message| &message.content)
+        .filter(|block| matches!(block, ContentBlock::RuntimeUpdate(_)))
+        .count();
+    assert_eq!(updates, 1);
+    assert_eq!(
+        protected(&input.history, input.checkpoint.through).unwrap()[0].text(),
+        "Keep this requirement"
+    );
+    assert!(
+        protected(&input.history, input.checkpoint.through)
+            .unwrap()
+            .iter()
+            .all(|message| !message.to_string().contains("Runtime state"))
+    );
+    input.history.push(snapshot);
+    let checkpoint = serde_json::to_vec(&input.checkpoint).unwrap();
+    input.checkpoint = serde_json::from_slice(&checkpoint).unwrap();
+    assert!(input.runtime_update(&input.checkpoint).is_none());
+    assert_eq!(
+        serde_json::to_value(input.request(&input.checkpoint).unwrap().messages).unwrap(),
+        serde_json::to_value(request.messages).unwrap()
+    );
+    let state = input.runtime.as_mut().unwrap();
+    state.evidence.remove("tool:read-0");
+    state.workers.clear();
+    let update = input.runtime_update(&input.checkpoint).unwrap();
+    assert!(
+        matches!(&update.content[0], ContentBlock::RuntimeUpdate(RuntimeUpdate::Changes(changes)) if changes.evidence.get("tool:read-0") == Some(&None) && changes.workers == Some(vec![]))
+    );
+}
+
+#[test]
+fn legacy_checkpoints_default_the_runtime_boundary() {
+    let checkpoint: Checkpoint =
+        serde_json::from_value(serde_json::json!({"through":1,"generation":0,"memory":null}))
+            .unwrap();
+    assert_eq!(checkpoint.runtime_from, 0);
 }

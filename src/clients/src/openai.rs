@@ -148,6 +148,8 @@ struct ResponseRequest {
     pub input: Vec<InputItem>,
     pub instructions: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
@@ -174,6 +176,9 @@ impl ResponseRequest {
             model: req.model.unwrap_or_else(|| config.model.clone()),
             input: req.input,
             instructions: req.instructions.unwrap_or_default(),
+            prompt_cache_key: req
+                .prompt_cache_key
+                .filter(|_| config.supports_prompt_cache_key()),
             temperature: None,
             max_output_tokens: match config.auth {
                 OpenAIAuthConfig::Codex(_) => None,
@@ -284,6 +289,10 @@ pub struct WebSearchSource {
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct Usage {
     #[serde(default)]
+    pub input_tokens_details: InputTokenDetails,
+    #[serde(default)]
+    pub output_tokens_details: OutputTokenDetails,
+    #[serde(default)]
     pub input_tokens: u32,
     #[serde(default)]
     pub output_tokens: u32,
@@ -291,10 +300,79 @@ pub struct Usage {
     pub total_tokens: u32,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Default)]
+#[serde(default)]
+pub struct InputTokenDetails {
+    pub cached_tokens: u32,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+#[serde(default)]
+pub struct OutputTokenDetails {
+    pub reasoning_tokens: u32,
+}
+
+impl From<Usage> for llm::UsageDelta {
+    fn from(usage: Usage) -> Self {
+        Self {
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            cached_input_tokens: usage.input_tokens_details.cached_tokens,
+            reasoning_tokens: usage.output_tokens_details.reasoning_tokens,
+        }
+    }
+}
+
+impl Usage {
+    fn log(
+        &self,
+        response_id: &str,
+        model: &str,
+        cache_key: Option<&str>,
+        purpose: llm::RequestPurpose,
+    ) {
+        tracing::debug!(
+            response_id,
+            model,
+            prompt_cache_key = cache_key,
+            ?purpose,
+            input_tokens = self.input_tokens,
+            cached_input_tokens = self.input_tokens_details.cached_tokens,
+            output_tokens = self.output_tokens,
+            reasoning_tokens = self.output_tokens_details.reasoning_tokens,
+            total_tokens = self.input_tokens.saturating_add(self.output_tokens),
+            "Provider response usage"
+        );
+    }
+}
+
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct ResponseError {
     pub code: Option<String>,
+    #[serde(default, rename = "type")]
+    pub error_type: Option<String>,
+    #[serde(default)]
     pub message: String,
+    #[serde(flatten)]
+    pub details: serde_json::Map<String, serde_json::Value>,
+}
+
+impl ResponseError {
+    pub(crate) fn api_error(self) -> llm::ApiErrorDetail {
+        let codes = [self.code.as_deref(), self.error_type.as_deref()];
+        let code = codes
+            .iter()
+            .flatten()
+            .copied()
+            .find(|code| matches!(*code, "usage_limit_reached" | "insufficient_quota"))
+            .or(self.code.as_deref())
+            .or(self.error_type.as_deref())
+            .unwrap_or("failed_response");
+        llm::ApiErrorDetail {
+            error_type: code.to_owned(),
+            message: serde_json::to_string(&self).unwrap_or(self.message),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -628,6 +706,10 @@ pub enum StreamEvent {
         #[serde(default)]
         message: String,
         #[serde(default)]
+        error: Option<ResponseError>,
+        #[serde(flatten)]
+        details: serde_json::Map<String, serde_json::Value>,
+        #[serde(default)]
         sequence_number: u64,
     },
 }
@@ -658,6 +740,9 @@ pub struct ClientRequest {
     pub model: Option<String>,
     pub tools: Vec<Tool>,
     pub max_output_tokens: Option<u32>,
+    pub prompt_cache_key: Option<String>,
+    #[serde(skip)]
+    pub purpose: llm::RequestPurpose,
 }
 
 impl ClientRequest {
@@ -668,6 +753,8 @@ impl ClientRequest {
             model: None,
             tools: vec![],
             max_output_tokens: None,
+            prompt_cache_key: None,
+            purpose: llm::RequestPurpose::default(),
         }
     }
 
@@ -692,8 +779,13 @@ impl OpenAIClient {
         &self,
         request: llm::ClientRequest,
     ) -> anyhow::Result<crate::compaction::CompactionResponse> {
+        let cache_key = request.prompt_cache_key.clone();
+        let model = request
+            .model
+            .clone()
+            .unwrap_or_else(|| self.config.model.clone());
         let request: ClientRequest = request.try_into()?;
-        match self.config.auth {
+        let response = match self.config.auth {
             OpenAIAuthConfig::Codex(_) => {
                 let response = self
                     .stream_response(ResponseRequest::compaction(&self.config, request))
@@ -705,7 +797,14 @@ impl OpenAIClient {
                 .await
             }
             _ => self.compact_standalone(request).await,
-        }
+        }?;
+        response.usage.log(
+            "",
+            &model,
+            cache_key.as_deref(),
+            llm::RequestPurpose::Compaction,
+        );
+        Ok(response)
     }
 
     async fn compact_standalone(
@@ -716,6 +815,9 @@ impl OpenAIClient {
             model: request.model.unwrap_or_else(|| self.config.model.clone()),
             input: request.input,
             instructions: request.instructions.unwrap_or_default(),
+            prompt_cache_key: request
+                .prompt_cache_key
+                .filter(|_| self.config.supports_prompt_cache_key()),
         };
         let response = self
             .client
@@ -812,10 +914,13 @@ impl OpenAIClient {
             .default_headers(headers)
             .build()?;
 
-        let client = ClientBuilder::new(inner_client)
-            .with(TracingMiddleware::default())
-            .with(RetryTransientMiddleware::new_with_policy(retry_policy))
-            .build();
+        let builder = ClientBuilder::new(inner_client).with(TracingMiddleware::default());
+        let client = match config.auth {
+            OpenAIAuthConfig::Codex(_) => builder.build(),
+            _ => builder
+                .with(RetryTransientMiddleware::new_with_policy(retry_policy))
+                .build(),
+        };
 
         Ok(Self { client, config })
     }
@@ -823,6 +928,7 @@ impl OpenAIClient {
     pub async fn chat(&self, req: ClientRequest) -> OpenAIResult<Response> {
         let url = format!("{}/responses", self.config.get_url());
 
+        let purpose = req.purpose;
         let inner = ResponseRequest::new(&self.config, req, false);
 
         let response = self
@@ -836,7 +942,16 @@ impl OpenAIClient {
             })?;
 
         if response.status().is_success() {
-            Ok(response.json().await?)
+            let response: Response = response.json().await?;
+            if let Some(usage) = &response.usage {
+                usage.log(
+                    &response.id,
+                    &response.model,
+                    inner.prompt_cache_key.as_deref(),
+                    purpose,
+                );
+            }
+            Ok(response)
         } else {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
@@ -851,7 +966,9 @@ impl OpenAIClient {
         req: ClientRequest,
     ) -> Result<impl Stream<Item = anyhow::Result<StreamEvent>> + Send + 'static, anyhow::Error>
     {
+        let purpose = req.purpose;
         let request = ResponseRequest::new(&self.config, req, true);
+        let cache_key = request.prompt_cache_key.clone();
         let response = self.stream_response(request).await?;
         Ok(crate::sse::decode(response.bytes_stream(), |event| {
             matches!(
@@ -861,6 +978,21 @@ impl OpenAIClient {
                     | StreamEvent::ResponseFailed { .. }
                     | StreamEvent::Error { .. }
             )
+        })
+        .inspect(move |event| {
+            let response = match event {
+                Ok(
+                    StreamEvent::ResponseCompleted { response, .. }
+                    | StreamEvent::ResponseFailed { response, .. }
+                    | StreamEvent::ResponseIncomplete { response, .. },
+                ) => Some(response),
+                _ => None,
+            };
+            if let Some(response) = response
+                && let Some(usage) = &response.usage
+            {
+                usage.log(&response.id, &response.model, cache_key.as_deref(), purpose);
+            }
         }))
     }
 

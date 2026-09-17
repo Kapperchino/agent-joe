@@ -586,6 +586,9 @@ impl Session {
         failure: Failure,
         effects: &mut Vec<Effect>,
     ) {
+        if failure.kind == clients::failure::FailureKind::UsageLimit {
+            self.cancel_queue(effects);
+        }
         effects.push(Effect::operation(
             turn.phase.tag,
             Lifecycle::Failed,

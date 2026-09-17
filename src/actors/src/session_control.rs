@@ -88,6 +88,9 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 "Context compacted. The saved transcript and full output artifacts remain available.".into(),
             ));
         }
+        if let (Persistence::Ready, Some(message)) = (&self.persistence, update.runtime_update) {
+            self.append_history(vec![message]);
+        }
         match &self.persistence {
             Persistence::Ready => Ok(update.request),
             Persistence::Failed(failure) => Err(failure.clone()),
@@ -377,35 +380,38 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 message
                     .content
                     .iter()
-                    .map(|block| match (&message.role, block) {
+                    .filter_map(|block| match (&message.role, block) {
                         (llm::Role::User, llm::ContentBlock::MessageBlock { text, .. }) => {
-                            SessionMessage::User(text.clone())
+                            Some(SessionMessage::User(text.clone()))
                         }
                         (llm::Role::Assistant, llm::ContentBlock::MessageBlock { text, .. }) => {
-                            SessionMessage::Assistant(text.clone())
+                            Some(SessionMessage::Assistant(text.clone()))
                         }
                         (_, llm::ContentBlock::ToolBlock { name, input, .. }) => {
-                            SessionMessage::Tool(format!(
+                            Some(SessionMessage::Tool(format!(
                                 "{name}: {}",
                                 serde_json::Value::Object(input.clone())
-                            ))
+                            )))
                         }
                         (_, llm::ContentBlock::ToolResult { content, .. }) => {
-                            SessionMessage::Tool(content.clone())
+                            Some(SessionMessage::Tool(content.clone()))
                         }
                         (_, llm::ContentBlock::ThinkingBlock { thinking, .. }) => {
-                            SessionMessage::Thinking(thinking.clone())
+                            Some(SessionMessage::Thinking(thinking.clone()))
                         }
-                        (_, llm::ContentBlock::OpenAIReasoning(item)) => SessionMessage::Thinking(
-                            item.summary
-                                .iter()
-                                .map(|part| part.text.as_str())
-                                .collect::<Vec<_>>()
-                                .join("\n"),
+                        (_, llm::ContentBlock::OpenAIReasoning(item)) => {
+                            Some(SessionMessage::Thinking(
+                                item.summary
+                                    .iter()
+                                    .map(|part| part.text.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join("\n"),
+                            ))
+                        }
+                        (_, llm::ContentBlock::RuntimeUpdate(_)) => None,
+                        (_, llm::ContentBlock::OpenAICompaction(_)) => Some(
+                            SessionMessage::Thinking("Provider-compacted context".into()),
                         ),
-                        (_, llm::ContentBlock::OpenAICompaction(_)) => {
-                            SessionMessage::Thinking("Provider-compacted context".into())
-                        }
                     })
             })
             .collect();
@@ -469,6 +475,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         self.dependency.runtime = runtime;
         self.dependency.context = context.clone();
         let fresh = llm::Message::new(context.get_ctx().await);
+        self.prompt_cache_key = session.id.clone();
         self.history = std::iter::once(fresh)
             .chain(snapshot.history.into_iter().skip(1))
             .collect();

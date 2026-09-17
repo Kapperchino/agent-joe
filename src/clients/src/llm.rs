@@ -296,8 +296,11 @@ pub struct ApiErrorDetail {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct UsageDelta {
+    pub cached_input_tokens: u32,
+    pub reasoning_tokens: u32,
     pub output_tokens: u32,
     pub input_tokens: u32,
 }
@@ -318,6 +321,15 @@ pub struct StreamUsage {
     pub output_tokens: u32,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub enum RequestPurpose {
+    #[default]
+    Conversation,
+    Worker,
+    Compaction,
+    Commit,
+}
+
 #[derive(Clone)]
 pub struct ClientRequest {
     pub messages: Vec<Message>,
@@ -326,9 +338,21 @@ pub struct ClientRequest {
     pub model: Option<String>,
     pub tools: Vec<ToolDefinition>,
     pub max_output_tokens: Option<u32>,
+    pub prompt_cache_key: Option<String>,
+    pub purpose: RequestPurpose,
 }
 
 impl ClientRequest {
+    pub fn with_purpose(mut self, purpose: RequestPurpose) -> Self {
+        self.purpose = purpose;
+        self
+    }
+
+    pub fn with_prompt_cache_key(mut self, key: Option<String>) -> Self {
+        self.prompt_cache_key = key;
+        self
+    }
+
     pub fn with_output_limit(mut self, tokens: u32) -> Self {
         self.max_output_tokens = Some(tokens);
         self
@@ -347,40 +371,27 @@ impl ClientRequest {
             model: None,
             tools: vec![],
             max_output_tokens: None,
+            prompt_cache_key: None,
+            purpose: RequestPurpose::default(),
         }
     }
 
     pub fn with_thinking(self) -> ClientRequest {
         ClientRequest {
-            messages: self.messages,
             thinking: true,
-            system: self.system,
-            model: self.model,
-            tools: self.tools,
-            max_output_tokens: self.max_output_tokens,
+            ..self
         }
     }
 
     pub fn with_model(self, model: String) -> ClientRequest {
         ClientRequest {
-            messages: self.messages,
-            thinking: self.thinking,
-            system: self.system,
             model: Some(model),
-            tools: self.tools,
-            max_output_tokens: self.max_output_tokens,
+            ..self
         }
     }
 
     pub fn with_tools(self, tools: Vec<ToolDefinition>) -> ClientRequest {
-        ClientRequest {
-            messages: self.messages,
-            thinking: self.thinking,
-            system: self.system,
-            model: self.model,
-            tools,
-            max_output_tokens: self.max_output_tokens,
-        }
+        ClientRequest { tools, ..self }
     }
 }
 
@@ -456,6 +467,7 @@ pub enum MessagePhase {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ContentBlock {
+    RuntimeUpdate(crate::runtime_update::RuntimeUpdate),
     MessageBlock {
         text: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -503,6 +515,9 @@ impl Display for Message {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         for block in &self.content {
             match block {
+                ContentBlock::RuntimeUpdate(update) => {
+                    writeln!(f, "{}", update.text().map_err(|_| std::fmt::Error)?)?;
+                }
                 ContentBlock::MessageBlock { text, .. } => {
                     writeln!(f, "{text}")?;
                 }

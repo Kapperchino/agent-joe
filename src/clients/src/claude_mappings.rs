@@ -24,6 +24,9 @@ impl TryFrom<llm::ContentBlock> for ContentBlock {
 
     fn try_from(value: llm::ContentBlock) -> anyhow::Result<Self> {
         match value {
+            llm::ContentBlock::RuntimeUpdate(update) => Ok(ContentBlock::MessageBlock {
+                text: update.text()?,
+            }),
             llm::ContentBlock::MessageBlock { text, .. } => Ok(ContentBlock::MessageBlock { text }),
             llm::ContentBlock::OpenAIReasoning(_) | llm::ContentBlock::OpenAICompaction(_) => {
                 Err(anyhow::anyhow!(
@@ -215,6 +218,7 @@ impl Into<llm::StreamEvent> for StreamEvent {
                 usage: llm::UsageDelta {
                     output_tokens: usage.output_tokens,
                     input_tokens: 0,
+                    ..Default::default()
                 },
             },
             StreamEvent::MessageStop => llm::StreamEvent::MessageStop,

@@ -102,3 +102,54 @@ fn incomplete_response_preserves_the_structured_reason() {
         assert!(!failure.retryable());
     }
 }
+
+#[test]
+fn usage_subtotals_survive_mapping_without_inflating_totals() {
+    let event: openai::StreamEvent = serde_json::from_value(serde_json::json!({
+        "type":"response.completed", "response":{"usage":{
+            "input_tokens":1000, "output_tokens":200, "total_tokens":1200,
+            "input_tokens_details":{"cached_tokens":800},
+            "output_tokens_details":{"reasoning_tokens":150}
+        }}
+    }))
+    .unwrap();
+    let Some(llm::StreamEvent::MessageDelta { usage, .. }) =
+        Option::<llm::StreamEvent>::from(event)
+    else {
+        panic!("expected usage");
+    };
+    assert_eq!(usage.input_tokens + usage.output_tokens, 1200);
+    assert_eq!(usage.cached_input_tokens, 800);
+    assert_eq!(usage.reasoning_tokens, 150);
+    let restored: llm::UsageDelta =
+        serde_json::from_value(serde_json::to_value(&usage).unwrap()).unwrap();
+    assert_eq!(restored.cached_input_tokens, 800);
+    assert_eq!(restored.reasoning_tokens, 150);
+    let old: llm::UsageDelta =
+        serde_json::from_value(serde_json::json!({"input_tokens":12,"output_tokens":3})).unwrap();
+    assert_eq!(old.cached_input_tokens, 0);
+    assert_eq!(old.reasoning_tokens, 0);
+    let old: openai::Usage =
+        serde_json::from_value(serde_json::json!({"input_tokens":12,"output_tokens":3})).unwrap();
+    assert_eq!(old.input_tokens_details.cached_tokens, 0);
+    assert_eq!(old.output_tokens_details.reasoning_tokens, 0);
+}
+
+#[test]
+fn streamed_quota_errors_preserve_reset_information() {
+    for event in [
+        serde_json::json!({"type":"error","code":"usage_limit_reached","message":"Quota exhausted","resets_at":1800000000}),
+        serde_json::json!({"type":"error","error":{"type":"usage_limit_reached","message":"Quota exhausted","resets_at":1800000000}}),
+        serde_json::json!({"type":"response.failed","response":{"error":{"code":"insufficient_quota","message":"Quota exhausted","resets_at":1800000000}}}),
+    ] {
+        let event: openai::StreamEvent = serde_json::from_value(event).unwrap();
+        let Some(llm::StreamEvent::Error { error }) = Option::<llm::StreamEvent>::from(event)
+        else {
+            panic!("expected quota error");
+        };
+        let failure = Failure::api(&error.error_type, &error.message);
+        assert_eq!(failure.kind, FailureKind::UsageLimit);
+        assert!(failure.message.contains("1800000000"));
+        assert!(!failure.retryable());
+    }
+}

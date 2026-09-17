@@ -77,6 +77,7 @@ impl CompactedWindow {
 #[derive(Debug, Deserialize)]
 pub struct CompactionResponse {
     pub output: CompactedWindow,
+    #[serde(default)]
     pub usage: crate::openai::Usage,
 }
 
@@ -113,7 +114,12 @@ pub(crate) enum CompactionEvent {
     Error {
         #[serde(default)]
         code: Option<String>,
+        #[serde(default)]
         message: String,
+        #[serde(default)]
+        error: Option<crate::openai::ResponseError>,
+        #[serde(flatten)]
+        details: serde_json::Map<String, Value>,
     },
     #[serde(other)]
     Other,
@@ -163,15 +169,8 @@ impl CompactionState {
                 "Compaction completed without an encrypted compaction item"
             )),
             (_, CompactionEvent::Failed { response }) => {
-                let error = response.error.unwrap_or(crate::openai::ResponseError {
-                    code: None,
-                    message: "Compaction failed".into(),
-                });
-                Err(crate::failure::Failure::api(
-                    error.code.as_deref().unwrap_or("failed_response"),
-                    &error.message,
-                )
-                .into())
+                let error = response.error.unwrap_or_default().api_error();
+                Err(crate::failure::Failure::api(&error.error_type, &error.message).into())
             }
             (_, CompactionEvent::Incomplete { response }) => {
                 let reason = response
@@ -190,11 +189,25 @@ impl CompactionState {
                         .into(),
                 )
             }
-            (_, CompactionEvent::Error { code, message }) => Err(crate::failure::Failure::api(
-                code.as_deref().unwrap_or("failed_response"),
-                &message,
-            )
-            .into()),
+            (
+                _,
+                CompactionEvent::Error {
+                    code,
+                    message,
+                    error,
+                    details,
+                },
+            ) => {
+                let error = error
+                    .unwrap_or(crate::openai::ResponseError {
+                        code,
+                        message,
+                        details,
+                        ..Default::default()
+                    })
+                    .api_error();
+                Err(crate::failure::Failure::api(&error.error_type, &error.message).into())
+            }
             (state, _) => Ok(state),
         }
     }
@@ -205,6 +218,8 @@ pub(crate) struct CompactionRequest {
     pub model: String,
     pub input: Vec<crate::openai::InputItem>,
     pub instructions: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_key: Option<String>,
 }
 
 #[cfg(test)]

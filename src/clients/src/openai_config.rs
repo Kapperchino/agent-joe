@@ -19,12 +19,17 @@ impl OpenAIConfig {
     pub fn reasoning_include(&self) -> Vec<ResponseInclude> {
         if self
             .request_encrypted_reasoning
-            .unwrap_or_else(|| self.get_url().trim_end_matches('/') == CHATGPT_BASE_URL)
+            .unwrap_or_else(|| self.supports_prompt_cache_key())
         {
             vec![ResponseInclude::EncryptedReasoning]
         } else {
             vec![]
         }
+    }
+
+    pub fn supports_prompt_cache_key(&self) -> bool {
+        matches!(self.auth, OpenAIAuthConfig::Codex(_))
+            || self.get_url().trim_end_matches('/') == CHATGPT_BASE_URL
     }
 
     pub fn get_url(&self) -> String {

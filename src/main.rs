@@ -61,7 +61,7 @@ async fn main() -> Result<()> {
     let file_appender = workspace.open_append(std::path::Path::new("logs/err.log"))?;
     let (file_appender, _guard) = tracing_appender::non_blocking(file_appender);
 
-    let log_level = if cli.debug { Level::INFO } else { Level::WARN };
+    let log_level = if cli.debug { Level::DEBUG } else { Level::WARN };
 
     let subscriber = FmtSubscriber::builder()
         .with_max_level(log_level)

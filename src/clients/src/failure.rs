@@ -4,6 +4,7 @@ use std::fmt;
 pub enum FailureKind {
     Authentication,
     RateLimit,
+    UsageLimit,
     Transport,
     Truncation,
     ContextOverflow,
@@ -25,23 +26,22 @@ impl Failure {
         }
     }
     pub fn http(status: u16, body: String) -> Self {
-        let kind = match status {
+        let structured = serde_json::from_str::<HttpError>(&body)
+            .ok()
+            .and_then(
+                |error| match (error.error.code.kind(), error.error.error_type.kind()) {
+                    (Some(FailureKind::UsageLimit), _) | (_, Some(FailureKind::UsageLimit)) => {
+                        Some(FailureKind::UsageLimit)
+                    }
+                    (code, error_type) => code.or(error_type),
+                },
+            );
+        let kind = structured.unwrap_or(match status {
             401 | 403 => FailureKind::Authentication,
             429 => FailureKind::RateLimit,
-            400 | 404 | 413 | 422 => {
-                let error = serde_json::from_str::<HttpError>(&body).ok();
-                error
-                    .and_then(|error| {
-                        error
-                            .error
-                            .code
-                            .kind()
-                            .or_else(|| error.error.error_type.kind())
-                    })
-                    .unwrap_or(FailureKind::InvalidInput)
-            }
+            400 | 404 | 413 | 422 => FailureKind::InvalidInput,
             _ => FailureKind::Transport,
-        };
+        });
         Self::new(kind, body)
     }
     pub fn api(code: &str, message: &str) -> Self {
@@ -94,12 +94,10 @@ enum ProviderErrorCode {
         alias = "permission_error"
     )]
     Authentication,
-    #[serde(
-        rename = "rate_limit_error",
-        alias = "rate_limit_exceeded",
-        alias = "insufficient_quota"
-    )]
+    #[serde(rename = "rate_limit_error", alias = "rate_limit_exceeded")]
     RateLimit,
+    #[serde(rename = "usage_limit_reached", alias = "insufficient_quota")]
+    UsageLimit,
     #[serde(
         rename = "overloaded_error",
         alias = "server_error",
@@ -128,6 +126,7 @@ impl ProviderErrorCode {
         match self {
             Self::Authentication => Some(FailureKind::Authentication),
             Self::RateLimit => Some(FailureKind::RateLimit),
+            Self::UsageLimit => Some(FailureKind::UsageLimit),
             Self::Transport => Some(FailureKind::Transport),
             Self::ContextOverflow => Some(FailureKind::ContextOverflow),
             Self::Truncation => Some(FailureKind::Truncation),

@@ -175,7 +175,8 @@ async fn native_endpoint_uses_the_configured_route_and_preserves_the_canonical_w
         let response = client
             .compact(
                 ClientRequest::new(vec![Message::new("task".into())])
-                    .with_system("current instructions".into()),
+                    .with_system("current instructions".into())
+                    .with_prompt_cache_key(Some("session-1".into())),
             )
             .await
             .unwrap();
@@ -191,5 +192,6 @@ async fn native_endpoint_uses_the_configured_route_and_preserves_the_canonical_w
         );
         assert!(captured.body.get("stream").is_none());
         assert!(captured.body.get("store").is_none());
+        assert!(captured.body.get("prompt_cache_key").is_none());
     }
 }

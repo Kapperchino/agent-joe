@@ -8,7 +8,7 @@ const DIFF: &str =
 async fn generated(events: Vec<StreamEvent>) -> anyhow::Result<CommitMessage> {
     let (tx, requests) = flume::unbounded();
     let client = llm::LLmClient::Injected(Arc::new(Provider(tx)));
-    let task = tokio::spawn(generate(client, DIFF.into(), Duration::from_secs(1)));
+    let task = tokio::spawn(generate(client, DIFF.into(), Duration::from_secs(1), None));
     let (request, reply) = within(requests.recv_async()).await.unwrap();
     assert_eq!(request.messages.len(), 1);
     assert_eq!(request.messages[0].text(), DIFF);
@@ -67,6 +67,7 @@ async fn provider_failures_and_timeouts_leave_no_partial_subject() {
         client.clone(),
         DIFF.into(),
         Duration::from_secs(1),
+        None,
     ));
     let (_, reply) = within(requests.recv_async()).await.unwrap();
     assert!(
@@ -83,7 +84,12 @@ async fn provider_failures_and_timeouts_leave_no_partial_subject() {
             .contains("Provider unavailable")
     );
 
-    let task = tokio::spawn(generate(client, DIFF.into(), Duration::from_millis(50)));
+    let task = tokio::spawn(generate(
+        client,
+        DIFF.into(),
+        Duration::from_millis(50),
+        None,
+    ));
     let (_, reply) = within(requests.recv_async()).await.unwrap();
     assert!(
         within(task)
@@ -102,7 +108,7 @@ async fn empty_and_oversized_diffs_do_not_send_partial_context() {
     let client = llm::LLmClient::Injected(Arc::new(Provider(tx)));
     for diff in [String::new(), "x".repeat(64 * 1024 + 1)] {
         assert!(
-            generate(client.clone(), diff, Duration::from_secs(1))
+            generate(client.clone(), diff, Duration::from_secs(1), None)
                 .await
                 .is_err()
         );

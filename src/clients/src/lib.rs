@@ -17,4 +17,5 @@ pub use openai_config::{
 
 pub mod compaction;
 pub mod failure;
+pub mod runtime_update;
 mod sse;

@@ -30,9 +30,50 @@ use tools::tool_defs::{
 };
 use utils::utils::FnvHashMap;
 
+pub(crate) fn runtime_snapshot(
+    messages: &[llm::Message],
+) -> clients::runtime_update::RuntimeSnapshot {
+    messages
+        .iter()
+        .flat_map(|message| &message.content)
+        .filter_map(|block| match block {
+            ContentBlock::RuntimeUpdate(update) => Some(update),
+            _ => None,
+        })
+        .fold(
+            Default::default(),
+            |state: clients::runtime_update::RuntimeSnapshot, update| state.apply(update),
+        )
+}
+
+fn transcript(messages: &[llm::Message]) -> Vec<llm::Message> {
+    messages
+        .iter()
+        .filter(|message| {
+            !message
+                .content
+                .iter()
+                .any(|block| matches!(block, ContentBlock::RuntimeUpdate(_)))
+        })
+        .cloned()
+        .collect()
+}
+
+fn latest_tool_result(request: &llm::ClientRequest) -> &ContentBlock {
+    request
+        .messages
+        .iter()
+        .rev()
+        .flat_map(|message| message.content.iter().rev())
+        .find(|block| matches!(block, ContentBlock::ToolResult { .. }))
+        .unwrap()
+}
+
 type Events = BoxStream<'static, anyhow::Result<StreamEvent>>;
 #[path = "commit_message/tests.rs"]
 mod commit_message;
+#[path = "request_continuity_test.rs"]
+mod request_continuity;
 #[path = "session_worktrees/tests.rs"]
 mod session_worktrees;
 type Request = (llm::ClientRequest, oneshot::Sender<anyhow::Result<Events>>);
@@ -225,6 +266,7 @@ fn response(blocks: Vec<ContentBlock>) -> Vec<StreamEvent> {
         usage: llm::UsageDelta {
             input_tokens: 0,
             output_tokens: 0,
+            ..Default::default()
         },
     });
     events
@@ -720,9 +762,18 @@ async fn context_update_feedback_stops_before_the_next_provider_request() {
 async fn interrupted_provider_retries_only_unaccepted_response_and_bounds_failures() {
     let h = Harness::new(vec![], Duration::from_secs(10)).await;
     h.start("work");
+    let mut previous = None;
+    let mut cache_key = None;
     for _ in 0..3 {
         let (request, reply) = h.request().await;
-        assert_eq!(request.messages.len(), 2);
+        assert_eq!(transcript(&request.messages).len(), 2);
+        let input = serde_json::to_value(&request.messages).unwrap();
+        if let Some(previous) = &previous {
+            assert_eq!(&input, previous);
+            assert_eq!(request.prompt_cache_key, cache_key);
+        }
+        previous = Some(input);
+        cache_key = request.prompt_cache_key;
         let mut events = response(vec![text("partial")]);
         events.pop();
         answer(reply, events);
@@ -888,7 +939,7 @@ async fn parent_and_delegated_file_tools_share_workspace_roots_and_denials() {
     );
     let (request, reply) = h.request().await;
     assert!(
-        matches!(&request.messages.last().unwrap().content[0], ContentBlock::ToolResult { content, is_error: None, .. } if content == "1: workspace content")
+        matches!(latest_tool_result(&request), ContentBlock::ToolResult { content, is_error: None, .. } if content == "1: workspace content")
     );
     answer(
         reply,
@@ -896,7 +947,7 @@ async fn parent_and_delegated_file_tools_share_workspace_roots_and_denials() {
     );
     let (request, reply) = h.request().await;
     assert!(
-        matches!(&request.messages.last().unwrap().content[0], ContentBlock::ToolResult { content, is_error: Some(true), .. } if content.contains("access denied") && !content.contains("outside secret"))
+        matches!(latest_tool_result(&request), ContentBlock::ToolResult { content, is_error: Some(true), .. } if content.contains("access denied") && !content.contains("outside secret"))
     );
     answer(reply, response(vec![call("delegate", "child")]));
     let (_, reply) = within(child_requests.recv_async()).await.unwrap();
@@ -906,7 +957,7 @@ async fn parent_and_delegated_file_tools_share_workspace_roots_and_denials() {
     );
     let (request, reply) = within(child_requests.recv_async()).await.unwrap();
     assert!(
-        matches!(&request.messages.last().unwrap().content[0], ContentBlock::ToolResult { content, is_error: None, .. } if content == "1: workspace content")
+        matches!(latest_tool_result(&request), ContentBlock::ToolResult { content, is_error: None, .. } if content == "1: workspace content")
     );
     answer(
         reply,
@@ -914,7 +965,7 @@ async fn parent_and_delegated_file_tools_share_workspace_roots_and_denials() {
     );
     let (request, reply) = within(child_requests.recv_async()).await.unwrap();
     assert!(
-        matches!(&request.messages.last().unwrap().content[0], ContentBlock::ToolResult { content, is_error: Some(true), .. } if content.contains("access denied") && !content.contains("outside secret"))
+        matches!(latest_tool_result(&request), ContentBlock::ToolResult { content, is_error: Some(true), .. } if content.contains("access denied") && !content.contains("outside secret"))
     );
     answer(reply, response(vec![text("child completed")]));
     h.terminal(Lifecycle::Completed).await;
@@ -982,7 +1033,7 @@ async fn immediately_completed_worker_registers_reply_before_starting() {
     h.terminal(Lifecycle::Completed).await;
     let (request, reply) = h.request().await;
     assert!(
-        matches!(&request.messages.last().unwrap().content[0], ContentBlock::ToolResult { content, is_error: None, .. } if content.contains("child result"))
+        matches!(latest_tool_result(&request), ContentBlock::ToolResult { content, is_error: None, .. } if content.contains("child result"))
     );
     answer(reply, response(vec![text("parent result")]));
     h.terminal(Lifecycle::Completed).await;
@@ -1361,7 +1412,7 @@ async fn failed_validation_is_an_error_with_diagnostics_in_history() {
     );
     let (request, reply) = h.request().await;
     assert!(
-        matches!(&request.messages.last().unwrap().content[0], ContentBlock::ToolResult { content, is_error: Some(true), .. } if content.contains("regression assertion failed"))
+        matches!(latest_tool_result(&request), ContentBlock::ToolResult { content, is_error: Some(true), .. } if content.contains("regression assertion failed"))
     );
     answer(reply, response(vec![text("reported failure")]));
     h.terminal(Lifecycle::Completed).await;

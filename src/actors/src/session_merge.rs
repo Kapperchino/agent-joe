@@ -343,6 +343,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                             self.llm.snapshot(),
                             diff,
                             self.dependency.runtime.request_timeout,
+                            Some(format!("{}:commit", self.prompt_cache_key)),
                         )
                         .await
                     }

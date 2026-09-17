@@ -101,3 +101,29 @@ fn classifies_provider_failures_and_limits_automatic_recovery() {
         assert!(!Failure::new(kind, "failure").retryable());
     }
 }
+
+#[test]
+fn quota_codes_override_http_status_and_rate_limit_types() {
+    for code in ["usage_limit_reached", "insufficient_quota"] {
+        for status in [400, 403, 429, 503] {
+            for error in [
+                serde_json::json!({"code":code,"type":"rate_limit_error"}),
+                serde_json::json!({"code":"rate_limit_exceeded","type":code}),
+            ] {
+                let body = serde_json::json!({"error":error}).to_string();
+                let failure = Failure::http(status, body.clone());
+                assert_eq!(failure.kind, FailureKind::UsageLimit);
+                assert_eq!(failure.message, body);
+                assert!(!failure.retryable());
+            }
+        }
+        assert_eq!(
+            Failure::api(code, "quota exhausted").kind,
+            FailureKind::UsageLimit
+        );
+    }
+    assert_eq!(
+        Failure::http(429, "usage_limit_reached".into()).kind,
+        FailureKind::RateLimit
+    );
+}

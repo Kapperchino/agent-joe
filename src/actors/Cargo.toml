@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+uuid = { version = "1", features = ["v4"] }
 tools = { path = "../tools" }
 utils = { path = "../utils" }
 turbo-code-macros = { path = "../turbo-code-macros" }

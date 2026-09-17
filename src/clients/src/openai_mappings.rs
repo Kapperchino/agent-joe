@@ -26,6 +26,8 @@ impl TryFrom<llm::ClientRequest> for ClientRequest {
                     Ok::<_, anyhow::Error>(items)
                 })?,
             max_output_tokens: llm_req.max_output_tokens,
+            prompt_cache_key: llm_req.prompt_cache_key,
+            purpose: llm_req.purpose,
             instructions: llm_req.system,
             model: llm_req.model,
             tools: llm_req.tools.into_iter().map(|t| t.into()).collect(),
@@ -35,6 +37,11 @@ impl TryFrom<llm::ClientRequest> for ClientRequest {
 
 fn input_items(content: ContentBlock, role: llm::Role) -> anyhow::Result<Vec<InputItem>> {
     match content {
+        ContentBlock::RuntimeUpdate(update) => Ok(vec![InputItem::Message {
+            role: Role::User,
+            content: update.text()?,
+            phase: None,
+        }]),
         ContentBlock::MessageBlock { text, phase } => Ok(vec![InputItem::Message {
             role: role.into(),
             content: text,
@@ -139,14 +146,7 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
                             llm::StopReason::EndTurn
                         }),
                     },
-                    usage: llm::UsageDelta {
-                        output_tokens: response
-                            .usage
-                            .as_ref()
-                            .map(|t| t.output_tokens)
-                            .unwrap_or(0),
-                        input_tokens: response.usage.as_ref().map(|t| t.input_tokens).unwrap_or(0),
-                    },
+                    usage: response.usage.unwrap_or_default().into(),
                 })
             }
             StreamEvent::ResponseIncomplete {
@@ -175,20 +175,7 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
                 response,
                 sequence_number: _,
             } => Some(llm::StreamEvent::Error {
-                error: llm::ApiErrorDetail {
-                    error_type: response
-                        .error
-                        .as_ref()
-                        .and_then(|error| error.code.clone())
-                        .unwrap_or_else(|| "failed_response".into()),
-                    message: format!(
-                        "OpenAI response failed: {}",
-                        response
-                            .error
-                            .map(|error| error.message)
-                            .unwrap_or_default()
-                    ),
-                },
+                error: response.error.unwrap_or_default().api_error(),
             }),
             StreamEvent::OutputItemAdded {
                 output_index,
@@ -322,12 +309,18 @@ impl From<StreamEvent> for Option<llm::StreamEvent> {
             StreamEvent::Error {
                 code,
                 message,
-                sequence_number: _,
+                error,
+                details,
+                ..
             } => Some(llm::StreamEvent::Error {
-                error: llm::ApiErrorDetail {
-                    error_type: code,
-                    message,
-                },
+                error: error
+                    .unwrap_or(openai::ResponseError {
+                        code: Some(code),
+                        message,
+                        details,
+                        ..Default::default()
+                    })
+                    .api_error(),
             }),
             StreamEvent::ResponseQueued { .. } => Some(llm::StreamEvent::Accum),
             StreamEvent::ResponseInProgress { .. } => Some(llm::StreamEvent::Accum),

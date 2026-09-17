@@ -159,7 +159,9 @@ impl ContentBlock {
             ) => ContentKind::Thinking,
             Self::Pending(PendingContent::Text(_))
             | Self::Complete(
-                MessageContent::MessageBlock { .. } | MessageContent::ToolResult { .. },
+                MessageContent::MessageBlock { .. }
+                | MessageContent::ToolResult { .. }
+                | MessageContent::RuntimeUpdate(_),
             ) => ContentKind::Text,
         }
     }

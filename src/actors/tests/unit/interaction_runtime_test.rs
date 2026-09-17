@@ -368,7 +368,7 @@ async fn required_question_pauses_and_prevents_later_batch_writes_until_typed_an
     let messages = serde_json::to_string(&request.messages).unwrap();
     assert!(messages.contains("Library"));
     assert!(messages.contains("Not executed"));
-    assert!(!messages.contains("Pending user questions (unanswered)"));
+    assert!(runtime_snapshot(&request.messages).questions.is_empty());
     answer(reply, response(vec![call("write", "allowed")]));
     let (_, release) = within(entered.recv_async()).await.unwrap();
     release.send(()).unwrap();
@@ -439,10 +439,9 @@ async fn optional_questions_allow_continuation_and_persist_without_inferred_answ
     h.start("Investigate");
     answer(h.request().await.1, response(vec![question(false)]));
     let (request, reply) = h.request().await;
-    assert!(
-        serde_json::to_string(&request.messages)
-            .unwrap()
-            .contains("Pending user questions (unanswered)")
+    assert_eq!(
+        runtime_snapshot(&request.messages).questions[0].id,
+        "target"
     );
     answer(
         reply,
@@ -506,7 +505,10 @@ async fn resume_pending_questions_restores_mode_and_clear_and_new_reset_interact
     assert!(command(&h, Command::Questions).await.contains("required"));
     command(&h, Command::parse("answer target choice lib").unwrap()).await;
     let (request, reply) = h.request().await;
-    assert!(request.system.unwrap().contains("Work mode: Plan"));
+    assert_eq!(
+        runtime_snapshot(&request.messages).planning.mode,
+        common_models::interaction::WorkMode::Plan
+    );
     answer(reply, response(vec![text("Plan prepared")]));
     h.terminal(Lifecycle::Completed).await;
     for reset in [Command::Clear, Command::New] {
@@ -517,7 +519,10 @@ async fn resume_pending_questions_restores_mode_and_clear_and_new_reset_interact
         );
         h.start("Plan again");
         let (request, reply) = h.request().await;
-        assert!(request.system.unwrap().contains("Work mode: Implement"));
+        assert_eq!(
+            runtime_snapshot(&request.messages).planning.mode,
+            common_models::interaction::WorkMode::Implement
+        );
         answer(reply, response(vec![question(false)]));
         answer(h.request().await.1, response(vec![text("Done")]));
         h.terminal(Lifecycle::Completed).await;
@@ -652,11 +657,11 @@ async fn steering_cancels_active_tools_and_queue_then_reconciles_plan() {
     let sent = serde_json::to_string(&request.messages).unwrap();
     assert!(sent.contains("Use the library instead"));
     assert!(!sent.contains("Obsolete follow-up"));
-    assert!(
-        request
-            .messages
-            .iter()
-            .any(|message| message.text().contains("\"requirements_revision\":1"))
+    assert_eq!(
+        runtime_snapshot(&request.messages)
+            .planning
+            .requirements_revision,
+        1
     );
     answer(reply, response(vec![text("Premature revised completion")]));
     let (request, reply) = h.request().await;
@@ -728,10 +733,9 @@ async fn tracked_plan_uses_observed_evidence_and_survives_compaction_and_fork() 
     release.send(()).unwrap();
     let (request, reply) = h.request().await;
     assert!(
-        request
-            .messages
-            .iter()
-            .any(|message| message.text().contains("tool:evidence"))
+        runtime_snapshot(&request.messages)
+            .evidence
+            .contains_key("tool:evidence")
     );
     update.revision = 1;
     update.steps[0].state = StepState::Completed;
@@ -791,10 +795,9 @@ async fn questions_do_not_wait_for_an_independent_workspace_writer() {
     h.start("Investigate while validation is running");
     answer(h.request().await.1, response(vec![question(false)]));
     let (request, reply) = h.request().await;
-    assert!(
-        serde_json::to_string(&request.messages)
-            .unwrap()
-            .contains("Pending user questions (unanswered)")
+    assert_eq!(
+        runtime_snapshot(&request.messages).questions[0].id,
+        "target"
     );
     drop(lease);
     answer(

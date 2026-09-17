@@ -57,7 +57,10 @@ async fn plan_mode_denies_all_cargo_and_mutation_tools_in_both_root_modes() {
             .send_message(Message::StartWork(Some("Investigate safely".into())))
             .unwrap();
         let (request, reply) = actor.request().await;
-        assert!(request.system.unwrap().contains("Work mode: Plan"));
+        assert_eq!(
+            runtime_snapshot(&request.messages).planning.mode,
+            common_models::interaction::WorkMode::Plan
+        );
         assert!(request.tools.iter().any(
             |tool| matches!(tool, ToolDefinition::Client { name, .. } if name == "update_plan")
         ));
@@ -173,14 +176,9 @@ async fn plan_mode_is_inherited_by_read_workers_and_denies_dynamic_writer_launch
     let actor = RepositoryActor::new(BaseWorker::new(), workspace.path.clone()).await;
     interaction_command(&actor, Command::Plan).await;
     let started = StartedWorker::new(&actor, worker_input("find_files", ".")).await;
-    assert!(
-        started
-            .child
-            .0
-            .system
-            .as_ref()
-            .unwrap()
-            .contains("Work mode: Plan")
+    assert_eq!(
+        runtime_snapshot(&started.child.0.messages).planning.mode,
+        common_models::interaction::WorkMode::Plan
     );
     assert!(!started.child.0.tools.iter().any(
         |tool| matches!(tool, ToolDefinition::Client { name, .. } if name == "request_user_input")
@@ -307,11 +305,18 @@ impl StartedWorker {
                 "Preserve the user's API constraint marker".into(),
             )))
             .unwrap();
-        let (_, reply) = actor.request().await;
+        let (root_request, reply) = actor.request().await;
         answer(reply, response(vec![tool("start_worker", "start", input)]));
         let first = actor.request().await;
         let second = actor.request().await;
         let WorkerRequests { parent, child } = WorkerRequests::new(first, second);
+        assert_eq!(parent.0.system, root_request.system);
+        assert_eq!(
+            serde_json::to_value(&parent.0.messages[..root_request.messages.len()]).unwrap(),
+            serde_json::to_value(&root_request.messages).unwrap()
+        );
+        assert!(!runtime_snapshot(&parent.0.messages).workers.is_empty());
+        assert_ne!(parent.0.prompt_cache_key, child.0.prompt_cache_key);
         let initial = latest_result(&parent.0);
         assert_eq!(initial["status"], "registered");
         let id = initial["worker_id"].as_str().unwrap().to_owned();
@@ -561,6 +566,12 @@ async fn bounded_worker_inherits_constraints_denies_other_paths_and_returns_obse
         )]),
     );
     let (parent, reply) = actor.request().await;
+    assert_eq!(parent.system, started.parent.0.system);
+    assert_eq!(
+        serde_json::to_value(&parent.messages[..started.parent.0.messages.len()]).unwrap(),
+        serde_json::to_value(&started.parent.0.messages).unwrap()
+    );
+    assert!(runtime_snapshot(&parent.messages).workers.is_empty());
     let result = latest_result(&parent);
     let report = &result["workers"][0]["report"];
     assert_eq!(report["status"], "completed");
@@ -815,7 +826,7 @@ async fn parent_interrupt_cancels_and_journals_children_without_replaying_them()
         &policy,
         &llm::SessionProvider::Injected,
     );
-    assert!(resumed.is_ok());
+    assert!(resumed.is_ok(), "{:?}", resumed.err());
 }
 
 fn actor_store(path: &std::path::Path) -> Arc<crate::session::SessionStore> {
