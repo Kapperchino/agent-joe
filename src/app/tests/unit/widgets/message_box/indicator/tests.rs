@@ -48,8 +48,8 @@ fn ferris_runs_to_both_ends_at_a_fixed_cadence_without_shifting_the_label() {
                 line.to_string(),
                 format!(
                     "Thinking it through…  {}{glyphs}{}",
-                    "─".repeat(offset),
-                    "─".repeat(5 - offset)
+                    " ".repeat(offset),
+                    " ".repeat(5 - offset)
                 )
             );
             assert_eq!(line.spans[3..10].iter().map(Span::width).sum::<usize>(), 7);
@@ -123,7 +123,7 @@ fn message_box_moves_ferris_across_the_line_and_clears_it_when_idle() {
     let area = Rect::new(3, 2, 40, 2);
     let first = render(area, &mut state);
     assert_eq!(row(&first, 2).trim(), "Hello");
-    assert_eq!(row(&first, 3), "Working on it…  v(•ᴗ•)v─────────────────");
+    assert_eq!(row(&first, 3), "Working on it…  v(•ᴗ•)v                 ");
     assert_eq!(first[(19, 3)].fg, theme::ACCENT);
     assert_eq!(first[(3, 3)].fg, theme::AMBER);
     for x in 20..=24 {
@@ -139,7 +139,7 @@ fn message_box_moves_ferris_across_the_line_and_clears_it_when_idle() {
     }
     let next = render(area, &mut state);
     assert_eq!(row(&next, 2), row(&first, 2));
-    assert_eq!(row(&next, 3), "Working on it…  ─V(•ᴗ•)v────────────────");
+    assert_eq!(row(&next, 3), "Working on it…   V(•ᴗ•)v                ");
     assert_eq!(next[(19, 3)].bg, theme::BACKGROUND);
     assert_eq!(next[(20, 3)].bg, theme::BACKGROUND);
     assert_eq!(next[(21, 3)].bg, theme::ACCENT);
@@ -166,7 +166,7 @@ fn clearing_messages_resets_ferris_before_the_next_conversation() {
     state.append(Msg::Message("After".into()));
     let buffer = render(Rect::new(0, 0, 40, 2), &mut state);
     assert_eq!(row(&buffer, 0).trim(), "After");
-    assert_eq!(row(&buffer, 1), "Connecting…  v(•ᴗ•)v────────────────────");
+    assert_eq!(row(&buffer, 1), "Connecting…  v(•ᴗ•)v                    ");
     state.advance_busy_indicator();
     assert_eq!(render(buffer.area, &mut state), buffer);
 }
@@ -189,7 +189,7 @@ fn ferris_stays_on_one_line_in_tiny_viewports() {
                         .collect(),
                     _ => format!(
                         "Thinking it through…  v(•ᴗ•)v{}",
-                        "─".repeat(usize::from(width) - 29)
+                        " ".repeat(usize::from(width) - 29)
                     ),
                 };
                 assert_eq!(

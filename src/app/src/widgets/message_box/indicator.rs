@@ -92,17 +92,12 @@ impl BusyIndicator {
                 Some(travel) => {
                     let phase = self.steps % (travel * 2).max(1);
                     let offset = travel - travel.abs_diff(phase);
-                    let track = Style::default().fg(theme::BORDER);
                     Line::from(
-                        [
-                            label,
-                            Span::raw("  "),
-                            Span::styled("─".repeat(offset), track),
-                        ]
-                        .into_iter()
-                        .chain(ferris.spans)
-                        .chain([Span::styled("─".repeat(travel - offset), track)])
-                        .collect::<Vec<_>>(),
+                        [label, Span::raw("  "), Span::raw(" ".repeat(offset))]
+                            .into_iter()
+                            .chain(ferris.spans)
+                            .chain([Span::raw(" ".repeat(travel - offset))])
+                            .collect::<Vec<_>>(),
                     )
                 }
                 None => Line::from(
