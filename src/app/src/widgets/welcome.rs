@@ -35,9 +35,8 @@ impl Widget for Welcome {
                 Line::from(theme::muted(branding::CAPTION)),
                 Line::from(theme::muted("Press i to start building.")),
             ],
-            _ => branding::FERRIS
+            _ => branding::ferris()
                 .into_iter()
-                .map(|row| Line::from(Span::styled(row, Style::default().fg(theme::ACCENT))))
                 .chain([
                     Line::default(),
                     Line::from(Span::styled(

@@ -396,21 +396,22 @@ async fn worker_streams_update_progress_without_replacing_the_root_stream() {
 #[tokio::test]
 async fn welcome_gives_way_to_conversation_and_returns_after_clear() {
     let mut fixture = Fixture::new().await;
+    let ferris = crate::branding::ferris()[1].to_string();
     let welcome = fixture.render();
     assert!(welcome.contains(crate::branding::TAGLINE));
-    assert!(welcome.contains(crate::branding::FERRIS[1].trim()));
+    assert!(welcome.contains(ferris.trim()));
     fixture.key(KeyCode::Char('i'));
     fixture.app.input_box.paste("Explain this crate");
     fixture.key(KeyCode::Enter);
     let conversation = fixture.render();
     assert!(conversation.contains("Explain this crate"));
     assert!(!conversation.contains(crate::branding::TAGLINE));
-    assert!(!conversation.contains(crate::branding::FERRIS[1].trim()));
+    assert!(!conversation.contains(ferris.trim()));
     assert!(conversation.contains(crate::branding::TITLE));
     fixture.app.clear_messages_and_terminal();
     let welcome = fixture.render();
     assert!(welcome.contains(crate::branding::TAGLINE));
-    assert!(welcome.contains(crate::branding::FERRIS[1].trim()));
+    assert!(welcome.contains(ferris.trim()));
     fixture.stop().await;
 }
 
