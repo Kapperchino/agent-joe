@@ -9,14 +9,18 @@ use reqwest_retry::RetryTransientMiddleware;
 use reqwest_retry::policies::ExponentialBackoff;
 use reqwest_tracing::TracingMiddleware;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::future::ready;
 use std::str::FromStr;
 use std::time::Duration;
 use thiserror::Error;
 use tools::tool_defs::NonEmptyString;
-use utils::utils::FnvHashMap;
 
 const HTTP_MAX_RETRIES: u32 = 5;
+
+mod prompt_cache;
+pub use prompt_cache::InputContent;
+use prompt_cache::PromptCacheOptions;
 
 #[derive(Error, Debug)]
 pub enum OpenAIError {
@@ -45,7 +49,7 @@ pub enum InputItem {
     #[serde(rename = "message")]
     Message {
         role: Role,
-        content: String,
+        content: InputContent,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         phase: Option<llm::MessagePhase>,
     },
@@ -59,7 +63,7 @@ pub enum InputItem {
     #[serde(rename = "function_call_output")]
     FunctionCallOutput {
         call_id: NonEmptyString,
-        output: String,
+        output: InputContent,
     },
     #[serde(rename = "reasoning")]
     Reasoning(ReasoningItem),
@@ -73,7 +77,7 @@ impl InputItem {
     pub fn user(content: String) -> Self {
         InputItem::Message {
             role: Role::User,
-            content,
+            content: content.into(),
             phase: None,
         }
     }
@@ -81,13 +85,16 @@ impl InputItem {
     pub fn assistant(content: String) -> Self {
         InputItem::Message {
             role: Role::Assistant,
-            content,
+            content: content.into(),
             phase: None,
         }
     }
 
     pub fn function_call_output(call_id: NonEmptyString, output: String) -> Self {
-        InputItem::FunctionCallOutput { call_id, output }
+        InputItem::FunctionCallOutput {
+            call_id,
+            output: output.into(),
+        }
     }
 }
 
@@ -111,7 +118,7 @@ pub enum Tool {
 pub struct FunctionParameters {
     #[serde(rename = "type")]
     pub param_type: String,
-    pub properties: FnvHashMap<String, ToolProperty>,
+    pub properties: BTreeMap<String, ToolProperty>,
     pub required: Vec<String>,
 }
 
@@ -132,7 +139,7 @@ pub enum ToolProperty {
         #[serde(rename = "type")]
         prop_type: String,
         description: String,
-        properties: FnvHashMap<String, ToolProperty>,
+        properties: BTreeMap<String, ToolProperty>,
     },
 }
 
@@ -142,6 +149,12 @@ pub enum ResponseInclude {
     EncryptedReasoning,
 }
 
+#[derive(Clone, Copy)]
+enum ResponseMode {
+    Complete,
+    Streaming,
+}
+
 #[derive(Debug, Serialize)]
 struct ResponseRequest {
     pub model: String,
@@ -149,6 +162,8 @@ struct ResponseRequest {
     pub instructions: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_cache_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_options: Option<PromptCacheOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -168,17 +183,28 @@ struct ResponseRequest {
 impl ResponseRequest {
     fn compaction(config: &OpenAIConfig, mut request: ClientRequest) -> Self {
         request.input.push(InputItem::CompactionTrigger);
-        Self::new(config, request, true)
+        Self::new(config, request, ResponseMode::Streaming)
     }
 
-    fn new(config: &OpenAIConfig, req: ClientRequest, stream: bool) -> Self {
+    fn new(config: &OpenAIConfig, req: ClientRequest, mode: ResponseMode) -> Self {
+        let model = req.model.unwrap_or_else(|| config.model.clone());
+        let prompt_cache_options = PromptCacheOptions::for_model(config, &model);
+        let input = req
+            .input
+            .into_iter()
+            .map(|item| match &prompt_cache_options {
+                Some(_) => item.with_cache_breakpoint(),
+                None => item,
+            })
+            .collect();
         Self {
-            model: req.model.unwrap_or_else(|| config.model.clone()),
-            input: req.input,
+            model,
+            input,
             instructions: req.instructions.unwrap_or_default(),
             prompt_cache_key: req
                 .prompt_cache_key
                 .filter(|_| config.supports_prompt_cache_key()),
+            prompt_cache_options,
             temperature: None,
             max_output_tokens: match config.auth {
                 OpenAIAuthConfig::Codex(_) => None,
@@ -187,7 +213,7 @@ impl ResponseRequest {
             tools: req.tools,
             reasoning: Some(config.get_reasoning()),
             parallel_tool_calls: true,
-            stream,
+            stream: matches!(mode, ResponseMode::Streaming),
             store: false,
             include: config.reasoning_include(),
         }
@@ -304,6 +330,7 @@ pub struct Usage {
 #[serde(default)]
 pub struct InputTokenDetails {
     pub cached_tokens: u32,
+    pub cache_write_tokens: u32,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -324,6 +351,13 @@ impl From<Usage> for llm::UsageDelta {
 }
 
 impl Usage {
+    fn cache_hit_percent(&self) -> f64 {
+        match self.input_tokens {
+            0 => 0.0,
+            input => f64::from(self.input_tokens_details.cached_tokens) * 100.0 / f64::from(input),
+        }
+    }
+
     fn log(
         &self,
         response_id: &str,
@@ -338,6 +372,11 @@ impl Usage {
             ?purpose,
             input_tokens = self.input_tokens,
             cached_input_tokens = self.input_tokens_details.cached_tokens,
+            cache_write_tokens = self.input_tokens_details.cache_write_tokens,
+            uncached_input_tokens = self
+                .input_tokens
+                .saturating_sub(self.input_tokens_details.cached_tokens),
+            cache_hit_percent = self.cache_hit_percent(),
             output_tokens = self.output_tokens,
             reasoning_tokens = self.output_tokens_details.reasoning_tokens,
             total_tokens = self.input_tokens.saturating_add(self.output_tokens),
@@ -929,7 +968,8 @@ impl OpenAIClient {
         let url = format!("{}/responses", self.config.get_url());
 
         let purpose = req.purpose;
-        let inner = ResponseRequest::new(&self.config, req, false);
+        let inner = ResponseRequest::new(&self.config, req, ResponseMode::Complete);
+        inner.log_cache_fingerprint();
 
         let response = self
             .client
@@ -967,7 +1007,7 @@ impl OpenAIClient {
     ) -> Result<impl Stream<Item = anyhow::Result<StreamEvent>> + Send + 'static, anyhow::Error>
     {
         let purpose = req.purpose;
-        let request = ResponseRequest::new(&self.config, req, true);
+        let request = ResponseRequest::new(&self.config, req, ResponseMode::Streaming);
         let cache_key = request.prompt_cache_key.clone();
         let response = self.stream_response(request).await?;
         Ok(crate::sse::decode(response.bytes_stream(), |event| {
@@ -997,6 +1037,7 @@ impl OpenAIClient {
     }
 
     async fn stream_response(&self, request: ResponseRequest) -> anyhow::Result<reqwest::Response> {
+        request.log_cache_fingerprint();
         let url = format!("{}/responses", self.config.get_url().trim_end_matches('/'));
         let response = self.client.post(&url).json(&request).send().await?;
         match response.status().is_success() {

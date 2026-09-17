@@ -2,6 +2,9 @@ use super::*;
 use crate::{LocalOpenAIConfig, OpenAICodexConfig, OpenAIKeyConfig, OpenRouterConfig};
 use serde_json::json;
 
+#[path = "cache_tests.rs"]
+mod cache_tests;
+
 fn config(auth: OpenAIAuthConfig) -> OpenAIConfig {
     OpenAIConfig {
         auth,
@@ -11,12 +14,12 @@ fn config(auth: OpenAIAuthConfig) -> OpenAIConfig {
     }
 }
 
-fn wire_request(config: &OpenAIConfig, stream: bool) -> serde_json::Value {
+fn wire_request(config: &OpenAIConfig, mode: ResponseMode) -> serde_json::Value {
     serde_json::to_value(ResponseRequest::new(
         config,
         ClientRequest::new(vec![InputItem::user("task".into())])
             .with_instructions("operating instructions".into()),
-        stream,
+        mode,
     ))
     .unwrap()
 }
@@ -52,6 +55,7 @@ fn codex_compaction_appends_a_transient_trigger_to_a_streaming_request() {
     assert_eq!(body["stream"], true);
     assert_eq!(body["store"], false);
     assert!(body.get("max_output_tokens").is_none());
+    assert!(body.get("prompt_cache_options").is_none());
     assert_eq!(
         body["input"],
         json!([
@@ -61,7 +65,7 @@ fn codex_compaction_appends_a_transient_trigger_to_a_streaming_request() {
         ])
     );
     assert_eq!(
-        wire_request(&config, true)["input"]
+        wire_request(&config, ResponseMode::Streaming)["input"]
             .as_array()
             .unwrap()
             .len(),
@@ -132,8 +136,12 @@ fn public_openai_requests_encrypted_state_in_streaming_and_nonstreaming_requests
         api_key: "fixture".into(),
         url: None,
     }));
-    for stream in [false, true] {
-        let request = wire_request(&config, stream);
+    for mode in [ResponseMode::Complete, ResponseMode::Streaming] {
+        let request = wire_request(&config, mode);
+        match mode {
+            ResponseMode::Complete => assert!(request.get("stream").is_none()),
+            ResponseMode::Streaming => assert_eq!(request["stream"], true),
+        }
         assert_eq!(request["include"], json!(["reasoning.encrypted_content"]));
         assert_eq!(request["store"], false);
         assert_eq!(request["instructions"], "operating instructions");
@@ -162,14 +170,22 @@ fn compatible_routes_can_opt_in_without_receiving_unknown_fields_by_default() {
     ];
     for route in routes {
         let mut config = config(route);
-        assert!(wire_request(&config, true).get("include").is_none());
+        assert!(
+            wire_request(&config, ResponseMode::Streaming)
+                .get("include")
+                .is_none()
+        );
         config.request_encrypted_reasoning = Some(true);
         assert_eq!(
-            wire_request(&config, true)["include"],
+            wire_request(&config, ResponseMode::Streaming)["include"],
             json!(["reasoning.encrypted_content"])
         );
         config.request_encrypted_reasoning = Some(false);
-        assert!(wire_request(&config, true).get("include").is_none());
+        assert!(
+            wire_request(&config, ResponseMode::Streaming)
+                .get("include")
+                .is_none()
+        );
     }
 }
 
@@ -225,7 +241,7 @@ fn cache_keys_follow_supported_routes_and_codex_reasoning_can_be_disabled() {
             let body = serde_json::to_value(ResponseRequest::new(
                 &config,
                 request.try_into().unwrap(),
-                true,
+                ResponseMode::Streaming,
             ))
             .unwrap();
             assert_eq!(
@@ -236,9 +252,13 @@ fn cache_keys_follow_supported_routes_and_codex_reasoning_can_be_disabled() {
             assert_eq!(body["model"], "gpt-6-astra");
         }
         config.request_encrypted_reasoning = Some(false);
-        assert!(wire_request(&config, true).get("include").is_none());
         assert!(
-            wire_request(&config, true)
+            wire_request(&config, ResponseMode::Streaming)
+                .get("include")
+                .is_none()
+        );
+        assert!(
+            wire_request(&config, ResponseMode::Streaming)
                 .get("prompt_cache_key")
                 .is_none()
         );

@@ -39,12 +39,12 @@ fn input_items(content: ContentBlock, role: llm::Role) -> anyhow::Result<Vec<Inp
     match content {
         ContentBlock::RuntimeUpdate(update) => Ok(vec![InputItem::Message {
             role: Role::User,
-            content: update.text()?,
+            content: update.text()?.into(),
             phase: None,
         }]),
         ContentBlock::MessageBlock { text, phase } => Ok(vec![InputItem::Message {
             role: role.into(),
-            content: text,
+            content: text.into(),
             phase,
         }]),
         ContentBlock::ThinkingBlock { .. } => Err(anyhow::anyhow!(
@@ -73,7 +73,7 @@ fn input_items(content: ContentBlock, role: llm::Role) -> anyhow::Result<Vec<Inp
             call_id: tool_id
                 .call_id
                 .ok_or_else(|| anyhow::anyhow!("OpenAI tool result is missing its call_id"))?,
-            output: content,
+            output: content.into(),
         }]),
     }
 }
