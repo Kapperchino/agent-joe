@@ -154,6 +154,41 @@ enum MergeState {
     Diverged,
 }
 
+enum LinkedWorktree {
+    Available { repo: git2::Repository },
+    Missing,
+}
+
+impl LinkedWorktree {
+    fn new(git: &GitRepository, name: &str) -> anyhow::Result<Self> {
+        let worktree = git.repo.find_worktree(name)?;
+        match std::fs::symlink_metadata(worktree.path()) {
+            Ok(_) => Ok(Self::Available {
+                repo: git2::Repository::open(worktree.path())?,
+            }),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && worktree.is_locked()? == git2::WorktreeLockStatus::Unlocked =>
+            {
+                Ok(Self::Missing)
+            }
+            Err(error) => Err(error).with_context(|| {
+                format!(
+                    "Cannot inspect registered worktree {name} at {}",
+                    worktree.path().display()
+                )
+            }),
+        }
+    }
+
+    fn has_branch(&self, reference: &str) -> anyhow::Result<bool> {
+        match self {
+            Self::Available { repo } => Ok(repo.head()?.name()? == reference),
+            Self::Missing => Ok(false),
+        }
+    }
+}
+
 #[derive(Default)]
 struct CommitSummary {
     added: Vec<String>,
@@ -352,10 +387,7 @@ impl<'repo> SessionCleanup<'repo> {
             .try_fold(self, |cleanup, name| {
                 let name = name?.ok_or_else(|| anyhow::anyhow!("Worktree name is not UTF-8"))?;
                 let checked_out = name != session.id
-                    && git2::Repository::open(git.repo.find_worktree(name)?.path())?
-                        .head()?
-                        .name()?
-                        == cleanup.reference;
+                    && LinkedWorktree::new(git, name)?.has_branch(&cleanup.reference)?;
                 match checked_out {
                     true => Err(anyhow::anyhow!(
                         "Session branch is checked out in another worktree"
@@ -785,8 +817,7 @@ impl SessionWorktree {
                 for name in git.repo.worktrees()?.iter() {
                     let name =
                         name?.ok_or_else(|| anyhow::anyhow!("Worktree name is not UTF-8"))?;
-                    let linked = git2::Repository::open(git.repo.find_worktree(name)?.path())?;
-                    match linked.head()?.name()? == reference {
+                    match LinkedWorktree::new(&git, name)?.has_branch(&reference)? {
                         true => Err(anyhow::anyhow!(
                             "{} is checked out in another worktree",
                             self.target

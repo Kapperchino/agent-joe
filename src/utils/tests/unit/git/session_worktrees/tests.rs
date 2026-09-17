@@ -63,6 +63,143 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn merge_ignores_missing_unrelated_worktrees() {
+    let fixture = Fixture::new();
+    let missing = fixture.session();
+    std::fs::write(missing.path.join("file.txt"), "unmerged work\n").unwrap();
+    let retained = missing.proposal(&fixture.workspace).unwrap().unwrap();
+    let session = fixture.session();
+    std::fs::write(session.path.join("file.txt"), "session\n").unwrap();
+    let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+    std::fs::remove_dir_all(&missing.path).unwrap();
+
+    assert!(matches!(
+        session.merge(&fixture.workspace, &approved).unwrap(),
+        MergeOutcome::Merged { .. }
+    ));
+    assert_eq!(
+        fixture
+            .repo
+            .refname_to_id("refs/heads/main")
+            .unwrap()
+            .to_string(),
+        approved
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.root.join("file.txt")).unwrap(),
+        "session\n"
+    );
+    assert_eq!(
+        fixture
+            .repo
+            .refname_to_id(&format!("refs/heads/{}", missing.branch()))
+            .unwrap()
+            .to_string(),
+        retained
+    );
+    assert!(fixture.repo.find_worktree(missing.id()).is_ok());
+}
+
+#[test]
+fn cleanup_ignores_missing_unrelated_worktrees() {
+    let fixture = Fixture::new();
+    let missing = fixture.session();
+    let reference = format!("refs/heads/{}", missing.branch());
+    let retained = fixture.repo.refname_to_id(&reference).unwrap();
+    let session = fixture.session();
+    std::fs::write(session.path.join("file.txt"), "session\n").unwrap();
+    let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+    session.merge(&fixture.workspace, &approved).unwrap();
+    std::fs::remove_dir_all(&missing.path).unwrap();
+
+    session.cleanup(&fixture.workspace, &approved).unwrap();
+    assert!(!session.path.exists());
+    assert!(fixture.repo.find_worktree(session.id()).is_err());
+    assert!(
+        fixture
+            .repo
+            .find_reference(&format!("refs/heads/{}", session.branch()))
+            .is_err()
+    );
+    assert_eq!(fixture.repo.refname_to_id(&reference).unwrap(), retained);
+    assert!(fixture.repo.find_worktree(missing.id()).is_ok());
+}
+
+#[test]
+fn missing_locked_worktrees_still_block_merge_and_cleanup() {
+    let fixture = Fixture::new();
+    let missing = fixture.session();
+    let worktree = fixture.repo.find_worktree(missing.id()).unwrap();
+    let session = fixture.session();
+    std::fs::write(session.path.join("file.txt"), "session\n").unwrap();
+    let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+    let main = fixture.repo.refname_to_id("refs/heads/main").unwrap();
+    worktree.lock(Some("temporarily unavailable")).unwrap();
+    std::fs::remove_dir_all(&missing.path).unwrap();
+
+    assert!(session.merge(&fixture.workspace, &approved).is_err());
+    assert_eq!(fixture.repo.refname_to_id("refs/heads/main").unwrap(), main);
+    worktree.unlock().unwrap();
+    session.merge(&fixture.workspace, &approved).unwrap();
+    worktree.lock(Some("temporarily unavailable")).unwrap();
+    assert!(session.cleanup(&fixture.workspace, &approved).is_err());
+    assert!(session.workspace(&fixture.workspace).is_ok());
+    worktree.unlock().unwrap();
+    session.cleanup(&fixture.workspace, &approved).unwrap();
+    assert!(!session.path.exists());
+    assert!(fixture.repo.find_worktree(missing.id()).is_ok());
+}
+
+#[test]
+fn invalid_existing_worktrees_still_block_merge_and_cleanup() {
+    let fixture = Fixture::new();
+    let other = fixture.session();
+    let gitfile = other.path.join(".git");
+    let metadata = std::fs::read(&gitfile).unwrap();
+    let session = fixture.session();
+    std::fs::write(session.path.join("file.txt"), "session\n").unwrap();
+    let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+    let main = fixture.repo.refname_to_id("refs/heads/main").unwrap();
+    std::fs::write(&gitfile, "invalid Git metadata\n").unwrap();
+
+    assert!(session.merge(&fixture.workspace, &approved).is_err());
+    assert_eq!(fixture.repo.refname_to_id("refs/heads/main").unwrap(), main);
+    std::fs::write(&gitfile, &metadata).unwrap();
+    session.merge(&fixture.workspace, &approved).unwrap();
+    std::fs::write(&gitfile, "invalid Git metadata\n").unwrap();
+    assert!(session.cleanup(&fixture.workspace, &approved).is_err());
+    assert!(session.workspace(&fixture.workspace).is_ok());
+    std::fs::write(&gitfile, &metadata).unwrap();
+    session.cleanup(&fixture.workspace, &approved).unwrap();
+    assert!(!session.path.exists());
+    assert!(other.workspace(&fixture.workspace).is_ok());
+}
+
+#[test]
+fn merge_refuses_main_checked_out_in_another_worktree() {
+    let fixture = Fixture::new();
+    let other = fixture.session();
+    let session = fixture.session();
+    std::fs::write(session.path.join("file.txt"), "session\n").unwrap();
+    let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+    let main = fixture.repo.refname_to_id("refs/heads/main").unwrap();
+    let linked = git2::Repository::open(&other.path).unwrap();
+    std::fs::write(linked.path().join("HEAD"), "ref: refs/heads/main\n").unwrap();
+
+    let error = session.merge(&fixture.workspace, &approved).err().unwrap();
+    assert!(
+        format!("{error:#}").contains("main is checked out in another worktree"),
+        "{error:#}"
+    );
+    assert_eq!(fixture.repo.refname_to_id("refs/heads/main").unwrap(), main);
+    assert_eq!(
+        std::fs::read_to_string(fixture.root.join("file.txt")).unwrap(),
+        "base\n"
+    );
+    assert!(session.workspace(&fixture.workspace).is_ok());
+}
+
+#[test]
 fn fast_forward_commit_summarizes_added_updated_and_removed_files() {
     let fixture = Fixture::new();
     fixture.commit("removed.txt", "remove me\n");
