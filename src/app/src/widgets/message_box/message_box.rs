@@ -117,7 +117,7 @@ impl MessageBoxState {
             .finish_stream(trailing_blank_line, &self.formatter());
     }
 
-    pub fn advance_throbber(&mut self) {
+    pub fn advance_busy_indicator(&mut self) {
         self.busy_indicator.advance(&self.actor_state);
     }
 

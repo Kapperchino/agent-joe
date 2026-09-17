@@ -298,7 +298,7 @@ impl TUIApp {
 
         while !self.do_quit {
             tokio::select! {
-                _ = interval.tick() => self.message_box.advance_throbber(),
+                _ = interval.tick() => self.message_box.advance_busy_indicator(),
                 Some(Ok(event)) = events.next() => self.handle_term_event(&event),
                 Ok(actor_msg) = actor_rx.recv_async() => self.handle_actor_msg(actor_msg),
             }
