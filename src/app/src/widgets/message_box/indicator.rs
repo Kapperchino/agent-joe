@@ -2,34 +2,52 @@ use crate::{branding, theme};
 use common_models::tui_models::State;
 use ratatui::prelude::{Line, Modifier, Span, Style};
 
-const FERRIS_FRAME_TICKS: usize = 24;
+const FERRIS_FRAME_TICKS: usize = 12;
 
 #[derive(Clone, Copy, Default)]
 enum FerrisFrame {
     #[default]
-    Raised,
-    WaveLeft,
-    Blink,
-    WaveRight,
+    Rest,
+    StepLeft,
+    Land,
+    StepRight,
 }
 
 impl FerrisFrame {
     fn next(self) -> Self {
         match self {
-            Self::Raised => Self::WaveLeft,
-            Self::WaveLeft => Self::Blink,
-            Self::Blink => Self::WaveRight,
-            Self::WaveRight => Self::Raised,
+            Self::Rest => Self::StepLeft,
+            Self::StepLeft => Self::Land,
+            Self::Land => Self::StepRight,
+            Self::StepRight => Self::Rest,
         }
     }
 
     fn glyphs(self) -> &'static str {
         match self {
-            Self::Raised => branding::MARK,
-            Self::WaveLeft => "v(^_^)V",
-            Self::Blink => "V(-_-)V",
-            Self::WaveRight => "V(^_^)v",
+            Self::Rest | Self::Land => branding::MARK,
+            Self::StepLeft => "V(•ᴗ•)v",
+            Self::StepRight => "v(•ᴗ•)V",
         }
+    }
+
+    fn render(self) -> Line<'static> {
+        let claws = theme::base().fg(theme::ACCENT).add_modifier(Modifier::BOLD);
+        let face = claws.fg(theme::BACKGROUND).bg(theme::ACCENT);
+        Line::from(
+            self.glyphs()
+                .chars()
+                .map(|glyph| {
+                    let style = match glyph {
+                        'v' | 'V' => claws,
+                        '(' | ')' => face.fg(branding::BLUSH),
+                        '•' => face.fg(theme::TEXT),
+                        _ => face,
+                    };
+                    Span::styled(glyph.to_string(), style)
+                })
+                .collect::<Vec<_>>(),
+        )
     }
 }
 
@@ -37,6 +55,7 @@ impl FerrisFrame {
 pub(super) struct BusyIndicator {
     frame: FerrisFrame,
     ticks: usize,
+    steps: usize,
 }
 
 impl BusyIndicator {
@@ -54,6 +73,7 @@ impl BusyIndicator {
                 self.ticks = (self.ticks + 1) % FERRIS_FRAME_TICKS;
                 if self.ticks == 0 {
                     self.frame = self.frame.next();
+                    self.steps = self.steps.wrapping_add(1);
                 }
             }
             _ => self.reset(),
@@ -64,18 +84,35 @@ impl BusyIndicator {
         *self = Self::default();
     }
 
-    pub(super) fn render_line(&self, actor_state: &State) -> Option<Line<'static>> {
+    pub(super) fn render_line(&self, actor_state: &State, width: u16) -> Option<Line<'static>> {
         Self::label(actor_state).map(|label| {
-            Line::from(vec![
-                Span::styled(
-                    self.frame.glyphs(),
-                    Style::default()
-                        .fg(theme::ACCENT)
-                        .add_modifier(Modifier::BOLD),
+            let ferris = self.frame.render();
+            let label = Span::styled(label, Style::default().fg(theme::AMBER));
+            match usize::from(width).checked_sub(label.width() + ferris.width() + 2) {
+                Some(travel) => {
+                    let phase = self.steps % (travel * 2).max(1);
+                    let offset = travel - travel.abs_diff(phase);
+                    let track = Style::default().fg(theme::BORDER);
+                    Line::from(
+                        [
+                            label,
+                            Span::raw("  "),
+                            Span::styled("─".repeat(offset), track),
+                        ]
+                        .into_iter()
+                        .chain(ferris.spans)
+                        .chain([Span::styled("─".repeat(travel - offset), track)])
+                        .collect::<Vec<_>>(),
+                    )
+                }
+                None => Line::from(
+                    ferris
+                        .spans
+                        .into_iter()
+                        .chain([Span::raw(" "), label])
+                        .collect::<Vec<_>>(),
                 ),
-                Span::raw(" "),
-                Span::styled(label, Style::default().fg(theme::AMBER)),
-            ])
+            }
         })
     }
 

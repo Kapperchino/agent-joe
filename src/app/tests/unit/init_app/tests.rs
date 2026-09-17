@@ -29,7 +29,7 @@ fn setup_shares_ferris_branding_without_displacing_provider_fields() {
         let title = buffer
             .content
             .iter()
-            .find(|cell| cell.symbol() == "V")
+            .find(|cell| cell.symbol() == "v")
             .unwrap();
         assert_eq!(title.fg, theme::ACCENT);
         assert_eq!(title.bg, theme::SURFACE);

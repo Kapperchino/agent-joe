@@ -1,10 +1,10 @@
 use super::*;
 
 const FERRIS_ROWS: [&str; 4] = [
-    " ▄ ▄   ▄█████████▄   ▄ ▄ ",
-    " █▄█ ▄██ ●     ● ██▄ █▄█ ",
-    "  ▀█████  • ω •  █████▀  ",
-    "     ▀█▀▀███████▀▀█▀     ",
+    " ▄ ▄    ▄███████▄    ▄ ▄ ",
+    " █▄█  ▄█ ◕     ◕ █▄  █▄█ ",
+    "  ▀█████ ˶  ᴗ  ˶ █████▀  ",
+    "     ▀█▄█▀▀▀▀▀▀▀█▄█▀     ",
 ];
 
 fn render(area: Rect) -> Buffer {
@@ -47,9 +47,9 @@ fn full_welcome_renders_filled_ferris_with_unclipped_hints() {
                 let x = left + u16::try_from(column).unwrap();
                 let cell = &buffer[(x, y)];
                 let expected = match (offset, column) {
-                    (1, 9 | 15) => theme::base().fg(theme::BACKGROUND).bg(theme::TEXT),
-                    (2, 10 | 14) => theme::base()
-                        .fg(ratatui::style::Color::Rgb(188, 66, 87))
+                    (1, 9 | 15) => theme::base().fg(theme::TEXT).bg(theme::ACCENT),
+                    (2, 9 | 15) => theme::base()
+                        .fg(ratatui::style::Color::Rgb(203, 76, 100))
                         .bg(theme::ACCENT),
                     (1 | 2, 8..=16) => theme::base().fg(theme::BACKGROUND).bg(theme::ACCENT),
                     _ => theme::base().fg(theme::ACCENT),

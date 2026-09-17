@@ -137,12 +137,12 @@ impl MessageBoxState {
         Ok(())
     }
 
-    fn output_lines(&self) -> Vec<Line<'static>> {
+    fn output_lines(&self, width: u16) -> Vec<Line<'static>> {
         let formatter = self.formatter();
         let lines = self.scrollback.render_live_lines(
             self.transcript.committed_lines(),
             self.transcript.active_lines(&formatter),
-            self.busy_indicator.render_line(&self.actor_state),
+            self.busy_indicator.render_line(&self.actor_state, width),
         );
         self.viewport.visible_lines(lines)
     }
@@ -165,7 +165,7 @@ impl StatefulWidget for MessageBox {
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         match state.view {
             ConversationView::Welcome => Welcome.render(area, buf),
-            ConversationView::Transcript => Paragraph::new(state.output_lines())
+            ConversationView::Transcript => Paragraph::new(state.output_lines(area.width))
                 .style(theme::base())
                 .render(area, buf),
         }
