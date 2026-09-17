@@ -19,6 +19,7 @@ use tools::tool_defs::NonEmptyString;
 const HTTP_MAX_RETRIES: u32 = 5;
 
 mod prompt_cache;
+mod routing;
 pub use prompt_cache::InputContent;
 use prompt_cache::PromptCacheOptions;
 
@@ -771,6 +772,7 @@ pub enum ReasoningSummary {
 pub struct OpenAIClient {
     client: ClientWithMiddleware,
     pub config: OpenAIConfig,
+    routing: routing::CodexRouting,
 }
 #[derive(Serialize)]
 pub struct ClientRequest {
@@ -961,7 +963,11 @@ impl OpenAIClient {
                 .build(),
         };
 
-        Ok(Self { client, config })
+        Ok(Self {
+            client,
+            config,
+            routing: routing::CodexRouting::default(),
+        })
     }
 
     pub async fn chat(&self, req: ClientRequest) -> OpenAIResult<Response> {
@@ -974,6 +980,7 @@ impl OpenAIClient {
         let response = self
             .client
             .post(&url)
+            .headers(self.routing_headers(inner.prompt_cache_key.as_deref())?)
             .json(&inner)
             .send()
             .await
@@ -982,6 +989,7 @@ impl OpenAIClient {
             })?;
 
         if response.status().is_success() {
+            self.observe_routing(inner.prompt_cache_key.as_deref(), response.headers());
             let response: Response = response.json().await?;
             if let Some(usage) = &response.usage {
                 usage.log(
@@ -1039,9 +1047,18 @@ impl OpenAIClient {
     async fn stream_response(&self, request: ResponseRequest) -> anyhow::Result<reqwest::Response> {
         request.log_cache_fingerprint();
         let url = format!("{}/responses", self.config.get_url().trim_end_matches('/'));
-        let response = self.client.post(&url).json(&request).send().await?;
+        let response = self
+            .client
+            .post(&url)
+            .headers(self.routing_headers(request.prompt_cache_key.as_deref())?)
+            .json(&request)
+            .send()
+            .await?;
         match response.status().is_success() {
-            true => Ok(response),
+            true => {
+                self.observe_routing(request.prompt_cache_key.as_deref(), response.headers());
+                Ok(response)
+            }
             false => {
                 let status = response.status();
                 let body = response.text().await.unwrap_or_default();

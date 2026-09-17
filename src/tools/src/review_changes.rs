@@ -2,6 +2,7 @@ use crate::tool_defs::{ToolEffect, ToolId, ToolTrait, ToolType};
 use analysis::contexts::context::Context;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use turbo_code_macros::{ToolDef, ToolInput};
 use utils::utils::FnvHashMap;
@@ -9,7 +10,7 @@ use utils::utils::FnvHashMap;
 #[derive(Default, Serialize, Deserialize, Debug, Clone, ToolDef)]
 #[tool(
     name = "review_changes",
-    description = "Review the aggregate task change before claiming completion. Includes baseline and current Git status, staged and unstaged/untracked diffs, task diffs, recorded Joe edit IDs, and concurrent user changes. Read large output through its artifact reference. A conversation fork shares the filesystem and starts its own edit ownership."
+    description = "Review the aggregate task change before claiming completion. Includes baseline and current Git status, staged and unstaged/untracked diffs, task diffs, recorded Joe edit IDs, and concurrent user changes. Identical diffs use same_as JSON pointers to another field in this result. Read large output through its artifact reference. A conversation fork shares the filesystem and starts its own edit ownership."
 )]
 pub struct ReviewChanges {
     #[tool(input)]
@@ -40,7 +41,7 @@ impl<C: Context, A> ToolTrait<C, A> for ReviewChanges {
         Ok(FnvHashMap::default())
     }
     fn output_to_content(_: &Self::Input, output: &Self::Output) -> anyhow::Result<String> {
-        Ok(serde_json::to_string(output)?)
+        Ok(serde_json::to_string(&ReviewContent::new(output))?)
     }
     fn effect() -> ToolEffect {
         ToolEffect::Read
@@ -49,3 +50,83 @@ impl<C: Context, A> ToolTrait<C, A> for ReviewChanges {
         ToolType::Client
     }
 }
+
+#[derive(Serialize)]
+struct ReviewContent<'a> {
+    index_changes: &'a [utils::changes::IndexChange],
+    baseline_git: &'a Option<utils::git::GitStatus>,
+    current_git: &'a Option<utils::git::GitStatus>,
+    baseline_staged: ReviewDiff<'a>,
+    staged: ReviewDiff<'a>,
+    unstaged: ReviewDiff<'a>,
+    changes: Vec<ReviewFile<'a>>,
+    edits: &'a [utils::changes::EditSummary],
+}
+
+#[derive(Serialize)]
+struct ReviewFile<'a> {
+    path: &'a std::path::Path,
+    ownership: &'a utils::changes::ChangeOwnership,
+    current_fingerprint: &'a str,
+    task_diff: ReviewDiff<'a>,
+    joe_diff: ReviewDiff<'a>,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum ReviewDiff<'a> {
+    Text(&'a str),
+    Reference { same_as: String },
+}
+
+#[derive(Default)]
+struct ReviewDiffs<'a> {
+    locations: BTreeMap<&'a str, String>,
+}
+
+impl<'a> ReviewDiffs<'a> {
+    fn insert(&mut self, location: String, content: &'a str) -> ReviewDiff<'a> {
+        match (content, self.locations.get(content)) {
+            ("", _) => ReviewDiff::Text(content),
+            (_, Some(previous)) => ReviewDiff::Reference {
+                same_as: previous.clone(),
+            },
+            (_, None) => {
+                self.locations.insert(content, location);
+                ReviewDiff::Text(content)
+            }
+        }
+    }
+}
+
+impl<'a> ReviewContent<'a> {
+    fn new(review: &'a utils::changes::Review) -> Self {
+        let mut diffs = ReviewDiffs::default();
+        let changes = review
+            .changes
+            .iter()
+            .enumerate()
+            .map(|(index, change)| ReviewFile {
+                path: &change.path,
+                ownership: &change.ownership,
+                current_fingerprint: &change.current_fingerprint,
+                task_diff: diffs.insert(format!("/changes/{index}/task_diff"), &change.task_diff),
+                joe_diff: diffs.insert(format!("/changes/{index}/joe_diff"), &change.joe_diff),
+            })
+            .collect();
+        Self {
+            index_changes: &review.index_changes,
+            baseline_git: &review.baseline_git,
+            current_git: &review.current_git,
+            baseline_staged: diffs.insert("/baseline_staged".into(), &review.baseline_staged),
+            staged: diffs.insert("/staged".into(), &review.staged),
+            unstaged: diffs.insert("/unstaged".into(), &review.unstaged),
+            changes,
+            edits: &review.edits,
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "../tests/unit/review_changes/tests.rs"]
+mod tests;

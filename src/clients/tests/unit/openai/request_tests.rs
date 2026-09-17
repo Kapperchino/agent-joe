@@ -5,6 +5,9 @@ use serde_json::json;
 #[path = "cache_tests.rs"]
 mod cache_tests;
 
+#[path = "routing_tests.rs"]
+mod routing_tests;
+
 fn config(auth: OpenAIAuthConfig) -> OpenAIConfig {
     OpenAIConfig {
         auth,

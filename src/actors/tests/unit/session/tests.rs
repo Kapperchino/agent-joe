@@ -207,7 +207,7 @@ fn full_artifacts_survive_restart_with_bounded_utf8_pages() {
         retrieved.push_str(&page.content);
     }
     assert_eq!(retrieved, content);
-    assert!(ArtifactRange::new(0, 4097).is_err());
+    assert!(ArtifactRange::new(0, artifacts::ARTIFACT_PAGE_BYTES + 1).is_err());
     assert!(
         session
             .read_artifact(
@@ -220,6 +220,65 @@ fn full_artifacts_survive_restart_with_bounded_utf8_pages() {
         session
             .read_artifact(&artifact.id, ArtifactRange::new(8, 10).unwrap())
             .is_err()
+    );
+}
+
+#[test]
+fn large_artifact_pages_stay_inline_across_session_resume() {
+    use super::artifacts::{ARTIFACT_PAGE_BYTES, ArtifactRange, INLINE_BYTES};
+    let workspace = Workspace::new();
+    let store = workspace.store();
+    let session = store
+        .create(SessionProvider::Injected, None, history())
+        .unwrap();
+    let content = "résumé 終わり\n".repeat(10_000);
+    save_output(&session, &content);
+    let artifact = session.snapshot().unwrap().artifacts[0].clone();
+    let page = session
+        .read_artifact(
+            &artifact.id,
+            ArtifactRange::new(0, ARTIFACT_PAGE_BYTES).unwrap(),
+        )
+        .unwrap();
+    assert!(page.content.len() > INLINE_BYTES);
+    assert!(page.content.len() <= ARTIFACT_PAGE_BYTES);
+    assert_eq!(page.content, content[..page.next_offset.unwrap()]);
+    let rendered = format!("Artifact {}\n{}", artifact.id, page.content);
+    let mut pending = batch();
+    pending.operations.truncate(1);
+    pending.operations[0].call.name = "read_artifact".to_owned().try_into().unwrap();
+    pending.assistant.content = vec![pending.operations[0].call.content()];
+    let operation = pending.operations[0].clone();
+    session.record(Event::Prepared(pending)).unwrap();
+    session
+        .record(Event::Intent {
+            operation: operation.id.clone(),
+            effect: ToolEffect::Read,
+        })
+        .unwrap();
+    let result = session
+        .complete_tool(
+            operation.id.clone(),
+            ToolResult {
+                outcome: Ok(rendered.clone()),
+                ..success(&operation)
+            },
+        )
+        .unwrap();
+    assert_eq!(result.outcome.unwrap(), rendered);
+    let messages = session.snapshot().unwrap().pending.unwrap().messages();
+    session.record(Event::History(messages.into())).unwrap();
+    let before = session.snapshot().unwrap();
+    let id = session.id.clone();
+    drop(session);
+    let resumed = workspace
+        .resume(&store, &id, &SessionProvider::Injected)
+        .unwrap();
+    let after = resumed.snapshot().unwrap();
+    assert_eq!(after.artifacts.len(), 1);
+    assert_eq!(
+        serde_json::to_value(before.history).unwrap(),
+        serde_json::to_value(after.history).unwrap()
     );
 }
 

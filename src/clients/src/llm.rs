@@ -56,6 +56,13 @@ pub enum LLmClient {
 }
 
 impl LLmClient {
+    pub fn begin_turn(&mut self) {
+        match self {
+            Self::OpenApi { client, .. } => client.begin_turn(),
+            Self::Injected(_) | Self::Claude { .. } => {}
+        }
+    }
+
     pub fn snapshot(&self) -> Self {
         match self {
             Self::Injected(provider) => Self::Injected(provider.clone()),

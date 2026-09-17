@@ -202,6 +202,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     }
 
     pub(crate) async fn begin_turn(&mut self, input: FollowUp) {
+        self.llm.begin_turn();
         if let Err(error) = self.record_merge(MergeEvent::TaskStarted { turn: input.id }) {
             self.persistence_failed(error);
         }

@@ -99,6 +99,7 @@ pub(crate) async fn generate(
     timeout: Duration,
     prompt_cache_key: Option<String>,
 ) -> anyhow::Result<CommitMessage> {
+    client.begin_turn();
     let CommitRequest { request } = CommitRequest::new(diff, client.context_window())?;
     tokio::time::timeout(timeout.min(Duration::from_secs(30)), async {
         client

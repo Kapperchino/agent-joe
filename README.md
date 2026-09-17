@@ -59,6 +59,14 @@ API. Other providers use conversation summaries. `--native-compaction off`
 selects summaries for sessions that do not already contain encrypted context.
 The saved transcript remains available after compaction.
 
+Codex login requests use a stable session header for cache affinity and retain
+server routing state only within the current turn. Token totals include cached
+input; `--debug` records cached and uncached usage separately in `logs/err.log`.
+Large tool outputs are archived, with artifact reads supporting up to 32 KB per
+call. Review output refers to identical diffs with `same_as` JSON pointers.
+The [token usage investigation](docs/token-usage.md) records the measured causes
+and the comparison with Codex.
+
 ## Build & Run
 
 ```sh

@@ -26,6 +26,7 @@ use tokio::main;
 use tokio::task::JoinHandle;
 use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
+use tracing_subscriber::prelude::*;
 
 const INLINE_VIEWPORT_HEIGHT: u16 = 24;
 
@@ -65,8 +66,16 @@ async fn main() -> Result<()> {
 
     let subscriber = FmtSubscriber::builder()
         .with_max_level(log_level)
+        .with_ansi(false)
         .with_writer(file_appender)
-        .finish();
+        .finish()
+        .with(
+            tracing_subscriber::filter::Targets::new()
+                .with_default(log_level)
+                .with_target("h2", Level::WARN)
+                .with_target("hyper_util", Level::WARN)
+                .with_target("salsa", Level::WARN),
+        );
 
     tracing::subscriber::set_global_default(subscriber)
         .context("Failed to set the tracing subscriber")?;

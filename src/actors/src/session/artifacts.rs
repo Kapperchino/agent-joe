@@ -3,7 +3,31 @@ use serde::{Deserialize, Serialize};
 use tools::tool_defs::ToolResult;
 
 pub const INLINE_BYTES: usize = 8 * 1024;
+pub const ARTIFACT_PAGE_BYTES: usize = 32 * 1024;
 pub const ARTIFACT_BYTES: usize = 64 * 1024 * 1024;
+
+#[derive(Clone, Copy, Default)]
+enum OutputLimit {
+    #[default]
+    Tool,
+    ArtifactPage,
+}
+
+impl OutputLimit {
+    fn for_tool(name: &str) -> Self {
+        match name {
+            "read_artifact" => Self::ArtifactPage,
+            _ => Self::Tool,
+        }
+    }
+
+    fn bytes(self) -> usize {
+        match self {
+            Self::Tool => INLINE_BYTES,
+            Self::ArtifactPage => ARTIFACT_PAGE_BYTES + 512,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArtifactReference {
@@ -27,8 +51,10 @@ pub struct ArtifactRange {
 impl ArtifactRange {
     pub fn new(offset: usize, bytes: usize) -> anyhow::Result<Self> {
         match bytes {
-            1..=4096 => Ok(Self { offset, bytes }),
-            _ => Err(anyhow::anyhow!("Artifact pages must contain 1–4096 bytes")),
+            1..=ARTIFACT_PAGE_BYTES => Ok(Self { offset, bytes }),
+            _ => Err(anyhow::anyhow!(
+                "Artifact pages must contain 1–{ARTIFACT_PAGE_BYTES} bytes"
+            )),
         }
     }
 
@@ -75,16 +101,38 @@ impl Session {
             let mut transaction = database.env.write_txn()?;
             let mut snapshot = self.owned_snapshot(database, &transaction)?;
             let mut history = snapshot.history.clone();
+            let limits = snapshot
+                .history
+                .iter()
+                .flat_map(|message| &message.content)
+                .filter_map(|block| match block {
+                    clients::llm::ContentBlock::ToolBlock { tool_id, name, .. } => {
+                        Some((tool_id.id.to_string(), OutputLimit::for_tool(name.as_ref())))
+                    }
+                    _ => None,
+                })
+                .collect::<std::collections::BTreeMap<_, _>>();
             let previous_artifacts = snapshot.artifacts.len();
-            for block in history.iter_mut().flat_map(|message| &mut message.content) {
-                if let clients::llm::ContentBlock::ToolResult { content, .. } = block
-                    && content.len() > INLINE_BYTES
-                {
-                    let artifact =
-                        self.save_artifact(database, &mut transaction, &mut snapshot, content)?;
-                    *content = artifact.preview(content);
-                }
-            }
+            history
+                .iter_mut()
+                .flat_map(|message| &mut message.content)
+                .try_for_each(|block| match block {
+                    clients::llm::ContentBlock::ToolResult {
+                        tool_id, content, ..
+                    } if content.len()
+                        > limits
+                            .get(tool_id.id.as_ref())
+                            .copied()
+                            .unwrap_or_default()
+                            .bytes() =>
+                    {
+                        let artifact =
+                            self.save_artifact(database, &mut transaction, &mut snapshot, content)?;
+                        *content = artifact.preview(content);
+                        Ok::<_, anyhow::Error>(())
+                    }
+                    _ => Ok(()),
+                })?;
             match snapshot.artifacts.len() == previous_artifacts {
                 true => Ok(()),
                 false => self.commit_event(
@@ -106,6 +154,7 @@ impl Session {
             let mut result = result.clone();
             let mut transaction = database.env.write_txn()?;
             let mut snapshot = self.owned_snapshot(database, &transaction)?;
+            let limit = OutputLimit::for_tool(result.invocation.name.as_ref()).bytes();
             let content = match &mut result.outcome {
                 Ok(content) => content,
                 Err(failure) => &mut failure.message,
@@ -116,7 +165,7 @@ impl Session {
                         self.archive_cargo(database, &mut transaction, &mut snapshot, cargo)?;
                     *content = serde_json::to_string(&cargo)?;
                 }
-                Err(_) if content.len() > INLINE_BYTES => {
+                Err(_) if content.len() > limit => {
                     let artifact =
                         self.save_artifact(database, &mut transaction, &mut snapshot, content)?;
                     *content = artifact.preview(content);
@@ -221,7 +270,7 @@ impl ArtifactReference {
 
     fn preview(&self, content: &str) -> String {
         format!(
-            "{}\n[Full output: artifact {} ({} bytes). Use read_artifact with offset 0 and bytes 4096; follow next_offset for more.]",
+            "{}\n[Full output: artifact {} ({} bytes). Use read_artifact for missing sections, up to {ARTIFACT_PAGE_BYTES} bytes per call. Batch independent ranges when the full output is needed.]",
             preview(content, INLINE_BYTES - 512),
             self.id,
             self.bytes,

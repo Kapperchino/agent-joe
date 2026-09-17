@@ -12,7 +12,7 @@ use utils::utils::FnvHashMap;
 #[derive(Default, Serialize, Deserialize, Debug, Clone, ToolDef)]
 #[tool(
     name = "read_artifact",
-    description = "Read a saved full tool output in this conversation. Byte offsets must be UTF-8 boundaries. Follow next_offset to retrieve the next page."
+    description = "Read a saved tool output in this conversation. Retrieve missing sections only; use up to 32768 bytes per call and batch independent ranges when a full review is required. Byte offsets must be UTF-8 boundaries. next_offset identifies remaining content."
 )]
 pub struct ReadArtifact {
     #[tool(input)]
@@ -35,7 +35,7 @@ pub struct ReadArtifactInput {
     pub id: String,
     #[tool(description = "Zero-based byte offset, initially 0", required)]
     pub offset: usize,
-    #[tool(description = "Page size in bytes, 1 through 4096", required)]
+    #[tool(description = "Page size in bytes, 1 through 32768", required)]
     pub bytes: usize,
 }
 
