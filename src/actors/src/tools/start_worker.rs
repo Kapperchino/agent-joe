@@ -15,7 +15,7 @@ use utils::utils::FnvHashMap;
 #[derive(Default, Debug, Clone, Serialize, Deserialize, ToolDef)]
 #[tool(
     name = "start_worker",
-    description = "Start a bounded independent worker and return its registered ID immediately. Work directly for small tasks. At most four workers and one writer; child delegation is disabled. Retrieve the final structured report with worker_status before completing the parent turn."
+    description = "Start a bounded independent worker with no provider request-count limit and return its registered ID immediately. Work directly for small tasks. At most four workers and one writer; child delegation is disabled. Retrieve the final structured report with worker_status before completing the parent turn."
 )]
 pub struct StartWorker {
     #[tool(input)]

@@ -377,7 +377,7 @@ async fn worker_streams_update_progress_without_replacing_the_root_stream() {
         packet: ActorToTuiPacket::TurnChanged {
             turn_id: worker_turn,
             state: Lifecycle::Failed,
-            detail: Some("Worker request budget exhausted (1/1 requests)".into()),
+            detail: Some("Worker tool-call budget exhausted (128 calls)".into()),
         },
     });
     assert!(

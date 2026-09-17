@@ -1,8 +1,7 @@
-use super::request::BudgetLimits;
 use std::sync::Mutex;
 
+#[derive(Default)]
 pub struct WorkerBudget {
-    limits: BudgetLimits,
     ledger: Mutex<BudgetLedger>,
 }
 
@@ -117,13 +116,6 @@ impl BudgetUsage {
 }
 
 impl WorkerBudget {
-    pub fn new(limits: BudgetLimits) -> Self {
-        Self {
-            limits,
-            ledger: Mutex::new(BudgetLedger::default()),
-        }
-    }
-
     pub fn usage(&self) -> BudgetUsage {
         self.ledger.lock().unwrap().usage.clone()
     }
@@ -140,17 +132,9 @@ impl WorkerBudget {
         let output = request.max_output_tokens.unwrap_or_default() as usize;
         match usage.state {
             BudgetState::Exhausted => Err(anyhow::anyhow!("Worker budget already exhausted")),
-            BudgetState::Available if usage.requests >= self.limits.requests() => {
-                let message = format!(
-                    "Worker request budget exhausted ({}/{} requests)",
-                    usage.requests,
-                    self.limits.requests()
-                );
-                Err(usage.exhausted(&message))
-            }
             BudgetState::Available => {
                 usage.reserved_tokens = charged.saturating_add(input).saturating_add(output);
-                usage.requests += 1;
+                usage.requests = usage.requests.saturating_add(1);
                 ledger.request = RequestState::Reserved(RequestUsage {
                     reserved_tokens: input + output,
                     estimated_input_tokens: input,
