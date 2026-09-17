@@ -1,47 +1,15 @@
 use super::{CommandMenu, HomeMenu, InputMode, Progress, TUIApp};
-use crate::branding;
 use crate::theme::{self, KeyHint};
 use common_models::interaction::{PlanReview, StepState, WorkMode};
 use common_models::tui_models::{Lifecycle, ValidationState};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Modifier, Style},
+    style::Style,
     text::{Line, Span},
-    widgets::{Block, Borders},
 };
 
 impl TUIApp {
-    pub(super) fn draw_header(&self, frame: &mut Frame, area: Rect) {
-        let block = Block::new()
-            .borders(Borders::BOTTOM)
-            .border_style(Style::default().fg(theme::BORDER));
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-        let mut title = vec![Span::styled(
-            format!(" {} ", branding::TITLE),
-            Style::default()
-                .fg(theme::ACCENT)
-                .add_modifier(Modifier::BOLD),
-        )];
-        if area.width >= 64 {
-            title.push(theme::muted(" /  THE RUST WORKSPACE"));
-        }
-        let title = Line::from(title);
-        let [brand, model] = Layout::horizontal([
-            Constraint::Length(u16::try_from(title.width()).unwrap_or(u16::MAX)),
-            Constraint::Min(0),
-        ])
-        .areas(inner);
-        frame.render_widget(title, brand);
-        let config = self.config_context.get_config();
-        let model_label = match area.width {
-            0..64 => format!("{} ", config.get_model()),
-            _ => format!("{}  ·  {} ", config.get_model(), config.get_effort()),
-        };
-        frame.render_widget(Line::from(theme::muted(model_label)).right_aligned(), model);
-    }
-
     pub(super) fn progress_line(&self, width: u16) -> Line<'static> {
         let mode = match self.interaction.planning.mode {
             WorkMode::Plan => theme::badge("PLAN", theme::AMBER),
@@ -121,9 +89,21 @@ impl TUIApp {
     }
 
     pub(super) fn draw_footer(&self, frame: &mut Frame, area: Rect) {
-        let [context, hints] =
+        let [status, hints] =
             Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(area);
+        let config = self.config_context.get_config();
+        let model_label = match area.width {
+            0..64 => format!(" {} ", config.get_model()),
+            _ => format!(" {}  ·  {} ", config.get_model(), config.get_effort()),
+        };
+        let model_line = Line::from(theme::muted(model_label)).right_aligned();
+        let [context, model] = Layout::horizontal([
+            Constraint::Min(0),
+            Constraint::Length(u16::try_from(model_line.width()).unwrap_or(u16::MAX)),
+        ])
+        .areas(status);
         frame.render_widget(self.context_line(context.width), context);
+        frame.render_widget(model_line, model);
         let mut shortcuts = match self.input_mode {
             InputMode::HomeMenu(HomeMenu::Normal) | InputMode::None => vec![
                 KeyHint::new("i", "write"),

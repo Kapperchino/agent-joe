@@ -2,7 +2,7 @@ use super::*;
 use clients::{ClaudeAuthConfig, ClaudeConfig, ClaudeEffort, ClaudeKeyConfig, config::Config};
 use commands::command::{Answer, QuestionAnswer};
 use common_models::interaction::{Choice, InteractionView, Question, QuestionInput};
-use common_models::tui_models::{Lifecycle, SessionSummary};
+use common_models::tui_models::{Lifecycle, RequestContext, SessionSummary};
 use ractor::{Actor, ActorProcessingErr};
 
 struct Capture;
@@ -407,7 +407,7 @@ async fn welcome_gives_way_to_conversation_and_returns_after_clear() {
     assert!(conversation.contains("Explain this crate"));
     assert!(!conversation.contains(crate::branding::TAGLINE));
     assert!(!conversation.contains(ferris.trim()));
-    assert!(conversation.contains(crate::branding::TITLE));
+    assert!(!conversation.contains(crate::branding::TITLE));
     fixture.app.clear_messages_and_terminal();
     let welcome = fixture.render();
     assert!(welcome.contains(crate::branding::TAGLINE));
@@ -416,22 +416,61 @@ async fn welcome_gives_way_to_conversation_and_returns_after_clear() {
 }
 
 #[tokio::test]
-async fn ferris_header_preserves_the_model_label_at_compact_and_full_widths() {
-    use ratatui::{Terminal, backend::TestBackend, style::Modifier};
+async fn footer_preserves_model_context_and_shortcuts_at_compact_and_full_widths() {
+    use ratatui::{Terminal, backend::TestBackend};
 
-    let fixture = Fixture::new().await;
-    for width in [32, 63, 64, 100] {
+    let mut fixture = Fixture::new().await;
+    fixture.packet(ActorToTuiPacket::ContextUpdated(RequestContext {
+        estimated_tokens: 12_000,
+        ceiling: 100_000,
+        response_reserve: 4_000,
+    }));
+    let effort = fixture.app.config_context.get_config().get_effort();
+    for width in [32, 63, 64, 100, 160] {
         let mut terminal = Terminal::new(TestBackend::new(width, 2)).unwrap();
         terminal
-            .draw(|frame| fixture.app.draw_header(frame, frame.area()))
+            .draw(|frame| fixture.app.draw_footer(frame, frame.area()))
             .unwrap();
         let buffer = terminal.backend().buffer();
-        let text: String = buffer.content.iter().map(|cell| cell.symbol()).collect();
-        assert!(text.contains(crate::branding::TITLE));
-        assert!(text.contains("fixture"));
-        assert_eq!(text.contains("THE RUST WORKSPACE"), width >= 64);
-        assert_eq!(buffer[(1, 0)].fg, theme::ACCENT);
-        assert!(buffer[(1, 0)].modifier.contains(Modifier::BOLD));
+        let status: String = (0..width).map(|x| buffer[(x, 0)].symbol()).collect();
+        let hints: String = (0..width).map(|x| buffer[(x, 1)].symbol()).collect();
+        let model_label = match width {
+            0..64 => " fixture ".to_string(),
+            _ => format!(" fixture  ·  {effort} "),
+        };
+        assert!(status.ends_with(&model_label), "{status:?}");
+        assert!(status.starts_with(" context ~12.0k/100.0k "), "{status:?}");
+        assert_eq!(status.contains(&effort), width >= 64);
+        assert!(!status.contains(crate::branding::TITLE));
+        assert!(hints.contains("write"));
+        assert!(!hints.contains("fixture"));
+        assert_eq!(buffer[(width - 2, 0)].fg, theme::MUTED);
+    }
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn conversation_starts_at_the_top_with_model_information_only_in_the_footer() {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let mut fixture = Fixture::new().await;
+    fixture
+        .app
+        .message_box
+        .append(Msg::Message("Conversation starts here".into()));
+    for width in [32, 100] {
+        let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
+        terminal.draw(|frame| fixture.app.draw(frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let rows: Vec<String> = (0..12)
+            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect();
+        assert!(rows[0].contains("Conversation starts here"));
+        assert!(rows[10].contains("fixture"));
+        assert!(rows[11].contains("write"));
+        assert!(rows[..10].iter().all(|row| !row.contains("fixture")));
+        assert!(rows.iter().all(|row| !row.contains(crate::branding::TITLE)));
+        assert!(rows.iter().all(|row| !row.contains("THE RUST WORKSPACE")));
     }
     fixture.stop().await;
 }

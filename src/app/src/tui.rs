@@ -708,9 +708,8 @@ impl TUIApp {
         let input_height = self
             .input_box
             .get_height(area.width)
-            .min(area.height.saturating_sub(7).max(3));
-        let [header, msg_area, progress, input_area, footer] = Layout::vertical([
-            Constraint::Length(2),
+            .min(area.height.saturating_sub(5).max(3));
+        let [msg_area, progress, input_area, footer] = Layout::vertical([
             Constraint::Min(0),
             Constraint::Length(1),
             Constraint::Length(input_height),
@@ -718,7 +717,6 @@ impl TUIApp {
         ])
         .areas(area);
 
-        self.draw_header(frame, header);
         frame.render_widget(self.progress_line(progress.width), progress);
         self.draw_footer(frame, footer);
         self.message_box
