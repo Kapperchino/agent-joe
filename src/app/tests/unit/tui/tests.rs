@@ -40,6 +40,10 @@ struct Fixture {
 
 impl Fixture {
     async fn new() -> Self {
+        Self::with_tool_display(ToolDisplay::Grouped).await
+    }
+
+    async fn with_tool_display(tool_display: ToolDisplay) -> Self {
         let (sender, messages) = flume::unbounded();
         let (actor, handle) = Actor::spawn(None, Capture, sender).await.unwrap();
         let config = Config::Claude(ClaudeConfig {
@@ -50,7 +54,11 @@ impl Fixture {
             effort: ClaudeEffort::Med,
         });
         let mut fixture = Self {
-            app: TUIApp::new(actor, ConfigContext::new(config), false),
+            app: TUIApp::new(
+                actor,
+                ConfigContext::new(config),
+                matches!(tool_display, ToolDisplay::Expanded),
+            ),
             messages,
             handle,
         };
@@ -111,6 +119,74 @@ impl Fixture {
     async fn stop(self) {
         self.app.actor_ref.stop(None);
         self.handle.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn tool_packets_share_a_block_unless_debug_is_enabled() {
+    for mode in [ToolDisplay::Grouped, ToolDisplay::Expanded] {
+        let mut fixture = Fixture::with_tool_display(mode).await;
+        fixture.packet(ActorToTuiPacket::ToolUse(vec![
+            "- read `src/main.rs`".into(),
+            "- search `main`".into(),
+        ]));
+        fixture.packet(ActorToTuiPacket::ToolUse(vec![
+            "- apply patch: src/main.rs\n\n```diff\n-old content\n+new content\n```".into(),
+        ]));
+        let rendered = fixture.render();
+        assert!(rendered.contains("read"));
+        assert!(rendered.contains("search"));
+        assert!(rendered.contains("apply patch"));
+        match mode {
+            ToolDisplay::Grouped => {
+                assert_eq!(rendered.matches("Tool calls").count(), 1);
+                assert!(rendered.contains("│ read"));
+                assert!(rendered.contains("│ search"));
+                assert!(rendered.contains("│ apply patch"));
+                assert!(!rendered.contains("old content"));
+                assert!(!rendered.contains("new content"));
+            }
+            ToolDisplay::Expanded => {
+                assert!(!rendered.contains("Tool calls"));
+                assert!(rendered.contains("old content"));
+                assert!(rendered.contains("new content"));
+            }
+        }
+        fixture.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn resumed_tool_messages_use_the_selected_display_mode() {
+    for mode in [ToolDisplay::Grouped, ToolDisplay::Expanded] {
+        let mut fixture = Fixture::with_tool_display(mode).await;
+        fixture.packet(ActorToTuiPacket::ToolUse(vec!["- stale tool".into()]));
+        fixture.app.restore_transcript(SessionTranscript {
+            id: "saved-session".into(),
+            messages: vec![
+                SessionMessage::User("Saved request".into()),
+                SessionMessage::Tool("- saved read".into()),
+                SessionMessage::Tool("- saved patch\n\n```diff\n+saved detail\n```".into()),
+                SessionMessage::Assistant("Saved answer".into()),
+            ],
+        });
+        let rendered = fixture.render();
+        assert!(!rendered.contains("stale tool"));
+        assert!(rendered.contains("Saved request"));
+        assert!(rendered.contains("Saved answer"));
+        assert!(rendered.contains("saved read"));
+        assert!(rendered.contains("saved patch"));
+        match mode {
+            ToolDisplay::Grouped => {
+                assert_eq!(rendered.matches("Tool calls").count(), 1);
+                assert!(!rendered.contains("saved detail"));
+            }
+            ToolDisplay::Expanded => {
+                assert!(!rendered.contains("Tool calls"));
+                assert!(rendered.contains("saved detail"));
+            }
+        }
+        fixture.stop().await;
     }
 }
 

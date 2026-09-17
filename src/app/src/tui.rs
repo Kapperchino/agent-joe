@@ -8,7 +8,7 @@ use common_models::tui_models::{ActorToTui, ActorToTuiPacket, SessionMessage, Se
 use std::time::Duration;
 
 use crate::widgets::input_box::{InputBox, InputBoxState};
-use crate::widgets::message_box::message_box::{MessageBox, MessageBoxState, Msg};
+use crate::widgets::message_box::message_box::{MessageBox, MessageBoxState, Msg, ToolDisplay};
 use crate::widgets::model_box::ModelBoxResult;
 use crate::widgets::question_box::QuestionAction;
 use crate::widgets::session_box::{PickerAction, SessionPickerState};
@@ -132,7 +132,11 @@ impl TUIApp {
             request_context: Default::default(),
             debug_mode,
             input_box: InputBoxState::new(config),
-            message_box: MessageBoxState::new(),
+            message_box: MessageBoxState::with_tool_display(if debug_mode {
+                ToolDisplay::Expanded
+            } else {
+                ToolDisplay::Grouped
+            }),
             do_clear_terminal: false,
             config_context,
             cursor_style: None,

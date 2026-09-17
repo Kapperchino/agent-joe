@@ -21,6 +21,13 @@ pub enum Msg {
     Empty,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum ToolDisplay {
+    #[default]
+    Grouped,
+    Expanded,
+}
+
 pub struct MessageBox {}
 
 pub struct MessageBoxState {
@@ -39,10 +46,14 @@ enum ConversationView {
 
 impl MessageBoxState {
     pub fn new() -> MessageBoxState {
+        Self::with_tool_display(ToolDisplay::Grouped)
+    }
+
+    pub fn with_tool_display(tool_display: ToolDisplay) -> MessageBoxState {
         MessageBoxState {
             view: ConversationView::Welcome,
             viewport: MessageViewport::default(),
-            transcript: MessageTranscript::default(),
+            transcript: MessageTranscript::new(tool_display),
             scrollback: ScrollbackRenderer::new(),
             busy_indicator: BusyIndicator::default(),
             actor_state: State::Ready,
