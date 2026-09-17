@@ -1,11 +1,20 @@
 use super::format::MessageFormatter;
 use super::table_flow;
-use crate::widgets::message_box::message_box::Msg;
+use crate::widgets::message_box::message_box::{Msg, ToolDisplay};
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(super) struct MessageTranscript {
     committed: Vec<String>,
     active: Option<ActiveStream>,
+    tool_display: ToolDisplay,
+    block: TranscriptBlock,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum TranscriptBlock {
+    #[default]
+    Message,
+    Tools,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -15,8 +24,37 @@ struct ActiveStream {
 }
 
 impl MessageTranscript {
+    pub(super) fn new(tool_display: ToolDisplay) -> Self {
+        Self {
+            tool_display,
+            ..Self::default()
+        }
+    }
+
     pub(super) fn append(&mut self, msg: Msg, formatter: &MessageFormatter) {
-        self.committed.extend(formatter.format_msg(msg));
+        match (self.tool_display, msg) {
+            (ToolDisplay::Expanded, msg) => self.committed.extend(formatter.format_msg(msg)),
+            (ToolDisplay::Grouped, Msg::Tool(message)) => {
+                let lines = formatter.format_tool_entry(&message);
+                if !lines.is_empty() {
+                    match self.block {
+                        TranscriptBlock::Message => {
+                            self.append_blank_line(true);
+                            self.committed
+                                .extend(formatter.format_message("╭─ Tool calls"));
+                        }
+                        TranscriptBlock::Tools => {}
+                    }
+                    self.committed.extend(lines);
+                    self.block = TranscriptBlock::Tools;
+                }
+            }
+            (ToolDisplay::Grouped, Msg::Empty) if self.block == TranscriptBlock::Tools => {}
+            (ToolDisplay::Grouped, msg) => {
+                self.finish_tool_block();
+                self.committed.extend(formatter.format_msg(msg));
+            }
+        }
     }
 
     pub(super) fn pop_line(&mut self) {
@@ -26,6 +64,7 @@ impl MessageTranscript {
     pub(super) fn clear(&mut self) {
         self.committed.clear();
         self.active = None;
+        self.block = TranscriptBlock::Message;
     }
 
     pub(super) fn last_line(&self) -> Option<&String> {
@@ -58,6 +97,9 @@ impl MessageTranscript {
     }
 
     pub(super) fn push_stream_chunk(&mut self, chunk: &str) {
+        if !chunk.is_empty() {
+            self.finish_tool_block();
+        }
         self.active
             .get_or_insert_with(ActiveStream::default)
             .message
@@ -159,6 +201,13 @@ impl MessageTranscript {
         self.committed
             .drain(0..count.min(self.committed.len()))
             .collect()
+    }
+
+    fn finish_tool_block(&mut self) {
+        if self.block == TranscriptBlock::Tools {
+            self.committed.extend(["╰─".to_string(), String::new()]);
+            self.block = TranscriptBlock::Message;
+        }
     }
 
     fn append_blank_line(&mut self, requested: bool) {
