@@ -217,7 +217,11 @@ async fn patch_mismatch_continues_to_read_and_retry_in_both_worker_modes() {
         let patch = "*** Begin Patch\n*** Add File: added.txt\n+added\n*** Update File: target.txt\n@@\n-outdated\n+updated\n*** End Patch";
         answer(
             reply,
-            response(vec![tool("apply_patch", "mismatch", json!({"patch": patch}))]),
+            response(vec![tool(
+                "apply_patch",
+                "mismatch",
+                json!({"patch": patch}),
+            )]),
         );
         let (failed, reply) = actor.request().await;
         assert!(matches!(

@@ -1,3 +1,4 @@
+use crate::configuration::LAUNCHER_PROTOCOL_VERSION;
 use crate::provision::{
     artifact::Artifact,
     download::{Downloads, Installation},
@@ -11,7 +12,7 @@ use std::{
     io::Read,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
 };
 
 struct BuildTarget {
@@ -40,13 +41,34 @@ impl Launcher {
                 path.display()
             )
         })?;
-        match metadata.is_file() && metadata.permissions().mode() & 0o111 != 0 {
+        let launcher = match metadata.is_file() && metadata.permissions().mode() & 0o111 != 0 {
             true => Ok(Self {
                 path: path.canonicalize()?,
             }),
             false => Err(anyhow::anyhow!(
                 "Sandbox launcher is not an executable file: {}",
                 path.display()
+            )),
+        }?;
+        let guidance = format!(
+            "Sandbox launcher at {} is incompatible with this Joe build. Rebuild both binaries with `cargo build --release` (or `cargo build` for debug) and install them together. Check JOE_SANDBOX_LAUNCHER if set",
+            launcher.path.display()
+        );
+        let output = Command::new(&launcher.path)
+            .arg("--protocol-version")
+            .env_clear()
+            .stdin(Stdio::null())
+            .output()
+            .with_context(|| guidance.clone())?;
+        match output.status.success()
+            && String::from_utf8_lossy(&output.stdout).trim() == LAUNCHER_PROTOCOL_VERSION
+        {
+            true => Ok(launcher),
+            false => Err(anyhow::anyhow!(
+                "{guidance}. Expected launcher protocol {LAUNCHER_PROTOCOL_VERSION}, got {}: {}{}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
             )),
         }
     }

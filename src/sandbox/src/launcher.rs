@@ -1,4 +1,4 @@
-use super::configuration::Configuration;
+use super::configuration::{Configuration, LAUNCHER_PROTOCOL_VERSION};
 use anyhow::Context;
 use std::{
     ffi::{CStr, CString},
@@ -200,13 +200,21 @@ fn raise_open_file_limit() -> anyhow::Result<()> {
 
 pub(super) fn run() -> anyhow::Result<()> {
     let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
-    let configuration: Configuration = match arguments.as_slice() {
+    match arguments.as_slice() {
+        [argument] if argument == "--protocol-version" => {
+            println!("{LAUNCHER_PROTOCOL_VERSION}");
+            Ok(())
+        }
         [configuration] => serde_json::from_slice(configuration.as_encoded_bytes())
-            .context("Invalid libkrun configuration"),
+            .context("Invalid libkrun configuration")
+            .and_then(launch),
         _ => Err(anyhow::anyhow!(
             "joe-sandbox requires one internal JSON configuration"
         )),
-    }?;
+    }
+}
+
+fn launch(configuration: Configuration) -> anyhow::Result<()> {
     raise_open_file_limit()?;
     let _firmware = unsafe { libloading::Library::new(&configuration.firmware) }
         .context("Cannot load Joe's bundled libkrun firmware")?;

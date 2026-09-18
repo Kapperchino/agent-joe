@@ -11,7 +11,11 @@ impl Fixture {
         fs::create_dir(&directory).unwrap();
         let directory = directory.canonicalize().unwrap();
         let launcher = directory.join("joe-sandbox");
-        fs::write(&launcher, "first build").unwrap();
+        fs::write(
+            &launcher,
+            format!("#!/bin/sh\nprintf '%s\\n' '{LAUNCHER_PROTOCOL_VERSION}'\n"),
+        )
+        .unwrap();
         fs::set_permissions(&launcher, fs::Permissions::from_mode(0o700)).unwrap();
         Self {
             directory,
@@ -45,6 +49,24 @@ fn missing_or_nonexecutable_launchers_fail_with_actionable_errors() {
     fs::remove_file(&fixture.launcher).unwrap();
     let error = Launcher::new(fixture.launcher.clone()).err().unwrap();
     assert!(error.to_string().contains("cargo build -p sandbox"));
+}
+
+#[test]
+fn stale_or_mismatched_launchers_fail_before_installation() {
+    let fixture = Fixture::new();
+    for script in [
+        "#!/bin/sh\nprintf '%s\\n' 'Invalid libkrun configuration' >&2\nexit 1\n",
+        "#!/bin/sh\nprintf '%s\\n' 'unsupported-protocol'\n",
+        "#!/bin/sh\nexit 0\n",
+    ] {
+        fs::write(&fixture.launcher, script).unwrap();
+        let error = Launcher::new(fixture.launcher.clone()).err().unwrap();
+        let message = error.to_string();
+        assert!(message.contains("incompatible with this Joe build"));
+        assert!(message.contains(&fixture.launcher.display().to_string()));
+        assert!(message.contains("cargo build --release"));
+        assert!(message.contains("JOE_SANDBOX_LAUNCHER"));
+    }
 }
 
 #[test]
