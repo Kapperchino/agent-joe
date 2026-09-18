@@ -1,4 +1,7 @@
-use crate::tool_defs::{ToolDefTrait, ToolId, ToolTrait, ToolType};
+use crate::{
+    tool_defs::{ToolDefTrait, ToolId, ToolTrait, ToolType},
+    tool_error::{ToolEffects, ToolFailure, ToolFailureKind},
+};
 use analysis::contexts::context::Context;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -358,7 +361,16 @@ impl ApplyPatch {
                 .into_patches()
                 .into_iter()
                 .map(|patch| prepared_patch(workspace, patch))
-                .collect::<anyhow::Result<Vec<_>>>()?
+                .collect::<anyhow::Result<Vec<_>>>()
+                .map_err(|error| {
+                    ToolFailure::new(
+                        ToolFailureKind::InvalidInput,
+                        ToolEffects::NoWorkspaceChange,
+                        format!(
+                            "{error:#}. No files were changed. Read the current file contents and retry with a corrected patch."
+                        ),
+                    )
+                })?
                 .into_iter()
                 .flatten()
                 .collect();

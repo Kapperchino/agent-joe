@@ -185,6 +185,116 @@ fn result_text(request: &llm::ClientRequest) -> String {
 }
 
 #[tokio::test]
+async fn patch_mismatch_continues_to_read_and_retry_in_both_worker_modes() {
+    for mode in [Mode::Simple, Mode::Delegated] {
+        let workspace = crate::session::tests::Workspace::new();
+        std::fs::write(workspace.path.join("target.txt"), "current\n").unwrap();
+        let actor = match mode {
+            Mode::Simple => RepositoryActor::new(SimpleWorker::new(), workspace.path.clone()).await,
+            Mode::Delegated => {
+                RepositoryActor::new(BaseWorker::new(), workspace.path.clone()).await
+            }
+        };
+        actor
+            .actor
+            .send_message(Message::StartWork(Some("Update the files".into())))
+            .unwrap();
+        let (_, reply) = actor.request().await;
+        let reply = match mode {
+            Mode::Simple => reply,
+            Mode::Delegated => {
+                answer(
+                    reply,
+                    response(vec![tool(
+                        "make_changes",
+                        "delegate",
+                        json!({"context": "Update the files"}),
+                    )]),
+                );
+                actor.request().await.1
+            }
+        };
+        let patch = "*** Begin Patch\n*** Add File: added.txt\n+added\n*** Update File: target.txt\n@@\n-outdated\n+updated\n*** End Patch";
+        answer(
+            reply,
+            response(vec![tool("apply_patch", "mismatch", json!({"patch": patch}))]),
+        );
+        let (failed, reply) = actor.request().await;
+        assert!(matches!(
+            latest_tool_result(&failed),
+            ContentBlock::ToolResult { content, is_error: Some(true), .. }
+                if content.contains("Patch hunk does not match the base content")
+                    && content.contains("No files were changed")
+                    && content.contains("Read the current file contents")
+                    && !content.contains("Effects may be partial")
+        ));
+        assert_eq!(
+            std::fs::read_to_string(workspace.path.join("target.txt")).unwrap(),
+            "current\n"
+        );
+        assert!(!workspace.path.join("added.txt").exists());
+        answer(
+            reply,
+            response(vec![tool(
+                "read_file",
+                "read-current",
+                json!({"file_path": "target.txt"}),
+            )]),
+        );
+        let (read, reply) = actor.request().await;
+        assert!(matches!(
+            latest_tool_result(&read),
+            ContentBlock::ToolResult { content, is_error: None, .. }
+                if content.contains("1: current")
+        ));
+        answer(
+            reply,
+            response(vec![tool(
+                "apply_patch",
+                "retry",
+                json!({"patch": patch.replace("-outdated", "-current")}),
+            )]),
+        );
+        let (retried, reply) = actor.request().await;
+        assert!(matches!(
+            latest_tool_result(&retried),
+            ContentBlock::ToolResult { content, is_error: None, .. }
+                if content.contains("\"status\":\"ok\"")
+        ));
+        assert_eq!(
+            std::fs::read_to_string(workspace.path.join("target.txt")).unwrap(),
+            "updated\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.path.join("added.txt")).unwrap(),
+            "added"
+        );
+        answer(reply, response(vec![text("Updated the files.")]));
+        if matches!(mode, Mode::Delegated) {
+            let (_, reply) = actor.request().await;
+            answer(reply, response(vec![text("Completed.")]));
+        }
+        let terminal = actor
+            .event(|event| {
+                event.actor_id == 0
+                    && matches!(
+                        event.packet,
+                        ActorToTuiPacket::TurnChanged { state, .. } if state.terminal()
+                    )
+            })
+            .await;
+        assert!(matches!(
+            terminal.packet,
+            ActorToTuiPacket::TurnChanged {
+                state: Lifecycle::Completed,
+                ..
+            }
+        ));
+        actor.stop().await;
+    }
+}
+
+#[tokio::test]
 async fn simple_and_delegated_turns_receive_scoped_rules_before_editing_and_read_fresh_files() {
     for mode in [Mode::Simple, Mode::Delegated] {
         let workspace = crate::session::tests::Workspace::new();

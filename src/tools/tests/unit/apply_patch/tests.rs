@@ -5,6 +5,7 @@ fn workspace_scope() -> utils::execution::ExecutionScope {
 }
 
 use super::*;
+use crate::tool_error::{ToolEffects, ToolFailure, ToolFailureKind};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -80,14 +81,23 @@ async fn patch_content_and_destinations_are_preflighted_before_any_write() {
     scope.enter(async {
             for second in [
                 "*** Update File: two\n@@\n-missing content\n+unexpected",
+                "*** Update File: two\n@@\n-two\n+changed\n@@\n-missing content\n+unexpected",
+                "*** Update File: two\n*** Move to: moved\n@@\n-missing content\n+unexpected",
                 "*** Add File: two\n+unexpected",
                 "*** Update File: two\n*** Move to: one",
                 "*** Delete File: missing",
             ] {
                 let patch = tool(format!("*** Begin Patch\n*** Update File: one\n@@\n-one\n+changed\n{second}\n*** End Patch"));
-                assert!(patch.apply_patch().await.is_err());
+                let error = patch.apply_patch().await.unwrap_err();
+                let failure = error.downcast_ref::<ToolFailure>().unwrap();
+                assert_eq!(failure.kind, ToolFailureKind::InvalidInput);
+                assert_eq!(failure.effects, ToolEffects::NoWorkspaceChange);
+                assert!(!failure.stops_turn());
+                assert!(failure.message.contains("Read the current file contents"));
                 assert_eq!(std::fs::read_to_string(root.join("one")).unwrap(), "one\n");
                 assert_eq!(std::fs::read_to_string(root.join("two")).unwrap(), "two\n");
+                assert!(!root.join("moved").exists());
+                assert!(scope.changes.snapshot().unwrap().records.is_empty());
             }
             Files::read_file(Path::new("one")).await.unwrap();
             std::fs::write(root.join("one"), "user content\n").unwrap();
