@@ -121,6 +121,15 @@ without a lockfile and after dependencies change. Builds, build scripts, tests,
 and programs run inside the sandbox without network access. Git dependencies and
 custom registries are not downloaded automatically.
 
+## Tool calls
+
+Tool blocks show the latest five calls by default. Press `Ctrl+o` in normal or
+insert mode to expand the tool history, including older calls and blocks already
+in terminal scrollback. Use `↑`/`↓` or `j`/`k` to scroll, `PgUp`/`PgDn` to page,
+and `Home`/`End` to jump to the first or latest calls. Press `Ctrl+o` or `Esc` to
+collapse the history and return to the conversation; message drafts are preserved.
+The `--debug` display continues to show individual tool calls with full details.
+
 ## Answering questions
 
 Pending questions have a TUI picker that opens automatically when the message

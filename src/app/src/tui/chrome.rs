@@ -105,6 +105,12 @@ impl TUIApp {
         frame.render_widget(self.context_line(context.width), context);
         frame.render_widget(model_line, model);
         let mut shortcuts = match self.input_mode {
+            _ if self.message_box.tool_history_expanded() => vec![
+                KeyHint::new("Ctrl+o/Esc", "collapse"),
+                KeyHint::new("↑/↓", "scroll"),
+                KeyHint::new("PgUp/PgDn", "page"),
+                KeyHint::new("Home/End", "first/last"),
+            ],
             InputMode::HomeMenu(HomeMenu::Normal) | InputMode::None => vec![
                 KeyHint::new("i", "write"),
                 KeyHint::new("/", "commands"),
@@ -136,12 +142,25 @@ impl TUIApp {
             }
         };
         if !self.interaction.questions.is_empty()
+            && !self.message_box.tool_history_expanded()
             && matches!(self.input_mode, InputMode::HomeMenu(HomeMenu::Normal))
         {
             shortcuts.insert(0, KeyHint::new("?", "questions"));
         }
-        if self.root_busy && matches!(self.input_mode, InputMode::HomeMenu(HomeMenu::Normal)) {
+        if self.root_busy
+            && !self.message_box.tool_history_expanded()
+            && matches!(self.input_mode, InputMode::HomeMenu(HomeMenu::Normal))
+        {
             shortcuts.insert(0, KeyHint::new("Ctrl+c", "interrupt"));
+        }
+        if self.message_box.has_tool_history()
+            && !self.message_box.tool_history_expanded()
+            && matches!(
+                self.input_mode,
+                InputMode::HomeMenu(HomeMenu::Normal | HomeMenu::Editing) | InputMode::None
+            )
+        {
+            shortcuts.insert(0, KeyHint::new("Ctrl+o", "expand tools"));
         }
         frame.render_widget(theme::hints(&shortcuts, hints.width), hints);
     }

@@ -157,6 +157,160 @@ async fn tool_packets_share_a_block_unless_debug_is_enabled() {
 }
 
 #[tokio::test]
+async fn tool_history_expands_and_collapses_without_changing_the_draft() {
+    let mut fixture = Fixture::new().await;
+    fixture.key(KeyCode::Char('i'));
+    fixture.app.input_box.paste("Unsent draft");
+    fixture.packet(ActorToTuiPacket::ToolUse(
+        (1..=6).map(|call| format!("- call {call}")).collect(),
+    ));
+    fixture.app.message_box.append(Msg::Message("Done".into()));
+    let collapsed = fixture.render();
+    assert!(collapsed.contains("last 5 of 6"));
+    assert!(collapsed.contains("Ctrl+o"));
+    assert!(!collapsed.contains("│ call 1"));
+    for call in 2..=6 {
+        assert!(collapsed.contains(&format!("│ call {call}")));
+    }
+
+    let toggle = KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL);
+    fixture.app.handle_key_event(&toggle);
+    let expanded = fixture.render();
+    assert!(expanded.contains("Tool history"));
+    for call in 1..=6 {
+        assert!(expanded.contains(&format!("│ call {call}")));
+    }
+    assert!(!expanded.contains("Done"));
+    fixture.app.handle_key_event(&KeyEvent {
+        kind: KeyEventKind::Repeat,
+        ..toggle
+    });
+    fixture.app.handle_key_event(&KeyEvent {
+        kind: KeyEventKind::Release,
+        ..toggle
+    });
+    assert!(fixture.app.message_box.tool_history_expanded());
+    fixture.key(KeyCode::Char('x'));
+    fixture.key(KeyCode::Enter);
+    fixture
+        .app
+        .handle_term_event(&Event::Paste("Ignored".into()));
+    assert_eq!(fixture.app.input_box.get_input(), "Unsent draft");
+    assert!(fixture.messages.is_empty());
+    fixture.packet(ActorToTuiPacket::ToolUse(vec!["- new call".into()]));
+    assert!(fixture.app.message_box.tool_history_expanded());
+    assert!(fixture.render().contains("new call"));
+
+    fixture.app.handle_key_event(&toggle);
+    assert!(!fixture.app.message_box.tool_history_expanded());
+    let collapsed = fixture.render();
+    assert!(!collapsed.contains("│ call 1"));
+    assert!(collapsed.contains("Done"));
+    assert_eq!(fixture.app.input_box.get_input(), "Unsent draft");
+    assert!(matches!(
+        fixture.app.input_mode,
+        InputMode::HomeMenu(HomeMenu::Editing)
+    ));
+    fixture.app.handle_key_event(&toggle);
+    fixture.key(KeyCode::Esc);
+    assert!(!fixture.app.message_box.tool_history_expanded());
+    assert!(matches!(
+        fixture.app.input_mode,
+        InputMode::HomeMenu(HomeMenu::Editing)
+    ));
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn tool_history_scrolls_to_calls_outside_the_viewport() {
+    let mut fixture = Fixture::new().await;
+    fixture.packet(ActorToTuiPacket::ToolUse(
+        (1..=40).map(|call| format!("- call {call:02}")).collect(),
+    ));
+    fixture
+        .app
+        .handle_key_event(&KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+    let latest = fixture.render();
+    assert!(latest.contains("call 40"));
+    assert!(!latest.contains("call 01"));
+    fixture.key(KeyCode::Home);
+    let first = fixture.render();
+    assert!(first.contains("call 01"));
+    assert!(!first.contains("call 40"));
+    fixture.key(KeyCode::PageDown);
+    let next = fixture.render();
+    assert!(!next.contains("call 01"));
+    assert!(next.contains("call 40"));
+    fixture.key(KeyCode::PageUp);
+    assert!(fixture.render().contains("call 01"));
+    fixture.key(KeyCode::End);
+    assert!(fixture.render().contains("call 40"));
+    fixture.key(KeyCode::Up);
+    fixture.key(KeyCode::Down);
+    assert_eq!(fixture.render(), latest);
+    fixture.key(KeyCode::Esc);
+    let collapsed = fixture.render();
+    assert!(collapsed.contains("last 5 of 40"));
+    assert!(!collapsed.contains("call 35"));
+    assert!(collapsed.contains("call 36"));
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn tool_history_is_reset_by_clear_and_rebuilt_on_resume() {
+    let mut fixture = Fixture::new().await;
+    let toggle = KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL);
+    fixture.app.handle_key_event(&toggle);
+    assert!(!fixture.app.message_box.tool_history_expanded());
+    fixture.packet(ActorToTuiPacket::ToolUse(vec!["- stale tool".into()]));
+    fixture.app.handle_key_event(&toggle);
+    fixture.app.clear_messages_and_terminal();
+    assert!(!fixture.app.message_box.tool_history_expanded());
+    assert!(!fixture.app.message_box.has_tool_history());
+    fixture.app.restore_transcript(SessionTranscript {
+        id: "saved-tools".into(),
+        messages: (1..=7)
+            .map(|call| SessionMessage::Tool(format!("- saved call {call}")))
+            .collect(),
+    });
+    assert!(!fixture.render().contains("saved call 1"));
+    fixture.app.handle_key_event(&toggle);
+    let expanded = fixture.render();
+    assert!(!expanded.contains("stale tool"));
+    for call in 1..=7 {
+        assert!(expanded.contains(&format!("saved call {call}")));
+    }
+    fixture
+        .app
+        .update_input_mode(InputMode::HomeMenu(HomeMenu::InputCommand));
+    assert!(!fixture.app.message_box.tool_history_expanded());
+    fixture.app.handle_key_event(&toggle);
+    assert!(!fixture.app.message_box.tool_history_expanded());
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn debug_tool_calls_are_not_limited_to_five() {
+    let mut fixture = Fixture::with_tool_display(ToolDisplay::Expanded).await;
+    fixture.packet(ActorToTuiPacket::ToolUse(
+        (1..=7)
+            .map(|call| format!("- debug call {call}\nDetail {call}"))
+            .collect(),
+    ));
+    fixture
+        .app
+        .handle_key_event(&KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+    assert!(!fixture.app.message_box.tool_history_expanded());
+    let rendered = fixture.render();
+    assert!(!rendered.contains("Tool history"));
+    for call in 1..=7 {
+        assert!(rendered.contains(&format!("debug call {call}")));
+        assert!(rendered.contains(&format!("Detail {call}")));
+    }
+    fixture.stop().await;
+}
+
+#[tokio::test]
 async fn resumed_tool_messages_use_the_selected_display_mode() {
     for mode in [ToolDisplay::Grouped, ToolDisplay::Expanded] {
         let mut fixture = Fixture::with_tool_display(mode).await;

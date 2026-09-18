@@ -2,19 +2,62 @@ use super::format::MessageFormatter;
 use super::table_flow;
 use crate::widgets::message_box::message_box::{Msg, ToolDisplay};
 
+const RECENT_TOOL_CALLS: usize = 5;
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(super) struct MessageTranscript {
     committed: Vec<String>,
     active: Option<ActiveStream>,
     tool_display: ToolDisplay,
     block: TranscriptBlock,
+    tool_blocks: Vec<ToolBlock>,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 enum TranscriptBlock {
     #[default]
     Message,
-    Tools,
+    Tools {
+        start: usize,
+    },
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct ToolBlock {
+    summaries: Vec<String>,
+}
+
+impl ToolBlock {
+    fn recent_lines(&self, formatter: &MessageFormatter) -> Vec<String> {
+        let count = self.summaries.len();
+        let heading = match count {
+            0..=RECENT_TOOL_CALLS => "╭─ Tool calls".to_string(),
+            _ => format!("╭─ Tool calls (last {RECENT_TOOL_CALLS} of {count}) · Ctrl+o expand"),
+        };
+        formatter
+            .format_message(&heading)
+            .into_iter()
+            .chain(
+                self.summaries
+                    .iter()
+                    .skip(count.saturating_sub(RECENT_TOOL_CALLS))
+                    .flat_map(|summary| formatter.format_tool_entry(summary)),
+            )
+            .collect()
+    }
+
+    fn all_lines(&self, formatter: &MessageFormatter) -> Vec<String> {
+        formatter
+            .format_message("╭─ Tool calls")
+            .into_iter()
+            .chain(
+                self.summaries
+                    .iter()
+                    .flat_map(|summary| formatter.format_tool_entry(summary)),
+            )
+            .chain(["╰─".to_string(), String::new()])
+            .collect()
+    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -35,21 +78,10 @@ impl MessageTranscript {
         match (self.tool_display, msg) {
             (ToolDisplay::Expanded, msg) => self.committed.extend(formatter.format_msg(msg)),
             (ToolDisplay::Grouped, Msg::Tool(message)) => {
-                let lines = formatter.format_tool_entry(&message);
-                if !lines.is_empty() {
-                    match self.block {
-                        TranscriptBlock::Message => {
-                            self.append_blank_line(true);
-                            self.committed
-                                .extend(formatter.format_message("╭─ Tool calls"));
-                        }
-                        TranscriptBlock::Tools => {}
-                    }
-                    self.committed.extend(lines);
-                    self.block = TranscriptBlock::Tools;
-                }
+                self.append_tool(&message, formatter);
             }
-            (ToolDisplay::Grouped, Msg::Empty) if self.block == TranscriptBlock::Tools => {}
+            (ToolDisplay::Grouped, Msg::Empty)
+                if matches!(self.block, TranscriptBlock::Tools { .. }) => {}
             (ToolDisplay::Grouped, msg) => {
                 self.finish_tool_block();
                 self.committed.extend(formatter.format_msg(msg));
@@ -65,6 +97,7 @@ impl MessageTranscript {
         self.committed.clear();
         self.active = None;
         self.block = TranscriptBlock::Message;
+        self.tool_blocks.clear();
     }
 
     pub(super) fn last_line(&self) -> Option<&String> {
@@ -73,6 +106,17 @@ impl MessageTranscript {
 
     pub(super) fn committed_lines(&self) -> &[String] {
         &self.committed
+    }
+
+    pub(super) fn has_tool_history(&self) -> bool {
+        !self.tool_blocks.is_empty()
+    }
+
+    pub(super) fn expanded_tool_lines(&self, formatter: &MessageFormatter) -> Vec<String> {
+        self.tool_blocks
+            .iter()
+            .flat_map(|block| block.all_lines(formatter))
+            .collect()
     }
 
     pub(super) fn active_lines(&self, formatter: &MessageFormatter) -> Option<Vec<String>> {
@@ -138,13 +182,33 @@ impl MessageTranscript {
         let committed_capacity =
             live_line_capacity.saturating_sub(self.active_line_count(formatter));
         let requested_flush = self.committed.len().saturating_sub(committed_capacity);
-        if requested_flush == 0 {
-            return Vec::new();
-        }
-
-        let flush_count =
-            table_flow::flush_count_preserving_tables(&self.committed, requested_flush);
+        let flushable = match self.block {
+            TranscriptBlock::Message => self.committed.len(),
+            TranscriptBlock::Tools { start } => start,
+        };
+        let flush_count = table_flow::flush_count_preserving_tables(
+            &self.committed[..flushable],
+            requested_flush.min(flushable),
+        );
         self.drain_front(flush_count)
+    }
+
+    fn append_tool(&mut self, message: &str, formatter: &MessageFormatter) {
+        if let Some(summary) = MessageFormatter::tool_summary(message) {
+            let start = match self.block {
+                TranscriptBlock::Message => {
+                    self.append_blank_line(true);
+                    self.tool_blocks.push(ToolBlock::default());
+                    self.committed.len()
+                }
+                TranscriptBlock::Tools { start } => start,
+            };
+            let block = self.tool_blocks.last_mut().expect("tool block was started");
+            block.summaries.push(summary);
+            self.committed.truncate(start);
+            self.committed.extend(block.recent_lines(formatter));
+            self.block = TranscriptBlock::Tools { start };
+        }
     }
 
     fn active_line_count(&self, formatter: &MessageFormatter) -> usize {
@@ -198,13 +262,15 @@ impl MessageTranscript {
     }
 
     fn drain_front(&mut self, count: usize) -> Vec<String> {
-        self.committed
-            .drain(0..count.min(self.committed.len()))
-            .collect()
+        let count = count.min(self.committed.len());
+        if let TranscriptBlock::Tools { start } = &mut self.block {
+            *start = start.saturating_sub(count);
+        }
+        self.committed.drain(0..count).collect()
     }
 
     fn finish_tool_block(&mut self) {
-        if self.block == TranscriptBlock::Tools {
+        if matches!(self.block, TranscriptBlock::Tools { .. }) {
             self.committed.extend(["╰─".to_string(), String::new()]);
             self.block = TranscriptBlock::Message;
         }

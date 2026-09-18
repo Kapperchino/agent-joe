@@ -6,6 +6,7 @@ use crate::widgets::message_box::viewport::MessageViewport;
 use crate::{theme, widgets::welcome::Welcome};
 use common_models::tui_models::State;
 use crossterm::cursor::MoveTo;
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{Clear, ClearType};
 use ratatui::DefaultTerminal;
@@ -34,6 +35,7 @@ pub struct MessageBoxState {
     view: ConversationView,
     viewport: MessageViewport,
     transcript: MessageTranscript,
+    tool_history: ToolHistoryView,
     scrollback: ScrollbackRenderer,
     busy_indicator: BusyIndicator,
     pub actor_state: State,
@@ -42,6 +44,15 @@ pub struct MessageBoxState {
 enum ConversationView {
     Welcome,
     Transcript,
+}
+
+#[derive(Default, Clone, Copy)]
+enum ToolHistoryView {
+    #[default]
+    Collapsed,
+    Expanded {
+        offset: usize,
+    },
 }
 
 impl MessageBoxState {
@@ -54,6 +65,7 @@ impl MessageBoxState {
             view: ConversationView::Welcome,
             viewport: MessageViewport::default(),
             transcript: MessageTranscript::new(tool_display),
+            tool_history: ToolHistoryView::default(),
             scrollback: ScrollbackRenderer::new(),
             busy_indicator: BusyIndicator::default(),
             actor_state: State::Ready,
@@ -72,6 +84,7 @@ impl MessageBoxState {
     pub fn clear(&mut self) {
         self.view = ConversationView::Welcome;
         self.transcript.clear();
+        self.close_tool_history();
         self.scrollback.reset();
         self.busy_indicator.reset();
     }
@@ -82,6 +95,65 @@ impl MessageBoxState {
 
     pub fn update_width_height(&mut self, width: u16, height: u16) {
         self.viewport.update(width, height);
+    }
+
+    pub(crate) fn has_tool_history(&self) -> bool {
+        self.transcript.has_tool_history()
+    }
+
+    pub(crate) fn tool_history_expanded(&self) -> bool {
+        matches!(self.tool_history, ToolHistoryView::Expanded { .. })
+    }
+
+    pub(crate) fn close_tool_history(&mut self) {
+        self.tool_history = ToolHistoryView::Collapsed;
+    }
+
+    pub(crate) fn handle_tool_history_key(&mut self, key: &KeyEvent) -> bool {
+        match (self.tool_history, key.code) {
+            (_, KeyCode::Char('o')) if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if key.kind == KeyEventKind::Press {
+                    self.tool_history = match self.tool_history {
+                        ToolHistoryView::Collapsed if self.has_tool_history() => {
+                            ToolHistoryView::Expanded { offset: 0 }
+                        }
+                        _ => ToolHistoryView::Collapsed,
+                    };
+                }
+                true
+            }
+            (ToolHistoryView::Collapsed, _) => false,
+            (_, KeyCode::Esc | KeyCode::Char('q')) => {
+                self.close_tool_history();
+                true
+            }
+            (_, KeyCode::Char('c')) if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.close_tool_history();
+                true
+            }
+            (ToolHistoryView::Expanded { offset }, code) => {
+                let capacity = self.viewport.live_line_capacity(1);
+                let max_offset = self
+                    .transcript
+                    .expanded_tool_lines(&self.formatter())
+                    .len()
+                    .saturating_sub(capacity);
+                let offset = offset.min(max_offset);
+                let offset = match code {
+                    KeyCode::Up | KeyCode::Char('k') => offset.saturating_add(1),
+                    KeyCode::Down | KeyCode::Char('j') => offset.saturating_sub(1),
+                    KeyCode::PageUp => offset.saturating_add(capacity.max(1)),
+                    KeyCode::PageDown => offset.saturating_sub(capacity.max(1)),
+                    KeyCode::Home => max_offset,
+                    KeyCode::End => 0,
+                    _ => offset,
+                };
+                self.tool_history = ToolHistoryView::Expanded {
+                    offset: offset.min(max_offset),
+                };
+                true
+            }
+        }
     }
 
     pub(crate) fn flush_scrollback(
@@ -150,12 +222,26 @@ impl MessageBoxState {
 
     fn output_lines(&self, width: u16) -> Vec<Line<'static>> {
         let formatter = self.formatter();
-        let lines = self.scrollback.render_live_lines(
-            self.transcript.committed_lines(),
-            self.transcript.active_lines(&formatter),
-            self.busy_indicator.render_line(&self.actor_state, width),
-        );
-        self.viewport.visible_lines(lines)
+        match self.tool_history {
+            ToolHistoryView::Collapsed => {
+                let lines = self.scrollback.render_live_lines(
+                    self.transcript.committed_lines(),
+                    self.transcript.active_lines(&formatter),
+                    self.busy_indicator.render_line(&self.actor_state, width),
+                );
+                self.viewport.visible_lines(lines)
+            }
+            ToolHistoryView::Expanded { offset } => {
+                let lines = self.transcript.expanded_tool_lines(&formatter);
+                let capacity = self.viewport.live_line_capacity(1);
+                let start = lines.len().saturating_sub(capacity).saturating_sub(offset);
+                std::iter::once(Line::from(theme::muted(
+                    "Tool history · Ctrl+o / Esc collapse",
+                )))
+                .chain(lines.into_iter().skip(start).take(capacity).map(Line::from))
+                .collect()
+            }
+        }
     }
 
     fn live_line_capacity(&self) -> usize {

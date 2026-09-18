@@ -31,29 +31,29 @@ impl MessageFormatter {
         DrawTable::wrap_markdown_tables(message, self.wrap_width)
     }
 
-    pub(super) fn format_tool_entry(self, message: &str) -> Vec<String> {
+    pub(super) fn format_tool_entry(self, summary: &str) -> Vec<String> {
+        textwrap::wrap(
+            summary,
+            textwrap::Options::new(self.wrap_width)
+                .initial_indent("│ ")
+                .subsequent_indent("│ "),
+        )
+        .into_iter()
+        .map(|line| line.into_owned())
+        .collect()
+    }
+
+    pub(super) fn tool_summary(message: &str) -> Option<String> {
         message
             .lines()
-            .map(str::trim)
+            .map(str::trim_start)
             .map(|line| {
                 line.strip_prefix(TOOL_SUMMARY_PREFIX)
                     .unwrap_or(line)
                     .trim()
             })
             .find(|line| !line.is_empty())
-            .map(|summary| {
-                let summary = DrawLine::expand_tabs(summary);
-                textwrap::wrap(
-                    &summary,
-                    textwrap::Options::new(self.wrap_width)
-                        .initial_indent("│ ")
-                        .subsequent_indent("│ "),
-                )
-                .into_iter()
-                .map(|line| line.into_owned())
-                .collect()
-            })
-            .unwrap_or_default()
+            .map(DrawLine::expand_tabs)
     }
 
     fn format_tool_message(self, message: &str) -> Vec<String> {

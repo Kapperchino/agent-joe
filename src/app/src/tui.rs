@@ -227,6 +227,7 @@ impl TUIApp {
     }
 
     fn update_input_mode(&mut self, mode: InputMode) {
+        self.message_box.close_tool_history();
         self.input_mode = mode;
         self.input_box.input_mode = mode;
     }
@@ -510,6 +511,7 @@ impl TUIApp {
             Event::FocusLost => {}
             Event::Key(key) => self.handle_key_event(key),
             Event::Mouse(_) => {}
+            Event::Paste(_) if self.message_box.tool_history_expanded() => {}
             Event::Paste(text) => match self.input_mode {
                 InputMode::CommandMenu(CommandMenu::SessionSelector) => {
                     self.input_box.session_picker.paste(text)
@@ -532,6 +534,8 @@ impl TUIApp {
         match self.input_mode {
             _ if key.kind == KeyEventKind::Release
                 || (key.kind == KeyEventKind::Repeat && key.code == KeyCode::Enter) => {}
+            InputMode::HomeMenu(HomeMenu::Normal | HomeMenu::Editing) | InputMode::None
+                if self.message_box.handle_tool_history_key(key) => {}
             InputMode::HomeMenu(HomeMenu::Normal) | InputMode::None => match key.code {
                 KeyCode::Enter => {
                     self.submit_message();
@@ -730,6 +734,7 @@ impl TUIApp {
 
         let cursor = self.input_box.get_cursor_pos(&input_area);
         let show_cursor = match self.input_mode {
+            _ if self.message_box.tool_history_expanded() => false,
             InputMode::HomeMenu(HomeMenu::Editing | HomeMenu::InputCommand) => true,
             InputMode::HomeMenu(HomeMenu::Normal) => !self.input_box.is_empty(),
             InputMode::None | InputMode::CommandMenu(_) => false,

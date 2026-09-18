@@ -159,9 +159,10 @@ fn scrollback_preserves_one_block_across_incremental_tool_calls() {
 
     transcript.append(Msg::Tool("- first".into()), &formatter);
     let mut history = transcript.take_scrollback_overflow(0, &formatter);
-    assert!(transcript.committed_lines().is_empty());
+    assert!(history.is_empty());
     transcript.append(Msg::Tool("- second".into()), &formatter);
     history.extend(transcript.take_scrollback_overflow(0, &formatter));
+    assert!(history.is_empty());
     transcript.append(Msg::Message("Done".into()), &formatter);
     history.extend(transcript.take_scrollback_overflow(0, &formatter));
 
@@ -211,5 +212,114 @@ fn clearing_resets_the_block_without_changing_the_display_mode() {
             ToolDisplay::Expanded => vec!["- new"],
         };
         assert_eq!(transcript.committed_lines(), expected);
+        assert!(
+            !transcript
+                .expanded_tool_lines(&formatter)
+                .join("\n")
+                .contains("old")
+        );
     }
+}
+
+#[test]
+fn grouped_blocks_keep_only_the_last_five_calls_and_retain_history() {
+    let formatter = formatter();
+    let mut transcript = MessageTranscript::default();
+
+    for call in 1..=8 {
+        transcript.append(Msg::Tool(format!("- call {call}\nDetails")), &formatter);
+        transcript.append(Msg::Empty, &formatter);
+        assert!(
+            transcript
+                .take_scrollback_overflow(0, &formatter)
+                .is_empty()
+        );
+    }
+    transcript.append(Msg::Tool(" \n- \n\t".into()), &formatter);
+    assert_eq!(
+        transcript.committed_lines(),
+        [
+            "╭─ Tool calls (last 5 of 8) · Ctrl+o expand",
+            "│ call 4",
+            "│ call 5",
+            "│ call 6",
+            "│ call 7",
+            "│ call 8",
+        ]
+    );
+
+    transcript.append(Msg::Message("Done".into()), &formatter);
+    let scrollback = transcript.take_scrollback_overflow(0, &formatter);
+    assert!(!scrollback.iter().any(|line| line == "│ call 1"));
+    assert!(scrollback.iter().any(|line| line == "│ call 8"));
+    assert!(transcript.committed_lines().is_empty());
+    let expanded = transcript.expanded_tool_lines(&formatter);
+    for call in 1..=8 {
+        assert!(expanded.contains(&format!("│ call {call}")));
+    }
+    assert!(!expanded.join("\n").contains("Details"));
+}
+
+#[test]
+fn five_calls_need_no_truncation_and_each_block_has_its_own_limit() {
+    let formatter = formatter();
+    let mut transcript = MessageTranscript::default();
+    for call in 1..=5 {
+        transcript.append(Msg::Tool(format!("- first {call}")), &formatter);
+    }
+    assert_eq!(transcript.committed_lines().len(), 6);
+    assert_eq!(transcript.committed_lines()[0], "╭─ Tool calls");
+    transcript.append(Msg::Message("Between blocks".into()), &formatter);
+    for call in 1..=6 {
+        transcript.append(Msg::Tool(format!("- second {call}")), &formatter);
+    }
+    assert!(transcript.committed_lines().contains(&"│ first 1".into()));
+    assert!(!transcript.committed_lines().contains(&"│ second 1".into()));
+    assert_eq!(transcript.expanded_tool_lines(&formatter).len(), 17);
+}
+
+#[test]
+fn preceding_scrollback_does_not_move_the_active_tool_block_start() {
+    let formatter = formatter();
+    let mut transcript = MessageTranscript::default();
+    transcript.append(Msg::Message("Request".into()), &formatter);
+    transcript.append(Msg::Tool("- first".into()), &formatter);
+    assert_eq!(
+        transcript.take_scrollback_overflow(0, &formatter),
+        ["Request", ""]
+    );
+    for call in 1..=5 {
+        transcript.append(Msg::Tool(format!("- later {call}")), &formatter);
+    }
+    assert_eq!(transcript.committed_lines().len(), 6);
+    assert!(!transcript.committed_lines().contains(&"│ first".into()));
+    assert!(transcript.committed_lines().contains(&"│ later 5".into()));
+}
+
+#[test]
+fn recent_limit_counts_calls_instead_of_wrapped_lines() {
+    let formatter = MessageFormatter::new(20);
+    let mut transcript = MessageTranscript::default();
+    transcript.append(Msg::Tool("- oldest".into()), &formatter);
+    for call in 1..=5 {
+        transcript.append(
+            Msg::Tool(format!("- call {call} with a long wrapped summary")),
+            &formatter,
+        );
+    }
+    let lines = transcript.committed_lines();
+    assert!(lines.len() > 6);
+    assert!(!lines.iter().any(|line| line.contains("oldest")));
+    for call in 1..=5 {
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains(&format!("call {call}")))
+        );
+    }
+    assert!(
+        lines
+            .iter()
+            .all(|line| textwrap::core::display_width(line) <= 20)
+    );
 }
