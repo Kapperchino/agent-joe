@@ -1,10 +1,16 @@
 use super::*;
 
-const FERRIS_ROWS: [&str; 4] = [
-    " ▄ ▄    ▄███████▄    ▄ ▄ ",
-    " █▄█  ▄█ ◕     ◕ █▄  █▄█ ",
-    "  ▀█████ ˶  ᴗ  ˶ █████▀  ",
-    "     ▀█▄█▀▀▀▀▀▀▀█▄█▀     ",
+const FERRIS_ROWS: [&str; 10] = [
+    "            ▄▖▗▄ ▗▖            ",
+    "       ▄▄▟█████████▟█▖▄▖       ",
+    "     ▄▄████████████████▙▄▖     ",
+    "   ▗▄▟███████████████████▙▄▖   ",
+    "  ▄▄███████████████████████▄▖  ",
+    "  ▐█████████▟●▙██▟●▙████████   ",
+    "▗▟██████████▝▀▘██▝▀▘█████████▙▖",
+    " ▜█▖▜▞▜██╭────╮╭────╮████▘▟▘▟▛ ",
+    "  ▝▀▄▝ ▝▀▜██▛▀     ███▀▘   ▟▘  ",
+    "     ▘    ▝▀█▛▘ ▝▀▀▀▘     ▝    ",
 ];
 
 fn render(area: Rect) -> Buffer {
@@ -25,10 +31,10 @@ fn rows(buffer: &Buffer) -> Vec<String> {
 
 #[test]
 fn full_welcome_renders_filled_ferris_with_unclipped_hints() {
-    assert_eq!(branding::ferris().map(|row| row.width()), [25; 4]);
+    assert_eq!(branding::ferris().map(|row| row.width()), [31; 10]);
     for area in [
-        Rect::new(0, 0, 48, 13),
-        Rect::new(0, 0, 49, 14),
+        Rect::new(0, 0, 48, 19),
+        Rect::new(0, 0, 49, 20),
         Rect::new(3, 2, 100, 24),
         Rect::new(3, 2, 101, 25),
     ] {
@@ -38,7 +44,7 @@ fn full_welcome_renders_filled_ferris_with_unclipped_hints() {
             .iter()
             .position(|row| row.trim() == FERRIS_ROWS[0].trim())
             .unwrap();
-        let left = area.x + area.width / 2 - 25 / 2;
+        let left = area.x + area.width / 2 - 31 / 2;
         for (offset, mascot_row) in FERRIS_ROWS.iter().enumerate() {
             let row = &rows[first + offset];
             assert_eq!(row.trim(), mascot_row.trim());
@@ -47,18 +53,22 @@ fn full_welcome_renders_filled_ferris_with_unclipped_hints() {
                 let x = left + u16::try_from(column).unwrap();
                 let cell = &buffer[(x, y)];
                 let expected = match (offset, column) {
-                    (1, 9 | 15) => theme::base().fg(theme::TEXT).bg(theme::ACCENT),
-                    (2, 9 | 15) => theme::base()
-                        .fg(ratatui::style::Color::Rgb(203, 76, 100))
-                        .bg(theme::ACCENT),
-                    (1 | 2, 8..=16) => theme::base().fg(theme::BACKGROUND).bg(theme::ACCENT),
-                    _ => theme::base().fg(theme::ACCENT),
+                    (5, 13 | 18) => theme::base()
+                        .fg(ratatui::style::Color::Rgb(255, 255, 255))
+                        .bg(branding::EYES),
+                    (5 | 6, 12..=14 | 17..=19) => {
+                        theme::base().fg(branding::EYES).bg(branding::SHELL)
+                    }
+                    (7, 9..=20) => theme::base()
+                        .fg(ratatui::style::Color::Rgb(182, 61, 0))
+                        .bg(branding::SHELL),
+                    _ => theme::base().fg(branding::SHELL),
                 };
                 assert_eq!(cell.symbol(), symbol.to_string(), "{area:?} ({x}, {y})");
                 assert_eq!(cell.fg, expected.fg.unwrap(), "{area:?} ({x}, {y})");
                 assert_eq!(cell.bg, expected.bg.unwrap(), "{area:?} ({x}, {y})");
             }
-            for x in (area.x..left).chain(left + 25..area.right()) {
+            for x in (area.x..left).chain(left + 31..area.right()) {
                 assert_eq!(buffer[(x, y)].symbol(), " ");
                 assert_eq!(buffer[(x, y)].bg, theme::BACKGROUND);
             }
@@ -83,8 +93,8 @@ fn full_welcome_renders_filled_ferris_with_unclipped_hints() {
 fn compact_welcome_keeps_the_mascot_and_input_hint_visible() {
     for area in [
         Rect::new(0, 0, 34, 4),
-        Rect::new(0, 0, 47, 13),
-        Rect::new(0, 0, 48, 12),
+        Rect::new(0, 0, 47, 19),
+        Rect::new(0, 0, 48, 13),
         Rect::new(0, 0, 100, 3),
         Rect::new(0, 0, 16, 2),
         Rect::new(0, 0, 12, 5),

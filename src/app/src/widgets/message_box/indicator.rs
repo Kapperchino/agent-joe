@@ -25,23 +25,24 @@ impl FerrisFrame {
 
     fn glyphs(self) -> &'static str {
         match self {
-            Self::Rest | Self::Land => branding::MARK,
-            Self::StepLeft => "V(•ᴗ•)v",
-            Self::StepRight => "v(•ᴗ•)V",
+            Self::Rest => branding::MARK,
+            Self::StepLeft => "⋏(◕ᴗ◕)⋎",
+            Self::Land => "⋎(◡ᴗ◡)⋎",
+            Self::StepRight => "⋎(◕ᴗ◕)⋏",
         }
     }
 
     fn render(self) -> Line<'static> {
-        let claws = theme::base().fg(theme::ACCENT).add_modifier(Modifier::BOLD);
-        let face = claws.fg(theme::BACKGROUND).bg(theme::ACCENT);
+        let claws = theme::base()
+            .fg(branding::SHELL)
+            .add_modifier(Modifier::BOLD);
+        let face = claws.fg(branding::EYES).bg(branding::SHELL);
         Line::from(
             self.glyphs()
                 .chars()
                 .map(|glyph| {
                     let style = match glyph {
-                        'v' | 'V' => claws,
-                        '(' | ')' => face.fg(branding::BLUSH),
-                        '•' => face.fg(theme::TEXT),
+                        '⋎' | '⋏' | '(' | ')' => claws,
                         _ => face,
                     };
                     Span::styled(glyph.to_string(), style)
