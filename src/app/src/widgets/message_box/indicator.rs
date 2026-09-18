@@ -2,7 +2,7 @@ use crate::{branding, theme};
 use common_models::tui_models::State;
 use ratatui::prelude::{Line, Modifier, Span, Style};
 
-const FERRIS_FRAME_TICKS: usize = 12;
+const FERRIS_FRAME_TICKS: usize = 36;
 
 #[derive(Clone, Copy, Default)]
 enum FerrisFrame {
@@ -32,22 +32,10 @@ impl FerrisFrame {
     }
 
     fn render(self) -> Line<'static> {
-        let claws = theme::base().fg(theme::ACCENT).add_modifier(Modifier::BOLD);
-        let face = claws.fg(theme::BACKGROUND).bg(theme::ACCENT);
-        Line::from(
-            self.glyphs()
-                .chars()
-                .map(|glyph| {
-                    let style = match glyph {
-                        'v' | 'V' => claws,
-                        '(' | ')' => face.fg(branding::BLUSH),
-                        '•' => face.fg(theme::TEXT),
-                        _ => face,
-                    };
-                    Span::styled(glyph.to_string(), style)
-                })
-                .collect::<Vec<_>>(),
-        )
+        Line::from(Span::styled(
+            self.glyphs(),
+            theme::base().fg(theme::ACCENT).add_modifier(Modifier::BOLD),
+        ))
     }
 }
 

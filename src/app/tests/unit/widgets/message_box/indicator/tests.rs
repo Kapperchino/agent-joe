@@ -38,6 +38,44 @@ fn ferris_preserves_busy_labels_and_uses_the_brand_color() {
 }
 
 #[test]
+fn mini_ferris_uses_theme_orange_on_the_normal_background_in_every_frame() {
+    for frame in [
+        FerrisFrame::Rest,
+        FerrisFrame::StepLeft,
+        FerrisFrame::Land,
+        FerrisFrame::StepRight,
+    ] {
+        let line = frame.render();
+        assert_eq!(line.to_string(), frame.glyphs());
+        assert_eq!(line.width(), 7);
+        for span in line.spans {
+            assert_eq!(
+                span.style,
+                theme::base().fg(theme::ACCENT).add_modifier(Modifier::BOLD)
+            );
+        }
+    }
+}
+
+#[test]
+fn mini_ferris_holds_each_frame_for_thirty_six_ticks() {
+    for state in [State::StreamStart, State::ThinkingStart, State::ToolStart] {
+        let mut indicator = BusyIndicator::default();
+        for step in 0..4 {
+            let initial = indicator.render_line(&state, 40).unwrap();
+            for _ in 0..35 {
+                indicator.advance(&state);
+                assert_eq!(indicator.render_line(&state, 40), Some(initial.clone()));
+                assert_eq!(indicator.steps, step);
+            }
+            indicator.advance(&state);
+            assert_ne!(indicator.render_line(&state, 40), Some(initial));
+            assert_eq!(indicator.steps, step + 1);
+        }
+    }
+}
+
+#[test]
 fn ferris_runs_to_both_ends_at_a_fixed_cadence_without_shifting_the_label() {
     let mut indicator = BusyIndicator::default();
     for (step, offset) in [0, 1, 2, 3, 4, 5, 4, 3, 2, 1, 0].into_iter().enumerate() {
@@ -52,7 +90,7 @@ fn ferris_runs_to_both_ends_at_a_fixed_cadence_without_shifting_the_label() {
                     " ".repeat(5 - offset)
                 )
             );
-            assert_eq!(line.spans[3..10].iter().map(Span::width).sum::<usize>(), 7);
+            assert_eq!(line.spans[3].width(), 7);
             assert_eq!(line.width(), 34);
             assert_eq!(indicator.render_line(&State::ThinkingStart, 34), Some(line));
             indicator.advance(&State::ThinkingStart);
@@ -126,23 +164,22 @@ fn message_box_moves_ferris_across_the_line_and_clears_it_when_idle() {
     assert_eq!(row(&first, 3), "Working on it…  v(•ᴗ•)v                 ");
     assert_eq!(first[(19, 3)].fg, theme::ACCENT);
     assert_eq!(first[(3, 3)].fg, theme::AMBER);
-    for x in 20..=24 {
-        assert_eq!(first[(x, 3)].bg, theme::ACCENT);
+    for x in 19..=25 {
+        assert_eq!(first[(x, 3)].fg, theme::ACCENT);
+        assert_eq!(first[(x, 3)].bg, theme::BACKGROUND);
     }
-    assert_eq!(first[(20, 3)].fg, branding::BLUSH);
-    assert_eq!(first[(24, 3)].fg, branding::BLUSH);
-    assert_eq!(first[(21, 3)].fg, theme::TEXT);
-    assert_eq!(first[(23, 3)].fg, theme::TEXT);
-    assert_eq!(first[(22, 3)].fg, theme::BACKGROUND);
     for _ in 0..FERRIS_FRAME_TICKS {
         state.advance_busy_indicator();
     }
     let next = render(area, &mut state);
     assert_eq!(row(&next, 2), row(&first, 2));
     assert_eq!(row(&next, 3), "Working on it…   V(•ᴗ•)v                ");
+    assert_eq!(next[(19, 3)].symbol(), " ");
     assert_eq!(next[(19, 3)].bg, theme::BACKGROUND);
-    assert_eq!(next[(20, 3)].bg, theme::BACKGROUND);
-    assert_eq!(next[(21, 3)].bg, theme::ACCENT);
+    for x in 20..=26 {
+        assert_eq!(next[(x, 3)].fg, theme::ACCENT);
+        assert_eq!(next[(x, 3)].bg, theme::BACKGROUND);
+    }
     state.actor_state = State::Ready;
     state.advance_busy_indicator();
     let idle = render(area, &mut state);
@@ -215,13 +252,7 @@ fn running_ferris_fits_after_resizing_and_changing_busy_states() {
                 line.to_string()
                     .starts_with(BusyIndicator::label(&state).unwrap())
             );
-            assert_eq!(
-                line.spans[3..10]
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect::<String>(),
-                indicator.frame.glyphs()
-            );
+            assert_eq!(line.spans[3].content.as_ref(), indicator.frame.glyphs());
         }
     }
 }
