@@ -390,9 +390,12 @@ impl TUIApp {
                 if msg.actor_id == 0 {
                     self.queued.insert(turn_id);
                 }
-                self.message_box.append(Msg::Message(format!(
-                    "Follow-up {turn_id} queued (position {position})."
-                )));
+                let message = if self.debug_mode {
+                    format!("Follow-up {turn_id} queued (position {position}).")
+                } else {
+                    format!("Follow-up queued (position {position}).")
+                };
+                self.message_box.append(Msg::Message(message));
             }
             ActorToTuiPacket::TurnChanged {
                 turn_id,
@@ -410,15 +413,23 @@ impl TUIApp {
                         self.workers.insert(worker, state);
                     }
                 }
-                if state.terminal() || detail.is_some() {
-                    let owner = match msg.actor_id {
-                        0 => "Turn".to_owned(),
-                        worker => format!("Worker {worker} turn"),
-                    };
-                    self.message_box.append(Msg::Message(format!(
-                        "{owner} {turn_id}: {state:?}{}",
-                        detail.map(|text| format!(" — {text}")).unwrap_or_default()
-                    )));
+                match (self.debug_mode, detail) {
+                    (true, detail) if state.terminal() || detail.is_some() => {
+                        let owner = match msg.actor_id {
+                            0 => "Turn".to_owned(),
+                            worker => format!("Worker {worker} turn"),
+                        };
+                        self.message_box.append(Msg::Message(format!(
+                            "{owner} {turn_id}: {state:?}{}",
+                            detail.map(|text| format!(" — {text}")).unwrap_or_default()
+                        )));
+                    }
+                    (false, Some(detail))
+                        if state == common_models::tui_models::Lifecycle::Failed =>
+                    {
+                        self.message_box.append(Msg::Message(detail));
+                    }
+                    _ => {}
                 }
             }
             ActorToTuiPacket::OperationChanged { state, detail, .. } => {

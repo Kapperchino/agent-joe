@@ -556,6 +556,91 @@ async fn interaction_commands_questions_and_queue_preserve_vim_and_transcript() 
 }
 
 #[tokio::test]
+async fn turn_metadata_is_only_shown_in_debug_mode() {
+    for mode in [ToolDisplay::Grouped, ToolDisplay::Expanded] {
+        for actor_id in [0, 1] {
+            for state in [
+                Lifecycle::Running,
+                Lifecycle::WaitingForInput,
+                Lifecycle::Completed,
+                Lifecycle::Cancelled,
+                Lifecycle::Failed,
+            ] {
+                for detail in [None, Some("Turn detail".to_owned())] {
+                    let mut fixture = Fixture::with_tool_display(mode).await;
+                    let turn_id = common_models::runtime_ids::TurnId::new();
+                    fixture
+                        .app
+                        .message_box
+                        .append(Msg::Message("Response".into()));
+                    fixture.app.queued.insert(turn_id);
+                    fixture.app.handle_actor_msg(ActorToTui {
+                        actor_id,
+                        packet: ActorToTuiPacket::TurnChanged {
+                            turn_id,
+                            state,
+                            detail: detail.clone(),
+                        },
+                    });
+                    let rendered = fixture.render();
+                    let owner = match actor_id {
+                        0 => "Turn".to_owned(),
+                        worker => format!("Worker {worker} turn"),
+                    };
+                    let metadata = format!("{owner} {turn_id}: {state:?}");
+                    assert_eq!(
+                        rendered.contains(&metadata),
+                        mode == ToolDisplay::Expanded && (state.terminal() || detail.is_some())
+                    );
+                    assert_eq!(
+                        rendered.contains("Turn detail"),
+                        detail.is_some()
+                            && (mode == ToolDisplay::Expanded || state == Lifecycle::Failed)
+                    );
+                    assert!(rendered.contains("Response"));
+                    match actor_id {
+                        0 => {
+                            assert_eq!(fixture.app.root_busy, !state.terminal());
+                            assert_eq!(fixture.app.queued.contains(&turn_id), !state.terminal());
+                            assert!(
+                                matches!(fixture.app.progress, Progress::Turn(current) if current == state)
+                            );
+                        }
+                        worker => {
+                            assert_eq!(fixture.app.workers.get(&worker), Some(&state));
+                            assert!(!fixture.app.root_busy);
+                            assert!(fixture.app.queued.contains(&turn_id));
+                            assert!(matches!(fixture.app.progress, Progress::Ready));
+                        }
+                    }
+                    fixture.stop().await;
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn queued_turn_ids_are_only_shown_in_debug_mode() {
+    for mode in [ToolDisplay::Grouped, ToolDisplay::Expanded] {
+        let mut fixture = Fixture::with_tool_display(mode).await;
+        let turn_id = common_models::runtime_ids::TurnId::new();
+        fixture.packet(ActorToTuiPacket::Queued {
+            turn_id,
+            position: 2,
+        });
+        let rendered = fixture.render();
+        let message = match mode {
+            ToolDisplay::Grouped => "Follow-up queued (position 2).".to_owned(),
+            ToolDisplay::Expanded => format!("Follow-up {turn_id} queued (position 2)."),
+        };
+        assert!(rendered.contains(&message));
+        assert!(fixture.app.queued.contains(&turn_id));
+        fixture.stop().await;
+    }
+}
+
+#[tokio::test]
 async fn worker_streams_update_progress_without_replacing_the_root_stream() {
     let mut fixture = Fixture::new().await;
     fixture.packet(ActorToTuiPacket::StateChanged(State::MessageStart));
@@ -610,11 +695,9 @@ async fn worker_streams_update_progress_without_replacing_the_root_stream() {
             detail: Some("Worker tool-call budget exhausted (128 calls)".into()),
         },
     });
-    assert!(
-        fixture
-            .render()
-            .contains(&format!("Worker 1 turn {worker_turn}: Failed"))
-    );
+    let rendered = fixture.render();
+    assert!(rendered.contains("Worker tool-call budget exhausted (128 calls)"));
+    assert!(!rendered.contains(&format!("Worker 1 turn {worker_turn}: Failed")));
     assert!(fixture.app.root_busy);
     assert!(matches!(
         fixture.app.progress,
