@@ -137,9 +137,14 @@ fn answering_a_question_atomically_marks_the_saved_plan_for_reconciliation() {
 }
 
 pub(super) fn save_output(session: &Session, content: &str) -> ToolResult {
+    save_named_output(session, "write", content)
+}
+
+fn save_named_output(session: &Session, name: &str, content: &str) -> ToolResult {
     let mut pending = batch();
     pending.operations.truncate(1);
-    pending.assistant.content.truncate(1);
+    pending.operations[0].call.name = name.to_owned().try_into().unwrap();
+    pending.assistant.content = vec![pending.operations[0].call.content()];
     let operation = pending.operations[0].clone();
     session.record(Event::Prepared(pending)).unwrap();
     session
@@ -280,6 +285,64 @@ fn large_artifact_pages_stay_inline_across_session_resume() {
         serde_json::to_value(before.history).unwrap(),
         serde_json::to_value(after.history).unwrap()
     );
+}
+
+#[test]
+fn reviews_fit_inline_up_to_one_artifact_page_across_session_resume() {
+    use super::artifacts::{ARTIFACT_PAGE_BYTES, ArtifactRange, INLINE_BYTES};
+    for bytes in [
+        INLINE_BYTES + 1,
+        ARTIFACT_PAGE_BYTES,
+        ARTIFACT_PAGE_BYTES + 1,
+    ] {
+        let workspace = Workspace::new();
+        let store = workspace.store();
+        let session = store
+            .create(SessionProvider::Injected, None, history())
+            .unwrap();
+        let content = "r".repeat(bytes);
+        let result = save_named_output(&session, "review_changes", &content);
+        let rendered = result.outcome.unwrap();
+        let before = session.snapshot().unwrap();
+        match bytes <= ARTIFACT_PAGE_BYTES {
+            true => {
+                assert_eq!(rendered, content);
+                assert!(before.artifacts.is_empty());
+            }
+            false => {
+                assert!(rendered.len() <= INLINE_BYTES);
+                assert_eq!(before.artifacts.len(), 1);
+                let artifact = &before.artifacts[0];
+                assert_eq!(artifact.bytes, content.len());
+                assert!(rendered.contains(&artifact.id));
+                let page = session
+                    .read_artifact(
+                        &artifact.id,
+                        ArtifactRange::new(0, ARTIFACT_PAGE_BYTES).unwrap(),
+                    )
+                    .unwrap();
+                let tail = session
+                    .read_artifact(
+                        &artifact.id,
+                        ArtifactRange::new(page.next_offset.unwrap(), ARTIFACT_PAGE_BYTES).unwrap(),
+                    )
+                    .unwrap();
+                assert_eq!(format!("{}{}", page.content, tail.content), content);
+                assert_eq!(tail.next_offset, None);
+            }
+        }
+        let id = session.id.clone();
+        drop(session);
+        let resumed = workspace
+            .resume(&store, &id, &SessionProvider::Injected)
+            .unwrap();
+        let after = resumed.snapshot().unwrap();
+        assert_eq!(after.artifacts.len(), before.artifacts.len());
+        assert_eq!(
+            serde_json::to_value(after.history).unwrap(),
+            serde_json::to_value(before.history).unwrap()
+        );
+    }
 }
 
 #[test]

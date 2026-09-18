@@ -90,14 +90,16 @@ impl PlanStep {
                 "Reopen completed step {} after requirements change",
                 self.id
             )),
-            (Some(StepState::InProgress), StepState::Completed, _) if definition_unchanged => {
+            (Some(StepState::Pending | StepState::InProgress), StepState::Completed, _)
+                if definition_unchanged =>
+            {
                 Ok(self.clone())
             }
             (None | Some(StepState::Pending | StepState::Blocked), StepState::InProgress, _)
             | (_, StepState::Pending | StepState::Blocked, _) => Ok(self.clone()),
             (Some(old), new, _) if old == new && definition_unchanged => Ok(self.clone()),
             _ => Err(anyhow::anyhow!(
-                "Step {} has an unsupported transition: start before completing and reopen changed steps",
+                "Step {} has an unsupported transition: complete existing pending or in_progress steps and reopen changed or blocked steps",
                 self.id
             )),
         }

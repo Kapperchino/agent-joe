@@ -10,12 +10,14 @@ pub const ARTIFACT_BYTES: usize = 64 * 1024 * 1024;
 enum OutputLimit {
     #[default]
     Tool,
+    Review,
     ArtifactPage,
 }
 
 impl OutputLimit {
     fn for_tool(name: &str) -> Self {
         match name {
+            "review_changes" => Self::Review,
             "read_artifact" => Self::ArtifactPage,
             _ => Self::Tool,
         }
@@ -24,6 +26,7 @@ impl OutputLimit {
     fn bytes(self) -> usize {
         match self {
             Self::Tool => INLINE_BYTES,
+            Self::Review => ARTIFACT_PAGE_BYTES,
             Self::ArtifactPage => ARTIFACT_PAGE_BYTES + 512,
         }
     }

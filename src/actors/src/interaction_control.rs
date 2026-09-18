@@ -245,6 +245,9 @@ impl<'a, C: Context + Clone + 'static> Interaction<'a, C> {
             plan,
             ..self.state.planning.clone()
         })?;
-        self.state.interaction_content()
+        Ok(format!(
+            "Plan updated: revision={}, requirements_revision={}.",
+            self.state.planning.plan.revision, self.state.planning.requirements_revision
+        ))
     }
 }

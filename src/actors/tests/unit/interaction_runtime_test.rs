@@ -282,7 +282,7 @@ fn plan_transitions_require_dependencies_real_evidence_and_reconciliation() {
     let mut initial = input.clone();
     initial.revision = 0;
     assert!(Plan::default().update(initial, 0, &evidence).is_err());
-    assert!(plan.update(input.clone(), 0, &evidence).is_err());
+    assert!(plan.update(input.clone(), 0, &evidence).is_ok());
     input.steps[0].state = StepState::InProgress;
     let plan = plan.update(input.clone(), 0, &evidence).unwrap();
     input.revision = 2;
@@ -334,6 +334,65 @@ fn plan_transitions_require_dependencies_real_evidence_and_reconciliation() {
     let mut unknown = input;
     unknown.steps[15].dependencies.push("missing".into());
     assert!(Plan::default().update(unknown, 0, &evidence).is_err());
+}
+
+#[test]
+fn pending_plan_steps_complete_together_with_evidence_and_unchanged_requirements() {
+    use common_models::interaction::PlanEvidence;
+    let evidence = [("tool:read".into(), "read_file".into())].into();
+    let plan = Plan::default()
+        .update(
+            PlanUpdate {
+                revision: 0,
+                requirements_revision: 0,
+                steps: vec![
+                    step("inspect"),
+                    PlanStep {
+                        dependencies: vec!["inspect".into()],
+                        ..step("document")
+                    },
+                ],
+            },
+            0,
+            &evidence,
+        )
+        .unwrap();
+    let update = PlanUpdate {
+        revision: plan.revision,
+        requirements_revision: 0,
+        steps: plan
+            .steps
+            .iter()
+            .map(|step| PlanStep {
+                state: StepState::Completed,
+                evidence: vec![PlanEvidence {
+                    source: "tool:read".into(),
+                    explanation: "Read the source and its documentation".into(),
+                }],
+                ..step.clone()
+            })
+            .collect(),
+    };
+    let completed = plan.update(update.clone(), 0, &evidence).unwrap();
+    assert_eq!(completed.revision, 2);
+    assert_eq!(completed.steps, update.steps);
+
+    let mut missing_evidence = update.clone();
+    missing_evidence.steps[1].evidence.clear();
+    assert!(plan.update(missing_evidence, 0, &evidence).is_err());
+    assert!(plan.update(update.clone(), 0, &Default::default()).is_err());
+
+    let mut unmet_dependency = update.clone();
+    unmet_dependency.steps[0].state = StepState::Pending;
+    assert!(plan.update(unmet_dependency, 0, &evidence).is_err());
+
+    let mut changed_definition = update.clone();
+    changed_definition.steps[1].acceptance = "New requirement".into();
+    assert!(plan.update(changed_definition, 0, &evidence).is_err());
+
+    let mut changed_requirements = update;
+    changed_requirements.requirements_revision = 1;
+    assert!(plan.update(changed_requirements, 1, &evidence).is_err());
 }
 
 #[tokio::test]
@@ -751,7 +810,17 @@ async fn tracked_plan_uses_observed_evidence_and_survives_compaction_and_fork() 
             serde_json::to_value(&update).unwrap(),
         )]),
     );
-    answer(h.request().await.1, response(vec![question(false)]));
+    let (request, reply) = h.request().await;
+    assert!(matches!(
+        latest_tool_result(&request),
+        ContentBlock::ToolResult { content, is_error: None, .. }
+            if content == "Plan updated: revision=2, requirements_revision=0."
+    ));
+    let runtime = runtime_snapshot(&request.messages);
+    assert_eq!(runtime.planning.plan.steps, update.steps);
+    assert_eq!(runtime.planning.plan.revision, 2);
+    assert!(runtime.evidence.contains_key("tool:evidence"));
+    answer(reply, response(vec![question(false)]));
     answer(
         h.request().await.1,
         response(vec![text("Inspection documented")]),
