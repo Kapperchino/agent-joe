@@ -594,8 +594,7 @@ async fn turn_metadata_is_only_shown_in_debug_mode() {
                     );
                     assert_eq!(
                         rendered.contains("Turn detail"),
-                        detail.is_some()
-                            && (mode == ToolDisplay::Expanded || state == Lifecycle::Failed)
+                        detail.is_some() && mode == ToolDisplay::Expanded
                     );
                     assert!(rendered.contains("Response"));
                     match actor_id {
@@ -616,6 +615,78 @@ async fn turn_metadata_is_only_shown_in_debug_mode() {
                     fixture.stop().await;
                 }
             }
+        }
+    }
+}
+
+#[tokio::test]
+async fn validation_diagnostics_are_only_shown_in_debug_mode() {
+    use common_models::runtime_ids::{OperationId, TurnId};
+    use common_models::tui_models::{ValidationProgress, ValidationState};
+
+    let detail = r#"Validation: {"command":{"program":"cargo"},"exit_code":1}"#;
+    for mode in [ToolDisplay::Grouped, ToolDisplay::Expanded] {
+        for actor_id in [0, 1] {
+            let mut fixture = Fixture::with_tool_display(mode).await;
+            let turn_id = TurnId::new();
+            fixture
+                .app
+                .message_box
+                .append(Msg::Message("Response".into()));
+            fixture.app.handle_actor_msg(ActorToTui {
+                actor_id,
+                packet: ActorToTuiPacket::ValidationUpdated(ValidationProgress {
+                    operation: "test".into(),
+                    state: ValidationState::Failed,
+                }),
+            });
+            fixture.app.handle_actor_msg(ActorToTui {
+                actor_id,
+                packet: ActorToTuiPacket::OperationChanged {
+                    turn_id,
+                    operation_id: OperationId::new(),
+                    state: Lifecycle::Failed,
+                    detail: detail.into(),
+                },
+            });
+            let rendered = fixture.render();
+            assert!(rendered.contains("Response"));
+            assert!(rendered.contains("last test Failed"));
+            assert_eq!(
+                rendered.contains("exit_code"),
+                mode == ToolDisplay::Expanded
+            );
+            let progress = fixture.app.progress_line(u16::MAX).to_string();
+            assert_eq!(
+                progress.contains(detail),
+                mode == ToolDisplay::Expanded && actor_id == 0
+            );
+            match actor_id {
+                0 => assert!(matches!(
+                    &fixture.app.progress,
+                    Progress::Operation { state: Lifecycle::Failed, detail: current } if current == detail
+                )),
+                _ => assert!(matches!(fixture.app.progress, Progress::Ready)),
+            }
+            fixture.app.handle_actor_msg(ActorToTui {
+                actor_id,
+                packet: ActorToTuiPacket::TurnChanged {
+                    turn_id,
+                    state: Lifecycle::Failed,
+                    detail: Some(format!("Tool: {detail}. Automatic continuation stopped.")),
+                },
+            });
+            let rendered = fixture.render();
+            assert_eq!(
+                rendered.contains("exit_code"),
+                mode == ToolDisplay::Expanded
+            );
+            assert_eq!(
+                rendered.contains("Automatic"),
+                mode == ToolDisplay::Expanded
+            );
+            assert!(rendered.contains("last test Failed"));
+            fixture.stop().await;
         }
     }
 }
@@ -696,8 +767,9 @@ async fn worker_streams_update_progress_without_replacing_the_root_stream() {
         },
     });
     let rendered = fixture.render();
-    assert!(rendered.contains("Worker tool-call budget exhausted (128 calls)"));
+    assert!(!rendered.contains("Worker tool-call budget exhausted (128 calls)"));
     assert!(!rendered.contains(&format!("Worker 1 turn {worker_turn}: Failed")));
+    assert_eq!(fixture.app.workers.get(&1), Some(&Lifecycle::Failed));
     assert!(fixture.app.root_busy);
     assert!(matches!(
         fixture.app.progress,

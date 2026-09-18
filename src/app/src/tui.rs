@@ -424,11 +424,6 @@ impl TUIApp {
                             detail.map(|text| format!(" — {text}")).unwrap_or_default()
                         )));
                     }
-                    (false, Some(detail))
-                        if state == common_models::tui_models::Lifecycle::Failed =>
-                    {
-                        self.message_box.append(Msg::Message(detail));
-                    }
                     _ => {}
                 }
             }
@@ -439,7 +434,10 @@ impl TUIApp {
                         detail: detail.clone(),
                     };
                 }
-                if state == common_models::tui_models::Lifecycle::Failed {
+                if matches!(
+                    (self.debug_mode, state),
+                    (true, common_models::tui_models::Lifecycle::Failed)
+                ) {
                     self.message_box.append(Msg::Message(detail));
                 }
             }

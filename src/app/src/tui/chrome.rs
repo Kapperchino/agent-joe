@@ -77,7 +77,7 @@ impl TUIApp {
             theme::muted(format!(" · queued {}", self.queued.len())),
             theme::muted(format!(" · workers {workers}")),
         ]);
-        if let Progress::Operation { detail, .. } = &self.progress {
+        if let (true, Progress::Operation { detail, .. }) = (self.debug_mode, &self.progress) {
             details.push(theme::muted(format!(" · {detail}")));
         }
         details.into_iter().fold(status, |mut line, detail| {
