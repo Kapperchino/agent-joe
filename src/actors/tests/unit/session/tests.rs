@@ -1619,7 +1619,7 @@ fn crash_fixture() {
 async fn cargo_artifacts_preserve_structured_results_and_managed_recovery() {
     use utils::cargo::{CargoAction, CargoInput, CargoOperation};
     let workspace = Workspace::new();
-    let runtime = crate::runtime::Runtime::for_workspace(workspace.path.clone()).unwrap();
+    let runtime = crate::states::runtime::Runtime::for_workspace(workspace.path.clone()).unwrap();
     let store = runtime.sessions.clone().unwrap();
     let session = store
         .create(SessionProvider::Injected, None, history())

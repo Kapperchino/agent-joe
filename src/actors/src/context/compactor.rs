@@ -1,9 +1,9 @@
+use crate::states::provider_task::{ProviderEvent, ProviderTask};
 use crate::{
     context::{
         BudgetPlan, Checkpoint, ContextInput, ContextLimits, Memory, NativeCompaction,
         estimated_tokens,
     },
-    provider_task::{ProviderEvent, ProviderTask},
     workers::compaction_worker::CompactionWorker,
 };
 use clients::llm::ClientRequest;

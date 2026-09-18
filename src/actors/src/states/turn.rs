@@ -1,8 +1,6 @@
-use crate::{
-    runtime::WorkspaceRevision,
-    stream_processor::{ProcessedItem, StreamNextStep, StreamProcessor},
-    tool_call::ToolCall,
-};
+use crate::states::runtime::WorkspaceRevision;
+use crate::states::stream_processor::{ProcessedItem, StreamNextStep, StreamProcessor};
+use crate::tool_call::ToolCall;
 use clients::{
     failure::{Failure, FailureKind},
     llm::{ContentBlock, Message, Role, StreamEvent},
@@ -489,5 +487,5 @@ pub fn tool_failure(failure: &ToolFailure) -> Failure {
 }
 
 #[cfg(test)]
-#[path = "../tests/unit/turn/tests.rs"]
+#[path = "../../tests/unit/turn/tests.rs"]
 mod tests;

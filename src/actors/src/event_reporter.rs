@@ -6,7 +6,7 @@ pub enum EventReporter {
         actor_id: u64,
         tui_tx: Sender<ActorToTui>,
     },
-    Compaction(crate::provider_task::ProviderTarget),
+    Compaction(crate::states::provider_task::ProviderTarget),
 }
 
 impl EventReporter {
@@ -29,7 +29,8 @@ impl EventReporter {
 
     pub fn usage(&self, usage: TokenCount) {
         if let Self::Compaction(target) = self {
-            let _ = target.send(crate::provider_task::ProviderEvent::CompactionUsage(usage));
+            let _ =
+                target.send(crate::states::provider_task::ProviderEvent::CompactionUsage(usage));
         }
     }
 }

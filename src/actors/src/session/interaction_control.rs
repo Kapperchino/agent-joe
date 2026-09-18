@@ -1,6 +1,8 @@
 use crate::{
-    actor_state::ActorState, runtime::ExecutionRole, session::Event, session_control::Persistence,
-    turn::FollowUp, turn_machine::SessionEvent,
+    session::{Event, session_control::Persistence},
+    states::{
+        actor_state::ActorState, runtime::ExecutionRole, turn::FollowUp, turn_machine::SessionEvent,
+    },
 };
 use analysis::contexts::context::Context;
 use commands::command::Command;
@@ -13,7 +15,7 @@ use utils::execution::ExecutionScope;
 impl<C: Context + Clone + 'static> ActorState<C> {
     pub(crate) fn interaction_instructions(&self) -> String {
         let guidance = match self.dependency.runtime.role {
-            ExecutionRole::Root => include_str!("workers/resources/interaction.md"),
+            ExecutionRole::Root => include_str!("../workers/resources/interaction.md"),
             ExecutionRole::Worker { .. } | ExecutionRole::Helper => {
                 "Inherit the parent's work mode. Report questions, blockers, plan progress and evidence to the parent; only the root can update the shared plan or ask the user."
             }

@@ -153,7 +153,7 @@ async fn get_actor<W: Worker<C = RustContext>>(
     root: std::path::PathBuf,
 ) -> Result<RunningActor> {
     let mut runtime =
-        actors::runtime::Runtime::with_session_namespace(root, &cli.session_namespace)?;
+        actors::states::runtime::Runtime::with_session_namespace(root, &cli.session_namespace)?;
     runtime.context_budget =
         actors::context::ContextBudget::new(cli.context_tokens, cli.response_tokens)?;
     runtime

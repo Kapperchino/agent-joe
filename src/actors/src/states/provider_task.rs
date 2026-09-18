@@ -1,7 +1,5 @@
-use crate::{
-    actor::Message,
-    turn::{ProviderRun, Tag},
-};
+use crate::actor::Message;
+use crate::states::turn::{ProviderRun, Tag};
 use clients::{
     failure::{Failure, FailureKind},
     llm::{LLmClient, StreamEvent},
@@ -16,7 +14,7 @@ pub enum ProviderEvent {
     ContextNotice(String),
     CompactionUsage(common_models::tui_models::TokenCount),
     ContextPrepared {
-        update: crate::compactor::ContextUpdate,
+        update: crate::context::compactor::ContextUpdate,
         reply: tokio::sync::oneshot::Sender<Result<(), Failure>>,
     },
     Compacted,
@@ -103,12 +101,14 @@ impl ProviderTask {
         if attempt > 0 {
             tokio::time::sleep(Duration::from_millis(100 * u64::from(attempt))).await;
         }
-        let prepared =
-            tokio::time::timeout(self.timeout, crate::compactor::prepare(&input, &mut self))
-                .await
-                .map_err(|_| anyhow::anyhow!("Context compaction timed out"))
-                .and_then(std::convert::identity)
-                .map_err(context_failure)?;
+        let prepared = tokio::time::timeout(
+            self.timeout,
+            crate::context::compactor::prepare(&input, &mut self),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("Context compaction timed out"))
+        .and_then(std::convert::identity)
+        .map_err(context_failure)?;
         let (reply, receive) = tokio::sync::oneshot::channel();
         self.target.send(ProviderEvent::ContextPrepared {
             update: prepared.update,

@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use tools::tool_defs::ToolDefinition;
 
+pub mod compactor;
+
 #[derive(Debug, Clone, Copy)]
 pub struct ContextLimits {
     ceiling: usize,
@@ -507,7 +509,7 @@ struct EvidenceCall<'a> {
 }
 
 #[cfg(test)]
-#[path = "../tests/unit/context/tests.rs"]
+#[path = "../../tests/unit/context/tests.rs"]
 mod tests;
 
 pub(crate) fn estimated_tokens(request: &ClientRequest) -> anyhow::Result<usize> {

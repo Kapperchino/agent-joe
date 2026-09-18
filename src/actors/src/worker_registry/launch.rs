@@ -4,9 +4,9 @@ use super::{
     report::{WorkerReport, WorkerStatus, WorkerView},
     request::{WorkerRequest, WorkerRole},
 };
+use crate::states::runtime::ExecutionRole;
 use crate::{
     actor::{ActorInfo, Dependency},
-    runtime::ExecutionRole,
     worker::{Worker, WorkerFailure, run_worker},
     workers::task_worker::TaskWorker,
 };
@@ -123,7 +123,7 @@ impl PreparedWorker {
             WorkerRole::Write => Some(info.dep.runtime.workspace.writer.clone().try_lock_owned().map_err(|_| anyhow::anyhow!("A writer already owns the workspace; wait before starting another write worker"))?),
             WorkerRole::Read => None,
         };
-        let runtime = crate::runtime::Runtime {
+        let runtime = crate::states::runtime::Runtime {
             turn_scope: None,
             ..info.dep.runtime.child(scope.clone())
         };

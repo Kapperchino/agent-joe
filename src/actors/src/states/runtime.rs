@@ -40,7 +40,7 @@ impl ExecutionRole {
 
 #[derive(Clone)]
 pub struct Runtime {
-    pub(crate) interaction: Arc<crate::interaction_policy::InteractionPolicy>,
+    pub(crate) interaction: Arc<crate::session::interaction_policy::InteractionPolicy>,
     pub workers: Arc<crate::worker_registry::WorkerRegistry>,
     pub(crate) role: ExecutionRole,
     pub(crate) turn_scope: Option<ExecutionScope>,

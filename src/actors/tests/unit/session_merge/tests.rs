@@ -1,5 +1,5 @@
 use super::*;
-use crate::{context::RequestMode, turn_machine::SessionEvent};
+use crate::{context::RequestMode, states::turn_machine::SessionEvent};
 use clients::failure::{Failure, FailureKind};
 use common_models::interaction::{Planning, WorkMode};
 

@@ -1,6 +1,6 @@
+use crate::states::actor_state::ActorState;
 use crate::{
     actor::{ActorContext, Dependency, IntoActorErr, Message},
-    actor_state::ActorState,
     worker::Worker,
 };
 use analysis::contexts::rust_context::RustContext;

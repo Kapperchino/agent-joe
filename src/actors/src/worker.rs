@@ -1,7 +1,7 @@
 use crate::actor::Message;
 use crate::actor::{ActorContext, Dependency};
-use crate::actor_state::ActorState;
-use crate::runtime::ExecutionRole;
+use crate::states::actor_state::ActorState;
+use crate::states::runtime::ExecutionRole;
 use analysis::contexts::context::Context;
 use async_trait::async_trait;
 use ractor::{ActorProcessingErr, ActorRef};

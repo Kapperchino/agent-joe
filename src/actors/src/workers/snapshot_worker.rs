@@ -1,9 +1,9 @@
+use crate::states::actor_state::ActorState;
+use crate::states::stream_processor::{StreamNextStep, StreamProcessor};
+use crate::states::turn::{AcceptedResponse, ResponseState};
 use crate::{
-    actor_state::ActorState,
     context::{CompleteHistory, ContextLimits, estimated_tokens},
     event_reporter::EventReporter,
-    stream_processor::{StreamNextStep, StreamProcessor},
-    turn::{AcceptedResponse, ResponseState},
 };
 use analysis::contexts::context::Context;
 use anyhow::Context as _;
@@ -123,7 +123,7 @@ impl Snapshot {
     }
 }
 
-pub struct SnapshotActor;
+pub struct SnapshotWorker;
 
 #[derive(Debug)]
 pub enum SnapshotMessage {
@@ -133,7 +133,7 @@ pub enum SnapshotMessage {
     },
 }
 
-impl Actor for SnapshotActor {
+impl Actor for SnapshotWorker {
     type Msg = SnapshotMessage;
     type State = Snapshot;
     type Arguments = Snapshot;
@@ -262,5 +262,5 @@ impl SnapshotAnswer {
 }
 
 #[cfg(test)]
-#[path = "../tests/unit/snapshot_actor/tests.rs"]
+#[path = "../../tests/unit/snapshot_actor/tests.rs"]
 mod tests;

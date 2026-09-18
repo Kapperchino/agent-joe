@@ -1,4 +1,4 @@
-use crate::stream_processor::ProcessedItem;
+use crate::states::stream_processor::ProcessedItem;
 use crate::tool_call::ToolCall;
 use anyhow::anyhow;
 use clients::llm::PendingToolId;
@@ -265,5 +265,5 @@ impl PendingContent {
 }
 
 #[cfg(test)]
-#[path = "../tests/unit/batch/tests.rs"]
+#[path = "../../tests/unit/batch/tests.rs"]
 mod tests;

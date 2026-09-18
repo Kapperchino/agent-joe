@@ -1,14 +1,11 @@
-use crate::{
-    context::RequestMode,
-    runtime::WorkspaceRevision,
-    scheduler::ToolEvent,
-    stream_processor::StreamNextStep,
-    turn::{
-        AcceptedResponse, Cleanup, CleanupWork, Continuation, FollowUp, HistoryDisposition,
-        ProviderRun, ResponseState, Tag, ToolJob, Turn, TurnOutcome, TurnState, tool_failure,
-    },
-    worker::WorkerFailure,
+use crate::states::runtime::WorkspaceRevision;
+use crate::states::scheduler::ToolEvent;
+use crate::states::stream_processor::StreamNextStep;
+use crate::states::turn::{
+    AcceptedResponse, Cleanup, CleanupWork, Continuation, FollowUp, HistoryDisposition,
+    ProviderRun, ResponseState, Tag, ToolJob, Turn, TurnOutcome, TurnState, tool_failure,
 };
+use crate::{context::RequestMode, worker::WorkerFailure};
 use clients::{failure::Failure, llm};
 use common_models::{
     interaction::QuestionGate,
@@ -305,7 +302,7 @@ impl TurnMachine {
         }
     }
 
-    pub fn batch(&self) -> Option<&crate::turn::ToolBatch> {
+    pub fn batch(&self) -> Option<&crate::states::turn::ToolBatch> {
         match &self.state {
             SessionState::Running(session) | SessionState::Closing(session) => {
                 session.state.batch()
@@ -870,5 +867,5 @@ impl Shutdown {
 }
 
 #[cfg(test)]
-#[path = "../tests/unit/turn_machine_test.rs"]
+#[path = "../../tests/unit/turn_machine_test.rs"]
 mod tests;

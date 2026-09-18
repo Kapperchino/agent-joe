@@ -1,10 +1,11 @@
 use crate::{
-    actor_state::ActorState,
-    runtime::{ExecutionRole, Runtime},
-    session::Event,
-    session_control::Persistence,
-    turn::FollowUp,
-    turn_machine::TurnMachine,
+    session::{Event, session_control::Persistence},
+    states::{
+        actor_state::ActorState,
+        runtime::{ExecutionRole, Runtime},
+        turn::FollowUp,
+        turn_machine::TurnMachine,
+    },
 };
 use analysis::contexts::context::Context;
 use common_models::{
@@ -485,5 +486,5 @@ impl<C: Context + Clone + 'static> ActorState<C> {
 }
 
 #[cfg(test)]
-#[path = "../tests/unit/session_merge/tests.rs"]
+#[path = "../../tests/unit/session_merge/tests.rs"]
 mod tests;

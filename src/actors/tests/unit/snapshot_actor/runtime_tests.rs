@@ -1,8 +1,6 @@
 use super::*;
-use crate::{
-    context::ContextLimits,
-    snapshot_actor::{Snapshot, SnapshotActor, SnapshotMessage},
-};
+use crate::context::ContextLimits;
+use crate::workers::snapshot_worker::{Snapshot, SnapshotMessage, SnapshotWorker};
 
 struct SnapshotHarness {
     actor: ActorRef<SnapshotMessage>,
@@ -25,7 +23,7 @@ impl SnapshotHarness {
     }
 
     async fn spawn(snapshot: Snapshot, requests: flume::Receiver<Request>) -> Self {
-        let (actor, handle) = Actor::spawn(None, SnapshotActor, snapshot).await.unwrap();
+        let (actor, handle) = Actor::spawn(None, SnapshotWorker, snapshot).await.unwrap();
         Self {
             actor,
             handle: Some(handle),

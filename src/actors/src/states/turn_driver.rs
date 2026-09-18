@@ -1,13 +1,13 @@
+use crate::states::actor_state::ActorState;
+use crate::states::provider_task::{ProviderEvent, ProviderTarget, ProviderTask};
+use crate::states::runtime::ExecutionRole;
+use crate::states::turn::{HistoryDisposition, Tag};
+use crate::states::turn_machine::{
+    Effect, EffectOutcome, Event, ProviderUpdate, SessionEvent, ShutdownScope, WorkerOutcome,
+};
 use crate::{
     actor::{Dependency, Message},
-    actor_state::ActorState,
-    provider_task::{ProviderEvent, ProviderTarget, ProviderTask},
-    runtime::ExecutionRole,
-    session_control::Persistence,
-    turn::{HistoryDisposition, Tag},
-    turn_machine::{
-        Effect, EffectOutcome, Event, ProviderUpdate, SessionEvent, ShutdownScope, WorkerOutcome,
-    },
+    session::session_control::Persistence,
 };
 use analysis::contexts::context::Context;
 use clients::{
@@ -174,7 +174,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                         );
                         let _ = self.actor_ref.send_message(Message::Tools {
                             tag,
-                            event: crate::scheduler::ToolEvent::Finished(Err(failure)),
+                            event: crate::states::scheduler::ToolEvent::Finished(Err(failure)),
                         });
                     }
                 }
@@ -235,7 +235,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             let update = match event {
                 ProviderEvent::ContextNotice(message) => {
                     self.reporter.send(ActorToTuiPacket::ContextNotice(message));
-                    ProviderUpdate::Progress(crate::stream_processor::StreamNextStep::Noop)
+                    ProviderUpdate::Progress(crate::states::stream_processor::StreamNextStep::Noop)
                 }
                 ProviderEvent::CompactionUsage(usage) => {
                     self.stream_processor.token_count.input_tokens = self
@@ -254,7 +254,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                     self.reporter.send(ActorToTuiPacket::TokensUpdated(
                         self.stream_processor.token_count.clone(),
                     ));
-                    ProviderUpdate::Progress(crate::stream_processor::StreamNextStep::Noop)
+                    ProviderUpdate::Progress(crate::states::stream_processor::StreamNextStep::Noop)
                 }
                 ProviderEvent::ContextPrepared { update, reply } => {
                     let result = self.commit_context(update).map(|request| {
@@ -262,10 +262,10 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                             .send(ActorToTuiPacket::ContextUpdated(request));
                     });
                     let _ = reply.send(result);
-                    ProviderUpdate::Progress(crate::stream_processor::StreamNextStep::Noop)
+                    ProviderUpdate::Progress(crate::states::stream_processor::StreamNextStep::Noop)
                 }
                 ProviderEvent::Compacted => {
-                    ProviderUpdate::Finished(Ok(crate::turn::AcceptedResponse::Compacted))
+                    ProviderUpdate::Finished(Ok(crate::states::turn::AcceptedResponse::Compacted))
                 }
                 ProviderEvent::Item(item) => {
                     match response.process(&mut self.stream_processor, item).await {
@@ -284,11 +284,12 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 .workers
                 .pending(&self.dependency.worker_owner());
             let update = match update {
-                ProviderUpdate::Finished(Ok(crate::turn::AcceptedResponse::Complete(message)))
-                    if self.request_mode == crate::context::RequestMode::Continue
-                        && matches!(self.dependency.runtime.role, ExecutionRole::Root)
-                        && self.planning.review()
-                            == common_models::interaction::PlanReview::Required =>
+                ProviderUpdate::Finished(Ok(crate::states::turn::AcceptedResponse::Complete(
+                    message,
+                ))) if self.request_mode == crate::context::RequestMode::Continue
+                    && matches!(self.dependency.runtime.role, ExecutionRole::Root)
+                    && self.planning.review()
+                        == common_models::interaction::PlanReview::Required =>
                 {
                     ProviderUpdate::ReconcilePlan {
                         message,
@@ -298,17 +299,15 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                         ),
                     }
                 }
-                ProviderUpdate::Finished(Ok(crate::turn::AcceptedResponse::Complete(_)))
-                    if !pending.is_empty() =>
-                {
-                    ProviderUpdate::Finished(Err(Failure::new(
-                        FailureKind::Worker,
-                        format!(
-                            "Worker reports have not been collected: {}",
-                            pending.join("; ")
-                        ),
-                    )))
-                }
+                ProviderUpdate::Finished(Ok(crate::states::turn::AcceptedResponse::Complete(
+                    _,
+                ))) if !pending.is_empty() => ProviderUpdate::Finished(Err(Failure::new(
+                    FailureKind::Worker,
+                    format!(
+                        "Worker reports have not been collected: {}",
+                        pending.join("; ")
+                    ),
+                ))),
                 update => update,
             };
             if let ProviderUpdate::Finished(Err(failure)) = &update {
@@ -391,7 +390,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             Command::Compact => {
                 match self.turn.is_idle() {
                     true => {
-                        let follow_up = crate::turn::FollowUp::new(None);
+                        let follow_up = crate::states::turn::FollowUp::new(None);
                         self.compact_turn = Some(follow_up.id);
                         self.dispatch(SessionEvent::Start(follow_up)).await;
                     }

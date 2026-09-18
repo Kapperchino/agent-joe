@@ -1,11 +1,9 @@
-use crate::{
-    actor_state::ActorState,
-    provider_task::ProviderEvent,
-    scheduler::ToolEvent,
-    turn::{FollowUp, HistoryDisposition, Tag},
-    turn_machine::{Event, SessionEvent},
-    worker::{Worker, WorkerAdapter, WorkerFailure},
-};
+use crate::states::actor_state::ActorState;
+use crate::states::provider_task::ProviderEvent;
+use crate::states::scheduler::ToolEvent;
+use crate::states::turn::{FollowUp, HistoryDisposition, Tag};
+use crate::states::turn_machine::{Event, SessionEvent};
+use crate::worker::{Worker, WorkerAdapter, WorkerFailure};
 use analysis::contexts::context::Context;
 use clients::llm::LLmClient;
 use commands::command::Command;
@@ -25,7 +23,7 @@ impl<T, E: std::fmt::Display> IntoActorErr<T> for Result<T, E> {
 
 #[derive(Debug)]
 pub enum Message {
-    CaptureSnapshot(RpcReplyPort<anyhow::Result<crate::snapshot_actor::Snapshot>>),
+    CaptureSnapshot(RpcReplyPort<anyhow::Result<crate::workers::snapshot_worker::Snapshot>>),
     AskQuestion {
         question: common_models::interaction::Question,
         scope: InteractionScope,
@@ -68,7 +66,7 @@ pub struct Dependency<C: Context> {
     pub tui_tx: Sender<ActorToTui>,
     pub debug_mode: bool,
     pub context: C,
-    pub runtime: crate::runtime::Runtime,
+    pub runtime: crate::states::runtime::Runtime,
 }
 
 pub struct InteractionScope {
@@ -140,9 +138,11 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
                         scope,
                         reply,
                     } => {
-                        let result =
-                            crate::interaction_control::Interaction::new(state, &scope.execution)
-                                .and_then(|interaction| interaction.ask(question));
+                        let result = crate::session::interaction_control::Interaction::new(
+                            state,
+                            &scope.execution,
+                        )
+                        .and_then(|interaction| interaction.ask(question));
                         state.sync_question_gate().await;
                         let _ = reply.send(result.map_err(|error| error.to_string()));
                     }
@@ -151,9 +151,11 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
                         scope,
                         reply,
                     } => {
-                        let result =
-                            crate::interaction_control::Interaction::new(state, &scope.execution)
-                                .and_then(|interaction| interaction.update_plan(update));
+                        let result = crate::session::interaction_control::Interaction::new(
+                            state,
+                            &scope.execution,
+                        )
+                        .and_then(|interaction| interaction.update_plan(update));
                         let _ = reply.send(result.map_err(|error| error.to_string()));
                     }
                     Message::StartWork(prompt) => {

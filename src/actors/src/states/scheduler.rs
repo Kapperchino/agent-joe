@@ -1,8 +1,6 @@
-use crate::{
-    actor::{ActorContext, ActorInfo, Dependency, Message},
-    runtime::{ExecutionRole, WorkspaceRevision},
-    turn::{Tag, ToolJob},
-};
+use crate::actor::{ActorContext, ActorInfo, Dependency, Message};
+use crate::states::runtime::{ExecutionRole, WorkspaceRevision};
+use crate::states::turn::{Tag, ToolJob};
 use analysis::contexts::context::Context;
 use common_models::runtime_ids::OperationId;
 use futures::{FutureExt, StreamExt};
@@ -519,7 +517,10 @@ impl<C: Context + Clone + 'static> Executor<C> {
     }
 
     #[cfg(test)]
-    pub async fn replay(&self, mut batch: crate::turn::ToolBatch) -> crate::turn::ToolBatch {
+    pub async fn replay(
+        &self,
+        mut batch: crate::states::turn::ToolBatch,
+    ) -> crate::states::turn::ToolBatch {
         let jobs = batch.jobs();
         let results = self
             .dependency

@@ -1,4 +1,4 @@
-use crate::actor_state::ActorState;
+use crate::states::actor_state::ActorState;
 use analysis::contexts::context::Context;
 use commands::command::Command;
 use common_models::tui_models::ActorToTuiPacket;

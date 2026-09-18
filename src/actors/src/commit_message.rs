@@ -1,8 +1,6 @@
-use crate::{
-    event_reporter::EventReporter,
-    stream_processor::{StreamNextStep, StreamProcessor},
-    turn::{AcceptedResponse, ResponseState},
-};
+use crate::event_reporter::EventReporter;
+use crate::states::stream_processor::{StreamNextStep, StreamProcessor};
+use crate::states::turn::{AcceptedResponse, ResponseState};
 use anyhow::Context;
 use clients::llm::{ClientRequest, LLmClient, Message, StreamEvent};
 use common_models::{runtime_ids::TurnId, tui_models::State};

@@ -217,14 +217,14 @@ retains the existing databases.
 
 ## Immutable snapshot actors
 
-The `actors::snapshot_actor` module provides a question-only actor alongside the
+The `actors::workers::snapshot_worker` module provides a question-only actor alongside the
 normal tool-using workers. Send `actor::Message::CaptureSnapshot` to a settled
 source actor to capture its full transcript, effective instructions, tool
 definitions and results, existing compaction memory, runtime state, and provider
 configuration. Capture rejects active turns and incomplete tool exchanges; it
 does not truncate history or trigger compaction to make the snapshot fit.
 
-Spawn `SnapshotActor` with the returned `Snapshot`, then send
+Spawn `SnapshotWorker` with the returned `Snapshot`, then send
 `SnapshotMessage::Ask { question, reply }`. Each question is independent: the
 actor uses its frozen context plus only that question, and retains neither the
 question nor its answer. Historical messages and tools are losslessly encoded as
@@ -233,7 +233,10 @@ file watchers, delegation, live context refreshes, or session writes. Files and
 artifact contents not already present in the captured context are not fetched.
 
 ```rust
-use actors::{actor::Message, snapshot_actor::{SnapshotActor, SnapshotMessage}};
+use actors::{
+    actor::Message,
+    workers::snapshot_worker::{SnapshotMessage, SnapshotWorker},
+};
 use ractor::{Actor, ActorRef};
 use tokio::sync::oneshot;
 
@@ -241,7 +244,7 @@ async fn ask_snapshot(source: &ActorRef<Message>, question: String) -> anyhow::R
     let (reply, receive) = oneshot::channel();
     source.send_message(Message::CaptureSnapshot(reply.into()))?;
     let snapshot = receive.await??;
-    let (actor, handle) = Actor::spawn(None, SnapshotActor, snapshot).await?;
+    let (actor, handle) = Actor::spawn(None, SnapshotWorker, snapshot).await?;
 
     let (reply, receive) = oneshot::channel();
     actor.send_message(SnapshotMessage::Ask { question, reply: reply.into() })?;
@@ -269,7 +272,7 @@ own internal isolation.
 
 Each crate keeps its tests and fixtures in its own `tests/` directory. Unit tests
 live under `tests/unit/`, organized by module. For example,
-`src/actors/src/batch.rs` has its tests in `src/actors/tests/unit/batch/tests.rs`.
+`src/actors/src/states/batch.rs` has its tests in `src/actors/tests/unit/batch/tests.rs`.
 They are connected with `#[cfg(test)]` and `#[path]` so they retain access to
 private module items. Integration tests live directly under the crate's `tests/`
 directory, such as `src/sandbox/tests/launcher.rs`, where Cargo discovers them

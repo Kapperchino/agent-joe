@@ -11,8 +11,12 @@ use utils::workspace::WorkspacePolicy;
 mod artifact_index;
 pub mod artifacts;
 mod generations;
+pub(crate) mod interaction_control;
+pub(crate) mod interaction_policy;
 mod ownership;
 mod prune;
+pub(crate) mod session_control;
+pub mod session_merge;
 use generations::SessionDatabase;
 pub use generations::SessionStore;
 use ownership::Owner;
@@ -114,7 +118,7 @@ pub(crate) struct Snapshot {
     #[serde(default)]
     pub worktree: Option<utils::git::worktrees::session::SessionWorktree>,
     #[serde(default)]
-    pub merge_approval: crate::session_merge::MergeApproval,
+    pub merge_approval: session_merge::MergeApproval,
     pub id: String,
     workspace: String,
     provider: SessionProvider,
@@ -234,7 +238,7 @@ pub(crate) enum OperationState {
 pub(crate) enum Event {
     Worktree(Option<utils::git::worktrees::session::SessionWorktree>),
     WorktreePruned,
-    MergeApproval(crate::session_merge::MergeApproval),
+    MergeApproval(session_merge::MergeApproval),
     Planning(common_models::interaction::Planning),
     Worker(Box<crate::worker_registry::report::WorkerView>),
     Created,
@@ -711,7 +715,7 @@ impl Snapshot {
 }
 
 impl PendingBatch {
-    pub fn new(session: &Session, batch: &crate::turn::ToolBatch) -> Self {
+    pub fn new(session: &Session, batch: &crate::states::turn::ToolBatch) -> Self {
         Self {
             assistant: batch.assistant_message(),
             operations: batch
@@ -801,7 +805,7 @@ impl Operation {
 }
 
 #[cfg(test)]
-#[path = "../tests/unit/session/tests.rs"]
+#[path = "../../tests/unit/session/tests.rs"]
 pub(crate) mod tests;
 
 impl utils::changes::ChangeStore for Session {

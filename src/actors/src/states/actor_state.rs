@@ -1,12 +1,12 @@
+use crate::states::runtime::{ExecutionRole, Runtime};
+use crate::states::stream_processor::StreamProcessor;
+use crate::states::turn_machine::TurnMachine;
 use crate::{
     actor::{self, ActorContext, Dependency},
     background_actors::file_actor,
     context::{Checkpoint, ContextInput, RequestMode},
     event_reporter::EventReporter,
-    runtime::{ExecutionRole, Runtime},
-    session_control::Persistence,
-    stream_processor::StreamProcessor,
-    turn_machine::TurnMachine,
+    session::session_control::Persistence,
 };
 use analysis::contexts::context::Context;
 use clients::llm::{LLmClient, Message};
@@ -29,7 +29,7 @@ pub struct ActorState<C: Context> {
     pub(crate) compact_turn: Option<TurnId>,
     pub(crate) questions: Questions,
     pub(crate) persistence: Persistence,
-    pub(crate) merge_approval: crate::session_merge::MergeApproval,
+    pub(crate) merge_approval: crate::session::session_merge::MergeApproval,
     pub cur_context: C,
     pub(crate) turn: TurnMachine,
     pub history: Vec<Message>,
@@ -379,7 +379,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             .collect()
     }
 
-    pub(crate) fn executor(&self, scope: ExecutionScope) -> crate::scheduler::Executor<C> {
+    pub(crate) fn executor(&self, scope: ExecutionScope) -> crate::states::scheduler::Executor<C> {
         let runtime = self.dependency.runtime.child(scope.clone());
         let runtime = Runtime {
             turn_scope: Some(scope),
@@ -397,7 +397,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 .collect(),
             ..runtime
         };
-        crate::scheduler::Executor {
+        crate::states::scheduler::Executor {
             dependency: Dependency {
                 runtime,
                 ..self.dependency.clone()

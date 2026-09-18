@@ -1,8 +1,10 @@
 use crate::{
-    actor_state::ActorState,
-    session::{Event, PendingBatch, QueuedInput, ResumableSession, Session, SessionStore},
-    session_merge::MergeEvent,
-    turn::FollowUp,
+    context,
+    session::{
+        Event, PendingBatch, QueuedInput, ResumableSession, Session, SessionStore,
+        session_merge::MergeEvent,
+    },
+    states::{actor_state::ActorState, turn::FollowUp},
 };
 use analysis::contexts::context::Context;
 use clients::{
@@ -48,7 +50,7 @@ enum SessionAction<'a> {
 impl<'a> SessionAction<'a> {
     fn new(
         command: &'a Command,
-        turn: &crate::turn_machine::TurnMachine,
+        turn: &crate::states::turn_machine::TurnMachine,
         current: Option<&str>,
     ) -> anyhow::Result<Self> {
         match command {
@@ -84,7 +86,7 @@ enum SessionReply {
 impl<C: Context + Clone + 'static> ActorState<C> {
     pub(crate) fn commit_context(
         &mut self,
-        update: crate::compactor::ContextUpdate,
+        update: context::compactor::ContextUpdate,
     ) -> Result<common_models::tui_models::RequestContext, Failure> {
         if let Some(checkpoint) = update.checkpoint {
             self.context_checkpoint = self.save_checkpoint(checkpoint)?;
@@ -167,7 +169,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
 
     pub(crate) async fn prepare_session_workspace(&mut self) -> anyhow::Result<()> {
         let mut runtime = self.dependency.runtime.clone();
-        if let (crate::runtime::ExecutionRole::Root, Some(session)) =
+        if let (crate::states::runtime::ExecutionRole::Root, Some(session)) =
             (&runtime.role, &runtime.session)
             && runtime.project.is_some()
             && session.snapshot()?.worktree.is_none()
@@ -188,7 +190,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
 
     pub(crate) async fn relocate_session_workspace(
         &mut self,
-        runtime: crate::runtime::Runtime,
+        runtime: crate::states::runtime::Runtime,
     ) -> anyhow::Result<()> {
         let mut context = self.cur_context.clone();
         context.clear_task_context();
@@ -333,8 +335,8 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 Ok(SessionReply::Resumed(self.session_transcript(id)))
             }
             SessionAction::New => {
-                self.dispatch(crate::turn_machine::SessionEvent::Interrupt(
-                    crate::turn::HistoryDisposition::Retain,
+                self.dispatch(crate::states::turn_machine::SessionEvent::Interrupt(
+                    crate::states::turn::HistoryDisposition::Retain,
                 ))
                 .await;
                 self.clear_history().await?;
@@ -493,7 +495,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         self.questions = snapshot.questions;
         self.planning = snapshot.planning;
         self.deferred_input = snapshot.deferred_input;
-        self.turn = crate::turn_machine::TurnMachine::new(
+        self.turn = crate::states::turn_machine::TurnMachine::new(
             self.dependency.runtime.scope.clone(),
             self.request_mode,
         );

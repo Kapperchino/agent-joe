@@ -281,7 +281,7 @@ async fn force_prune_discards_inactive_worktrees_preserves_history_and_allows_re
     assert!(pruned.worktree.is_none());
     assert!(matches!(
         pruned.merge_approval,
-        crate::session_merge::MergeApproval::None
+        crate::session::session_merge::MergeApproval::None
     ));
     assert_eq!(
         serde_json::to_value(&pruned.history[..saved.history.len()]).unwrap(),
@@ -433,7 +433,7 @@ async fn prune_recovers_interrupted_cleanup_and_clears_saved_worktree_state() {
     assert!(snapshot.worktree.is_none());
     assert!(matches!(
         snapshot.merge_approval,
-        crate::session_merge::MergeApproval::None
+        crate::session::session_merge::MergeApproval::None
     ));
     assert!(h.repo.find_reference(&reference).is_err());
     assert!(
@@ -551,7 +551,7 @@ async fn unchanged_tasks_do_not_request_a_commit_subject_or_merge() {
     assert_eq!(h.repo.refname_to_id("HEAD").unwrap(), base);
     assert!(matches!(
         h.snapshot(&id).merge_approval,
-        crate::session_merge::MergeApproval::None
+        crate::session::session_merge::MergeApproval::None
     ));
     h.stop().await;
 }
@@ -646,7 +646,7 @@ async fn approving_a_conflicted_merge_resolves_and_merges_without_another_questi
     );
     assert!(matches!(
         h.snapshot(&id).merge_approval,
-        crate::session_merge::MergeApproval::None
+        crate::session::session_merge::MergeApproval::None
     ));
     assert!(h.snapshot(&id).worktree.is_none());
     assert!(!worktree.path.exists());
@@ -736,8 +736,8 @@ async fn interrupting_conflict_resolution_keeps_main_unchanged() {
     assert_eq!(h.repo.refname_to_id("HEAD").unwrap(), target);
     assert!(matches!(
         h.snapshot(&id).merge_approval,
-        crate::session_merge::MergeApproval::Resolving {
-            activity: crate::session_merge::ResolutionActivity::Paused,
+        crate::session::session_merge::MergeApproval::Resolving {
+            activity: crate::session::session_merge::ResolutionActivity::Paused,
             ..
         }
     ));
@@ -797,7 +797,7 @@ async fn merge_questions_survive_session_switches_and_failed_tasks_revoke_approv
     .await;
     assert!(matches!(
         h.snapshot(&id).merge_approval,
-        crate::session_merge::MergeApproval::None
+        crate::session::session_merge::MergeApproval::None
     ));
     assert_eq!(h.repo.refname_to_id("HEAD").unwrap(), base);
     assert!(
@@ -869,7 +869,7 @@ async fn successful_tasks_prompt_and_only_explicit_acceptance_updates_main() {
     );
     assert!(matches!(
         h.snapshot(&id).merge_approval,
-        crate::session_merge::MergeApproval::None
+        crate::session::session_merge::MergeApproval::None
     ));
     h.stop().await;
 }
@@ -948,7 +948,7 @@ async fn new_fork_and_resume_keep_distinct_workspaces_and_switch_context() {
     drop(reply);
     assert!(matches!(
         h.snapshot(&original).merge_approval,
-        crate::session_merge::MergeApproval::None
+        crate::session::session_merge::MergeApproval::None
     ));
     assert!(
         std::fs::read_to_string(h.workspace.path.join("lib.rs"))
@@ -987,7 +987,7 @@ async fn another_task_after_merge_gets_a_fresh_isolated_workspace() {
     );
     assert!(matches!(
         h.snapshot(&id).merge_approval,
-        crate::session_merge::MergeApproval::None
+        crate::session::session_merge::MergeApproval::None
     ));
     let merged = h.repo.refname_to_id("HEAD").unwrap();
     let history = h.snapshot(&id).history.len();

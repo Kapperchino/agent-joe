@@ -1,5 +1,5 @@
-use crate::batch::{Batch, ContentBlock, ContentKind};
 use crate::event_reporter::EventReporter;
+use crate::states::batch::{Batch, ContentBlock, ContentKind};
 use crate::tool_call::ToolCall;
 use anyhow::anyhow;
 use clients::llm::{ContentBlockInfo, Delta, StopReason, StreamEvent};

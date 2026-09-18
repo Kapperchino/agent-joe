@@ -1,6 +1,6 @@
 use crate::actor::{ActorContext, Dependency, Message};
-use crate::actor_state::ActorState;
-use crate::stream_processor::StreamNextStep;
+use crate::states::actor_state::ActorState;
+use crate::states::stream_processor::StreamNextStep;
 use analysis::contexts::context::Context;
 use analysis::contexts::rust_context::RustContextLineIndexCreator;
 use async_trait::async_trait;
@@ -170,7 +170,7 @@ async fn runtime_state_is_excluded_from_inherited_worker_constraints() {
     );
 }
 
-async fn harness_with_runtime(runtime: crate::runtime::Runtime) -> Harness {
+async fn harness_with_runtime(runtime: crate::states::runtime::Runtime) -> Harness {
     let (actor, _) = Actor::spawn(None, IdleActor, ()).await.unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
     let (tui_tx, _) = flume::unbounded();
@@ -200,7 +200,7 @@ async fn harness_with_runtime(runtime: crate::runtime::Runtime) -> Harness {
 
 #[tokio::test]
 async fn helpers_preserve_parent_interaction_without_root_tools_or_plan_context() {
-    use crate::runtime::{ExecutionRole, Runtime};
+    use crate::states::runtime::{ExecutionRole, Runtime};
     use common_models::interaction::{Planning, WorkMode};
 
     let runtime = Runtime {
@@ -236,7 +236,7 @@ async fn helpers_preserve_parent_interaction_without_root_tools_or_plan_context(
     );
     assert!(input.instructions.contains("Runtime state updates"));
     let scope = h.state.dependency.runtime.scope.clone();
-    assert!(crate::interaction_control::Interaction::new(&mut h.state, &scope).is_err());
+    assert!(crate::session::interaction_control::Interaction::new(&mut h.state, &scope).is_err());
     h.state.clear_history().await.unwrap();
     assert_eq!(interaction.mode(), WorkMode::Plan);
     assert!(matches!(
@@ -299,8 +299,10 @@ async fn consume(
     match state.stream_processor.process_stream_event(event).await? {
         StreamNextStep::ToolUse => {
             let items = state.stream_processor.extract_and_pre_process()?;
-            let batch =
-                crate::turn::ToolBatch::new(common_models::runtime_ids::TurnId::new(), items);
+            let batch = crate::states::turn::ToolBatch::new(
+                common_models::runtime_ids::TurnId::new(),
+                items,
+            );
             let batch = state
                 .executor(state.dependency.runtime.scope.clone())
                 .replay(batch)
@@ -312,8 +314,8 @@ async fn consume(
             let content = items
                 .into_iter()
                 .map(|item| match item {
-                    crate::stream_processor::ProcessedItem::Content(content) => Ok(content),
-                    crate::stream_processor::ProcessedItem::Tool(_) => {
+                    crate::states::stream_processor::ProcessedItem::Content(content) => Ok(content),
+                    crate::states::stream_processor::ProcessedItem::Tool(_) => {
                         Err(anyhow::anyhow!("Unexpected tool in a completed response"))
                     }
                 })

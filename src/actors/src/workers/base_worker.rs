@@ -1,5 +1,5 @@
 use crate::actor::{ActorContext, Dependency, IntoActorErr, Message};
-use crate::actor_state::ActorState;
+use crate::states::actor_state::ActorState;
 use crate::tools::gather_context::GatherContext;
 use crate::tools::make_changes::MakeChanges;
 use crate::worker::Worker;
