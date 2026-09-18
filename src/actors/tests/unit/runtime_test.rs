@@ -76,6 +76,8 @@ mod commit_message;
 mod request_continuity;
 #[path = "session_worktrees/tests.rs"]
 mod session_worktrees;
+#[path = "snapshot_actor/runtime_tests.rs"]
+mod snapshot_actor;
 type Request = (llm::ClientRequest, oneshot::Sender<anyhow::Result<Events>>);
 struct Provider(flume::Sender<Request>);
 impl StreamProvider for Provider {

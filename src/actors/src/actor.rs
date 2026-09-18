@@ -25,6 +25,7 @@ impl<T, E: std::fmt::Display> IntoActorErr<T> for Result<T, E> {
 
 #[derive(Debug)]
 pub enum Message {
+    CaptureSnapshot(RpcReplyPort<anyhow::Result<crate::snapshot_actor::Snapshot>>),
     AskQuestion {
         question: common_models::interaction::Question,
         scope: InteractionScope,
@@ -131,6 +132,9 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
         scope
             .enter(async {
                 match message {
+                    Message::CaptureSnapshot(reply) => {
+                        let _ = reply.send(state.capture_snapshot());
+                    }
                     Message::AskQuestion {
                         question,
                         scope,

@@ -215,6 +215,56 @@ Compression can take time and needs temporary space for the new database and
 archive. If active conversations alone fill the next database, rotation stops and
 retains the existing databases.
 
+## Immutable snapshot actors
+
+The `actors::snapshot_actor` module provides a question-only actor alongside the
+normal tool-using workers. Send `actor::Message::CaptureSnapshot` to a settled
+source actor to capture its full transcript, effective instructions, tool
+definitions and results, existing compaction memory, runtime state, and provider
+configuration. Capture rejects active turns and incomplete tool exchanges; it
+does not truncate history or trigger compaction to make the snapshot fit.
+
+Spawn `SnapshotActor` with the returned `Snapshot`, then send
+`SnapshotMessage::Ask { question, reply }`. Each question is independent: the
+actor uses its frozen context plus only that question, and retains neither the
+question nor its answer. Historical messages and tools are losslessly encoded as
+inert reference data, not enabled capabilities. There are no workspace tools,
+file watchers, delegation, live context refreshes, or session writes. Files and
+artifact contents not already present in the captured context are not fetched.
+
+```rust
+use actors::{actor::Message, snapshot_actor::{SnapshotActor, SnapshotMessage}};
+use ractor::{Actor, ActorRef};
+use tokio::sync::oneshot;
+
+async fn ask_snapshot(source: &ActorRef<Message>, question: String) -> anyhow::Result<String> {
+    let (reply, receive) = oneshot::channel();
+    source.send_message(Message::CaptureSnapshot(reply.into()))?;
+    let snapshot = receive.await??;
+    let (actor, handle) = Actor::spawn(None, SnapshotActor, snapshot).await?;
+
+    let (reply, receive) = oneshot::channel();
+    actor.send_message(SnapshotMessage::Ask { question, reply: reply.into() })?;
+    let answer = receive.await;
+    actor.stop(None);
+    handle.await?;
+    answer?
+}
+```
+
+Keep the actor reference to ask multiple independent questions before stopping
+it. Snapshots are in-memory and caller-managed; they remain usable after the
+source changes or stops, but are not saved for application restarts. For callers
+without a source actor, `Snapshot::new` accepts an owned `ClientRequest`, a client,
+context limits, and a nonzero per-question timeout.
+
+Blank or oversized questions, tool responses, incomplete streams, and provider
+failures return errors without changing the snapshot. Requests reserve output
+space and have a whole-request timeout and cumulative response-size limit.
+Provider configuration and per-question turn state are isolated; an injected
+`StreamProvider` is still a shared provider implementation and must enforce its
+own internal isolation.
+
 ## Tests
 
 Each crate keeps its tests and fixtures in its own `tests/` directory. Unit tests

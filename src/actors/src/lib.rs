@@ -1,5 +1,6 @@
 pub mod actor;
 pub mod actor_state;
+pub mod snapshot_actor;
 pub mod supervisor;
 pub mod worker;
 pub mod worker_registry;
