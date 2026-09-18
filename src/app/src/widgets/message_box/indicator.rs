@@ -25,16 +25,19 @@ impl FerrisFrame {
 
     fn glyphs(self) -> &'static str {
         match self {
-            Self::Rest | Self::Land => branding::MARK,
-            Self::StepLeft => "V(•ᴗ•)v",
-            Self::StepRight => "v(•ᴗ•)V",
+            Self::Rest => branding::MARK,
+            Self::StepLeft => "⋏(◕ᴗ◕)⋎",
+            Self::Land => "⋎(◡ᴗ◡)⋎",
+            Self::StepRight => "⋎(◕ᴗ◕)⋏",
         }
     }
 
     fn render(self) -> Line<'static> {
         Line::from(Span::styled(
             self.glyphs(),
-            theme::base().fg(theme::ACCENT).add_modifier(Modifier::BOLD),
+            theme::base()
+                .fg(branding::SHELL)
+                .add_modifier(Modifier::BOLD),
         ))
     }
 }

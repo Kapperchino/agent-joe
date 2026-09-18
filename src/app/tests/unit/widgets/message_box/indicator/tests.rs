@@ -31,14 +31,14 @@ fn ferris_preserves_busy_labels_and_uses_the_brand_color() {
         );
         assert_eq!(line.width(), 40);
         assert_eq!(indicator.reserved_lines(&case.state), 1);
-        assert_eq!(line.spans[3].style.fg, Some(theme::ACCENT));
+        assert_eq!(line.spans[3].style.fg, Some(branding::SHELL));
         assert!(line.spans[3].style.add_modifier.contains(Modifier::BOLD));
         assert_eq!(line.spans[0].style.fg, Some(theme::AMBER));
     }
 }
 
 #[test]
-fn mini_ferris_uses_theme_orange_on_the_normal_background_in_every_frame() {
+fn mini_ferris_uses_brand_orange_on_the_normal_background_in_every_frame() {
     for frame in [
         FerrisFrame::Rest,
         FerrisFrame::StepLeft,
@@ -51,7 +51,9 @@ fn mini_ferris_uses_theme_orange_on_the_normal_background_in_every_frame() {
         for span in line.spans {
             assert_eq!(
                 span.style,
-                theme::base().fg(theme::ACCENT).add_modifier(Modifier::BOLD)
+                theme::base()
+                    .fg(branding::SHELL)
+                    .add_modifier(Modifier::BOLD)
             );
         }
     }
@@ -79,7 +81,7 @@ fn mini_ferris_holds_each_frame_for_thirty_six_ticks() {
 fn ferris_runs_to_both_ends_at_a_fixed_cadence_without_shifting_the_label() {
     let mut indicator = BusyIndicator::default();
     for (step, offset) in [0, 1, 2, 3, 4, 5, 4, 3, 2, 1, 0].into_iter().enumerate() {
-        let glyphs = ["v(•ᴗ•)v", "V(•ᴗ•)v", "v(•ᴗ•)v", "v(•ᴗ•)V"][step % 4];
+        let glyphs = ["⋎(◕ᴗ◕)⋎", "⋏(◕ᴗ◕)⋎", "⋎(◡ᴗ◡)⋎", "⋎(◕ᴗ◕)⋏"][step % 4];
         for _ in 0..FERRIS_FRAME_TICKS {
             let line = indicator.render_line(&State::ThinkingStart, 34).unwrap();
             assert_eq!(
@@ -161,11 +163,11 @@ fn message_box_moves_ferris_across_the_line_and_clears_it_when_idle() {
     let area = Rect::new(3, 2, 40, 2);
     let first = render(area, &mut state);
     assert_eq!(row(&first, 2).trim(), "Hello");
-    assert_eq!(row(&first, 3), "Working on it…  v(•ᴗ•)v                 ");
-    assert_eq!(first[(19, 3)].fg, theme::ACCENT);
+    assert_eq!(row(&first, 3), "Working on it…  ⋎(◕ᴗ◕)⋎                 ");
+    assert_eq!(first[(19, 3)].fg, branding::SHELL);
     assert_eq!(first[(3, 3)].fg, theme::AMBER);
     for x in 19..=25 {
-        assert_eq!(first[(x, 3)].fg, theme::ACCENT);
+        assert_eq!(first[(x, 3)].fg, branding::SHELL);
         assert_eq!(first[(x, 3)].bg, theme::BACKGROUND);
     }
     for _ in 0..FERRIS_FRAME_TICKS {
@@ -173,11 +175,11 @@ fn message_box_moves_ferris_across_the_line_and_clears_it_when_idle() {
     }
     let next = render(area, &mut state);
     assert_eq!(row(&next, 2), row(&first, 2));
-    assert_eq!(row(&next, 3), "Working on it…   V(•ᴗ•)v                ");
+    assert_eq!(row(&next, 3), "Working on it…   ⋏(◕ᴗ◕)⋎                ");
     assert_eq!(next[(19, 3)].symbol(), " ");
     assert_eq!(next[(19, 3)].bg, theme::BACKGROUND);
     for x in 20..=26 {
-        assert_eq!(next[(x, 3)].fg, theme::ACCENT);
+        assert_eq!(next[(x, 3)].fg, branding::SHELL);
         assert_eq!(next[(x, 3)].bg, theme::BACKGROUND);
     }
     state.actor_state = State::Ready;
@@ -203,7 +205,7 @@ fn clearing_messages_resets_ferris_before_the_next_conversation() {
     state.append(Msg::Message("After".into()));
     let buffer = render(Rect::new(0, 0, 40, 2), &mut state);
     assert_eq!(row(&buffer, 0).trim(), "After");
-    assert_eq!(row(&buffer, 1), "Connecting…  v(•ᴗ•)v                    ");
+    assert_eq!(row(&buffer, 1), "Connecting…  ⋎(◕ᴗ◕)⋎                    ");
     state.advance_busy_indicator();
     assert_eq!(render(buffer.area, &mut state), buffer);
 }
@@ -220,12 +222,12 @@ fn ferris_stays_on_one_line_in_tiny_viewports() {
             assert_eq!(buffer.area, area);
             if height > 0 {
                 let expected = match width {
-                    0..29 => "v(•ᴗ•)v Thinking it through…"
+                    0..29 => "⋎(◕ᴗ◕)⋎ Thinking it through…"
                         .chars()
                         .take(usize::from(width))
                         .collect(),
                     _ => format!(
-                        "Thinking it through…  v(•ᴗ•)v{}",
+                        "Thinking it through…  ⋎(◕ᴗ◕)⋎{}",
                         " ".repeat(usize::from(width) - 29)
                     ),
                 };

@@ -4,38 +4,49 @@ use ratatui::{
     text::{Line, Span},
 };
 
-pub(crate) const MARK: &str = "v(•ᴗ•)v";
-pub(crate) const TITLE: &str = "v(•ᴗ•)v joe code";
+pub(crate) const MARK: &str = "⋎(◕ᴗ◕)⋎";
+pub(crate) const TITLE: &str = "⋎(◕ᴗ◕)⋎ joe code";
 pub(crate) const TAGLINE: &str = "Small claws. Big ideas.";
 pub(crate) const CAPTION: &str = "Ferris, your Rust companion.";
-pub(crate) const BLUSH: Color = Color::Rgb(203, 76, 100);
+pub(crate) const SHELL: Color = Color::Rgb(247, 76, 0);
+pub(crate) const EYES: Color = Color::Rgb(0, 0, 0);
 
-pub(crate) fn ferris() -> [Line<'static>; 4] {
-    let shell = theme::base().fg(theme::ACCENT);
-    let face = theme::base().fg(theme::BACKGROUND).bg(theme::ACCENT);
-    let eyes = face.fg(theme::TEXT);
-    let blush = face.fg(BLUSH);
+pub(crate) fn ferris() -> [Line<'static>; 10] {
+    let shell = theme::base().fg(SHELL);
+    let eyes = shell.fg(EYES).bg(SHELL);
+    let glint = shell.fg(Color::Rgb(255, 255, 255)).bg(EYES);
+    let claws = shell.fg(Color::Rgb(182, 61, 0)).bg(SHELL);
 
     [
-        Line::from(Span::styled(" ▄ ▄    ▄███████▄    ▄ ▄ ", shell)),
+        Line::from(Span::styled("            ▄▖▗▄ ▗▖            ", shell)),
+        Line::from(Span::styled("       ▄▄▟█████████▟█▖▄▖       ", shell)),
+        Line::from(Span::styled("     ▄▄████████████████▙▄▖     ", shell)),
+        Line::from(Span::styled("   ▗▄▟███████████████████▙▄▖   ", shell)),
+        Line::from(Span::styled("  ▄▄███████████████████████▄▖  ", shell)),
         Line::from(vec![
-            Span::styled(" █▄█  ▄█", shell),
-            Span::styled(" ", face),
-            Span::styled("◕", eyes),
-            Span::styled("     ", face),
-            Span::styled("◕", eyes),
-            Span::styled(" ", face),
-            Span::styled("█▄  █▄█ ", shell),
+            Span::styled("  ▐█████████", shell),
+            Span::styled("▟", eyes),
+            Span::styled("●", glint),
+            Span::styled("▙", eyes),
+            Span::styled("██", shell),
+            Span::styled("▟", eyes),
+            Span::styled("●", glint),
+            Span::styled("▙", eyes),
+            Span::styled("████████   ", shell),
         ]),
         Line::from(vec![
-            Span::styled("  ▀█████", shell),
-            Span::styled(" ", face),
-            Span::styled("˶", blush),
-            Span::styled("  ᴗ  ", face),
-            Span::styled("˶", blush),
-            Span::styled(" ", face),
-            Span::styled("█████▀  ", shell),
+            Span::styled("▗▟██████████", shell),
+            Span::styled("▝▀▘", eyes),
+            Span::styled("██", shell),
+            Span::styled("▝▀▘", eyes),
+            Span::styled("█████████▙▖", shell),
         ]),
-        Line::from(Span::styled("     ▀█▄█▀▀▀▀▀▀▀█▄█▀     ", shell)),
+        Line::from(vec![
+            Span::styled(" ▜█▖▜▞▜██", shell),
+            Span::styled("╭────╮╭────╮", claws),
+            Span::styled("████▘▟▘▟▛ ", shell),
+        ]),
+        Line::from(Span::styled("  ▝▀▄▝ ▝▀▜██▛▀     ███▀▘   ▟▘  ", shell)),
+        Line::from(Span::styled("     ▘    ▝▀█▛▘ ▝▀▀▀▘     ▝    ", shell)),
     ]
 }

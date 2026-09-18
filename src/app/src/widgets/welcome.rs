@@ -24,7 +24,7 @@ impl Widget for Welcome {
                 )),
                 Line::from(theme::muted("i: write")),
             ],
-            (34..48, _) | (_, 4..13) => vec![
+            (34..48, _) | (_, 4..14) => vec![
                 Line::from(Span::styled(
                     branding::TITLE,
                     Style::default()
@@ -35,6 +35,20 @@ impl Widget for Welcome {
                 Line::from(theme::muted(branding::CAPTION)),
                 Line::from(theme::muted("Press i to start building.")),
             ],
+            (_, 14..19) => branding::ferris()
+                .into_iter()
+                .chain([
+                    Line::default(),
+                    Line::from(Span::styled(
+                        branding::TAGLINE,
+                        Style::default()
+                            .fg(theme::TEXT)
+                            .add_modifier(Modifier::BOLD),
+                    )),
+                    Line::from(theme::muted(branding::CAPTION)),
+                    Line::from(theme::muted("Press i to start building.")),
+                ])
+                .collect(),
             _ => branding::ferris()
                 .into_iter()
                 .chain([
