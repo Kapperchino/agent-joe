@@ -1,4 +1,5 @@
 use super::*;
+use crate::isolation::cache::BuildCache;
 use crate::protocol::GuestCommand;
 
 struct FixtureWorkspace {
@@ -50,9 +51,12 @@ impl RuntimeFixture {
         let project = directory.join("project");
         for path in [
             "usr/local/cargo/bin",
+            "usr/local/bin",
             "usr/local/rustup",
             "usr/local/libexec",
             "workspace",
+            "joe-project",
+            "cache",
         ] {
             std::fs::create_dir_all(rootfs.join(path)).unwrap();
         }
@@ -64,6 +68,7 @@ impl RuntimeFixture {
             &firmware.with_file_name("joe-init"),
             &helper,
             &rootfs.join("usr/local/cargo/bin/cargo"),
+            &rootfs.join("usr/local/bin/sccache"),
         ] {
             std::fs::write(path, "fixture").unwrap();
         }
@@ -78,7 +83,8 @@ impl RuntimeFixture {
         )
         .unwrap();
         std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let runtime = Runtime::from_paths(rootfs, firmware, helper, &project).unwrap();
+        let cache = BuildCache::new(directory.join("cache"), &project).unwrap();
+        let runtime = Runtime::from_paths(rootfs, firmware, helper, &project, cache).unwrap();
         Self {
             directory,
             runtime,
@@ -102,7 +108,8 @@ fn runtime_requires_matching_guest_and_paths_outside_the_workspace() {
             runtime.rootfs.clone(),
             runtime.firmware.clone(),
             runtime.helper.clone(),
-            &fixture.directory
+            &fixture.directory,
+            BuildCache::new(fixture.directory.join("cache"), fixture.workspace.root()).unwrap()
         )
         .is_err()
     );
@@ -112,7 +119,8 @@ fn runtime_requires_matching_guest_and_paths_outside_the_workspace() {
             runtime.rootfs.clone(),
             runtime.firmware.clone(),
             runtime.helper.clone(),
-            fixture.workspace.root()
+            fixture.workspace.root(),
+            BuildCache::new(fixture.directory.join("cache"), fixture.workspace.root()).unwrap()
         )
         .is_err()
     );
@@ -128,7 +136,8 @@ fn runtime_requires_the_guest_init_program() {
             runtime.rootfs.clone(),
             runtime.firmware.clone(),
             runtime.helper.clone(),
-            fixture.workspace.root()
+            fixture.workspace.root(),
+            BuildCache::new(fixture.directory.join("cache"), fixture.workspace.root()).unwrap()
         )
         .is_err()
     );
@@ -140,8 +149,7 @@ fn guest_environment_is_clean_and_arguments_stay_out_of_the_helper_protocol() {
     let mut source = Command::new("/usr/bin/env");
     source.env("JOE_RUN_VALUE", "'\"$HOME`id`$(id);*");
     let command = fixture.runtime.prepare(&fixture.workspace).unwrap();
-    let guest =
-        GuestCommand::new(source.as_std(), uuid::Uuid::new_v4(), uuid::Uuid::new_v4()).unwrap();
+    let guest = GuestCommand::new(source.as_std()).unwrap();
     let output = std::process::Command::new(guest.program)
         .args(guest.args)
         .env("JOE_SECRET", "not for the guest")
@@ -165,6 +173,7 @@ fn guest_environment_is_clean_and_arguments_stay_out_of_the_helper_protocol() {
     .unwrap();
     assert_eq!(configuration.workspace, fixture.workspace.root());
     assert_eq!(configuration.init, fixture.runtime.init);
+    assert_eq!(configuration.cache, fixture.runtime.cache.path());
     let cache = fixture
         .workspace
         .root()
@@ -180,7 +189,7 @@ fn guest_arguments_are_literal_and_preserve_empty_values() {
     let values = ["", "a b", "'\"$HOME`id`$(id);*\\", "--", "こんにちは"];
     let mut source = std::process::Command::new("/usr/bin/printf");
     source.arg("%s\\n").args(values);
-    let guest = GuestCommand::new(&source, uuid::Uuid::new_v4(), uuid::Uuid::new_v4()).unwrap();
+    let guest = GuestCommand::new(&source).unwrap();
     let output = std::process::Command::new(guest.program)
         .args(guest.args)
         .env_clear()

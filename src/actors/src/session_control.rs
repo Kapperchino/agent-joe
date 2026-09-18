@@ -469,7 +469,6 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         session: Arc<Session>,
         source: Option<&utils::git::worktrees::session::SessionWorktree>,
     ) -> anyhow::Result<()> {
-        self.dependency.runtime.scope.shutdown_sandbox().await?;
         let mut runtime = self.dependency.runtime.clone();
         runtime.session = Some(session.clone());
         runtime.activate_session(source)?;

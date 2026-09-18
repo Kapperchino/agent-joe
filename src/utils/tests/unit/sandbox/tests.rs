@@ -69,6 +69,111 @@ fn boot_id() -> Command {
 }
 
 #[tokio::test]
+async fn session_worktrees_share_a_vm_without_exposing_each_other() {
+    if crate::test_support::sandbox_available() {
+        let project = Fixture::new();
+        let scope = project.scope();
+        let first_root = project.root.join(".joe-worktrees/first");
+        let second_root = project.root.join(".joe-worktrees/second");
+        for (path, marker) in [(&first_root, "first"), (&second_root, "second")] {
+            std::fs::create_dir_all(path).unwrap();
+            std::fs::write(path.join("marker"), marker).unwrap();
+        }
+        std::os::unix::fs::symlink("../second", first_root.join("sibling")).unwrap();
+        let first = scope
+            .relocated(crate::workspace::WorkspacePolicy::workspace(first_root).unwrap())
+            .child();
+        let second = scope
+            .relocated(crate::workspace::WorkspacePolicy::workspace(second_root).unwrap())
+            .child();
+        let first_boot = first.enter(output(boot_id())).await.unwrap();
+        let second_boot = second.enter(output(boot_id())).await.unwrap();
+        assert!(first_boot.status.success());
+        assert!(second_boot.status.success());
+        assert_eq!(first_boot.stdout, second_boot.stdout);
+        for (session, marker) in [(&first, "first"), (&second, "second")] {
+            let mut command = Command::new("/usr/bin/python3");
+            command.args(["-c", "import pathlib, sys; p = pathlib.Path; assert p('marker').read_text() == sys.argv[1]; assert not list(p('/joe-project').iterdir()); assert not p('sibling/marker').exists(); assert not p('../first/marker').exists(); assert not p('../second/marker').exists()", marker]);
+            let result = session.enter(output(command)).await.unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
+        first.finish().await;
+        let still_running = second.enter(output(boot_id())).await.unwrap();
+        assert!(still_running.status.success());
+        assert_eq!(first_boot.stdout, still_running.stdout);
+        second.finish().await;
+        scope.finish().await;
+    }
+}
+
+fn cached_compilation() -> Command {
+    let mut command = Command::new("/bin/sh");
+    command.args(["-ec", "sccache --zero-stats >/dev/null; sccache rustc --crate-name shared_cache_fixture --crate-type rlib --emit=link --out-dir . lib.rs; sccache --show-stats --stats-format=json"]);
+    command
+}
+
+fn cache_hits(output: &Output) -> u64 {
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stats: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    stats["stats"]["cache_hits"]["counts"]
+        .as_object()
+        .unwrap()
+        .values()
+        .map(|value| value.as_u64().unwrap())
+        .sum()
+}
+
+#[tokio::test]
+async fn compiler_cache_survives_session_deletion_and_vm_restart() {
+    if crate::test_support::sandbox_available() {
+        let project = Fixture::new();
+        let scope = project.scope();
+        let first_root = project.root.join(".joe-worktrees/first");
+        let second_root = project.root.join(".joe-worktrees/second");
+        let source = format!(
+            "pub const ID: &str = {:?};",
+            uuid::Uuid::new_v4().to_string()
+        );
+        for path in [&first_root, &second_root] {
+            std::fs::create_dir_all(path).unwrap();
+            std::fs::write(path.join("lib.rs"), &source).unwrap();
+        }
+        let first = scope
+            .relocated(crate::workspace::WorkspacePolicy::workspace(first_root.clone()).unwrap())
+            .child();
+        let second = scope
+            .relocated(crate::workspace::WorkspacePolicy::workspace(second_root.clone()).unwrap())
+            .child();
+        let before = first.enter(output(boot_id())).await.unwrap();
+        let compiled = first.enter(output(cached_compilation())).await.unwrap();
+        assert_eq!(cache_hits(&compiled), 0);
+        first.finish().await;
+        std::fs::remove_dir_all(first_root).unwrap();
+        let reused = second.enter(output(cached_compilation())).await.unwrap();
+        assert!(cache_hits(&reused) > 0);
+        scope.shutdown_sandbox().await.unwrap();
+        std::fs::remove_file(second_root.join("libshared_cache_fixture.rlib")).unwrap();
+        std::fs::remove_dir_all(second_root.join("target")).unwrap();
+        let after = second.enter(output(boot_id())).await.unwrap();
+        assert!(before.status.success());
+        assert!(after.status.success());
+        assert_ne!(before.stdout, after.stdout);
+        let persisted = second.enter(output(cached_compilation())).await.unwrap();
+        assert!(cache_hits(&persisted) > 0);
+        second.finish().await;
+        scope.finish().await;
+    }
+}
+
+#[tokio::test]
 async fn new_outside_hard_links_block_commands_without_restarting_the_vm() {
     if crate::test_support::sandbox_available() {
         let project = Fixture::new();

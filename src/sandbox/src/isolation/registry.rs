@@ -341,7 +341,7 @@ impl DependencyResolver {
         let rootfs = self
             .sandbox
             .session
-            .get(workspace.clone(), &self.sandbox.tasks)
+            .get(self.sandbox.project.clone(), &self.sandbox.tasks)
             .await?
             .rootfs
             .clone();

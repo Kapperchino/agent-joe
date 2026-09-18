@@ -100,13 +100,19 @@ enum SessionState {
     Stopped { reason: String },
 }
 
+struct CommandEntry {
+    events: mpsc::Sender<CommandEvent>,
+    _lease: std::fs::File,
+}
+
 pub(crate) struct Session {
     requests: mpsc::Sender<Request>,
-    commands: Mutex<HashMap<Uuid, mpsc::Sender<CommandEvent>>>,
+    commands: Mutex<HashMap<Uuid, CommandEntry>>,
     state: watch::Receiver<SessionState>,
     cancel: CancellationToken,
     temporary: TemporaryDirectory,
     pub(crate) rootfs: std::path::PathBuf,
+    cache: crate::isolation::cache::BuildCache,
 }
 
 impl Session {
@@ -125,9 +131,19 @@ impl Session {
             cancel,
             temporary: prepared.temporary,
             rootfs: prepared.runtime.rootfs,
+            cache: prepared.runtime.cache,
         });
         tasks.spawn(launcher.supervise(session.clone(), receiver, state));
         Ok(session)
+    }
+
+    pub(crate) async fn lease(
+        &self,
+        cancellations: &[CancellationToken],
+    ) -> anyhow::Result<std::fs::File> {
+        let mut cancellations = cancellations.to_vec();
+        cancellations.push(self.cancel.clone());
+        self.cache.lease(&cancellations).await
     }
 
     async fn ready(self: &Arc<Self>) -> anyhow::Result<Arc<Self>> {
@@ -171,7 +187,15 @@ impl Session {
     }
 
     async fn dispatch(&self, id: Uuid, event: CommandEvent) {
-        let sender = self.commands.lock().unwrap().get(&id).cloned();
+        let sender = {
+            let mut commands = self.commands.lock().unwrap();
+            match event {
+                CommandEvent::Exited { .. } | CommandEvent::Failed { .. } => {
+                    commands.remove(&id).map(|entry| entry.events)
+                }
+                CommandEvent::Output { .. } => commands.get(&id).map(|entry| entry.events.clone()),
+            }
+        };
         if let Some(sender) = sender {
             let _ = sender.send(event).await;
         }

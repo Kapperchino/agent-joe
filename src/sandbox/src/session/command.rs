@@ -1,4 +1,4 @@
-use super::Session;
+use super::{CommandEntry, Session};
 use crate::{
     ProcessLimits,
     isolation::TemporaryDirectory,
@@ -45,6 +45,7 @@ impl RunningProcess {
         session: &Arc<Session>,
         command: Command,
         protection: CommandProtection,
+        lease: std::fs::File,
         limits: ProcessLimits,
         handle: Arc<ProcessHandle>,
         cancellations: &[CancellationToken],
@@ -55,9 +56,15 @@ impl RunningProcess {
             false => {
                 let temporary = session.temporary.child()?;
                 let id = temporary.id();
-                let command = GuestCommand::new(command.as_std(), session.temporary.id(), id)?;
+                let command = GuestCommand::new(command.as_std())?;
                 let (sender, events) = mpsc::channel(32);
-                session.commands.lock().unwrap().insert(id, sender);
+                session.commands.lock().unwrap().insert(
+                    id,
+                    CommandEntry {
+                        events: sender,
+                        _lease: lease,
+                    },
+                );
                 let process = Self {
                     session: session.clone(),
                     events,
@@ -65,16 +72,21 @@ impl RunningProcess {
                     limits,
                     temporary,
                 };
-                session
+                let submitted = session
                     .requests
-                    .send(Request::Run {
+                    .try_send(Request::Run {
                         id,
                         command,
                         protection,
                     })
-                    .await
-                    .context("Sandbox session stopped before command submission")?;
-                Ok(process)
+                    .context("Sandbox session could not accept the command");
+                match submitted {
+                    Ok(()) => Ok(process),
+                    Err(error) => {
+                        session.commands.lock().unwrap().remove(&id);
+                        Err(error)
+                    }
+                }
             }
         }
     }
@@ -152,18 +164,20 @@ impl RunningProcess {
 
 impl Drop for RunningProcess {
     fn drop(&mut self) {
-        if self
+        let cancellation = self
             .session
             .commands
             .lock()
             .unwrap()
-            .remove(&self.id())
-            .is_some()
-        {
-            let _ = self
-                .session
-                .requests
-                .try_send(Request::Cancel { id: self.id() });
+            .contains_key(&self.id())
+            .then(|| {
+                self.session
+                    .requests
+                    .try_send(Request::Cancel { id: self.id() })
+                    .map_err(|_| ())
+            });
+        if matches!(cancellation, Some(Err(_))) {
+            self.session.cancel.cancel();
         }
     }
 }

@@ -36,6 +36,12 @@ impl Profile {
             workspace.root(),
         );
         profile.path("allow", "file-read*", "literal", executable);
+        profile.path(
+            "allow",
+            "file-read* file-write*",
+            "subpath",
+            runtime.cache.path(),
+        );
         for path in runtime.read_only_paths()? {
             profile.path("allow", "file-read*", "subpath", path);
         }

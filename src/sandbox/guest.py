@@ -6,9 +6,10 @@ import os
 import pathlib
 import signal
 import stat
+import subprocess
 import sys
 import tty
-from contextlib import ExitStack
+from contextlib import ExitStack, suppress
 from dataclasses import dataclass
 from enum import Enum, IntFlag, auto
 
@@ -92,9 +93,35 @@ class ProtectedMount:
                           MountFlag.BIND | MountFlag.REMOUNT | read_only)
 
 
+@dataclass(frozen=True)
+class WorkspaceMount:
+    path: str
+
+    def apply(self):
+        parts = pathlib.PurePosixPath(self.path).parts
+        if parts[:2] != ("/", "joe-project") or ".." in parts:
+            raise ValueError("Command workspaces must remain in the project")
+        with ExitStack() as descriptors:
+            flags = os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW
+            descriptor = os.open("/joe-project", flags)
+            descriptors.callback(os.close, descriptor)
+            for name in parts[2:]:
+                descriptor = os.open(name, flags, dir_fd=descriptor)
+                descriptors.callback(os.close, descriptor)
+            mount(f"/proc/self/fd/{descriptor}", "/workspace", None,
+                  MountFlag.BIND | MountFlag.RECURSIVE)
+        hidden = MountFlag.READ_ONLY | MountFlag.NO_SUID | MountFlag.NO_DEVICES
+        mount("tmpfs", "/joe-project", "tmpfs", hidden, "size=4096,mode=000")
+        private = MountFlag.NO_SUID | MountFlag.NO_DEVICES
+        mount("tmpfs", "/tmp", "tmpfs", private, "size=1g,mode=1777")
+        mount("tmpfs", "/dev/shm", "tmpfs", private, "size=64m,mode=1777")
+        os.chdir("/workspace")
+
+
 def execute():
     request = json.load(sys.stdin)
     protection = request["protection"]
+    WorkspaceMount(protection["workspace"]).apply()
     mounts = ([ProtectedMount(path, Access.READ_ONLY) for path in protection["read_only"]]
               + [ProtectedMount(path, Access.HIDDEN) for path in protection["hidden"]])
     for protection in sorted(mounts, key=lambda entry: len(pathlib.PurePosixPath(entry.path).parts)):
@@ -104,11 +131,22 @@ def execute():
                  "--bounding-set=-all,+dac_override", "--inh-caps=-all", "--ambient-caps=-all",
                  "--clear-groups", "--", "/usr/bin/env", "-i", "--",
                  *[f"{key}={value}" for key, value in command["environment"].items()],
+                 "/usr/bin/python3", "-I", "/usr/local/libexec/joe-session.py", "command",
                  command["program"], *command["args"]]
     descriptor = os.open("/dev/null", os.O_RDONLY)
     os.dup2(descriptor, 0)
     os.close(descriptor)
     os.execve(arguments[0], arguments, {})
+
+
+def run_command(arguments):
+    completed = subprocess.run(arguments, stdin=subprocess.DEVNULL)
+    if pathlib.Path("/tmp/sccache.sock").is_socket():
+        with suppress(subprocess.SubprocessError):
+            subprocess.run(["/usr/local/bin/sccache", "--stop-server"],
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=30, check=True)
+    sys.exit(completed.returncode if completed.returncode >= 0 else 128 - completed.returncode)
 
 
 @dataclass
@@ -146,10 +184,10 @@ class Job:
         try:
             await asyncio.to_thread(refresh_metadata)
             self.process = await asyncio.create_subprocess_exec(
-                "/usr/bin/unshare", "--mount", "--pid", "--fork", "--kill-child=KILL",
+                "/usr/bin/unshare", "--mount", "--pid", "--ipc", "--net", "--fork", "--kill-child=KILL",
                 "--mount-proc", "--propagation", "private", "--",
                 "/usr/bin/python3", "-I", "/usr/local/libexec/joe-session.py", "execute",
-                env={}, cwd="/workspace",
+                env={}, cwd="/",
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE, start_new_session=True,
             )
@@ -212,6 +250,8 @@ if __name__ == "__main__":
     match sys.argv[1:]:
         case ["execute"]:
             execute()
+        case ["command", *arguments]:
+            run_command(arguments)
         case []:
             asyncio.run(serve())
         case _:

@@ -386,7 +386,6 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             .workspace
             .acquire(ToolEffect::Write, &runtime.scope)
             .await?;
-        runtime.scope.shutdown_sandbox().await?;
         let outcome = tokio::task::spawn_blocking(move || workspace.merge(&commit)).await?;
         drop(lease);
         match outcome {

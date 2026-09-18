@@ -50,6 +50,10 @@ pub(super) fn prepare(
     for path in runtime.read_only_paths()? {
         command.arg("--ro-bind").arg(path).arg(path);
     }
+    command
+        .arg("--bind")
+        .arg(runtime.cache.path())
+        .arg(runtime.cache.path());
     command.args(["--dev-bind", "/dev/kvm", "/dev/kvm"]);
     command
         .arg("--bind")

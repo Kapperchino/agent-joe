@@ -1,5 +1,70 @@
 use super::*;
 
+#[cfg(target_os = "linux")]
+#[test]
+fn guest_workspace_mounts_and_cache_shutdown_are_isolated() {
+    use std::io::Write;
+    let mut child = std::process::Command::new("/usr/bin/python3")
+        .args(["-I", "-c", include_str!("guest.py")])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(include_bytes!("../../../guest.py"))
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn workspace_selection_is_relative_to_the_shared_project() {
+    let project = Path::new("/project");
+    assert_eq!(
+        CommandProtection::workspace_path(project, project).unwrap(),
+        Path::new("/joe-project")
+    );
+    assert_eq!(
+        CommandProtection::workspace_path(project, Path::new("/project/.joe-worktrees/session"))
+            .unwrap(),
+        Path::new("/joe-project/.joe-worktrees/session")
+    );
+    for workspace in [
+        "/other",
+        "/project-other",
+        "/project/../other",
+        "/project/a/../../other",
+    ] {
+        assert!(CommandProtection::workspace_path(project, Path::new(workspace)).is_err());
+    }
+}
+
+#[test]
+fn commands_use_persistent_compiler_cache_and_private_temporary_storage() {
+    let source = std::process::Command::new("cargo");
+    let first = GuestCommand::new(&source).unwrap();
+    let second = GuestCommand::new(&source).unwrap();
+    assert_eq!(first.environment, second.environment);
+    for (name, value) in [
+        ("RUSTC_WRAPPER", "/usr/local/bin/sccache"),
+        ("CARGO_INCREMENTAL", "0"),
+        ("SCCACHE_DIR", "/cache"),
+        ("SCCACHE_SERVER_UDS", "/tmp/sccache.sock"),
+        ("TMPDIR", "/tmp"),
+        ("CARGO_TARGET_DIR", "/workspace/target/.joe/linux/build"),
+    ] {
+        assert_eq!(first.environment[name], value);
+    }
+}
+
 #[test]
 fn command_identifiers_must_be_uuids() {
     for identifier in ["../outside", "/tmp/command", "", "command;exit"] {

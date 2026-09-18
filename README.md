@@ -79,13 +79,25 @@ package. Keep both executables in the same directory when installing Joe. Other
 applications using the sandbox crate can set `JOE_SANDBOX_LAUNCHER` to the launcher
 path. Workspace checks and tests include the launcher.
 
-Cargo operations within a session share a sandbox VM and its build cache.
-Switching session worktrees starts a separate sandbox for that workspace.
-Each command runs in its own PID
-namespace, so timeouts and turn cancellation stop its descendants without
-shutting down the VM. Workspace hard links are checked before every command, and
-each command receives fresh protection mounts for read-only and hidden paths.
-Temporary directories use verified directory handles for creation and cleanup.
+All session worktrees in a Joe project share one running sandbox VM. Switching,
+restoring, or merging sessions does not restart it. Each command mounts only its
+selected worktree at `/workspace`, hides the project export, and gets private
+mount, PID, IPC, and network namespaces plus temporary storage. Timeouts and turn
+cancellation stop its descendants without shutting down the VM. Workspace hard
+links are checked before every command, and each command receives fresh
+protection mounts for read-only and hidden paths.
+
+Rust builds use a pinned, checksum-verified sccache with a persistent 10 GiB local
+cache under the system cache directory at `agent-joe/sandbox/compiler-cache-v1`.
+The guest image and compiler cache survive VM shutdown, application restarts,
+and session/worktree deletion. Cargo target directories remain worktree-local;
+unchanged cacheable compilations can be reused across worktrees, while linking
+and build scripts may still run. Incremental compilation is disabled for sccache.
+Commands acquire an exclusive cache lease, including across Joe processes, and
+run a private sccache server that stops before the lease is released. Commands
+therefore run serially, including managed programs, rather than racing multiple
+servers against sccache's local storage. Cancelling a waiting command releases
+its wait without stopping the shared VM.
 Cargo timeouts default to 30 minutes and can be set between
 1 and 3600 seconds with `timeout_seconds`.
 

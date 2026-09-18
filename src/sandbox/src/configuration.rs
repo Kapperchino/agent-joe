@@ -8,4 +8,5 @@ pub(super) struct Configuration {
     pub init: PathBuf,
     pub rootfs: PathBuf,
     pub workspace: PathBuf,
+    pub cache: PathBuf,
 }

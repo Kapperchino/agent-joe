@@ -12,6 +12,7 @@ pub(crate) fn command(
             rootfs: path.clone(),
             firmware: path.clone(),
             init: path.clone(),
+            cache: cache::BuildCache::new(path.parent().unwrap().join("cache"), &path)?,
             helper: path,
         },
         #[cfg(target_os = "linux")]

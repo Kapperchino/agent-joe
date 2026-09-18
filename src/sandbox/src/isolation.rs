@@ -10,6 +10,7 @@ mod temporary;
 pub(crate) use temporary::TemporaryDirectory;
 
 mod bootstrap;
+pub(crate) mod cache;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]

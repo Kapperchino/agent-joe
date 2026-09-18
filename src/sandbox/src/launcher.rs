@@ -95,8 +95,13 @@ impl KrunContext {
                 read_only: true,
             },
             Filesystem {
-                tag: c"joe-workspace",
+                tag: c"joe-project",
                 path: configuration.workspace,
+                read_only: false,
+            },
+            Filesystem {
+                tag: c"joe-cache",
+                path: configuration.cache,
                 read_only: false,
             },
         ] {

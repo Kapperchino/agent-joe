@@ -38,13 +38,15 @@ impl ExecutionScope {
         let scope = self.clone();
         let workspace = Arc::new(workspace);
         #[cfg(unix)]
-        let sandbox = Some(sandbox::Sandbox::new(
-            Arc::new(crate::sandbox::workspace::SandboxWorkspace::new(
-                workspace.clone(),
-            )),
-            scope.tasks.clone(),
-            scope.cancel.clone(),
-        ));
+        let sandbox = {
+            let workspace: Arc<dyn sandbox::workspace::Workspace> = Arc::new(
+                crate::sandbox::workspace::SandboxWorkspace::new(workspace.clone()),
+            );
+            Some(match &self.sandbox {
+                Some(sandbox) => sandbox.relocated(workspace),
+                None => sandbox::Sandbox::new(workspace, scope.tasks.clone(), scope.cancel.clone()),
+            })
+        };
         #[cfg(not(unix))]
         let sandbox = None;
         Self {

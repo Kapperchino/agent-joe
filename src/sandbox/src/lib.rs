@@ -61,6 +61,7 @@ impl Default for ProcessLimits {
 #[derive(Clone)]
 pub struct Sandbox {
     workspace: Arc<dyn Workspace>,
+    project: Arc<dyn Workspace>,
     tasks: TaskTracker,
     #[cfg(unix)]
     session: Arc<session::SessionOwner>,
@@ -73,6 +74,7 @@ impl Sandbox {
         cancel: CancellationToken,
     ) -> Self {
         Self {
+            project: workspace.clone(),
             workspace,
             tasks,
             #[cfg(unix)]
@@ -80,11 +82,16 @@ impl Sandbox {
         }
     }
 
+    pub fn relocated(&self, workspace: Arc<dyn Workspace>) -> Self {
+        Self {
+            workspace,
+            ..self.clone()
+        }
+    }
+
     #[cfg(unix)]
     pub async fn start(&self) -> anyhow::Result<()> {
-        self.session
-            .get(self.workspace.clone(), &self.tasks)
-            .await?;
+        self.session.get(self.project.clone(), &self.tasks).await?;
         Ok(())
     }
 
@@ -106,25 +113,27 @@ impl Sandbox {
             true => Err(anyhow::anyhow!("Process cancelled before launch")),
             false => Ok(()),
         }?;
-        let session = self
-            .session
-            .get(self.workspace.clone(), &self.tasks)
-            .await?;
+        let session = self.session.get(self.project.clone(), &self.tasks).await?;
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         if command.as_std().get_program() == "cargo"
             && command.as_std().get_args().next() != Some(std::ffi::OsStr::new("fmt"))
         {
             isolation::registry::prepare(self.clone(), cancellations.clone()).await?;
         }
+        let lease = session.lease(&cancellations).await?;
         let workspace = self.workspace.clone();
+        let project = self.project.clone();
         let protection = self
             .tasks
-            .spawn_blocking(move || protocol::CommandProtection::new(workspace.as_ref()))
+            .spawn_blocking(move || {
+                protocol::CommandProtection::new(project.root(), workspace.as_ref())
+            })
             .await??;
         RunningProcess::new(
             &session,
             command,
             protection,
+            lease,
             limits,
             handle,
             &cancellations,

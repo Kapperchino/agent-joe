@@ -129,6 +129,7 @@ pub fn prepare(
         Sha256::new()
             .chain_update(include_bytes!("../../guest.sh"))
             .chain_update(include_bytes!("../../guest.py"))
+            .chain_update(super::compiler_cache::VERSION)
             .finalize()
     );
     installation.prepare(&format!("guest-{}-{guest_version}", architecture.manifest()), |staging| {
@@ -148,7 +149,8 @@ pub fn prepare(
         for component in [RustComponent::Formatter, RustComponent::Clippy] {
             component.install(downloads, architecture, staging)?;
         }
-        for directory in ["workspace", "dev", "proc", "sys", "tmp", "usr/local/libexec", "usr/local/cargo/registry/index", "usr/local/cargo/registry/cache"] {
+        super::compiler_cache::install(downloads, architecture, staging)?;
+        for directory in ["workspace", "joe-project", "cache", "dev", "dev/shm", "proc", "sys", "tmp", "usr/local/libexec", "usr/local/cargo/registry/index", "usr/local/cargo/registry/cache"] {
             fs::create_dir_all(rootfs.join(directory))?;
         }
         fs::write(rootfs.join("usr/local/libexec/joe-guest"), include_bytes!("../../guest.sh"))?;

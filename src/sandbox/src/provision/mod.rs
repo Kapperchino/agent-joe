@@ -1,4 +1,5 @@
 pub mod artifact;
+mod compiler_cache;
 pub mod directory;
 pub mod download;
 pub mod image;

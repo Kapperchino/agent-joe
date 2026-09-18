@@ -33,17 +33,36 @@ pub(crate) enum Request {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CommandProtection {
+    workspace: PathBuf,
     read_only: Vec<PathBuf>,
     hidden: Vec<PathBuf>,
 }
 
 impl CommandProtection {
-    pub(crate) fn new(workspace: &dyn Workspace) -> anyhow::Result<Self> {
+    pub(crate) fn new(project: &Path, workspace: &dyn Workspace) -> anyhow::Result<Self> {
+        let selected = Self::workspace_path(project, workspace.root())?;
+        crate::isolation::runtime::Runtime::prepare_workspace(workspace)?;
         let protection = workspace.prepare()?;
         Ok(Self {
+            workspace: selected,
             read_only: Self::guest_paths(workspace.root(), protection.read_only)?,
             hidden: Self::guest_paths(workspace.root(), protection.hidden)?,
         })
+    }
+
+    fn workspace_path(project: &Path, workspace: &Path) -> anyhow::Result<PathBuf> {
+        let relative = workspace
+            .strip_prefix(project)
+            .context("Sandbox workspaces must remain within the original project")?;
+        match relative
+            .components()
+            .all(|part| matches!(part, Component::Normal(_)))
+        {
+            true => Ok(Path::new("/joe-project").join(relative)),
+            false => Err(anyhow::anyhow!(
+                "Sandbox workspace paths cannot contain traversal"
+            )),
+        }
     }
 
     fn guest_paths(root: &Path, paths: Vec<PathBuf>) -> anyhow::Result<Vec<PathBuf>> {
@@ -115,11 +134,7 @@ fn decode_output<'de, D: serde::Deserializer<'de>>(decoder: D) -> Result<Vec<u8>
 }
 
 impl GuestCommand {
-    pub(crate) fn new(
-        command: &std::process::Command,
-        session: uuid::Uuid,
-        temporary: uuid::Uuid,
-    ) -> anyhow::Result<Self> {
+    pub(crate) fn new(command: &std::process::Command) -> anyhow::Result<Self> {
         let executable = match command.get_program() {
             program if program == OsStr::new("cargo") => "/usr/local/cargo/bin/cargo",
             program => program.to_str().context("Guest executable must be UTF-8")?,
@@ -137,10 +152,7 @@ impl GuestCommand {
                     .collect::<anyhow::Result<_>>()?,
                 environment: [
                     ("HOME", "/workspace".to_owned()),
-                    (
-                        "TMPDIR",
-                        format!("/workspace/target/.joe/tmp/{session}/{temporary}/guest"),
-                    ),
+                    ("TMPDIR", "/tmp".into()),
                     (
                         "CARGO_TARGET_DIR",
                         "/workspace/target/.joe/linux/build".into(),
@@ -154,6 +166,12 @@ impl GuestCommand {
                     ("LANG", "C".into()),
                     ("CARGO_NET_OFFLINE", "true".into()),
                     ("RUSTUP_AUTO_INSTALL", "0".into()),
+                    ("RUSTC_WRAPPER", "/usr/local/bin/sccache".into()),
+                    ("CARGO_INCREMENTAL", "0".into()),
+                    ("SCCACHE_DIR", "/cache".into()),
+                    ("SCCACHE_CACHE_SIZE", "10G".into()),
+                    ("SCCACHE_SERVER_UDS", "/tmp/sccache.sock".into()),
+                    ("SCCACHE_IDLE_TIMEOUT", "0".into()),
                 ]
                 .into_iter()
                 .map(|(key, value)| Ok((key.to_owned(), value)))
