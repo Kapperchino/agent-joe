@@ -30,7 +30,7 @@ fn rows(buffer: &Buffer) -> Vec<String> {
 }
 
 #[test]
-fn full_welcome_renders_filled_ferris_with_unclipped_hints() {
+fn full_welcome_renders_themed_ferris_with_unclipped_hints() {
     assert_eq!(branding::ferris().map(|row| row.width()), [31; 10]);
     for area in [
         Rect::new(0, 0, 48, 19),
@@ -57,12 +57,10 @@ fn full_welcome_renders_filled_ferris_with_unclipped_hints() {
                         .fg(ratatui::style::Color::Rgb(255, 255, 255))
                         .bg(branding::EYES),
                     (5 | 6, 12..=14 | 17..=19) => {
-                        theme::base().fg(branding::EYES).bg(branding::SHELL)
+                        theme::base().fg(branding::EYES).bg(theme::ACCENT)
                     }
-                    (7, 9..=20) => theme::base()
-                        .fg(ratatui::style::Color::Rgb(182, 61, 0))
-                        .bg(branding::SHELL),
-                    _ => theme::base().fg(branding::SHELL),
+                    (7, 9..=20) => theme::base().fg(theme::BORDER).bg(theme::ACCENT),
+                    _ => theme::base().fg(theme::ACCENT),
                 };
                 assert_eq!(cell.symbol(), symbol.to_string(), "{area:?} ({x}, {y})");
                 assert_eq!(cell.fg, expected.fg.unwrap(), "{area:?} ({x}, {y})");

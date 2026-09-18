@@ -8,7 +8,7 @@ struct BusyCase {
 }
 
 #[test]
-fn ferris_preserves_busy_labels_and_uses_the_brand_color() {
+fn ferris_preserves_busy_labels_and_uses_the_theme_accent() {
     let indicator = BusyIndicator::default();
     for case in [
         BusyCase {
@@ -31,14 +31,14 @@ fn ferris_preserves_busy_labels_and_uses_the_brand_color() {
         );
         assert_eq!(line.width(), 40);
         assert_eq!(indicator.reserved_lines(&case.state), 1);
-        assert_eq!(line.spans[3].style.fg, Some(branding::SHELL));
+        assert_eq!(line.spans[3].style.fg, Some(theme::ACCENT));
         assert!(line.spans[3].style.add_modifier.contains(Modifier::BOLD));
         assert_eq!(line.spans[0].style.fg, Some(theme::AMBER));
     }
 }
 
 #[test]
-fn mini_ferris_uses_brand_orange_on_the_normal_background_in_every_frame() {
+fn mini_ferris_uses_the_theme_accent_on_the_normal_background_in_every_frame() {
     for frame in [
         FerrisFrame::Rest,
         FerrisFrame::StepLeft,
@@ -51,9 +51,7 @@ fn mini_ferris_uses_brand_orange_on_the_normal_background_in_every_frame() {
         for span in line.spans {
             assert_eq!(
                 span.style,
-                theme::base()
-                    .fg(branding::SHELL)
-                    .add_modifier(Modifier::BOLD)
+                theme::base().fg(theme::ACCENT).add_modifier(Modifier::BOLD)
             );
         }
     }
@@ -164,10 +162,10 @@ fn message_box_moves_ferris_across_the_line_and_clears_it_when_idle() {
     let first = render(area, &mut state);
     assert_eq!(row(&first, 2).trim(), "Hello");
     assert_eq!(row(&first, 3), "Working on it…  ⋎(◕ᴗ◕)⋎                 ");
-    assert_eq!(first[(19, 3)].fg, branding::SHELL);
+    assert_eq!(first[(19, 3)].fg, theme::ACCENT);
     assert_eq!(first[(3, 3)].fg, theme::AMBER);
     for x in 19..=25 {
-        assert_eq!(first[(x, 3)].fg, branding::SHELL);
+        assert_eq!(first[(x, 3)].fg, theme::ACCENT);
         assert_eq!(first[(x, 3)].bg, theme::BACKGROUND);
     }
     for _ in 0..FERRIS_FRAME_TICKS {
@@ -179,7 +177,7 @@ fn message_box_moves_ferris_across_the_line_and_clears_it_when_idle() {
     assert_eq!(next[(19, 3)].symbol(), " ");
     assert_eq!(next[(19, 3)].bg, theme::BACKGROUND);
     for x in 20..=26 {
-        assert_eq!(next[(x, 3)].fg, branding::SHELL);
+        assert_eq!(next[(x, 3)].fg, theme::ACCENT);
         assert_eq!(next[(x, 3)].bg, theme::BACKGROUND);
     }
     state.actor_state = State::Ready;

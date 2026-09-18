@@ -15,8 +15,9 @@
 
 **Small claws. Big ideas.** Ferris is Joe Code's mascot and your Rust coding companion.
 The Unicode artwork follows [Karen Rustad Tölva’s original Ferris](https://rustacean.net/):
-a spiky orange shell, black eyes with white highlights, and low, inward-facing claws.
-The terminal pairs Ferris with warm charcoal surfaces and cream text.
+a spiky shell, black eyes with white highlights, and low, inward-facing claws.
+Ferris shares the textbox's peach theme accent, with warm brown claw details,
+warm charcoal surfaces, and cream text.
 Success and added lines stay green; warnings are amber, and errors and removed lines stay red.
 
 An open source TUI-based coding tool that only works with rust and does not have access to the shell.
