@@ -7,7 +7,7 @@ use super::{
 use crate::states::runtime::ExecutionRole;
 use crate::{
     actor::{ActorInfo, Dependency},
-    worker::{Worker, WorkerFailure, run_worker},
+    worker::{ContextWorker, WorkerFailure, run_worker},
     workers::task_worker::TaskWorker,
 };
 use analysis::contexts::{context::Context, rust_context::RustContext};

@@ -83,11 +83,11 @@ struct RepositoryActor {
 }
 
 impl RepositoryActor {
-    async fn new<W: Worker<C = RustContext>>(worker: W, root: std::path::PathBuf) -> Self {
+    async fn new<W: ContextWorker<C = RustContext>>(worker: W, root: std::path::PathBuf) -> Self {
         Self::configured(worker, root, false).await
     }
 
-    async fn configured<W: Worker<C = RustContext>>(
+    async fn configured<W: ContextWorker<C = RustContext>>(
         worker: W,
         root: std::path::PathBuf,
         debug_mode: bool,
@@ -96,7 +96,7 @@ impl RepositoryActor {
         Self::with_runtime(worker, runtime, debug_mode).await
     }
 
-    async fn with_runtime<W: Worker<C = RustContext>>(
+    async fn with_runtime<W: ContextWorker<C = RustContext>>(
         worker: W,
         runtime: Runtime,
         debug_mode: bool,

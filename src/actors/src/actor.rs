@@ -3,13 +3,14 @@ use crate::states::provider_task::ProviderEvent;
 use crate::states::scheduler::ToolEvent;
 use crate::states::turn::{FollowUp, HistoryDisposition, Tag};
 use crate::states::turn_machine::{Event, SessionEvent};
-use crate::worker::{Worker, WorkerAdapter, WorkerFailure};
+use crate::worker::{ContextWorker, Worker, WorkerFailure};
 use analysis::contexts::context::Context;
+use async_trait::async_trait;
 use clients::llm::LLmClient;
 use commands::command::Command;
 use common_models::{runtime_ids::TurnId, tui_models::ActorToTui};
 use flume::Sender;
-use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, SupervisionEvent};
+use ractor::{ActorProcessingErr, ActorRef, RpcReplyPort};
 use tools::tool_defs::ErasedToolRef;
 
 pub trait IntoActorErr<T> {
@@ -101,13 +102,13 @@ pub struct ActorInfo<C: Context> {
     pub dep: Dependency<C>,
     pub actor_ref: ActorRef<Message>,
 }
-#[cfg_attr(feature = "async-trait", ractor::async_trait)]
-impl<W: Worker> Actor for WorkerAdapter<W> {
+#[async_trait]
+impl<W: ContextWorker> Worker for W {
     type Msg = Message;
     type State = ActorState<W::C>;
     type Arguments = Dependency<W::C>;
 
-    async fn pre_start(
+    async fn start(
         &self,
         myself: ActorRef<Message>,
         dependency: Self::Arguments,
@@ -116,7 +117,7 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
         tokio::select! {
             biased;
             _ = scope.cancel.cancelled() => Err("Worker startup cancelled".into()),
-            state = scope.enter(self.worker.startup_hook(myself, dependency)) => state,
+            state = scope.enter(self.startup_hook(myself, dependency)) => state,
         }
     }
 
@@ -213,7 +214,7 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
         Ok(())
     }
 
-    async fn post_stop(
+    async fn stop(
         &self,
         _: ActorRef<Message>,
         state: &mut Self::State,
@@ -227,18 +228,6 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
             .await;
         if let Some(watcher) = &state.file_actor {
             watcher.stop_and_wait(None, None).await?;
-        }
-        Ok(())
-    }
-
-    async fn handle_supervisor_evt(
-        &self,
-        _: ActorRef<Message>,
-        event: SupervisionEvent,
-        _: &mut Self::State,
-    ) -> Result<(), ActorProcessingErr> {
-        if let SupervisionEvent::ActorFailed(who, reason) = event {
-            tracing::error!("Child actor {:?} failed: {:?}", who.get_id(), reason);
         }
         Ok(())
     }

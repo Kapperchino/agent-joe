@@ -26,7 +26,7 @@ impl Drop for Fixture {
     }
 }
 
-async fn startup_without_sandbox<W: Worker<C = RustContext>>(worker: W) -> Result<()> {
+async fn startup_without_sandbox<W: ContextWorker<C = RustContext>>(worker: W) -> Result<()> {
     let fixture = Fixture::new()?;
     let mut cli = Cli::try_parse_from(["joe"])?;
     cli.instructions_file = Some(fixture.root.join("AGENTS.md"));

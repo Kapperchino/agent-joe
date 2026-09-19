@@ -1,5 +1,6 @@
 use super::*;
 use crate::context::ContextLimits;
+use crate::immutable_workers::{ImmutableWorker, ImmutableWorkerDescription, ImmutableWorkerView};
 use crate::workers::snapshot_worker::{Snapshot, SnapshotMessage, SnapshotWorker};
 
 struct SnapshotHarness {
@@ -23,7 +24,9 @@ impl SnapshotHarness {
     }
 
     async fn spawn(snapshot: Snapshot, requests: flume::Receiver<Request>) -> Self {
-        let (actor, handle) = Actor::spawn(None, SnapshotWorker, snapshot).await.unwrap();
+        let (actor, handle) = Actor::spawn(None, WorkerAdapter::new(SnapshotWorker), snapshot)
+            .await
+            .unwrap();
         Self {
             actor,
             handle: Some(handle),
@@ -79,6 +82,119 @@ async fn capture(actor: &ActorRef<Message>) -> anyhow::Result<Snapshot> {
         .send_message(Message::CaptureSnapshot(reply.into()))
         .unwrap();
     within(receive).await.unwrap()
+}
+
+async fn register_snapshot(h: &Harness, owner: &str) -> ImmutableWorkerView {
+    let worker = ImmutableWorker::spawn(
+        SnapshotWorker,
+        capture(&h.actor).await.unwrap(),
+        ImmutableWorkerDescription {
+            kind: "snapshot".into(),
+            description: "Frozen fixture context".into(),
+        },
+        &h.actor,
+    )
+    .await
+    .unwrap();
+    h.runtime.immutable_workers.insert(owner, worker)
+}
+
+#[tokio::test]
+async fn registered_snapshot_survives_completed_and_interrupted_owner_turns() {
+    enum OwnerTurn {
+        Complete,
+        Interrupt,
+    }
+
+    let h = Harness::new(vec![], Duration::from_secs(1)).await;
+    let owner = "actor-1";
+    let view = register_snapshot(&h, owner).await;
+    let registry = h.runtime.immutable_workers.clone();
+    let mut prefix = None;
+    for turn in [OwnerTurn::Complete, OwnerTurn::Interrupt] {
+        h.start("Later owner context must not change the snapshot");
+        let (_, reply) = h.request().await;
+        match turn {
+            OwnerTurn::Complete => {
+                answer(reply, response(vec![text("Later owner answer")]));
+                h.terminal(Lifecycle::Completed).await;
+            }
+            OwnerTurn::Interrupt => {
+                h.actor.send_message(Message::Interrupt).unwrap();
+                h.terminal(Lifecycle::Cancelled).await;
+                assert!(reply.is_closed());
+            }
+        }
+        assert_eq!(registry.list(owner).len(), 1);
+        let serve = async {
+            let (request, reply) = h.request().await;
+            assert_eq!(request.messages.len(), 2);
+            assert!(request.tools.is_empty());
+            let current = request.messages[0].text();
+            assert!(!current.contains("Later owner"));
+            match &prefix {
+                Some(previous) => assert_eq!(previous, &current),
+                None => prefix = Some(current),
+            }
+            answer(reply, response(vec![text("Independent snapshot answer")]));
+        };
+        let ask = registry.ask(
+            owner,
+            &view.worker_id,
+            "What was captured?".into(),
+            Duration::from_secs(2),
+        );
+        let (result, ()) = within(async { tokio::join!(ask, serve) }).await;
+        assert_eq!(result.unwrap().answer, "Independent snapshot answer");
+    }
+    h.stop().await;
+    assert!(registry.list(owner).is_empty());
+}
+
+#[tokio::test]
+async fn clearing_registered_snapshots_cancels_pending_requests_and_streams() {
+    enum Pending {
+        Request,
+        Stream,
+    }
+
+    for pending in [Pending::Request, Pending::Stream] {
+        let h = Harness::new(vec![], Duration::from_secs(1)).await;
+        let owner = "actor-1";
+        let view = register_snapshot(&h, owner).await;
+        let registry = &h.runtime.immutable_workers;
+        let clear = async {
+            let (_, reply) = h.request().await;
+            match pending {
+                Pending::Request => {
+                    registry.clear(owner).await;
+                    assert!(reply.is_closed());
+                }
+                Pending::Stream => {
+                    let (events, stream) = flume::unbounded::<StreamEvent>();
+                    assert!(reply.send(Ok(stream.into_stream().map(Ok).boxed())).is_ok());
+                    registry.clear(owner).await;
+                    assert!(events.is_disconnected());
+                }
+            }
+        };
+        let ask = registry.ask(
+            owner,
+            &view.worker_id,
+            "Wait for an answer".into(),
+            Duration::from_secs(2),
+        );
+        let (result, ()) = within(async { tokio::join!(ask, clear) }).await;
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("stopped before answering")
+        );
+        assert!(registry.list(owner).is_empty());
+        assert!(h.requests.is_empty());
+        h.stop().await;
+    }
 }
 
 #[tokio::test]

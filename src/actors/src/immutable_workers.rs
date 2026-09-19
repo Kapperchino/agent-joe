@@ -1,4 +1,5 @@
 use crate::actor::Message;
+use crate::worker::{Worker, WorkerAdapter};
 use anyhow::Context as _;
 use ractor::{Actor, ActorRef, RpcReplyPort};
 use serde::{Deserialize, Serialize};
@@ -43,14 +44,19 @@ pub struct ImmutableWorker {
 }
 
 impl ImmutableWorker {
-    pub async fn spawn<A: Actor<Msg = ImmutableMessage>>(
-        worker: A,
-        arguments: A::Arguments,
+    pub async fn spawn<W: Worker<Msg = ImmutableMessage>>(
+        worker: W,
+        arguments: W::Arguments,
         description: ImmutableWorkerDescription,
         owner: &ActorRef<Message>,
     ) -> anyhow::Result<Self> {
-        let (actor, handle) =
-            Actor::spawn_linked(None, worker, arguments, owner.get_cell()).await?;
+        let (actor, handle) = Actor::spawn_linked(
+            None,
+            WorkerAdapter::new(worker),
+            arguments,
+            owner.get_cell(),
+        )
+        .await?;
         Ok(Self {
             endpoint: Endpoint {
                 view: ImmutableWorkerView {

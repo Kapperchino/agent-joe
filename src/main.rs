@@ -1,6 +1,6 @@
 use actors::actor::{Dependency, Message};
 use actors::supervisor::WorkerSupervisor;
-use actors::worker::{Worker, WorkerAdapter};
+use actors::worker::{ContextWorker, WorkerAdapter};
 use actors::workers::base_worker::BaseWorker;
 use actors::workers::simple_worker::SimpleWorker;
 use analysis::contexts::rust_context::RustContext;
@@ -145,7 +145,7 @@ struct RunningActor {
     scope: utils::execution::OwnedScope,
 }
 
-async fn get_actor<W: Worker<C = RustContext>>(
+async fn get_actor<W: ContextWorker<C = RustContext>>(
     cli: &Cli,
     worker: W,
     chan: Sender<ActorToTui>,

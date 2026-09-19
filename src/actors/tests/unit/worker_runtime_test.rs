@@ -536,12 +536,13 @@ async fn both_root_modes_query_automatically_created_compaction_snapshots() {
     }
 }
 
-impl Actor for ReferenceWorker {
+#[async_trait]
+impl crate::worker::Worker for ReferenceWorker {
     type Msg = crate::immutable_workers::ImmutableMessage;
     type State = String;
     type Arguments = String;
 
-    async fn pre_start(
+    async fn start(
         &self,
         _: ActorRef<Self::Msg>,
         reference: String,

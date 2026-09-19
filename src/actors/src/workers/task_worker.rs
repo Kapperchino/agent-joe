@@ -1,7 +1,7 @@
 use crate::states::actor_state::ActorState;
 use crate::{
     actor::{ActorContext, Dependency, IntoActorErr, Message},
-    worker::Worker,
+    worker::ContextWorker,
 };
 use analysis::contexts::rust_context::RustContext;
 use async_trait::async_trait;
@@ -11,7 +11,7 @@ use tools::tool_defs::ErasedToolRef;
 pub struct TaskWorker;
 
 #[async_trait]
-impl Worker for TaskWorker {
+impl ContextWorker for TaskWorker {
     type C = RustContext;
 
     fn init_prompt(_: Option<&str>) -> String {

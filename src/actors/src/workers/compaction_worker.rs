@@ -5,7 +5,7 @@ use crate::{
     actor::{ActorContext, Dependency, IntoActorErr, Message},
     context::{ContextBudget, ContextLimits, Memory, NativeCompaction},
     event_reporter::EventReporter,
-    worker::{Worker, run_worker},
+    worker::{ContextWorker, run_worker},
 };
 use analysis::contexts::{context::Context, rust_context::RustContextLineIndexCreator};
 use async_trait::async_trait;
@@ -22,7 +22,7 @@ pub(crate) struct CompactionWorker {
 const PROMPT: &str = include_str!("resources/compaction_worker.md");
 
 #[async_trait]
-impl Worker for CompactionWorker {
+impl ContextWorker for CompactionWorker {
     type C = CompactionContext;
 
     fn init_prompt(added: Option<&str>) -> String {

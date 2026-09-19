@@ -6,7 +6,7 @@ use crate::states::turn::Tag;
 use crate::{
     actor::{ActorContext, Dependency, Message},
     stream_replay_test::TestContext,
-    worker::{Worker, WorkerAdapter},
+    worker::{ContextWorker, WorkerAdapter},
 };
 use async_trait::async_trait;
 use clients::{
@@ -98,7 +98,7 @@ impl StreamProvider for Provider {
 }
 struct FixtureWorker;
 #[async_trait]
-impl Worker for FixtureWorker {
+impl ContextWorker for FixtureWorker {
     type C = TestContext;
     fn init_prompt(_: Option<&str>) -> String {
         "Fixture instructions".into()
@@ -848,7 +848,7 @@ impl ErasedToolTrait<TestContext, ActorContext<TestContext>> for DelegateTool {
 }
 struct FailingWorker;
 #[async_trait]
-impl Worker for FailingWorker {
+impl ContextWorker for FailingWorker {
     type C = TestContext;
     fn init_prompt(_: Option<&str>) -> String {
         String::new()

@@ -233,7 +233,7 @@ Both the main worker and simple worker expose `ask_immutable_worker`:
 
 Listing returns IDs, kinds, and descriptions. Asking returns the worker metadata
 and answer. The interface is not snapshot-specific: future immutable workers can
-implement `immutable_workers::ImmutableMessage::Ask`, be spawned through
+implement `worker::Worker` with `immutable_workers::ImmutableMessage` as their message type, handle `Ask`, be spawned through
 `ImmutableWorker::spawn`, and registered in `Runtime::immutable_workers` under
 their conversation owner. The tool needs no changes for a new worker kind.
 Registered workers must answer only from fixed context without tools or retained
@@ -248,14 +248,19 @@ memory rather than the original earlier exchanges.
 
 ### Manual snapshot actor API
 
-The `actors::workers::snapshot_worker` module provides a question-only actor alongside the
-normal tool-using workers. Send `actor::Message::CaptureSnapshot` to a settled
+The `actors::workers::snapshot_worker` module provides a question-only worker using
+the same `Worker` lifecycle and `WorkerAdapter` as the normal tool-using workers.
+Context-based workers implement `ContextWorker`, which supplies the shared
+conversation lifecycle through a blanket `Worker` implementation. Snapshot workers
+implement `Worker` directly with frozen state, without a workspace context.
+Send `actor::Message::CaptureSnapshot` to a settled
 source actor to capture its full transcript, effective instructions, tool
 definitions and results, existing compaction memory, runtime state, and provider
 configuration. Capture rejects active turns and incomplete tool exchanges; it
 does not truncate history or trigger compaction to make the snapshot fit.
 
-For independently managed snapshots, spawn `SnapshotWorker` with the returned `Snapshot`, then send
+For independently managed snapshots, spawn `WorkerAdapter::new(SnapshotWorker)`
+with the returned `Snapshot`, then send
 `SnapshotMessage::Ask { question, reply }`. Each question is independent: the
 actor uses its frozen context plus only that question, and retains neither the
 question nor its answer. Historical messages and tools are losslessly encoded as
@@ -266,6 +271,7 @@ artifact contents not already present in the captured context are not fetched.
 ```rust
 use actors::{
     actor::Message,
+    worker::WorkerAdapter,
     workers::snapshot_worker::{SnapshotMessage, SnapshotWorker},
 };
 use ractor::{Actor, ActorRef};
@@ -275,7 +281,7 @@ async fn ask_snapshot(source: &ActorRef<Message>, question: String) -> anyhow::R
     let (reply, receive) = oneshot::channel();
     source.send_message(Message::CaptureSnapshot(reply.into()))?;
     let snapshot = receive.await??;
-    let (actor, handle) = Actor::spawn(None, SnapshotWorker, snapshot).await?;
+    let (actor, handle) = Actor::spawn(None, WorkerAdapter::new(SnapshotWorker), snapshot).await?;
 
     let (reply, receive) = oneshot::channel();
     actor.send_message(SnapshotMessage::Ask { question, reply: reply.into() })?;

@@ -1,6 +1,6 @@
 use crate::actor::{ActorContext, Dependency, IntoActorErr, Message};
 use crate::states::actor_state::ActorState;
-use crate::worker::Worker;
+use crate::worker::ContextWorker;
 use analysis::contexts::context::Context;
 use analysis::contexts::rust_context::RustContext;
 use async_trait::async_trait;
@@ -19,7 +19,7 @@ pub struct SimpleWorker<C: Context> {
 const PROMPT: &str = include_str!("resources/simple_worker.md");
 
 #[async_trait]
-impl Worker for SimpleWorker<RustContext> {
+impl ContextWorker for SimpleWorker<RustContext> {
     type C = RustContext;
 
     fn init_prompt(added: Option<&str>) -> String {

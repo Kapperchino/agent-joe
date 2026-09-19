@@ -4,7 +4,7 @@ use crate::states::actor_state::ActorState;
 use crate::states::runtime::ExecutionRole;
 use analysis::contexts::context::Context;
 use async_trait::async_trait;
-use ractor::{ActorProcessingErr, ActorRef};
+use ractor::{Actor, ActorProcessingErr, ActorRef, SupervisionEvent};
 use tools::tool_defs::ErasedToolRef;
 
 pub struct WorkerAdapter<W> {
@@ -23,6 +23,78 @@ impl<W> WorkerAdapter<W> {
 
 #[async_trait]
 pub trait Worker: Send + Sync + 'static {
+    type Msg: ractor::Message;
+    type State: Send + 'static;
+    type Arguments: Send + 'static;
+
+    async fn start(
+        &self,
+        myself: ActorRef<Self::Msg>,
+        arguments: Self::Arguments,
+    ) -> Result<Self::State, ActorProcessingErr>;
+
+    async fn handle(
+        &self,
+        myself: ActorRef<Self::Msg>,
+        message: Self::Msg,
+        state: &mut Self::State,
+    ) -> Result<(), ActorProcessingErr>;
+
+    async fn stop(
+        &self,
+        _: ActorRef<Self::Msg>,
+        _: &mut Self::State,
+    ) -> Result<(), ActorProcessingErr> {
+        Ok(())
+    }
+}
+
+#[cfg_attr(feature = "async-trait", ractor::async_trait)]
+impl<W: Worker> Actor for WorkerAdapter<W> {
+    type Msg = W::Msg;
+    type State = W::State;
+    type Arguments = W::Arguments;
+
+    async fn pre_start(
+        &self,
+        myself: ActorRef<Self::Msg>,
+        arguments: Self::Arguments,
+    ) -> Result<Self::State, ActorProcessingErr> {
+        self.worker.start(myself, arguments).await
+    }
+
+    async fn handle(
+        &self,
+        myself: ActorRef<Self::Msg>,
+        message: Self::Msg,
+        state: &mut Self::State,
+    ) -> Result<(), ActorProcessingErr> {
+        self.worker.handle(myself, message, state).await
+    }
+
+    async fn post_stop(
+        &self,
+        myself: ActorRef<Self::Msg>,
+        state: &mut Self::State,
+    ) -> Result<(), ActorProcessingErr> {
+        self.worker.stop(myself, state).await
+    }
+
+    async fn handle_supervisor_evt(
+        &self,
+        _: ActorRef<Self::Msg>,
+        event: SupervisionEvent,
+        _: &mut Self::State,
+    ) -> Result<(), ActorProcessingErr> {
+        if let SupervisionEvent::ActorFailed(who, reason) = event {
+            tracing::error!("Child actor {:?} failed: {:?}", who.get_id(), reason);
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+pub trait ContextWorker: Send + Sync + 'static {
     type C: Context + Send + Sync + Clone + 'static;
 
     fn init_prompt(added: Option<&str>) -> String;
@@ -36,12 +108,11 @@ pub trait Worker: Send + Sync + 'static {
     fn tools() -> Vec<ErasedToolRef<Self::C, ActorContext<Self::C>>>;
 }
 
-pub async fn run_worker<W: Worker>(
+pub async fn run_worker<W: ContextWorker>(
     worker: W,
     mut dependency: Dependency<W::C>,
     parent: ActorRef<Message>,
 ) -> Result<String, WorkerFailure> {
-    use ractor::Actor;
     dependency.runtime.role = match dependency.runtime.role {
         ExecutionRole::Root => ExecutionRole::Helper,
         role => role,

@@ -1,6 +1,6 @@
 use crate::actor::{ActorContext, Dependency, IntoActorErr, Message};
 use crate::states::actor_state::ActorState;
-use crate::worker::Worker;
+use crate::worker::ContextWorker;
 use analysis::contexts::context::Context;
 use analysis::contexts::rust_empty_context::RustEmptyContext;
 use async_trait::async_trait;
@@ -18,7 +18,7 @@ pub struct WriteWorker<C: Context> {
 const PROMPT: &str = include_str!("resources/write_worker.md");
 
 #[async_trait]
-impl Worker for WriteWorker<RustEmptyContext> {
+impl ContextWorker for WriteWorker<RustEmptyContext> {
     type C = RustEmptyContext;
 
     fn init_prompt(added: Option<&str>) -> String {

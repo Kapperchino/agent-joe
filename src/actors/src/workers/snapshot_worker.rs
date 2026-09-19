@@ -1,16 +1,18 @@
 use crate::states::actor_state::ActorState;
 use crate::states::stream_processor::{StreamNextStep, StreamProcessor};
 use crate::states::turn::{AcceptedResponse, ResponseState};
+use crate::worker::Worker;
 use crate::{
     context::{CompleteHistory, ContextLimits, estimated_tokens},
     event_reporter::EventReporter,
 };
 use analysis::contexts::context::Context;
 use anyhow::Context as _;
+use async_trait::async_trait;
 use clients::llm::{ClientRequest, ContentBlock, LLmClient, Message, Role, StreamEvent};
 use common_models::{runtime_ids::TurnId, tui_models::State};
 use futures::TryStreamExt;
-use ractor::{Actor, ActorProcessingErr, ActorRef};
+use ractor::{ActorProcessingErr, ActorRef};
 use std::time::Duration;
 
 pub use crate::immutable_workers::ImmutableMessage as SnapshotMessage;
@@ -127,12 +129,13 @@ impl Snapshot {
 
 pub struct SnapshotWorker;
 
-impl Actor for SnapshotWorker {
+#[async_trait]
+impl Worker for SnapshotWorker {
     type Msg = SnapshotMessage;
     type State = Snapshot;
     type Arguments = Snapshot;
 
-    async fn pre_start(
+    async fn start(
         &self,
         _: ActorRef<Self::Msg>,
         snapshot: Snapshot,
