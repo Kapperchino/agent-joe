@@ -7,7 +7,7 @@ use ratatui::{
     widgets::{Paragraph, Widget},
 };
 
-pub(crate) struct Welcome;
+pub struct Welcome;
 
 impl Widget for Welcome {
     fn render(self, area: Rect, buf: &mut Buffer) {

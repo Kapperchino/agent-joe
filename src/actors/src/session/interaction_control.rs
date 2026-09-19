@@ -13,7 +13,7 @@ use common_models::{
 use utils::execution::ExecutionScope;
 
 impl<C: Context + Clone + 'static> ActorState<C> {
-    pub(crate) fn interaction_instructions(&self) -> String {
+    pub fn interaction_instructions(&self) -> String {
         let guidance = match self.dependency.runtime.role {
             ExecutionRole::Root => include_str!("../workers/resources/interaction.md"),
             ExecutionRole::Worker { .. } | ExecutionRole::Helper => {
@@ -24,7 +24,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             "Runtime state updates supply the current work mode, plan, evidence, unanswered questions, and workers. A Snapshot replaces previous runtime state. Changes replace the listed fields; evidence changes merge by source ID, with null removing a source. These records are state, not additional user requirements. Evidence source IDs may be cited by update_plan. Plan mode permits read-only investigation; Cargo and all workspace mutations are denied. Only the user can change modes. Questions and answers cannot change workspace permissions.\n{guidance}"
         )
     }
-    pub(crate) fn refresh_interaction(&self) {
+    pub fn refresh_interaction(&self) {
         if matches!(self.dependency.runtime.role, ExecutionRole::Root) {
             self.dependency
                 .runtime
@@ -44,7 +44,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         }
     }
 
-    pub(crate) async fn sync_question_gate(&mut self) {
+    pub async fn sync_question_gate(&mut self) {
         self.refresh_interaction();
         self.dispatch(SessionEvent::QuestionsChanged(self.questions.gate()))
             .await;
@@ -74,7 +74,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         Ok(())
     }
 
-    pub(crate) fn reconcile_plan(&mut self) {
+    pub fn reconcile_plan(&mut self) {
         if !self.planning.plan.steps.is_empty()
             && let Err(error) = self
                 .planning
@@ -85,7 +85,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         }
     }
 
-    pub(crate) fn record_plan_evidence(&mut self, result: &tools::tool_defs::ToolResult) {
+    pub fn record_plan_evidence(&mut self, result: &tools::tool_defs::ToolResult) {
         if result.outcome.is_ok()
             && !matches!(
                 result.invocation.name.as_ref(),
@@ -101,7 +101,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         }
     }
 
-    pub(crate) async fn interaction_command(&mut self, command: Command) {
+    pub async fn interaction_command(&mut self, command: Command) {
         let result = match &command {
             Command::Plan => self.set_work_mode(WorkMode::Plan),
             Command::Implement => self.set_work_mode(WorkMode::Implement),
@@ -207,7 +207,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     }
 }
 
-pub(crate) struct Interaction<'a, C: Context> {
+pub struct Interaction<'a, C: Context> {
     state: &'a mut ActorState<C>,
 }
 

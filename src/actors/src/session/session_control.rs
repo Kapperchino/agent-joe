@@ -18,7 +18,7 @@ use common_models::tui_models::{
 use std::sync::Arc;
 use utils::git::worktrees::session::PruneMode;
 
-pub(crate) enum Persistence {
+pub enum Persistence {
     Ready,
     Failed(Failure),
 }
@@ -84,7 +84,7 @@ enum SessionReply {
 }
 
 impl<C: Context + Clone + 'static> ActorState<C> {
-    pub(crate) async fn commit_context(
+    pub async fn commit_context(
         &mut self,
         update: context::compactor::ContextUpdate,
     ) -> Result<common_models::tui_models::RequestContext, Failure> {
@@ -136,7 +136,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         }
     }
 
-    pub(crate) fn append_history(&mut self, messages: Vec<llm::Message>) {
+    pub fn append_history(&mut self, messages: Vec<llm::Message>) {
         let stored = self
             .dependency
             .runtime
@@ -158,7 +158,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         self.history.append(&mut self.deferred_input);
     }
 
-    pub(crate) fn persist(&mut self, event: Event) {
+    pub fn persist(&mut self, event: Event) {
         let result = self
             .dependency
             .runtime
@@ -171,13 +171,13 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         }
     }
 
-    pub(crate) fn persistence_failed(&mut self, error: anyhow::Error) {
+    pub fn persistence_failed(&mut self, error: anyhow::Error) {
         if let Some(message) = self.persistence.fail(error) {
             self.reporter.send(ActorToTuiPacket::SessionError(message));
         }
     }
 
-    pub(crate) fn queue_input(&mut self, input: &FollowUp) {
+    pub fn queue_input(&mut self, input: &FollowUp) {
         if let Some(session) = &self.dependency.runtime.session {
             self.persist(Event::Queued(QueuedInput {
                 turn: session.key(input.id),
@@ -186,7 +186,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         }
     }
 
-    pub(crate) async fn prepare_session_workspace(&mut self) -> anyhow::Result<()> {
+    pub async fn prepare_session_workspace(&mut self) -> anyhow::Result<()> {
         let mut runtime = self.dependency.runtime.clone();
         if let (crate::states::runtime::ExecutionRole::Root, Some(session)) =
             (&runtime.role, &runtime.session)
@@ -207,7 +207,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         Ok(())
     }
 
-    pub(crate) async fn relocate_session_workspace(
+    pub async fn relocate_session_workspace(
         &mut self,
         runtime: crate::states::runtime::Runtime,
     ) -> anyhow::Result<()> {
@@ -226,7 +226,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         Ok(())
     }
 
-    pub(crate) async fn begin_turn(&mut self, input: FollowUp) {
+    pub async fn begin_turn(&mut self, input: FollowUp) {
         self.llm.begin_turn();
         if let Err(error) = self.record_merge(MergeEvent::TaskStarted { turn: input.id }) {
             self.persistence_failed(error);
@@ -259,7 +259,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         self.history.extend(input.prompt.map(llm::Message::new));
     }
 
-    pub(crate) fn prepare_batch(&mut self) {
+    pub fn prepare_batch(&mut self) {
         if let Some(session) = &self.dependency.runtime.session
             && let Some(batch) = self.turn.batch()
         {
@@ -267,7 +267,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         }
     }
 
-    pub(crate) fn persist_report(&mut self, packet: &ActorToTuiPacket) {
+    pub fn persist_report(&mut self, packet: &ActorToTuiPacket) {
         if let Some(session) = &self.dependency.runtime.session
             && let ActorToTuiPacket::TurnChanged {
                 turn_id,
@@ -283,7 +283,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         }
     }
 
-    pub(crate) async fn session_command(&mut self, command: Command) {
+    pub async fn session_command(&mut self, command: Command) {
         let result = self.run_session_command(&command).await;
         let packet = match (command, result) {
             (command, Ok(SessionReply::Message(message))) => {

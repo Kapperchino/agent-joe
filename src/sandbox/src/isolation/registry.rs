@@ -372,7 +372,7 @@ impl DependencyResolver {
     }
 }
 
-pub(crate) fn prepare(
+pub fn prepare(
     sandbox: Sandbox,
     cancellations: Vec<CancellationToken>,
 ) -> futures::future::BoxFuture<'static, anyhow::Result<()>> {

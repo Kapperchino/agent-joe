@@ -41,7 +41,7 @@ impl CommandState {
 }
 
 impl RunningProcess {
-    pub(crate) async fn new(
+    pub async fn new(
         session: &Arc<Session>,
         command: Command,
         protection: CommandProtection,

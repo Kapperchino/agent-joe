@@ -1,5 +1,5 @@
 use crate::rust_proj::RustProject;
-pub(crate) use crate::symbol_info::SymbolInfo;
+pub use crate::symbol_info::SymbolInfo;
 use ra_ap_ide::{
     Analysis, FilePosition, FileStructureConfig, GotoImplementationConfig, LineIndex,
     NavigationTarget, StructureNode, TextSize,
@@ -37,7 +37,7 @@ pub struct Range {
 }
 
 impl<'a> AnalysisSession<'a> {
-    pub(crate) fn get_work_files(&self) -> Vec<FileInfo> {
+    pub fn get_work_files(&self) -> Vec<FileInfo> {
         self.work_files.clone()
     }
 

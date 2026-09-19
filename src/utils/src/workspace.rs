@@ -156,7 +156,7 @@ impl WorkspacePolicy {
                 .all(|restriction| restriction.covers(&self.base, access))
     }
 
-    pub(crate) fn read_only_roots(&self) -> impl Iterator<Item = &Path> {
+    pub fn read_only_roots(&self) -> impl Iterator<Item = &Path> {
         self.roots
             .iter()
             .filter(|root| matches!(root.access, RootAccess::ReadOnly))
@@ -164,7 +164,7 @@ impl WorkspacePolicy {
     }
 
     #[cfg(any(target_os = "linux", all(test, unix)))]
-    pub(crate) fn process_protected_paths(&self) -> anyhow::Result<Vec<PathBuf>> {
+    pub fn process_protected_paths(&self) -> anyhow::Result<Vec<PathBuf>> {
         let mut directories = vec![self.base.clone()];
         let mut paths = Vec::new();
         while let Some(directory) = directories.pop() {
@@ -274,7 +274,7 @@ mod unix;
 pub use unix::PrivateStorage;
 
 #[cfg(unix)]
-pub(crate) use unix::ProcessWorkspace;
+pub use unix::ProcessWorkspace;
 
 pub struct DirectoryEntry {
     pub name: std::ffi::OsString,

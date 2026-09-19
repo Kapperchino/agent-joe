@@ -32,7 +32,7 @@ impl OpenAIConfig {
             || self.get_url().trim_end_matches('/') == CHATGPT_BASE_URL
     }
 
-    pub(crate) fn supports_prompt_cache_options(&self) -> bool {
+    pub fn supports_prompt_cache_options(&self) -> bool {
         self.get_url().trim_end_matches('/') == CHATGPT_BASE_URL
     }
 

@@ -398,7 +398,7 @@ pub struct ResponseError {
 }
 
 impl ResponseError {
-    pub(crate) fn api_error(self) -> llm::ApiErrorDetail {
+    pub fn api_error(self) -> llm::ApiErrorDetail {
         let codes = [self.code.as_deref(), self.error_type.as_deref()];
         let code = codes
             .iter()

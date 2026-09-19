@@ -58,11 +58,11 @@ pub struct WorkerExecution {
     pub request: WorkerRequest,
     pub budget: Arc<WorkerBudget>,
     evidence: Mutex<Evidence>,
-    pub(crate) session: Mutex<Option<Arc<crate::session::Session>>>,
+    pub session: Mutex<Option<Arc<crate::session::Session>>>,
 }
 
 impl WorkerExecution {
-    pub(crate) fn attach_session(
+    pub fn attach_session(
         &self,
         session: Option<Arc<crate::session::Session>>,
     ) -> anyhow::Result<()> {
@@ -77,7 +77,7 @@ impl WorkerExecution {
         *self.session.lock().unwrap() = session;
         Ok(())
     }
-    pub(crate) fn record(
+    pub fn record(
         &self,
         effect: tools::tool_defs::ToolEffect,
         result: &tools::tool_defs::ToolResult,
@@ -131,7 +131,7 @@ impl WorkerRegistry {
         }))
     }
 
-    pub(crate) fn restore(&self, owner: &str, workers: BTreeMap<String, WorkerView>) {
+    pub fn restore(&self, owner: &str, workers: BTreeMap<String, WorkerView>) {
         let mut state = self.state.lock().unwrap();
         let allocation = Allocation {
             workers: workers.len(),
@@ -218,7 +218,7 @@ impl WorkerRegistry {
         }
     }
 
-    pub(crate) fn pending(&self, owner: &str) -> Vec<String> {
+    pub fn pending(&self, owner: &str) -> Vec<String> {
         self.state
             .lock()
             .unwrap()

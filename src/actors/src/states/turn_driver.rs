@@ -20,7 +20,7 @@ use std::{collections::VecDeque, panic::AssertUnwindSafe};
 use tools::tool_defs::ToolResult;
 
 impl<C: Context + Clone + 'static> ActorState<C> {
-    pub(crate) async fn dispatch(&mut self, event: impl Into<Event>) {
+    pub async fn dispatch(&mut self, event: impl Into<Event>) {
         let event = event.into();
         if self.turn.is_idle()
             && matches!(
@@ -230,7 +230,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         }
     }
 
-    pub(crate) async fn provider_event(&mut self, tag: Tag, event: ProviderEvent) {
+    pub async fn provider_event(&mut self, tag: Tag, event: ProviderEvent) {
         if let Some(response) = self.turn.provider_response(tag) {
             let update = match event {
                 ProviderEvent::ContextNotice(message) => {
@@ -372,7 +372,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     }
 
     #[cfg(test)]
-    pub(crate) fn visible_history(&self) -> Vec<llm::Message> {
+    pub fn visible_history(&self) -> Vec<llm::Message> {
         let mut history = self.history.clone();
         if let Some(batch) = self.turn.batch() {
             history.extend(batch.messages());
@@ -380,7 +380,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         history
     }
 
-    pub(crate) async fn command(&mut self, command: Command) {
+    pub async fn command(&mut self, command: Command) {
         match command {
             Command::Plan | Command::Implement | Command::Questions | Command::Answer(..) | Command::Steer(_) => self.interaction_command(command).await,
             Command::Diff | Command::Undo(_) => self.change_command(command).await,

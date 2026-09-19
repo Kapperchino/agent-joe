@@ -1,6 +1,6 @@
 use super::*;
 
-pub(crate) fn command(
+pub fn command(
     command: Command,
     workspace: &dyn Workspace,
 ) -> anyhow::Result<IsolatedCommand> {

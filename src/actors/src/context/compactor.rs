@@ -10,19 +10,19 @@ use clients::llm::ClientRequest;
 use common_models::tui_models::{RequestContext, TokenCount};
 
 #[derive(Debug)]
-pub(crate) struct CompactedContext {
+pub struct CompactedContext {
     pub checkpoint: Checkpoint,
     pub snapshot: Snapshot,
 }
 
 #[derive(Debug)]
 pub struct ContextUpdate {
-    pub(crate) compaction: Option<Box<CompactedContext>>,
-    pub(crate) runtime_update: Option<clients::llm::Message>,
-    pub(crate) request: RequestContext,
+    pub compaction: Option<Box<CompactedContext>>,
+    pub runtime_update: Option<clients::llm::Message>,
+    pub request: RequestContext,
 }
 
-pub(crate) struct PreparedRequest {
+pub struct PreparedRequest {
     pub request: ClientRequest,
     pub update: ContextUpdate,
 }
@@ -50,7 +50,7 @@ impl PreparedRequest {
     }
 }
 
-pub(crate) async fn prepare(
+pub async fn prepare(
     input: &ContextInput,
     task: &mut ProviderTask,
 ) -> anyhow::Result<PreparedRequest> {

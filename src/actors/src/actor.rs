@@ -82,7 +82,7 @@ impl std::fmt::Debug for InteractionScope {
     }
 }
 impl<C: Context> Dependency<C> {
-    pub(crate) fn worker_owner(&self) -> String {
+    pub fn worker_owner(&self) -> String {
         self.runtime
             .session
             .as_ref()

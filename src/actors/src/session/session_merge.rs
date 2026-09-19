@@ -21,7 +21,7 @@ use utils::{
 };
 
 #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
-pub(crate) enum MergeApproval {
+pub enum MergeApproval {
     #[default]
     None,
     Awaiting {
@@ -36,7 +36,7 @@ pub(crate) enum MergeApproval {
 }
 
 #[derive(Clone, Default)]
-pub(crate) enum ResolutionActivity {
+pub enum ResolutionActivity {
     #[default]
     Paused,
     Running {
@@ -44,7 +44,7 @@ pub(crate) enum ResolutionActivity {
     },
 }
 
-pub(crate) enum MergeEvent {
+pub enum MergeEvent {
     TaskStarted {
         turn: TurnId,
     },
@@ -216,7 +216,7 @@ impl MergeWorkspace {
 }
 
 impl MergeApproval {
-    pub(crate) fn resolution(&self, turn: TurnId) -> Option<&MergeConflict> {
+    pub fn resolution(&self, turn: TurnId) -> Option<&MergeConflict> {
         match self {
             Self::Resolving {
                 conflict,
@@ -259,7 +259,7 @@ impl MergeApproval {
         }
     }
 
-    pub(crate) fn question(&self) -> Option<Question> {
+    pub fn question(&self) -> Option<Question> {
         match self {
             Self::None | Self::Resolving { .. } => None,
             Self::Awaiting { question, commit } => Some(Question {
@@ -285,7 +285,7 @@ impl MergeApproval {
 }
 
 impl<C: Context + Clone + 'static> ActorState<C> {
-    pub(crate) async fn offer_merge(&mut self, turn: TurnId) -> anyhow::Result<()> {
+    pub async fn offer_merge(&mut self, turn: TurnId) -> anyhow::Result<()> {
         if let Some(workspace) = MergeWorkspace::for_offer(
             &self.dependency.runtime,
             &self.turn,
@@ -369,7 +369,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         }
     }
 
-    pub(crate) async fn answer_merge(&mut self, answer: &Answer) -> anyhow::Result<String> {
+    pub async fn answer_merge(&mut self, answer: &Answer) -> anyhow::Result<String> {
         match MergeDecision::new(&self.merge_approval, answer, &self.turn, &self.persistence)? {
             MergeDecision::Merge { commit } => self.merge_commit(commit).await,
             MergeDecision::Keep => {
@@ -447,7 +447,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         Ok("Resolving merge conflicts in the session worktree. Joe will merge into main when resolution succeeds; your approval already covers this work.".into())
     }
 
-    pub(crate) fn merge_input(&self, turn: TurnId) -> Option<FollowUp> {
+    pub fn merge_input(&self, turn: TurnId) -> Option<FollowUp> {
         self.merge_approval
             .resolution(turn)
             .filter(|_| self.turn.is_idle())
@@ -467,7 +467,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             })
     }
 
-    pub(crate) fn record_merge(&mut self, event: MergeEvent) -> anyhow::Result<()> {
+    pub fn record_merge(&mut self, event: MergeEvent) -> anyhow::Result<()> {
         if let Some(approval) = self.merge_approval.transition(event) {
             self.merge_approval = approval;
             self.persist(Event::MergeApproval(self.merge_approval.clone()));
@@ -478,7 +478,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         }
     }
 
-    pub(crate) fn pause_merge(&mut self) {
+    pub fn pause_merge(&mut self) {
         if let Err(error) = self.record_merge(MergeEvent::Paused) {
             self.persistence_failed(error);
         }

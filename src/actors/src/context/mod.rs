@@ -94,13 +94,13 @@ impl std::str::FromStr for NativeCompaction {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) enum Memory {
+pub enum Memory {
     Summary(String),
     Native(CompactedWindow),
 }
 
 impl Memory {
-    pub(crate) fn summary(text: String, limits: ContextLimits) -> anyhow::Result<Self> {
+    pub fn summary(text: String, limits: ContextLimits) -> anyhow::Result<Self> {
         match !text.trim().is_empty() && text.len() <= limits.summary_bytes() {
             true => Ok(Self::Summary(text)),
             false => Err(anyhow::anyhow!(
@@ -123,7 +123,7 @@ impl Memory {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct Checkpoint {
+pub struct Checkpoint {
     pub through: usize,
     pub generation: u64,
     pub memory: Option<Memory>,
@@ -164,7 +164,7 @@ impl Checkpoint {
     }
 }
 
-pub(crate) struct CompleteHistory {
+pub struct CompleteHistory {
     pub ends: Vec<usize>,
 }
 
@@ -271,7 +271,7 @@ impl ExchangeState {
 }
 
 #[derive(Clone)]
-pub(crate) struct ContextInput {
+pub struct ContextInput {
     pub runtime: Option<clients::runtime_update::RuntimeSnapshot>,
     pub prompt_cache_key: Option<String>,
     pub purpose: clients::llm::RequestPurpose,
@@ -285,18 +285,18 @@ pub(crate) struct ContextInput {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RequestMode {
+pub enum RequestMode {
     Continue,
     Compact,
     SingleResponse,
 }
 
-pub(crate) enum BudgetPlan {
+pub enum BudgetPlan {
     Ready(ClientRequest),
     Compact(CompactionPlan),
 }
 
-pub(crate) struct CompactionPlan {
+pub struct CompactionPlan {
     pub through: usize,
     pub request: ClientRequest,
 }
@@ -512,7 +512,7 @@ struct EvidenceCall<'a> {
 #[path = "../../tests/unit/context/tests.rs"]
 mod tests;
 
-pub(crate) fn estimated_tokens(request: &ClientRequest) -> anyhow::Result<usize> {
+pub fn estimated_tokens(request: &ClientRequest) -> anyhow::Result<usize> {
     let tokenizer = tiktoken_rs::o200k_base_singleton();
     Ok(1024
         + tokenizer.count_ordinary(request.system.as_deref().unwrap_or_default())

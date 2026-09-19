@@ -6,7 +6,7 @@ use tools::{
 };
 
 #[derive(Default)]
-pub(crate) struct InteractionPolicy {
+pub struct InteractionPolicy {
     policy: RwLock<Policy>,
 }
 

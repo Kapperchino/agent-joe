@@ -22,20 +22,20 @@ mod transport;
 pub use command::RunningProcess;
 use transport::Launcher;
 
-pub(crate) struct SessionOwner {
+pub struct SessionOwner {
     session: RwLock<OnceCell<Arc<Session>>>,
     cancel: CancellationToken,
 }
 
 impl SessionOwner {
-    pub(crate) fn new(cancel: CancellationToken) -> Self {
+    pub fn new(cancel: CancellationToken) -> Self {
         Self {
             session: RwLock::new(OnceCell::new()),
             cancel: cancel.child_token(),
         }
     }
 
-    pub(crate) async fn get(
+    pub async fn get(
         &self,
         workspace: Arc<dyn Workspace>,
         tasks: &TaskTracker,
@@ -72,7 +72,7 @@ impl SessionOwner {
         session.ready().await
     }
 
-    pub(crate) async fn shutdown(&self) -> anyhow::Result<()> {
+    pub async fn shutdown(&self) -> anyhow::Result<()> {
         let mut slot = self.session.write().await;
         if let Some(session) = slot.get() {
             session.cancel.cancel();
@@ -105,13 +105,13 @@ struct CommandEntry {
     _lease: std::fs::File,
 }
 
-pub(crate) struct Session {
+pub struct Session {
     requests: mpsc::Sender<Request>,
     commands: Mutex<HashMap<Uuid, CommandEntry>>,
     state: watch::Receiver<SessionState>,
     cancel: CancellationToken,
     temporary: TemporaryDirectory,
-    pub(crate) rootfs: std::path::PathBuf,
+    pub rootfs: std::path::PathBuf,
     cache: crate::isolation::cache::BuildCache,
 }
 
@@ -137,7 +137,7 @@ impl Session {
         Ok(session)
     }
 
-    pub(crate) async fn lease(
+    pub async fn lease(
         &self,
         cancellations: &[CancellationToken],
     ) -> anyhow::Result<std::fs::File> {

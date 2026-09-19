@@ -149,13 +149,13 @@ pub struct IndexEntry {
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct IndexKey {
+pub struct IndexKey {
     path: PathBuf,
     stage: u16,
 }
 
 impl IndexEntry {
-    pub(crate) fn key(&self) -> IndexKey {
+    pub fn key(&self) -> IndexKey {
         IndexKey {
             path: self.path.clone(),
             stage: (self.flags >> 12) & 3,
@@ -164,7 +164,7 @@ impl IndexEntry {
 }
 
 pub struct GitRepository {
-    pub(crate) repo: Repository,
+    pub repo: Repository,
 }
 
 impl GitRepository {
@@ -280,7 +280,7 @@ impl GitRepository {
             .collect()
     }
 
-    pub(crate) fn commit(&self, revision: &Revision) -> anyhow::Result<git2::Commit<'_>> {
+    pub fn commit(&self, revision: &Revision) -> anyhow::Result<git2::Commit<'_>> {
         Ok(self.repo.revparse_single(&revision.0)?.peel_to_commit()?)
     }
 
@@ -455,12 +455,12 @@ impl From<&git2::Commit<'_>> for CommitInfo {
     }
 }
 
-pub(crate) struct GitPath {
+pub struct GitPath {
     pub path: PathBuf,
 }
 
 impl GitPath {
-    pub(crate) fn new(workspace: &WorkspacePolicy, path: &Path) -> anyhow::Result<Self> {
+    pub fn new(workspace: &WorkspacePolicy, path: &Path) -> anyhow::Result<Self> {
         let relative = workspace.relative_path(path, Access::Read)?;
         let valid = !relative.as_os_str().is_empty()
             && relative
@@ -495,7 +495,7 @@ impl GitPath {
     }
 }
 
-pub(crate) fn excluded(path: &Path) -> bool {
+pub fn excluded(path: &Path) -> bool {
     path.starts_with("target/.joe")
         || path.components().any(|component| match component {
             Component::Normal(name) => [".git", ".turbo-code", ".joe-worktrees"]
@@ -538,4 +538,4 @@ impl GitChange {
 
 #[cfg(test)]
 #[path = "../tests/unit/git/tests.rs"]
-pub(crate) mod tests;
+pub mod tests;

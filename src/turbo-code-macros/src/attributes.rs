@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use syn::{Attribute, Expr, ExprLit, Lit, LitStr, Meta, Token, punctuated::Punctuated};
 
-pub(crate) struct Attributes {
+pub struct Attributes {
     values: BTreeMap<String, Meta>,
 }
 

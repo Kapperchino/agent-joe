@@ -2,12 +2,12 @@ use crate::workspace::{ProcessWorkspace, WorkspacePolicy};
 use sandbox::workspace::{Workspace, WorkspaceProtection};
 use std::{path::Path, sync::Arc};
 
-pub(crate) struct SandboxWorkspace {
+pub struct SandboxWorkspace {
     policy: Arc<WorkspacePolicy>,
 }
 
 impl SandboxWorkspace {
-    pub(crate) fn new(policy: Arc<WorkspacePolicy>) -> Self {
+    pub fn new(policy: Arc<WorkspacePolicy>) -> Self {
         Self { policy }
     }
 }

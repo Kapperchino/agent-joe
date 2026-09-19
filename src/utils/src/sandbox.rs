@@ -3,13 +3,13 @@ use tokio::process::Command;
 
 use sandbox::ProcessLimits;
 #[cfg(unix)]
-pub(crate) mod workspace;
+pub mod workspace;
 
 pub struct Sandbox;
 
 pub trait SandboxOperation: sealed::Operation {}
 
-pub(crate) mod sealed {
+pub mod sealed {
     pub trait Operation {
         fn into_command(self) -> tokio::process::Command;
     }

@@ -5,7 +5,7 @@ use common_models::tui_models::ActorToTuiPacket;
 use tools::tool_defs::ToolEffect;
 
 impl<C: Context + Clone + 'static> ActorState<C> {
-    pub(crate) async fn change_command(&mut self, command: Command) {
+    pub async fn change_command(&mut self, command: Command) {
         let result = self.run_change_command(&command).await;
         self.reporter.send(ActorToTuiPacket::CommandResult(
             command,

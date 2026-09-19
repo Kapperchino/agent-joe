@@ -11,7 +11,7 @@ use std::{
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct GuestCommand {
+pub struct GuestCommand {
     pub program: String,
     pub args: Vec<String>,
     pub environment: BTreeMap<String, String>,
@@ -19,7 +19,7 @@ pub(crate) struct GuestCommand {
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "request", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum Request {
+pub enum Request {
     Run {
         id: uuid::Uuid,
         command: GuestCommand,
@@ -32,14 +32,14 @@ pub(crate) enum Request {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct CommandProtection {
+pub struct CommandProtection {
     workspace: PathBuf,
     read_only: Vec<PathBuf>,
     hidden: Vec<PathBuf>,
 }
 
 impl CommandProtection {
-    pub(crate) fn new(project: &Path, workspace: &dyn Workspace) -> anyhow::Result<Self> {
+    pub fn new(project: &Path, workspace: &dyn Workspace) -> anyhow::Result<Self> {
         let selected = Self::workspace_path(project, workspace.root())?;
         crate::isolation::runtime::Runtime::prepare_workspace(workspace)?;
         let protection = workspace.prepare()?;
@@ -86,7 +86,7 @@ impl CommandProtection {
 
 #[derive(Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum CommandEvent {
+pub enum CommandEvent {
     Output {
         stream: OutputStream,
         #[serde(rename = "data", deserialize_with = "decode_output")]
@@ -102,7 +102,7 @@ pub(crate) enum CommandEvent {
 
 #[derive(Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum Frame {
+pub enum Frame {
     #[serde(skip)]
     BootOutput,
     Ready {},
@@ -114,9 +114,9 @@ pub(crate) enum Frame {
 }
 
 impl Frame {
-    pub(crate) const MAX_BYTES: usize = 65536;
+    pub const MAX_BYTES: usize = 65536;
 
-    pub(crate) fn new(line: &[u8]) -> anyhow::Result<Self> {
+    pub fn new(line: &[u8]) -> anyhow::Result<Self> {
         match line.strip_prefix(b"joe-session:") {
             _ if line.len() > Self::MAX_BYTES => {
                 Err(anyhow::anyhow!("Sandbox protocol frame exceeds 64 KiB"))
@@ -134,7 +134,7 @@ fn decode_output<'de, D: serde::Deserializer<'de>>(decoder: D) -> Result<Vec<u8>
 }
 
 impl GuestCommand {
-    pub(crate) fn new(command: &std::process::Command) -> anyhow::Result<Self> {
+    pub fn new(command: &std::process::Command) -> anyhow::Result<Self> {
         let executable = match command.get_program() {
             program if program == OsStr::new("cargo") => "/usr/local/cargo/bin/cargo",
             program => program.to_str().context("Guest executable must be UTF-8")?,

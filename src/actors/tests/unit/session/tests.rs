@@ -6,7 +6,7 @@ use heed::{
 use std::path::PathBuf;
 use tools::tool_defs::{ToolId, ToolInvocation};
 
-pub(crate) struct Workspace {
+pub struct Workspace {
     pub path: PathBuf,
 }
 
@@ -49,7 +49,7 @@ fn open(path: &std::path::Path) -> Arc<SessionStore> {
     .unwrap()
 }
 
-pub(crate) fn invalidate(store: &SessionStore, id: &str) {
+pub fn invalidate(store: &SessionStore, id: &str) {
     let access = store.access().unwrap();
     let database = &access.current;
     let mut transaction = database.env.write_txn().unwrap();

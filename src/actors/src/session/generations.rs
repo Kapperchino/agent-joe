@@ -589,7 +589,7 @@ impl SessionStore {
         )
     }
 
-    pub(crate) fn list(&self) -> anyhow::Result<Vec<Snapshot>> {
+    pub fn list(&self) -> anyhow::Result<Vec<Snapshot>> {
         Ok(self.access()?.sessions()?.into_values().collect())
     }
 }

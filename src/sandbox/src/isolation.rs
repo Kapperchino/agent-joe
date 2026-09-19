@@ -4,13 +4,13 @@ use tokio::process::Command;
 
 #[cfg(test)]
 #[path = "../tests/unit/isolation/fixture.rs"]
-pub(crate) mod fixture;
+pub mod fixture;
 
 mod temporary;
-pub(crate) use temporary::TemporaryDirectory;
+pub use temporary::TemporaryDirectory;
 
 mod bootstrap;
-pub(crate) mod cache;
+pub mod cache;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
@@ -18,7 +18,7 @@ mod macos;
 use crate::provision;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(super) mod registry;
-pub(crate) mod runtime;
+pub mod runtime;
 #[cfg(target_os = "linux")]
 mod seccomp;
 

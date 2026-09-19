@@ -59,7 +59,7 @@ pub struct WorkerView {
 }
 
 impl WorkerView {
-    pub(crate) fn recover(&mut self) {
+    pub fn recover(&mut self) {
         let report = self.recovered_report();
         self.status = report.status;
         self.report = Some(report);
@@ -91,7 +91,7 @@ impl WorkerView {
 }
 
 #[derive(Default)]
-pub(crate) struct Evidence {
+pub struct Evidence {
     pub inherited_artifacts: BTreeSet<String>,
     pub changed_files: BTreeSet<String>,
     pub possibly_changed_files: BTreeSet<String>,
@@ -101,7 +101,7 @@ pub(crate) struct Evidence {
 }
 
 impl Evidence {
-    pub(crate) fn record(&mut self, effect: ToolEffect, result: &ToolResult) {
+    pub fn record(&mut self, effect: ToolEffect, result: &ToolResult) {
         let edit = result
             .outcome
             .as_ref()

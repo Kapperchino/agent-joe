@@ -10,10 +10,10 @@ use ratatui::{
     widgets::{List, ListItem, ListState, Paragraph, StatefulWidget, Widget},
 };
 
-pub(crate) struct QuestionBox;
+pub struct QuestionBox;
 
 #[derive(Default)]
-pub(crate) struct QuestionPickerState {
+pub struct QuestionPickerState {
     forms: Vec<QuestionForm>,
     selected: usize,
 }
@@ -33,7 +33,7 @@ enum AnswerMode {
     Submitting(Answer),
 }
 
-pub(crate) enum QuestionAction {
+pub enum QuestionAction {
     Stay,
     Close,
     Submit(QuestionAnswer),

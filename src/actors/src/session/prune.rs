@@ -7,7 +7,7 @@ use utils::{
 };
 
 impl SessionStore {
-    pub(crate) fn prune_worktrees(
+    pub fn prune_worktrees(
         self: &Arc<Self>,
         project: &WorkspacePolicy,
         mode: PruneMode,

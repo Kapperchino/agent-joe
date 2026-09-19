@@ -4,7 +4,7 @@ use quote::quote;
 use std::collections::BTreeMap;
 use syn::{Data, DeriveInput, Field, Fields, GenericArgument, PathArguments, Type, ext::IdentExt};
 
-pub(crate) struct InputSchema {
+pub struct InputSchema {
     fields: Vec<FieldSchema>,
     required: Vec<String>,
 }

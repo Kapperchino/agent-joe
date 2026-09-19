@@ -8,7 +8,7 @@ use ractor::{Actor, ActorProcessingErr, ActorRef, SupervisionEvent};
 use tools::tool_defs::ErasedToolRef;
 
 pub struct WorkerAdapter<W> {
-    pub(crate) worker: W,
+    pub worker: W,
 }
 
 impl<W> WorkerAdapter<W> {
@@ -63,6 +63,14 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
         self.worker.start(myself, arguments).await
     }
 
+    async fn post_stop(
+        &self,
+        myself: ActorRef<Self::Msg>,
+        state: &mut Self::State,
+    ) -> Result<(), ActorProcessingErr> {
+        self.worker.stop(myself, state).await
+    }
+
     async fn handle(
         &self,
         myself: ActorRef<Self::Msg>,
@@ -70,14 +78,6 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         self.worker.handle(myself, message, state).await
-    }
-
-    async fn post_stop(
-        &self,
-        myself: ActorRef<Self::Msg>,
-        state: &mut Self::State,
-    ) -> Result<(), ActorProcessingErr> {
-        self.worker.stop(myself, state).await
     }
 
     async fn handle_supervisor_evt(

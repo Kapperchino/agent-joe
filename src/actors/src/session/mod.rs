@@ -11,11 +11,11 @@ use utils::workspace::WorkspacePolicy;
 mod artifact_index;
 pub mod artifacts;
 mod generations;
-pub(crate) mod interaction_control;
-pub(crate) mod interaction_policy;
+pub mod interaction_control;
+pub mod interaction_policy;
 mod ownership;
 mod prune;
-pub(crate) mod session_control;
+pub mod session_control;
 pub mod session_merge;
 use generations::SessionDatabase;
 pub use generations::SessionStore;
@@ -46,13 +46,13 @@ impl From<SchemaVersion> for u32 {
     }
 }
 
-pub(crate) struct Session {
+pub struct Session {
     store: Arc<SessionStore>,
     pub id: String,
     owner: Owner,
 }
 
-pub(crate) struct ResumableSession {
+pub struct ResumableSession {
     session: Arc<Session>,
 }
 
@@ -110,7 +110,7 @@ impl ResumableSession {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub(crate) struct Snapshot {
+pub struct Snapshot {
     version: SchemaVersion,
     pub sequence: u64,
     #[serde(default)]
@@ -206,36 +206,36 @@ impl CompactionTransition {
     }
 }
 
-pub(crate) use common_models::interaction::Question as PendingQuestion;
+pub use common_models::interaction::Question as PendingQuestion;
 
 #[derive(Clone, Serialize, Deserialize)]
-pub(crate) struct QueuedInput {
+pub struct QueuedInput {
     pub turn: String,
     pub prompt: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub(crate) struct PendingBatch {
+pub struct PendingBatch {
     pub assistant: Message,
     pub operations: Vec<Operation>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub(crate) struct Operation {
+pub struct Operation {
     pub id: String,
     pub call: crate::tool_call::ToolCall,
     pub state: OperationState,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub(crate) enum OperationState {
+pub enum OperationState {
     Queued,
     Intended { effect: ToolEffect },
     Completed(ToolResult),
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub(crate) enum Event {
+pub enum Event {
     Worktree(Option<utils::git::worktrees::session::SessionWorktree>),
     WorktreePruned,
     MergeApproval(session_merge::MergeApproval),
@@ -296,7 +296,7 @@ fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> anyhow::Result<T> {
 }
 
 impl SessionStore {
-    pub(crate) fn create(
+    pub fn create(
         self: &Arc<Self>,
         provider: SessionProvider,
         parent: Option<String>,
@@ -348,7 +348,7 @@ impl SessionStore {
         }))
     }
 
-    pub(crate) fn resume_choices(
+    pub fn resume_choices(
         &self,
         provider: &SessionProvider,
         current: Option<&str>,
@@ -401,7 +401,7 @@ impl SessionDatabase {
         decode(bytes)
     }
 
-    pub(crate) fn list(&self) -> anyhow::Result<Vec<Snapshot>> {
+    pub fn list(&self) -> anyhow::Result<Vec<Snapshot>> {
         let transaction = self.env.read_txn()?;
         self.snapshots
             .iter(&transaction)?
@@ -806,7 +806,7 @@ impl Operation {
 
 #[cfg(test)]
 #[path = "../../tests/unit/session/tests.rs"]
-pub(crate) mod tests;
+pub mod tests;
 
 impl utils::changes::ChangeStore for Session {
     fn save(&self, snapshot: &utils::changes::ChangeSnapshot) -> anyhow::Result<()> {

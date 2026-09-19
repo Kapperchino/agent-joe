@@ -212,7 +212,7 @@ impl Session {
         Ok(result)
     }
 
-    pub(crate) fn complete_process(&self, result: utils::cargo::CargoResult) -> anyhow::Result<()> {
+    pub fn complete_process(&self, result: utils::cargo::CargoResult) -> anyhow::Result<()> {
         self.store.update(Some(&self.id), |database| {
             let result = result.clone();
             let mut transaction = database.env.write_txn()?;

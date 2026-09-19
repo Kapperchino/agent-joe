@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub(crate) struct Runtime {
+pub struct Runtime {
     pub rootfs: PathBuf,
     pub firmware: PathBuf,
     pub init: PathBuf,
@@ -83,7 +83,7 @@ impl Runtime {
         ])
     }
 
-    pub(crate) fn prepare_workspace(workspace: &dyn Workspace) -> anyhow::Result<()> {
+    pub fn prepare_workspace(workspace: &dyn Workspace) -> anyhow::Result<()> {
         let cache = Path::new("target/.joe/linux");
         for directory in [cache.join("build"), cache.join("cargo")] {
             workspace.create_parent_dirs(&directory.join("placeholder"))?;

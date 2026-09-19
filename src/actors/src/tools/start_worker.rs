@@ -28,7 +28,7 @@ impl std::fmt::Display for StartWorker {
     }
 }
 
-pub(crate) fn info(context: &ActorContext<RustContext>) -> anyhow::Result<&ActorInfo<RustContext>> {
+pub fn info(context: &ActorContext<RustContext>) -> anyhow::Result<&ActorInfo<RustContext>> {
     match context {
         ActorContext::ActorInfo(info) => Ok(info),
         ActorContext::Noop => Err(anyhow::anyhow!(

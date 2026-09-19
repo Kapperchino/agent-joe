@@ -17,7 +17,7 @@ use tools::tool_defs::{ErasedToolTrait, ToolDefinition, ToolEffect, ToolId};
 use utils::utils::FnvHashMap;
 
 #[derive(Clone)]
-pub(crate) struct TestContext {
+pub struct TestContext {
     pub task: Option<String>,
     pub revision: usize,
 }

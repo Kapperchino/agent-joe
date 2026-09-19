@@ -11,10 +11,10 @@ use ratatui::{
 };
 use std::time::SystemTime;
 
-pub(crate) struct SessionBox;
+pub struct SessionBox;
 
 #[derive(Default)]
-pub(crate) enum SessionPickerState {
+pub enum SessionPickerState {
     #[default]
     Closed,
     Loading,
@@ -23,7 +23,7 @@ pub(crate) enum SessionPickerState {
     Failed(String),
 }
 
-pub(crate) struct SessionSelection {
+pub struct SessionSelection {
     sessions: Vec<SessionSummary>,
     query: String,
     matches: Vec<usize>,
@@ -31,7 +31,7 @@ pub(crate) struct SessionSelection {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum PickerAction {
+pub enum PickerAction {
     Stay,
     Cancel,
     Resume { id: String },

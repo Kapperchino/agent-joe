@@ -7,7 +7,7 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 
-pub(crate) struct BuildCache {
+pub struct BuildCache {
     directory: PrivateDirectory,
     artifacts: PrivateDirectory,
 }
@@ -18,7 +18,7 @@ enum LeaseState {
 }
 
 impl BuildCache {
-    pub(crate) fn new(path: PathBuf, workspace: &Path) -> anyhow::Result<Self> {
+    pub fn new(path: PathBuf, workspace: &Path) -> anyhow::Result<Self> {
         let directory = PrivateDirectory::new(path)?;
         match directory.path().starts_with(workspace) || workspace.starts_with(directory.path()) {
             true => Err(anyhow::anyhow!("Compiler cache overlaps the workspace")),
@@ -32,11 +32,11 @@ impl BuildCache {
         }
     }
 
-    pub(crate) fn path(&self) -> &Path {
+    pub fn path(&self) -> &Path {
         self.artifacts.path()
     }
 
-    pub(crate) async fn lease(&self, cancellations: &[CancellationToken]) -> anyhow::Result<File> {
+    pub async fn lease(&self, cancellations: &[CancellationToken]) -> anyhow::Result<File> {
         let file = OpenOptions::new()
             .read(true)
             .write(true)

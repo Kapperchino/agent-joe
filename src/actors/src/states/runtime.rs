@@ -13,7 +13,7 @@ use tools::{
 use utils::execution::ExecutionScope;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct WorkspaceRevision(pub(crate) u64);
+pub struct WorkspaceRevision(pub u64);
 impl std::fmt::Display for WorkspaceRevision {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
@@ -21,7 +21,7 @@ impl std::fmt::Display for WorkspaceRevision {
 }
 
 #[derive(Clone)]
-pub(crate) enum ExecutionRole {
+pub enum ExecutionRole {
     Root,
     Worker {
         execution: Arc<crate::worker_registry::WorkerExecution>,
@@ -30,7 +30,7 @@ pub(crate) enum ExecutionRole {
 }
 
 impl ExecutionRole {
-    pub(crate) fn allows_tool(&self, name: &str) -> bool {
+    pub fn allows_tool(&self, name: &str) -> bool {
         match self {
             Self::Root | Self::Helper => true,
             Self::Worker { execution } => execution.request.allows_tool(name),
@@ -40,17 +40,17 @@ impl ExecutionRole {
 
 #[derive(Clone)]
 pub struct Runtime {
-    pub(crate) interaction: Arc<crate::session::interaction_policy::InteractionPolicy>,
+    pub interaction: Arc<crate::session::interaction_policy::InteractionPolicy>,
     pub workers: Arc<crate::worker_registry::WorkerRegistry>,
     pub immutable_workers: Arc<crate::immutable_workers::ImmutableWorkerRegistry>,
-    pub(crate) role: ExecutionRole,
-    pub(crate) turn_scope: Option<ExecutionScope>,
-    pub(crate) inherited_constraints: Vec<String>,
+    pub role: ExecutionRole,
+    pub turn_scope: Option<ExecutionScope>,
+    pub inherited_constraints: Vec<String>,
     pub context_budget: crate::context::ContextBudget,
     pub native_compaction: crate::context::NativeCompaction,
     pub sessions: Option<Arc<crate::session::SessionStore>>,
-    pub(crate) project: Option<Arc<utils::workspace::WorkspacePolicy>>,
-    pub(crate) session: Option<Arc<crate::session::Session>>,
+    pub project: Option<Arc<utils::workspace::WorkspacePolicy>>,
+    pub session: Option<Arc<crate::session::Session>>,
     pub workspace: Arc<Workspace>,
     pub scope: ExecutionScope,
     pub tool_timeout: Duration,
@@ -106,7 +106,7 @@ impl Runtime {
         }
     }
 
-    pub(crate) fn activate_session(
+    pub fn activate_session(
         &mut self,
         source: Option<&utils::git::worktrees::session::SessionWorktree>,
     ) -> anyhow::Result<()> {
@@ -135,7 +135,7 @@ impl Runtime {
 }
 
 pub struct Workspace {
-    pub(crate) writer: Arc<tokio::sync::Mutex<()>>,
+    pub writer: Arc<tokio::sync::Mutex<()>>,
     lock: RwLock<()>,
     revision: AtomicU64,
     readers: Semaphore,

@@ -227,14 +227,14 @@ impl SectionSplitter {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CodeFence {
+pub struct CodeFence {
     marker: char,
     len: usize,
     lang: Option<String>,
 }
 
 impl CodeFence {
-    pub(crate) fn opening(line: &str) -> Option<Self> {
+    pub fn opening(line: &str) -> Option<Self> {
         let trimmed = line.trim_start();
         match trimmed.chars().next() {
             Some(marker @ ('`' | '~')) => {
@@ -250,7 +250,7 @@ impl CodeFence {
         }
     }
 
-    pub(crate) fn is_closing(&self, line: &str) -> bool {
+    pub fn is_closing(&self, line: &str) -> bool {
         let trimmed = line.trim();
         let len = Self::leading_markers(trimmed, self.marker);
         len >= self.len && trimmed.len() == len
@@ -510,7 +510,7 @@ impl DrawLine {
         line.bytes().take_while(|byte| *byte == b' ').count()
     }
 
-    pub(crate) fn expand_tabs(text: &str) -> String {
+    pub fn expand_tabs(text: &str) -> String {
         if text.contains('\t') {
             let mut expanded = String::with_capacity(text.len());
             let mut column = 0;
@@ -615,11 +615,11 @@ impl DrawLine {
         Self::markdown_list_content_indent(line).is_some()
     }
 
-    pub(crate) fn markdown_list_content_indent(line: &str) -> Option<String> {
+    pub fn markdown_list_content_indent(line: &str) -> Option<String> {
         Self::markdown_list_marker(line).map(|marker| " ".repeat(marker.content_indent))
     }
 
-    pub(crate) fn markdown_list_initial_indent(line: &str) -> Option<String> {
+    pub fn markdown_list_initial_indent(line: &str) -> Option<String> {
         Self::markdown_list_marker(line).map(|marker| " ".repeat(marker.indent))
     }
 

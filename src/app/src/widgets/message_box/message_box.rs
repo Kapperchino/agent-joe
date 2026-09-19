@@ -97,19 +97,19 @@ impl MessageBoxState {
         self.viewport.update(width, height);
     }
 
-    pub(crate) fn has_tool_history(&self) -> bool {
+    pub fn has_tool_history(&self) -> bool {
         self.transcript.has_tool_history()
     }
 
-    pub(crate) fn tool_history_expanded(&self) -> bool {
+    pub fn tool_history_expanded(&self) -> bool {
         matches!(self.tool_history, ToolHistoryView::Expanded { .. })
     }
 
-    pub(crate) fn close_tool_history(&mut self) {
+    pub fn close_tool_history(&mut self) {
         self.tool_history = ToolHistoryView::Collapsed;
     }
 
-    pub(crate) fn handle_tool_history_key(&mut self, key: &KeyEvent) -> bool {
+    pub fn handle_tool_history_key(&mut self, key: &KeyEvent) -> bool {
         match (self.tool_history, key.code) {
             (_, KeyCode::Char('o')) if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if key.kind == KeyEventKind::Press {
@@ -156,7 +156,7 @@ impl MessageBoxState {
         }
     }
 
-    pub(crate) fn flush_scrollback(
+    pub fn flush_scrollback(
         &mut self,
         terminal: &mut DefaultTerminal,
         do_clear: bool,

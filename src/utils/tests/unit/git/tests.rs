@@ -1,7 +1,7 @@
 use super::*;
 use crate::changes::ChangeTracker;
 
-pub(crate) struct Fixture {
+pub struct Fixture {
     pub root: PathBuf,
     pub workspace: WorkspacePolicy,
     pub repo: Repository,

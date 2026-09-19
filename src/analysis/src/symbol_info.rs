@@ -59,7 +59,7 @@ pub struct SymbolInfo {
 }
 
 impl SymbolInfo {
-    pub(crate) fn from_nav(
+    pub fn from_nav(
         n: NavigationTarget,
         vfs: &Vfs,
         line_ind: Arc<LineIndex>,

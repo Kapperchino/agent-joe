@@ -144,7 +144,7 @@ impl PreparedWorker {
 }
 
 impl WorkerRegistry {
-    pub(crate) fn start(
+    pub fn start(
         self: &Arc<Self>,
         info: &ActorInfo<RustContext>,
         context: &RustContext,

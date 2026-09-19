@@ -24,8 +24,8 @@ pub enum ProviderEvent {
 
 #[derive(Clone)]
 pub struct ProviderTarget {
-    pub(crate) actor: ActorRef<Message>,
-    pub(crate) tag: Tag,
+    pub actor: ActorRef<Message>,
+    pub tag: Tag,
 }
 
 impl ProviderTarget {
@@ -39,7 +39,7 @@ impl ProviderTarget {
     }
 }
 
-pub(crate) struct ProviderTask {
+pub struct ProviderTask {
     pub budget: Option<std::sync::Arc<crate::worker_registry::budget::WorkerBudget>>,
     pub target: ProviderTarget,
     pub client: LLmClient,

@@ -19,7 +19,7 @@ pub struct RustProject {
 }
 
 impl RustProject {
-    pub(crate) fn new(cur_dir: &Path) -> anyhow::Result<Self> {
+    pub fn new(cur_dir: &Path) -> anyhow::Result<Self> {
         let workspace = Arc::new(WorkspacePolicy::workspace(cur_dir.to_path_buf())?);
         let project = Self {
             analysis_host: Arc::new(Mutex::new(AnalysisHost::default())),

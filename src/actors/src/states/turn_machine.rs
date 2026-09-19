@@ -19,7 +19,7 @@ use utils::execution::ExecutionScope;
 
 type WorkerReply = RpcReplyPort<Result<String, WorkerFailure>>;
 
-pub(crate) enum Event {
+pub enum Event {
     Session(SessionEvent),
     StopRequested,
     Shutdown,
@@ -32,7 +32,7 @@ impl From<SessionEvent> for Event {
     }
 }
 
-pub(crate) enum SessionEvent {
+pub enum SessionEvent {
     QuestionsChanged(QuestionGate),
     Steer(FollowUp),
     Start(FollowUp),
@@ -54,7 +54,7 @@ pub(crate) enum SessionEvent {
     CleanupFinished(TurnId),
 }
 
-pub(crate) enum ProviderUpdate {
+pub enum ProviderUpdate {
     Progress(StreamNextStep),
     Finished(Result<AcceptedResponse, Failure>),
     ReconcilePlan {
@@ -81,7 +81,7 @@ impl ProviderUpdate {
     }
 }
 
-pub(crate) enum Effect {
+pub enum Effect {
     QueueInput(FollowUp),
     BeginTurn(FollowUp),
     AppendHistory(Vec<llm::Message>),
@@ -135,18 +135,18 @@ impl Effect {
     }
 }
 
-pub(crate) enum EffectOutcome {
+pub enum EffectOutcome {
     Applied,
     ContextFailed { tag: Tag, failure: Failure },
     ShutdownFinished,
 }
 
-pub(crate) enum WorkerOutcome {
+pub enum WorkerOutcome {
     Completed,
     Failed(WorkerFailure),
 }
 
-pub(crate) enum ShutdownScope {
+pub enum ShutdownScope {
     Session,
     Turn(ExecutionScope),
 }
@@ -165,7 +165,7 @@ enum SessionState {
     Stopped,
 }
 
-pub(crate) struct TurnMachine {
+pub struct TurnMachine {
     state: SessionState,
 }
 

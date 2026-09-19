@@ -2,7 +2,7 @@ use super::*;
 use anyhow::Context;
 use std::collections::HashMap;
 
-pub(crate) struct ProcessWorkspace<'a> {
+pub struct ProcessWorkspace<'a> {
     policy: &'a WorkspacePolicy,
 }
 
@@ -25,7 +25,7 @@ struct WorkspaceScan {
 }
 
 impl<'a> ProcessWorkspace<'a> {
-    pub(crate) fn new(policy: &'a WorkspacePolicy) -> anyhow::Result<Self> {
+    pub fn new(policy: &'a WorkspacePolicy) -> anyhow::Result<Self> {
         for root in &policy.roots {
             root.validate_identity()?;
         }
@@ -49,7 +49,7 @@ impl<'a> ProcessWorkspace<'a> {
         }
     }
 
-    pub(crate) fn policy(&self) -> &'a WorkspacePolicy {
+    pub fn policy(&self) -> &'a WorkspacePolicy {
         self.policy
     }
 }

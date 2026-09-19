@@ -51,7 +51,7 @@ impl CodexRouting {
 }
 
 impl OpenAIClient {
-    pub(crate) fn begin_turn(&mut self) {
+    pub fn begin_turn(&mut self) {
         self.routing = CodexRouting::default();
     }
 

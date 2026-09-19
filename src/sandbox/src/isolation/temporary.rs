@@ -6,7 +6,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-pub(crate) struct TemporaryDirectory {
+pub struct TemporaryDirectory {
     path: PathBuf,
     directory: OwnedFd,
     parent: OwnedFd,
@@ -33,11 +33,11 @@ impl TemporaryDirectory {
         })
     }
 
-    pub(crate) fn id(&self) -> uuid::Uuid {
+    pub fn id(&self) -> uuid::Uuid {
         self.id
     }
 
-    pub(crate) fn child(&self) -> anyhow::Result<Self> {
+    pub fn child(&self) -> anyhow::Result<Self> {
         let child = Self::create(self.reopen()?, &self.path)?;
         fs::mkdirat(&child.directory, "guest", Mode::from_raw_mode(0o700))?;
         Ok(child)
@@ -56,7 +56,7 @@ impl TemporaryDirectory {
         }
     }
 
-    pub(crate) fn remove(&self) {
+    pub fn remove(&self) {
         let _ = self.reopen().and_then(|directory| {
             remove_contents(&directory)?;
             let current = fs::statat(&self.parent, self.id.to_string(), AtFlags::SYMLINK_NOFOLLOW)?;

@@ -1,5 +1,5 @@
 #[derive(Default)]
-pub(crate) struct Decoder {
+pub struct Decoder {
     line: Vec<u8>,
     data: Vec<String>,
     after_cr: bool,
@@ -81,7 +81,7 @@ enum StreamState {
     Failed,
 }
 
-pub(crate) fn decode<T, S, B, E>(
+pub fn decode<T, S, B, E>(
     bytes: S,
     terminal: fn(&T) -> bool,
 ) -> impl futures::Stream<Item = anyhow::Result<T>> + Send

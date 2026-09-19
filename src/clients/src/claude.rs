@@ -337,15 +337,15 @@ pub enum ToolProperty {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct CacheControl {
-    pub(crate) cache_type: String,
-    pub(crate) ttl: String,
+    pub cache_type: String,
+    pub ttl: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct ClaudeClient {
     client: ClientWithMiddleware,
     base_url: String,
-    pub(crate) config: ClaudeConfig,
+    pub config: ClaudeConfig,
 }
 
 pub struct ClientRequest {
@@ -353,7 +353,7 @@ pub struct ClientRequest {
     pub thinking: bool,
     pub system: Option<String>,
     pub model: Option<String>,
-    pub(crate) cache_control: CacheControl,
+    pub cache_control: CacheControl,
     pub tools: Vec<Tool>,
     pub effort: Option<ClaudeEffort>,
     pub max_output_tokens: Option<u32>,

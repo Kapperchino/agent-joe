@@ -12,7 +12,7 @@ pub use storage::PrivateStorage;
 mod edits;
 
 mod process;
-pub(crate) use process::ProcessWorkspace;
+pub use process::ProcessWorkspace;
 
 struct Parent {
     directory: File,
@@ -253,7 +253,7 @@ impl Parent {
 }
 
 impl WorkspacePolicy {
-    pub(crate) fn link_process_cache(
+    pub fn link_process_cache(
         &self,
         source: &Path,
         destination: &Path,

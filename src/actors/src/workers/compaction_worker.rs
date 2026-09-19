@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use tools::tool_defs::ErasedToolRef;
 use utils::execution::ExecutionScope;
 
-pub(crate) struct CompactionWorker {
+pub struct CompactionWorker {
     reporter: EventReporter,
 }
 
@@ -50,7 +50,7 @@ impl ContextWorker for CompactionWorker {
 }
 
 impl CompactionWorker {
-    pub(crate) async fn run(
+    pub async fn run(
         task: &ProviderTask,
         messages: &[llm::Message],
         limits: ContextLimits,
@@ -87,7 +87,7 @@ impl CompactionWorker {
 }
 
 #[derive(Clone)]
-pub(crate) struct CompactionContext {
+pub struct CompactionContext {
     history: String,
     instructions: String,
 }

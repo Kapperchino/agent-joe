@@ -49,7 +49,7 @@ pub enum ProcessStatus {
     Failed,
 }
 
-pub(crate) enum ProcessEnd {
+pub enum ProcessEnd {
     Exited,
     Cancelled,
     TimedOut,
@@ -122,9 +122,9 @@ impl ProcessRegistry {
 }
 
 pub struct ProcessHandle {
-    pub(crate) cancel: CancellationToken,
-    pub(crate) done: CancellationToken,
-    pub(crate) command: ProcessCommand,
+    pub cancel: CancellationToken,
+    pub done: CancellationToken,
+    pub command: ProcessCommand,
     started: Instant,
     state: Mutex<ProcessState>,
 }
@@ -136,7 +136,7 @@ enum ProcessState {
 
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum OutputStream {
+pub enum OutputStream {
     Stdout,
     Stderr,
 }
@@ -168,7 +168,7 @@ impl ProcessHandle {
         })
     }
 
-    pub(crate) fn append(&self, stream: OutputStream, bytes: &[u8], limit: usize) -> bool {
+    pub fn append(&self, stream: OutputStream, bytes: &[u8], limit: usize) -> bool {
         let mut state = self.state.lock().unwrap();
         match &mut *state {
             ProcessState::Running { stdout, stderr } => {
@@ -184,7 +184,7 @@ impl ProcessHandle {
         }
     }
 
-    pub(crate) fn complete(&self, end: ProcessEnd, exit_code: Option<i32>) {
+    pub fn complete(&self, end: ProcessEnd, exit_code: Option<i32>) {
         let mut state = self.state.lock().unwrap();
         match &*state {
             ProcessState::Running { stdout, stderr } => {

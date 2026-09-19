@@ -30,7 +30,7 @@ use tools::tool_defs::{
 };
 use utils::utils::FnvHashMap;
 
-pub(crate) fn runtime_snapshot(
+pub fn runtime_snapshot(
     messages: &[llm::Message],
 ) -> clients::runtime_update::RuntimeSnapshot {
     messages

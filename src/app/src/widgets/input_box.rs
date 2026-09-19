@@ -23,8 +23,8 @@ pub struct InputBoxState {
     pub input_mode: InputMode,
     command_context: CommandContext,
     model_box_state: ModelBoxState,
-    pub(crate) session_picker: SessionPickerState,
-    pub(crate) question_picker: QuestionPickerState,
+    pub session_picker: SessionPickerState,
+    pub question_picker: QuestionPickerState,
 }
 
 struct InputViewport {
@@ -176,15 +176,15 @@ impl InputBoxState {
         self.get_input().is_empty()
     }
 
-    pub(crate) fn handle_hjkl_key(&mut self, key: KeyEvent) -> bool {
+    pub fn handle_hjkl_key(&mut self, key: KeyEvent) -> bool {
         hjkl_vim_tui::handle_key(&mut self.editor, key)
     }
 
-    pub(crate) fn force_normal_mode(&mut self) {
+    pub fn force_normal_mode(&mut self) {
         self.editor.force_normal();
     }
 
-    pub(crate) fn is_insert_mode(&self) -> bool {
+    pub fn is_insert_mode(&self) -> bool {
         self.editor.vim_mode() == VimMode::Insert
     }
 
@@ -265,11 +265,11 @@ impl InputBoxState {
         }
     }
 
-    pub(crate) fn move_cursor_left(&mut self) {
+    pub fn move_cursor_left(&mut self) {
         self.editor.insert_arrow(InsertDir::Left);
     }
 
-    pub(crate) fn move_cursor_right(&mut self) {
+    pub fn move_cursor_right(&mut self) {
         self.editor.insert_arrow(InsertDir::Right);
     }
 
@@ -281,7 +281,7 @@ impl InputBoxState {
         }
     }
 
-    pub(crate) fn paste(&mut self, string: &str) {
+    pub fn paste(&mut self, string: &str) {
         self.editor.insert_str(string);
     }
 
@@ -307,7 +307,7 @@ impl InputBoxState {
         self.model_box_state.on_enter()
     }
 
-    pub(crate) fn delete_char(&mut self) {
+    pub fn delete_char(&mut self) {
         self.editor.insert_backspace();
     }
 

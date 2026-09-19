@@ -91,7 +91,7 @@ impl CommitResponse {
     }
 }
 
-pub(crate) async fn generate(
+pub async fn generate(
     mut client: LLmClient,
     diff: String,
     timeout: Duration,

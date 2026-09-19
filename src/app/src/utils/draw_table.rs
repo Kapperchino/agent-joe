@@ -30,7 +30,7 @@ impl TableHeader {
 }
 
 impl DrawTable {
-    pub(crate) fn mark_table_header_as_continuation(
+    pub fn mark_table_header_as_continuation(
         line: &str,
         width_hint: Option<&[usize]>,
     ) -> String {
@@ -72,7 +72,7 @@ impl DrawTable {
         spanning_block
     }
 
-    pub(crate) fn table_width_hint(
+    pub fn table_width_hint(
         lines: &[&str],
         start: usize,
         end: usize,
@@ -284,7 +284,7 @@ impl DrawTable {
         }
     }
 
-    pub(crate) fn wrap_markdown_tables(text: &str, wrap_width: usize) -> Vec<String> {
+    pub fn wrap_markdown_tables(text: &str, wrap_width: usize) -> Vec<String> {
         let wrap_width = wrap_width.max(1);
         let expanded_lines = text
             .split('\n')
@@ -327,7 +327,7 @@ impl DrawTable {
         wrapped
     }
 
-    pub(crate) fn table_block_end(lines: &[&str], start: usize) -> Option<usize> {
+    pub fn table_block_end(lines: &[&str], start: usize) -> Option<usize> {
         let block = lines.get(start..)?;
         TableHeader::parse(block)?;
         Some(
@@ -398,7 +398,7 @@ impl DrawTable {
             Some(alignments)
         }
     }
-    pub(crate) fn mark_table_header_with_width_hint(
+    pub fn mark_table_header_with_width_hint(
         line: &str,
         width_hint: Option<&[usize]>,
     ) -> String {

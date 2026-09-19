@@ -79,7 +79,7 @@ pub fn context_window(model: &str) -> usize {
         })
 }
 
-pub(crate) fn codex_context_window(model: &str) -> usize {
+pub fn codex_context_window(model: &str) -> usize {
     model_name(model)
         .parse::<OpenAIModels>()
         .map(|model| model.codex_context_window())

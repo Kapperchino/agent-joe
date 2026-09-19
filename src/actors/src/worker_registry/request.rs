@@ -158,11 +158,11 @@ impl WorkerRequest {
         }
     }
 
-    pub(crate) fn allows_tool(&self, name: &str) -> bool {
+    pub fn allows_tool(&self, name: &str) -> bool {
         self.allowed_tools.iter().any(|tool| tool == name)
     }
 
-    pub(crate) fn follow_up(
+    pub fn follow_up(
         &self,
         objective: String,
         context: String,
@@ -187,7 +187,7 @@ impl WorkerRequest {
         )
     }
 
-    pub(crate) fn prompt(&self, inherited: &[String]) -> anyhow::Result<String> {
+    pub fn prompt(&self, inherited: &[String]) -> anyhow::Result<String> {
         let prompt = format!(
             "Inherited parent/user requirements (preserve all):\n{}\n\nBounded worker request:\n{}",
             inherited.join("\n\n"),

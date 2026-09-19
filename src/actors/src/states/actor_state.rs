@@ -21,17 +21,17 @@ use tools::tool_defs::{ToolDefinition, erased_tool};
 use utils::execution::ExecutionScope;
 
 pub struct ActorState<C: Context> {
-    pub(crate) prompt_cache_key: String,
-    pub(crate) planning: Planning,
-    pub(crate) deferred_input: Vec<Message>,
-    pub(crate) request_mode: RequestMode,
-    pub(crate) context_checkpoint: Checkpoint,
-    pub(crate) compact_turn: Option<TurnId>,
-    pub(crate) questions: Questions,
-    pub(crate) persistence: Persistence,
-    pub(crate) merge_approval: crate::session::session_merge::MergeApproval,
+    pub prompt_cache_key: String,
+    pub planning: Planning,
+    pub deferred_input: Vec<Message>,
+    pub request_mode: RequestMode,
+    pub context_checkpoint: Checkpoint,
+    pub compact_turn: Option<TurnId>,
+    pub questions: Questions,
+    pub persistence: Persistence,
+    pub merge_approval: crate::session::session_merge::MergeApproval,
     pub cur_context: C,
-    pub(crate) turn: TurnMachine,
+    pub turn: TurnMachine,
     pub history: Vec<Message>,
     pub llm: LLmClient,
     pub file_actor: Option<ActorRef<file_actor::Message>>,
@@ -39,10 +39,10 @@ pub struct ActorState<C: Context> {
     pub reporter: EventReporter,
     pub debug_mode: bool,
     pub actor_ref: ActorRef<actor::Message>,
-    pub(crate) dependency: Dependency<C>,
+    pub dependency: Dependency<C>,
 }
 
-pub(crate) enum ActorMode {
+pub enum ActorMode {
     Conversation,
     SingleResponse(EventReporter),
 }
@@ -159,7 +159,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         Self::with_mode(dependency, actor_ref, file_actor, ActorMode::Conversation).await
     }
 
-    pub(crate) async fn with_mode(
+    pub async fn with_mode(
         dependency: Dependency<C>,
         actor_ref: ActorRef<actor::Message>,
         file_actor: Option<ActorRef<file_actor::Message>>,
@@ -262,7 +262,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             .with_thinking()
     }
 
-    pub(crate) fn context_input(
+    pub fn context_input(
         &self,
         turn: TurnId,
         client: &LLmClient,
@@ -358,7 +358,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         Ok(())
     }
 
-    pub(crate) fn relocate_context(context: &mut C, runtime: &Runtime) -> anyhow::Result<()> {
+    pub fn relocate_context(context: &mut C, runtime: &Runtime) -> anyhow::Result<()> {
         if let Some(session) = &runtime.session
             && session.snapshot()?.worktree.is_some()
         {
@@ -367,7 +367,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         Ok(())
     }
 
-    pub(crate) fn relocate_watcher(&self) -> anyhow::Result<()> {
+    pub fn relocate_watcher(&self) -> anyhow::Result<()> {
         if let (Some(watcher), Some(project)) =
             (&self.file_actor, self.cur_context.analysis_project())
         {
@@ -384,7 +384,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             .collect()
     }
 
-    pub(crate) fn executor(&self, scope: ExecutionScope) -> crate::states::scheduler::Executor<C> {
+    pub fn executor(&self, scope: ExecutionScope) -> crate::states::scheduler::Executor<C> {
         let runtime = self.dependency.runtime.child(scope.clone());
         let runtime = Runtime {
             turn_scope: Some(scope),

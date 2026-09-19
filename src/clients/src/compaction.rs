@@ -82,7 +82,7 @@ pub struct CompactionResponse {
 }
 
 impl CompactionResponse {
-    pub(crate) async fn from_stream(
+    pub async fn from_stream(
         stream: impl Stream<Item = anyhow::Result<CompactionEvent>>,
     ) -> anyhow::Result<Self> {
         futures::pin_mut!(stream);
@@ -101,7 +101,7 @@ impl CompactionResponse {
 
 #[derive(Deserialize)]
 #[serde(tag = "type")]
-pub(crate) enum CompactionEvent {
+pub enum CompactionEvent {
     #[serde(rename = "response.output_item.done")]
     Item { item: Value },
     #[serde(rename = "response.completed")]
@@ -126,7 +126,7 @@ pub(crate) enum CompactionEvent {
 }
 
 impl CompactionEvent {
-    pub(crate) fn terminal(&self) -> bool {
+    pub fn terminal(&self) -> bool {
         matches!(
             self,
             Self::Completed { .. }
@@ -138,7 +138,7 @@ impl CompactionEvent {
 }
 
 #[derive(Deserialize)]
-pub(crate) struct CompactionStatus {
+pub struct CompactionStatus {
     usage: Option<crate::openai::Usage>,
     error: Option<crate::openai::ResponseError>,
     incomplete_details: Option<crate::openai::IncompleteDetails>,
@@ -214,7 +214,7 @@ impl CompactionState {
 }
 
 #[derive(Serialize)]
-pub(crate) struct CompactionRequest {
+pub struct CompactionRequest {
     pub model: String,
     pub input: Vec<crate::openai::InputItem>,
     pub instructions: String,

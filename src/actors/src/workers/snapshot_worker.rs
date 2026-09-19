@@ -159,7 +159,7 @@ impl Worker for SnapshotWorker {
 }
 
 impl<C: Context + Clone + 'static> ActorState<C> {
-    pub(crate) fn capture_snapshot(&self) -> anyhow::Result<Snapshot> {
+    pub fn capture_snapshot(&self) -> anyhow::Result<Snapshot> {
         match self.turn.is_idle() && self.deferred_input.is_empty() {
             true => Ok(()),
             false => Err(anyhow::anyhow!(
