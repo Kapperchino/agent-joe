@@ -149,6 +149,7 @@ async fn fitting_context_reports_tokens_and_continues_without_repeated_compactio
         .find(|snapshot| snapshot.id == id)
         .unwrap();
     assert_eq!(snapshot.context.generation, 0);
+    assert!(h.runtime.immutable_workers.list(&id).is_empty());
     h.stop().await;
 }
 
@@ -180,6 +181,9 @@ async fn automatic_compaction_survives_restart_and_forks() {
     assert!(!sent.contains("Investigation 0"));
     assert!(sent.contains("workspace revision 1"));
     assert!(!sent.contains("obsolete workspace context"));
+    let immutable = h.runtime.immutable_workers.list(&id);
+    assert_eq!(immutable.len(), 1);
+    assert_eq!(immutable[0].description.kind, "snapshot");
     answer(reply, response(vec![text("implementation in progress")]));
     h.terminal(Lifecycle::Completed).await;
     let saved = store
@@ -191,7 +195,9 @@ async fn automatic_compaction_survives_restart_and_forks() {
     assert_eq!(saved.context.generation, 1);
     assert_eq!(saved.usage.input_tokens, 500);
     assert_eq!(saved.history.len(), original.len() + 3);
+    let registry = h.runtime.immutable_workers.clone();
     h.stop().await;
+    assert!(registry.list(&id).is_empty());
     drop(store);
     let runtime = configured_runtime(&workspace);
     let store = runtime.sessions.clone().unwrap();
@@ -213,6 +219,7 @@ async fn automatic_compaction_survives_restart_and_forks() {
         .find(|snapshot| snapshot.forked_from.as_deref() == Some(&id))
         .unwrap();
     assert_eq!(fork.context.generation, 1);
+    assert!(h.runtime.immutable_workers.list(&fork.id).is_empty());
     h.start("Work on the fork");
     let (request, reply) = h.request().await;
     assert!(request.system.unwrap().starts_with("Follow the fixture"));
@@ -299,6 +306,7 @@ async fn cancelled_compaction_cannot_commit() {
     h.actor.send_message(Message::Interrupt).unwrap();
     h.terminal(Lifecycle::Cancelled).await;
     assert!(reply.is_closed());
+    assert!(h.runtime.immutable_workers.list(&id).is_empty());
     assert_eq!(
         store
             .list()
@@ -363,6 +371,7 @@ async fn failed_or_malformed_summaries_leave_history_intact_and_can_be_retried()
         h.terminal(Lifecycle::Failed).await;
         assert!(h.requests.is_empty());
         assert!(entered.is_empty());
+        assert!(h.runtime.immutable_workers.list(&id).is_empty());
         assert_eq!(serde_json::to_value(h.history().await).unwrap(), before);
         assert_eq!(
             store
@@ -382,6 +391,7 @@ async fn failed_or_malformed_summaries_leave_history_intact_and_can_be_retried()
     summary(h.request().await.1);
     h.terminal(Lifecycle::Completed).await;
     assert!(h.requests.is_empty());
+    assert_eq!(h.runtime.immutable_workers.list(&id).len(), 1);
     h.stop().await;
 }
 
@@ -625,6 +635,7 @@ async fn native_compaction_commits_and_replays_all_opaque_items_after_restart() 
         })
         .unwrap();
     assert_eq!(serde_json::to_value(window).unwrap(), output);
+    assert_eq!(h.runtime.immutable_workers.list(&id).len(), 1);
     answer(reply, response(vec![text("native continuation completed")]));
     h.terminal(Lifecycle::Completed).await;
     h.stop().await;
@@ -676,6 +687,90 @@ async fn compaction_storage_failure_stops_before_the_next_provider_request() {
     h.terminal(Lifecycle::Failed).await;
     assert!(h.requests.is_empty());
     assert_eq!(serde_json::to_value(h.history().await).unwrap(), before);
+    assert!(h.runtime.immutable_workers.list(&id).is_empty());
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn compaction_snapshots_keep_independent_windows_and_stop_on_clear() {
+    let workspace = crate::session::tests::Workspace::new();
+    let runtime = configured_runtime(&workspace);
+    let store = runtime.sessions.clone().unwrap();
+    let id = saved_history(&store);
+    let h = Harness::with_runtime(vec![], runtime).await;
+    resume(&h, &id).await;
+    for generation in 1..=2 {
+        h.actor
+            .send_message(Message::Command(Command::Compact))
+            .unwrap();
+        summary(h.request().await.1);
+        h.terminal(Lifecycle::Completed).await;
+        assert_eq!(h.runtime.immutable_workers.list(&id).len(), generation);
+        h.start("Continue with later evidence");
+        answer(
+            h.request().await.1,
+            response(vec![text("New evidence not in the first snapshot")]),
+        );
+        h.terminal(Lifecycle::Completed).await;
+    }
+    let registry = h.runtime.immutable_workers.clone();
+    let workers = registry.list(&id);
+    assert_ne!(workers[0].worker_id, workers[1].worker_id);
+    assert!(registry.list("another-conversation").is_empty());
+    assert!(
+        registry
+            .ask(
+                "another-conversation",
+                &workers[0].worker_id,
+                "Question".into(),
+                Duration::from_secs(1)
+            )
+            .await
+            .is_err()
+    );
+    let mut captured = Vec::new();
+    for index in [0, 1, 0] {
+        let question = format!("Independent question {}", captured.len());
+        let query = registry.ask(
+            &id,
+            &workers[index].worker_id,
+            question.clone(),
+            Duration::from_secs(1),
+        );
+        let provider = async {
+            let (request, reply) = h.request().await;
+            assert!(request.tools.is_empty());
+            assert_eq!(request.messages.len(), 2);
+            assert_eq!(request.messages[1].text(), question);
+            assert!(!request.messages[0].text().contains("Independent question"));
+            let frozen = request.messages[0].text();
+            answer(reply, response(vec![text("Historical answer")]));
+            frozen
+        };
+        let (result, frozen) = tokio::join!(query, provider);
+        assert_eq!(result.unwrap().answer, "Historical answer");
+        captured.push(frozen);
+    }
+    assert!(captured[0].contains("Investigation 0"));
+    assert!(!captured[0].contains("New evidence not in the first snapshot"));
+    assert!(captured[1].contains("Investigated src/lib.rs"));
+    assert_ne!(captured[0], captured[1]);
+    assert_eq!(captured[0], captured[2]);
+    let query = registry.ask(
+        &id,
+        &workers[0].worker_id,
+        "Pending question".into(),
+        Duration::from_secs(1),
+    );
+    let clear = async {
+        let (_, reply) = h.request().await;
+        h.actor.send_message(Message::Clear).unwrap();
+        h.history().await;
+        assert!(reply.is_closed());
+    };
+    let (result, ()) = tokio::join!(query, clear);
+    assert!(result.is_err());
+    assert!(registry.list(&id).is_empty());
     h.stop().await;
 }
 

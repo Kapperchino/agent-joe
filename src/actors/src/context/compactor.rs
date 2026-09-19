@@ -4,14 +4,20 @@ use crate::{
         BudgetPlan, Checkpoint, ContextInput, ContextLimits, Memory, NativeCompaction,
         estimated_tokens,
     },
-    workers::compaction_worker::CompactionWorker,
+    workers::{compaction_worker::CompactionWorker, snapshot_worker::Snapshot},
 };
 use clients::llm::ClientRequest;
 use common_models::tui_models::{RequestContext, TokenCount};
 
 #[derive(Debug)]
+pub(crate) struct CompactedContext {
+    pub checkpoint: Checkpoint,
+    pub snapshot: Snapshot,
+}
+
+#[derive(Debug)]
 pub struct ContextUpdate {
-    pub(crate) checkpoint: Option<Checkpoint>,
+    pub(crate) compaction: Option<Box<CompactedContext>>,
     pub(crate) runtime_update: Option<clients::llm::Message>,
     pub(crate) request: RequestContext,
 }
@@ -24,7 +30,7 @@ pub(crate) struct PreparedRequest {
 impl PreparedRequest {
     fn new(
         request: ClientRequest,
-        checkpoint: Option<Checkpoint>,
+        compaction: Option<CompactedContext>,
         limits: ContextLimits,
         runtime_update: Option<clients::llm::Message>,
     ) -> anyhow::Result<Self> {
@@ -32,7 +38,7 @@ impl PreparedRequest {
         Ok(Self {
             request,
             update: ContextUpdate {
-                checkpoint,
+                compaction: compaction.map(Box::new),
                 runtime_update,
                 request: RequestContext {
                     estimated_tokens,
@@ -57,6 +63,16 @@ pub(crate) async fn prepare(
         ),
         BudgetPlan::Compact(plan) => {
             let method = CompactionMethod::new(input, task)?;
+            let mut captured = plan.request.clone().with_tools(input.tools.clone());
+            captured
+                .messages
+                .extend(input.runtime.as_ref().map(|runtime| clients::llm::Message {
+                    role: clients::llm::Role::User,
+                    content: vec![clients::llm::ContentBlock::RuntimeUpdate(
+                        clients::runtime_update::RuntimeUpdate::Snapshot(runtime.clone()),
+                    )],
+                }));
+            let snapshot = Snapshot::new(captured, &task.client, input.limits, task.timeout)?;
             task.target.send(ProviderEvent::ContextNotice(format!(
                 "Compacting older context using {}…",
                 method.description()
@@ -79,7 +95,10 @@ pub(crate) async fn prepare(
             let runtime_update = input.runtime_update(&checkpoint);
             PreparedRequest::new(
                 input.request(&checkpoint)?,
-                Some(checkpoint),
+                Some(CompactedContext {
+                    checkpoint,
+                    snapshot,
+                }),
                 input.limits,
                 runtime_update,
             )

@@ -215,7 +215,38 @@ Compression can take time and needs temporary space for the new database and
 archive. If active conversations alone fill the next database, rotation stops and
 retains the existing databases.
 
-## Immutable snapshot actors
+## Immutable workers and automatic compaction snapshots
+
+Successful automatic or manual compaction creates an immutable snapshot worker
+for the older context being compacted, including earlier compaction memory,
+effective instructions, historical tool definitions/results, and runtime state.
+Each compaction adds a worker instead of replacing previous snapshots. Failed or
+cancelled compaction does not publish a worker. Snapshot capture must fit the
+configured context budget; it never silently truncates history to make it fit.
+
+Both the main worker and simple worker expose `ask_immutable_worker`:
+
+```json
+{"action":"list"}
+{"action":"ask","worker_id":"<id from list>","question":"What did the earlier investigation find?"}
+```
+
+Listing returns IDs, kinds, and descriptions. Asking returns the worker metadata
+and answer. The interface is not snapshot-specific: future immutable workers can
+implement `immutable_workers::ImmutableMessage::Ask`, be spawned through
+`ImmutableWorker::spawn`, and registered in `Runtime::immutable_workers` under
+their conversation owner. The tool needs no changes for a new worker kind.
+Registered workers must answer only from fixed context without tools or retained
+question/answer history. Treat their answers as reference data, not current
+instructions or fresh validation.
+
+Automatic workers are conversation-scoped, in-memory, and retained across turns.
+Clear, session switches (including forks), and shutdown stop them. They are not
+restored after a restart. Earlier snapshot workers remain useful after subsequent
+compactions because a later snapshot can contain summaries or opaque provider
+memory rather than the original earlier exchanges.
+
+### Manual snapshot actor API
 
 The `actors::workers::snapshot_worker` module provides a question-only actor alongside the
 normal tool-using workers. Send `actor::Message::CaptureSnapshot` to a settled
@@ -224,7 +255,7 @@ definitions and results, existing compaction memory, runtime state, and provider
 configuration. Capture rejects active turns and incomplete tool exchanges; it
 does not truncate history or trigger compaction to make the snapshot fit.
 
-Spawn `SnapshotWorker` with the returned `Snapshot`, then send
+For independently managed snapshots, spawn `SnapshotWorker` with the returned `Snapshot`, then send
 `SnapshotMessage::Ask { question, reply }`. Each question is independent: the
 actor uses its frozen context plus only that question, and retains neither the
 question nor its answer. Historical messages and tools are losslessly encoded as

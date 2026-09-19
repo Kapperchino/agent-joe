@@ -257,7 +257,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                     ProviderUpdate::Progress(crate::states::stream_processor::StreamNextStep::Noop)
                 }
                 ProviderEvent::ContextPrepared { update, reply } => {
-                    let result = self.commit_context(update).map(|request| {
+                    let result = self.commit_context(update).await.map(|request| {
                         self.reporter
                             .send(ActorToTuiPacket::ContextUpdated(request));
                     });

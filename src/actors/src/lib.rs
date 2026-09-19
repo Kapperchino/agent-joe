@@ -1,4 +1,5 @@
 pub mod actor;
+pub mod immutable_workers;
 pub mod supervisor;
 pub mod worker;
 pub mod worker_registry;

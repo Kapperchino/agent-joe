@@ -419,6 +419,233 @@ async fn root_modes_complete_small_changes_directly_and_simple_has_no_delegation
     }
 }
 
+struct ReferenceWorker;
+
+#[tokio::test]
+async fn both_root_modes_query_automatically_created_compaction_snapshots() {
+    for mode in [Mode::Simple, Mode::Delegated] {
+        let workspace = crate::session::tests::Workspace::new();
+        let runtime = Runtime {
+            context_budget: crate::context::ContextBudget::new(Some(48_000), 2048).unwrap(),
+            ..Runtime::for_workspace(workspace.path.clone()).unwrap()
+        };
+        let registry = runtime.immutable_workers.clone();
+        let history = std::iter::once(llm::Message::new("Original workspace".into()))
+            .chain((0..5).flat_map(|index| {
+                [
+                    llm::Message::new(format!("Inspect part {index}")),
+                    llm::Message::new_assistant(format!(
+                        "Original investigation {index}: {}",
+                        "inspected source ".repeat(4000)
+                    )),
+                ]
+            }))
+            .collect();
+        let session = runtime
+            .sessions
+            .as_ref()
+            .unwrap()
+            .create(llm::SessionProvider::Injected, None, history)
+            .unwrap();
+        let owner = session.id.clone();
+        drop(session);
+        let actor = match mode {
+            Mode::Simple => {
+                RepositoryActor::with_runtime(SimpleWorker::new(), runtime, false).await
+            }
+            Mode::Delegated => {
+                RepositoryActor::with_runtime(BaseWorker::new(), runtime, false).await
+            }
+        };
+        actor
+            .actor
+            .send_message(Message::Command(commands::command::Command::Resume(
+                commands::command::ResumeTarget::Session { id: owner.clone() },
+            )))
+            .unwrap();
+        let resumed = actor
+            .event(|event| matches!(event.packet, ActorToTuiPacket::SessionResumed(_)))
+            .await;
+        assert!(matches!(
+            resumed.packet,
+            ActorToTuiPacket::SessionResumed(Ok(_))
+        ));
+        actor
+            .actor
+            .send_message(Message::StartWork(Some("Recover earlier evidence".into())))
+            .unwrap();
+        let (request, reply) = actor.request().await;
+        assert!(request.system.unwrap().starts_with("Summarize only"));
+        assert!(registry.list(&owner).is_empty());
+        answer(
+            reply,
+            response(vec![text(
+                "Older investigation complete; consult the original evidence when needed.",
+            )]),
+        );
+        let (request, reply) = actor.request().await;
+        assert!(
+            !serde_json::to_string(&request.messages)
+                .unwrap()
+                .contains("Original investigation 0")
+        );
+        let workers = registry.list(&owner);
+        assert_eq!(workers.len(), 1);
+        answer(
+            reply,
+            response(vec![tool(
+                "ask_immutable_worker",
+                "list",
+                json!({"action":"list"}),
+            )]),
+        );
+        let (request, reply) = actor.request().await;
+        assert!(result_text(&request).contains(&workers[0].worker_id));
+        assert!(result_text(&request).contains("snapshot"));
+        answer(
+            reply,
+            response(vec![tool(
+                "ask_immutable_worker",
+                "ask",
+                json!({
+                    "action":"ask", "worker_id": workers[0].worker_id, "question":"What was the first investigation?"
+                }),
+            )]),
+        );
+        let (request, reply) = actor.request().await;
+        assert!(request.tools.is_empty());
+        assert_eq!(request.messages.len(), 2);
+        let frozen = request.messages[0].text();
+        assert!(frozen.starts_with("Frozen context:\n"));
+        assert!(frozen.contains("Original investigation 0"));
+        assert!(frozen.contains("ask_immutable_worker"));
+        assert!(!frozen.contains("What was the first investigation?"));
+        assert_eq!(
+            request.messages[1].text(),
+            "What was the first investigation?"
+        );
+        answer(
+            reply,
+            response(vec![text("The first investigation inspected source.")]),
+        );
+        let (request, reply) = actor.request().await;
+        assert!(result_text(&request).contains("The first investigation inspected source."));
+        completed_root(&actor, reply).await;
+        actor.stop().await;
+        assert!(registry.list(&owner).is_empty());
+    }
+}
+
+impl Actor for ReferenceWorker {
+    type Msg = crate::immutable_workers::ImmutableMessage;
+    type State = String;
+    type Arguments = String;
+
+    async fn pre_start(
+        &self,
+        _: ActorRef<Self::Msg>,
+        reference: String,
+    ) -> Result<Self::State, ActorProcessingErr> {
+        Ok(reference)
+    }
+
+    async fn handle(
+        &self,
+        _: ActorRef<Self::Msg>,
+        message: Self::Msg,
+        reference: &mut Self::State,
+    ) -> Result<(), ActorProcessingErr> {
+        let crate::immutable_workers::ImmutableMessage::Ask { question, reply } = message;
+        let _ = reply.send(Ok(format!("{reference}: {question}")));
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn both_root_modes_list_and_ask_non_snapshot_immutable_workers() {
+    use crate::immutable_workers::{ImmutableWorker, ImmutableWorkerDescription};
+    for mode in [Mode::Simple, Mode::Delegated] {
+        let workspace = crate::session::tests::Workspace::new();
+        let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
+        let registry = runtime.immutable_workers.clone();
+        let actor = match mode {
+            Mode::Simple => {
+                RepositoryActor::with_runtime(SimpleWorker::new(), runtime, false).await
+            }
+            Mode::Delegated => {
+                RepositoryActor::with_runtime(BaseWorker::new(), runtime, false).await
+            }
+        };
+        let owner = actor.store.list().unwrap()[0].id.clone();
+        let worker = ImmutableWorker::spawn(
+            ReferenceWorker,
+            "Frozen reference".into(),
+            ImmutableWorkerDescription {
+                kind: "reference".into(),
+                description: "A different immutable worker implementation".into(),
+            },
+            &actor.actor,
+        )
+        .await
+        .unwrap();
+        let registered = registry.insert(&owner, worker);
+        actor
+            .actor
+            .send_message(Message::StartWork(Some("Consult immutable workers".into())))
+            .unwrap();
+        let (request, reply) = actor.request().await;
+        assert!(request.tools.iter().any(|definition| matches!(definition, ToolDefinition::Client { name, .. } if name == "ask_immutable_worker")));
+        answer(
+            reply,
+            response(vec![tool(
+                "ask_immutable_worker",
+                "list",
+                json!({"action":"list"}),
+            )]),
+        );
+        let (request, reply) = actor.request().await;
+        assert!(result_text(&request).contains(&registered.worker_id));
+        assert!(result_text(&request).contains("reference"));
+        answer(
+            reply,
+            response(vec![tool(
+                "ask_immutable_worker",
+                "ask",
+                json!({
+                    "action":"ask", "worker_id":registered.worker_id, "question":"What is recorded?"
+                }),
+            )]),
+        );
+        let (request, mut reply) = actor.request().await;
+        assert!(result_text(&request).contains("Frozen reference: What is recorded?"));
+        for input in [
+            json!({"action":"ask", "worker_id":"missing", "question":"Question"}),
+            json!({"action":"ask", "worker_id":registered.worker_id, "question":" "}),
+            json!({"action":"ask", "worker_id":registered.worker_id, "question":"x".repeat(16385)}),
+            json!({"action":"unknown"}),
+        ] {
+            answer(
+                reply,
+                response(vec![tool("ask_immutable_worker", "invalid", input)]),
+            );
+            let (request, next) = actor.request().await;
+            assert!(matches!(
+                latest_tool_result(&request),
+                ContentBlock::ToolResult {
+                    is_error: Some(true),
+                    ..
+                }
+            ));
+            reply = next;
+        }
+        completed_root(&actor, reply).await;
+        assert_eq!(registry.list(&owner).len(), 1);
+        interaction_command(&actor, commands::command::Command::Fork).await;
+        assert!(registry.list(&owner).is_empty());
+        actor.stop().await;
+    }
+}
+
 #[tokio::test]
 async fn qualified_worker_tools_execute_with_scoped_read_access() {
     let workspace = crate::session::tests::Workspace::new();

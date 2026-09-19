@@ -84,14 +84,33 @@ enum SessionReply {
 }
 
 impl<C: Context + Clone + 'static> ActorState<C> {
-    pub(crate) fn commit_context(
+    pub(crate) async fn commit_context(
         &mut self,
         update: context::compactor::ContextUpdate,
     ) -> Result<common_models::tui_models::RequestContext, Failure> {
-        if let Some(checkpoint) = update.checkpoint {
-            self.context_checkpoint = self.save_checkpoint(checkpoint)?;
+        if let Some(compaction) = update.compaction {
+            let worker = crate::immutable_workers::ImmutableWorker::spawn(
+                crate::workers::snapshot_worker::SnapshotWorker,
+                compaction.snapshot,
+                crate::immutable_workers::ImmutableWorkerDescription {
+                    kind: "snapshot".into(),
+                    description: format!(
+                        "Older context preserved by compaction generation {}. Includes the compacted exchanges and any earlier compaction memory.",
+                        compaction.checkpoint.generation
+                    ),
+                },
+                &self.actor_ref,
+            )
+            .await
+            .map_err(|error| Failure::new(FailureKind::Worker, error.to_string()))?;
+            self.context_checkpoint = self.save_checkpoint(compaction.checkpoint)?;
+            let view = self
+                .dependency
+                .runtime
+                .immutable_workers
+                .insert(&self.dependency.worker_owner(), worker);
             self.reporter.send(ActorToTuiPacket::ContextNotice(
-                "Context compacted. The saved transcript and full output artifacts remain available.".into(),
+                format!("Context compacted. Immutable worker {} preserves the older context; use ask_immutable_worker to query it. The saved transcript and full output artifacts remain available.", view.worker_id),
             ));
         }
         if let (Persistence::Ready, Some(message)) = (&self.persistence, update.runtime_update) {
@@ -479,6 +498,11 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         let mut context = self.cur_context.clone();
         context.clear_task_context();
         Self::relocate_context(&mut context, &runtime)?;
+        self.dependency
+            .runtime
+            .immutable_workers
+            .clear(&self.dependency.worker_owner())
+            .await;
         self.dependency.runtime = runtime;
         self.dependency.context = context.clone();
         let fresh = llm::Message::new(context.get_ctx().await);

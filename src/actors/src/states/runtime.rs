@@ -42,6 +42,7 @@ impl ExecutionRole {
 pub struct Runtime {
     pub(crate) interaction: Arc<crate::session::interaction_policy::InteractionPolicy>,
     pub workers: Arc<crate::worker_registry::WorkerRegistry>,
+    pub immutable_workers: Arc<crate::immutable_workers::ImmutableWorkerRegistry>,
     pub(crate) role: ExecutionRole,
     pub(crate) turn_scope: Option<ExecutionScope>,
     pub(crate) inherited_constraints: Vec<String>,
@@ -60,6 +61,7 @@ impl Default for Runtime {
         Self {
             interaction: Arc::default(),
             workers: Arc::default(),
+            immutable_workers: Arc::default(),
             role: ExecutionRole::Root,
             turn_scope: None,
             inherited_constraints: Vec::new(),

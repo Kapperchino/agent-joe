@@ -42,6 +42,11 @@ impl Worker for SimpleWorker<RustContext> {
 
     fn tools() -> Vec<ErasedToolRef<Self::C, ActorContext<Self::C>>> {
         vec![
+            erased_tool::<
+                crate::tools::ask_immutable_worker::AskImmutableWorker,
+                Self::C,
+                ActorContext<Self::C>,
+            >(),
             erased_tool::<tools::worktree::Worktree, Self::C, ActorContext<Self::C>>(),
             erased_tool::<tools::undo_changes::UndoChanges, Self::C, ActorContext<Self::C>>(),
             erased_tool::<tools::git::Git, Self::C, ActorContext<Self::C>>(),

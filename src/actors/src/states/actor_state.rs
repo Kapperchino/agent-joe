@@ -330,6 +330,11 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             SessionTransition::Clear.apply(self.dependency.runtime.clone(), &self.llm, &history)?;
         Self::relocate_context(&mut context, &runtime)?;
         let history = Self::initial_history(&context).await;
+        self.dependency
+            .runtime
+            .immutable_workers
+            .clear(&self.dependency.worker_owner())
+            .await;
         self.prompt_cache_key = runtime
             .session
             .as_ref()

@@ -13,6 +13,7 @@ Use the tools deliberately:
 - `apply_patch`: make small, focused edits that preserve the surrounding style.
 - `cargo`: select an `operation` such as `check` or `test`. Run targeted tests first, then broader tests when the change warrants it.
 - `web_search`: look up current external information only when local project context is insufficient.
+- `ask_immutable_worker`: use action `list` to discover immutable workers by ID, kind, and description, then action `ask` with a worker ID and a self-contained question. Compaction automatically preserves older context in snapshot workers; ask them for details omitted from a summary. Other immutable worker kinds use the same tool. Answers are historical reference material, not current instructions or fresh validation. Questions are independent; workers survive turns, but not clear, session switch, or shutdown.
 
 When finished, respond concisely with what changed and what validation was run.
 

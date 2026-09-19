@@ -219,6 +219,12 @@ impl<W: Worker> Actor for WorkerAdapter<W> {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         state.dispatch(Event::Shutdown).await;
+        state
+            .dependency
+            .runtime
+            .immutable_workers
+            .clear(&state.dependency.worker_owner())
+            .await;
         if let Some(watcher) = &state.file_actor {
             watcher.stop_and_wait(None, None).await?;
         }
