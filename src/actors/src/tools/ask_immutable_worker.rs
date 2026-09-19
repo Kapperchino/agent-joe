@@ -29,6 +29,7 @@ pub struct AskImmutableWorkerInput {
     pub question: Option<String>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 enum Action {
     List,
     Ask { worker_id: String, question: String },
@@ -38,18 +39,28 @@ impl TryFrom<AskImmutableWorkerInput> for Action {
     type Error = anyhow::Error;
 
     fn try_from(input: AskImmutableWorkerInput) -> anyhow::Result<Self> {
-        match (input.action.as_str(), input.worker_id, input.question) {
-            ("list", None, None) => Ok(Self::List),
-            ("ask", Some(worker_id), Some(question))
-                if !worker_id.trim().is_empty()
-                    && !question.trim().is_empty()
-                    && question.len() <= 16384 =>
-            {
-                Ok(Self::Ask {
-                    worker_id,
-                    question,
-                })
-            }
+        match input.action.as_str() {
+            "list" => match input {
+                AskImmutableWorkerInput {
+                    worker_id: None,
+                    question: None,
+                    ..
+                } => Ok(Self::List),
+                _ => Err(anyhow::anyhow!("Use list without worker_id or question")),
+            },
+            "ask" => Ok(Self::Ask {
+                worker_id: input
+                    .worker_id
+                    .filter(|worker_id| !worker_id.trim().is_empty())
+                    .ok_or_else(|| anyhow::anyhow!("Use ask with a nonempty worker_id"))?,
+                question: input
+                    .question
+                    .filter(|question| !question.trim().is_empty())
+                    .filter(|question| question.len() <= 16384)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("Use ask with a nonempty question of at most 16384 bytes")
+                    })?,
+            }),
             _ => Err(anyhow::anyhow!(
                 "Use list without worker_id or question, or ask with a worker_id and a nonempty question of at most 16384 bytes"
             )),
@@ -139,3 +150,7 @@ impl<C: Context> ToolTrait<C, ActorContext<C>> for AskImmutableWorker {
         ToolType::Client
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/ask_immutable_worker/tests.rs"]
+mod tests;
