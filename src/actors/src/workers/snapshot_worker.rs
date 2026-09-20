@@ -1,16 +1,13 @@
+use crate::context::{CompleteHistory, ContextLimits, estimated_tokens};
 use crate::states::actor_state::ActorState;
 use crate::states::stream_processor::{StreamNextStep, StreamProcessor};
 use crate::states::turn::{AcceptedResponse, ResponseState};
 use crate::worker::Worker;
-use crate::{
-    context::{CompleteHistory, ContextLimits, estimated_tokens},
-    event_reporter::EventReporter,
-};
 use analysis::contexts::context::Context;
 use anyhow::Context as _;
 use async_trait::async_trait;
 use clients::llm::{ClientRequest, ContentBlock, LLmClient, Message, Role, StreamEvent};
-use common_models::{runtime_ids::TurnId, tui_models::State};
+use common_models::runtime_ids::TurnId;
 use futures::TryStreamExt;
 use ractor::{ActorProcessingErr, ActorRef};
 use std::time::Duration;
@@ -195,7 +192,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             request,
             &self.llm,
             input.limits,
-            self.workspace.runtime().request_timeout,
+            self.runtime.request_timeout,
         )
     }
 }
@@ -208,19 +205,8 @@ struct SnapshotAnswer {
 
 impl SnapshotAnswer {
     fn new() -> Self {
-        let (tui_tx, _) = flume::unbounded();
         Self {
-            processor: StreamProcessor {
-                batches: Vec::new(),
-                stream_log: None,
-                token_count: Default::default(),
-                reporter: EventReporter::Interactive {
-                    actor_id: 0,
-                    tui_tx,
-                },
-                cur_state: State::Ready,
-                debug: false,
-            },
+            processor: StreamProcessor::default(),
             state: ResponseState::Awaiting,
             bytes: 0,
         }
@@ -234,7 +220,8 @@ impl SnapshotAnswer {
                 "Snapshot answer exceeds the response byte limit"
             )),
         }?;
-        let step = self.state.process(&mut self.processor, event).await?;
+        let event = self.state.accept(event)?;
+        let step = self.processor.process_stream_event(event).next?;
         self.state = match step {
             StreamNextStep::ToolUse | StreamNextStep::Refused => Err(anyhow::anyhow!(
                 "Expected a snapshot answer without tools or refusal"
@@ -245,10 +232,12 @@ impl SnapshotAnswer {
     }
 
     fn finish(mut self) -> anyhow::Result<String> {
-        match self
-            .state
-            .finish(TurnId::new(), &mut self.processor)?
-            .text_only()?
+        match crate::states::stream_processor::finish_response(
+            self.state,
+            TurnId::new(),
+            &mut self.processor,
+        )?
+        .text_only()?
         {
             AcceptedResponse::Complete(message) if !message.text().trim().is_empty() => {
                 Ok(message.text())

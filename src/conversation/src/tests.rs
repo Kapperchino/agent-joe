@@ -16,7 +16,18 @@ fn input() -> ContextInput {
     }
 }
 
-fn exchange(history: &mut Vec<Message>, id: &str, name: &str, output: &str, is_error: bool) {
+enum ExchangeOutcome {
+    Succeeded,
+    Failed,
+}
+
+fn exchange(
+    history: &mut Vec<Message>,
+    id: &str,
+    name: &str,
+    output: &str,
+    outcome: ExchangeOutcome,
+) {
     let tool_id = ToolId {
         id: id.to_owned().try_into().unwrap(),
         call_id: None,
@@ -34,7 +45,10 @@ fn exchange(history: &mut Vec<Message>, id: &str, name: &str, output: &str, is_e
         content: vec![ContentBlock::ToolResult {
             tool_id,
             content: output.into(),
-            is_error: is_error.then_some(true),
+            is_error: match outcome {
+                ExchangeOutcome::Succeeded => None,
+                ExchangeOutcome::Failed => Some(true),
+            },
         }],
     });
 }
@@ -69,14 +83,14 @@ fn repeated_compaction_preserves_requirements_questions_evidence_and_recent_pair
         "check",
         "cargo_check",
         "Compiler error E0308 in src/main.rs",
-        true,
+        ExchangeOutcome::Failed,
     );
     exchange(
         &mut input.history,
         "test",
         "cargo",
         "Focused regression passed",
-        false,
+        ExchangeOutcome::Succeeded,
     );
     for id in ["one", "two", "three", "four"] {
         exchange(
@@ -84,7 +98,7 @@ fn repeated_compaction_preserves_requirements_questions_evidence_and_recent_pair
             id,
             "read_file",
             &"old data ".repeat(180),
-            false,
+            ExchangeOutcome::Succeeded,
         );
     }
     input.runtime = Some(Default::default());
@@ -93,7 +107,7 @@ fn repeated_compaction_preserves_requirements_questions_evidence_and_recent_pair
         .as_mut()
         .unwrap()
         .questions
-        .push(crate::session::PendingQuestion {
+        .push(common_models::interaction::Question {
             purpose: Default::default(),
             choices: Vec::new(),
             allow_free_text: true,
@@ -150,7 +164,7 @@ fn repeated_compaction_preserves_requirements_questions_evidence_and_recent_pair
                 &id,
                 "read_file",
                 &"more data ".repeat(180),
-                false,
+                ExchangeOutcome::Succeeded,
             );
         }
     }
@@ -183,8 +197,20 @@ fn requests_budget_optional_workspace_after_instructions_and_latest_user_input()
 #[test]
 fn compaction_requires_complete_tool_exchanges_without_duplicates_or_interruptions() {
     let mut input = input();
-    exchange(&mut input.history, "one", "read_file", "first", false);
-    exchange(&mut input.history, "two", "read_file", "second", false);
+    exchange(
+        &mut input.history,
+        "one",
+        "read_file",
+        "first",
+        ExchangeOutcome::Succeeded,
+    );
+    exchange(
+        &mut input.history,
+        "two",
+        "read_file",
+        "second",
+        ExchangeOutcome::Succeeded,
+    );
     let calls = Message {
         role: Role::Assistant,
         content: input.history[1]
@@ -261,7 +287,7 @@ fn runtime_deltas_preserve_prefixes_and_compaction_resets_the_snapshot() {
             &format!("read-{index}"),
             "read_file",
             &"source ".repeat(300),
-            false,
+            ExchangeOutcome::Succeeded,
         );
         let state = input.runtime.as_mut().unwrap();
         state

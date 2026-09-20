@@ -1,0 +1,505 @@
+use clients::response::{ProcessedItem, StreamNextStep, ToolCall};
+use clients::{
+    failure::{Failure, FailureKind},
+    llm::{ContentBlock, Message, Role, StreamEvent},
+};
+use common_models::runtime_ids::WorkspaceRevision;
+use common_models::{
+    runtime_ids::{OperationId, TurnId},
+    tui_models::Lifecycle,
+};
+use std::collections::HashMap;
+use tools::{
+    tool_defs::ToolResult,
+    tool_error::{ToolFailure, ToolFailureKind},
+};
+use utils::execution::{ExecutionScope, OwnedScope};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Tag {
+    pub turn: TurnId,
+    pub operation: OperationId,
+}
+impl Tag {
+    pub fn new(turn: TurnId) -> Self {
+        Self {
+            turn,
+            operation: OperationId::new(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct FollowUp {
+    pub id: TurnId,
+    pub prompt: Option<String>,
+}
+impl FollowUp {
+    pub fn new(prompt: Option<String>) -> Self {
+        Self {
+            id: TurnId::new(),
+            prompt,
+        }
+    }
+}
+
+#[derive(Default)]
+pub enum TurnState {
+    #[default]
+    Idle,
+    Provider(Turn<ProviderRun>),
+    Tools(Turn<ToolBatch>),
+    Waiting(TurnId),
+    Stopping(Turn<Cleanup>),
+}
+
+pub struct ToolBatchMut<'a> {
+    pub failures: &'a mut FailureTracker,
+    pub batch: &'a mut ToolBatch,
+}
+
+impl ToolBatchMut<'_> {
+    pub fn complete(
+        self,
+        operation: OperationId,
+        result: ToolResult,
+        revision: WorkspaceRevision,
+    ) -> Option<ToolResult> {
+        self.batch.complete(operation, result).map(|result| {
+            if let Continuation::Stop(failure) = self.failures.record(&result, revision) {
+                self.batch.continuation = Continuation::Stop(failure);
+            }
+            result
+        })
+    }
+}
+
+impl TurnState {
+    pub fn tools_mut(&mut self, tag: Tag) -> Option<ToolBatchMut<'_>> {
+        let tools = match self {
+            Self::Tools(turn) => Some(ToolBatchMut {
+                failures: &mut turn.failures,
+                batch: &mut turn.phase,
+            }),
+            Self::Stopping(turn) => match &mut turn.phase.work {
+                CleanupWork::Tools(batch) => Some(ToolBatchMut {
+                    failures: &mut turn.failures,
+                    batch,
+                }),
+                CleanupWork::Provider(_) => None,
+            },
+            _ => None,
+        };
+        tools.filter(|tools| tools.batch.tag == tag)
+    }
+
+    pub fn batch(&self) -> Option<&ToolBatch> {
+        match self {
+            Self::Tools(turn) => Some(&turn.phase),
+            Self::Stopping(turn) => match &turn.phase.work {
+                CleanupWork::Tools(batch) => Some(batch),
+                CleanupWork::Provider(_) => None,
+            },
+            _ => None,
+        }
+    }
+}
+
+pub struct Turn<P> {
+    pub id: TurnId,
+    pub scope: OwnedScope,
+    pub failures: FailureTracker,
+    pub plan_reconciliations: u8,
+    pub phase: P,
+}
+impl Turn<ProviderRun> {
+    pub fn new(id: TurnId, scope: ExecutionScope) -> Self {
+        let phase = ProviderRun::new(id, scope.child(), 0);
+        Self {
+            id,
+            scope: OwnedScope::new(scope),
+            failures: FailureTracker::default(),
+            plan_reconciliations: 0,
+            phase,
+        }
+    }
+}
+impl<P> Turn<P> {
+    pub fn map<Q>(self, phase: impl FnOnce(P) -> Q) -> Turn<Q> {
+        Turn {
+            id: self.id,
+            scope: self.scope,
+            failures: self.failures,
+            plan_reconciliations: self.plan_reconciliations,
+            phase: phase(self.phase),
+        }
+    }
+
+    pub fn provider(self) -> Turn<ProviderRun> {
+        let run = ProviderRun::new(self.id, self.scope.child(), 0);
+        self.map(|_| run)
+    }
+}
+impl<P: Into<CleanupWork>> Turn<P> {
+    pub fn stopping(self, outcome: TurnOutcome, history: HistoryDisposition) -> Turn<Cleanup> {
+        self.map(|work| Cleanup {
+            work: work.into(),
+            outcome,
+            history,
+        })
+    }
+}
+
+pub struct Cleanup {
+    pub work: CleanupWork,
+    pub outcome: TurnOutcome,
+    pub history: HistoryDisposition,
+}
+pub enum CleanupWork {
+    Provider(Tag),
+    Tools(ToolBatch),
+}
+impl CleanupWork {
+    pub fn tag(&self) -> Tag {
+        match self {
+            Self::Provider(tag) => *tag,
+            Self::Tools(batch) => batch.tag,
+        }
+    }
+}
+impl From<ProviderRun> for CleanupWork {
+    fn from(run: ProviderRun) -> Self {
+        Self::Provider(run.tag)
+    }
+}
+impl From<ToolBatch> for CleanupWork {
+    fn from(batch: ToolBatch) -> Self {
+        Self::Tools(batch)
+    }
+}
+
+#[derive(Clone)]
+pub struct ProviderRun {
+    pub tag: Tag,
+    pub scope: ExecutionScope,
+    pub attempt: u8,
+    pub response: ResponseState,
+}
+impl ProviderRun {
+    pub fn new(turn: TurnId, scope: ExecutionScope, attempt: u8) -> Self {
+        Self {
+            tag: Tag::new(turn),
+            scope,
+            attempt,
+            response: ResponseState::Awaiting,
+        }
+    }
+}
+#[derive(Clone, Copy)]
+pub enum ResponseState {
+    Awaiting,
+    Streaming,
+    Complete,
+    ToolUse,
+}
+pub enum AcceptedResponse {
+    Compacted,
+    Complete(Message),
+    Tools(ToolBatch),
+}
+impl AcceptedResponse {
+    pub fn text_only(self) -> Result<Self, Failure> {
+        match &self {
+            Self::Complete(message)
+                if message.content.iter().all(|content| {
+                    matches!(
+                        content,
+                        ContentBlock::MessageBlock { .. }
+                            | ContentBlock::ThinkingBlock { .. }
+                            | ContentBlock::OpenAIReasoning(_)
+                    )
+                }) =>
+            {
+                Ok(self)
+            }
+            _ => Err(Failure::new(
+                FailureKind::InvalidInput,
+                "Expected a text response without tool or provider content",
+            )),
+        }
+    }
+}
+impl ResponseState {
+    pub fn advance(self, step: StreamNextStep) -> Self {
+        match step {
+            StreamNextStep::Started => Self::Streaming,
+            StreamNextStep::Done | StreamNextStep::Refused => Self::Complete,
+            StreamNextStep::ToolUse => Self::ToolUse,
+            StreamNextStep::Accum | StreamNextStep::Noop => self,
+        }
+    }
+
+    pub fn accept(self, item: StreamEvent) -> anyhow::Result<StreamEvent> {
+        match (&self, &item) {
+            (_, StreamEvent::Ping | StreamEvent::Accum | StreamEvent::Error { .. }) => Ok(()),
+            (Self::Awaiting, StreamEvent::MessageStart { .. }) => Ok(()),
+            (Self::Awaiting, _) => Err(anyhow::anyhow!(
+                "Provider sent content before starting its response"
+            )),
+            (Self::Streaming, StreamEvent::MessageStart { .. }) => Err(anyhow::anyhow!(
+                "Provider started a second response in one stream"
+            )),
+            (Self::Streaming, StreamEvent::MessageStop) => Err(anyhow::anyhow!(
+                "Provider stopped before completing its response"
+            )),
+            (Self::Streaming, _) | (_, StreamEvent::MessageStop) => Ok(()),
+            _ => Err(anyhow::anyhow!(
+                "Provider sent content after completing its response"
+            )),
+        }?;
+        Ok(item)
+    }
+
+    pub fn completion(self) -> Result<ResponseCompletion, Failure> {
+        match self {
+            Self::Awaiting | Self::Streaming => Err(Failure::new(
+                FailureKind::Transport,
+                "Provider stream ended without a complete response",
+            )),
+            Self::ToolUse => Ok(ResponseCompletion::Tools),
+            Self::Complete => Ok(ResponseCompletion::Message),
+        }
+    }
+}
+
+pub enum ResponseCompletion {
+    Tools,
+    Message,
+}
+
+impl ResponseCompletion {
+    pub fn finish(
+        self,
+        turn: TurnId,
+        items: Vec<ProcessedItem>,
+    ) -> Result<AcceptedResponse, Failure> {
+        match self {
+            Self::Tools => Ok(AcceptedResponse::Tools(ToolBatch::new(turn, items))),
+            Self::Message => items
+                .into_iter()
+                .map(|item| match item {
+                    ProcessedItem::Content(content) => Ok(content),
+                    ProcessedItem::Tool(_) => Err(Failure::new(
+                        FailureKind::InvalidInput,
+                        "Tool in a completed response",
+                    )),
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(|content| {
+                    AcceptedResponse::Complete(Message {
+                        role: Role::Assistant,
+                        content,
+                    })
+                }),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum TurnOutcome {
+    WaitingForInput,
+    Completed,
+    Cancelled,
+    Failed(Failure),
+}
+impl TurnOutcome {
+    pub fn lifecycle(&self) -> Lifecycle {
+        match self {
+            Self::WaitingForInput => Lifecycle::WaitingForInput,
+            Self::Completed => Lifecycle::Completed,
+            Self::Cancelled => Lifecycle::Cancelled,
+            Self::Failed(_) => Lifecycle::Failed,
+        }
+    }
+    pub fn detail(&self) -> Option<String> {
+        match self {
+            Self::WaitingForInput => {
+                Some("Required question pending; use /questions and /answer".into())
+            }
+            Self::Completed => None,
+            Self::Cancelled => Some("Turn cancelled".into()),
+            Self::Failed(failure) => Some(failure.to_string()),
+        }
+    }
+}
+#[derive(Clone, Copy)]
+pub enum HistoryDisposition {
+    Retain,
+    Clear,
+}
+
+#[derive(Clone)]
+pub struct ToolJob {
+    pub operation: OperationId,
+    pub call: ToolCall,
+}
+pub struct ToolBatch {
+    pub tag: Tag,
+    assistant: Vec<ContentBlock>,
+    entries: Vec<ToolEntry>,
+    pub continuation: Continuation,
+}
+
+#[derive(Clone)]
+pub enum Continuation {
+    Continue,
+    Stop(Failure),
+}
+struct ToolEntry {
+    job: ToolJob,
+    state: ToolState,
+}
+enum ToolState {
+    Queued,
+    Running,
+    Completed(ToolResult),
+}
+
+impl ToolBatch {
+    pub fn new(turn: TurnId, items: Vec<ProcessedItem>) -> Self {
+        let mut assistant = Vec::new();
+        let mut entries = Vec::new();
+        for item in items {
+            match item {
+                ProcessedItem::Content(content) => assistant.push(content),
+                ProcessedItem::Tool(call) => {
+                    assistant.push(call.content());
+                    entries.push(ToolEntry {
+                        job: ToolJob {
+                            operation: OperationId::new(),
+                            call,
+                        },
+                        state: ToolState::Queued,
+                    });
+                }
+            }
+        }
+        Self {
+            tag: Tag::new(turn),
+            assistant,
+            entries,
+            continuation: Continuation::Continue,
+        }
+    }
+
+    pub fn jobs(&self) -> Vec<ToolJob> {
+        self.entries.iter().map(|entry| entry.job.clone()).collect()
+    }
+
+    pub fn assistant_message(&self) -> Message {
+        Message {
+            role: Role::Assistant,
+            content: self.assistant.clone(),
+        }
+    }
+
+    pub fn start(&mut self, operation: OperationId) -> Option<&ToolJob> {
+        self.entries
+            .iter_mut()
+            .find(|entry| entry.job.operation == operation)
+            .filter(|entry| matches!(entry.state, ToolState::Queued))
+            .map(|entry| {
+                entry.state = ToolState::Running;
+                &entry.job
+            })
+    }
+
+    pub fn complete(&mut self, operation: OperationId, result: ToolResult) -> Option<ToolResult> {
+        self.entries
+            .iter_mut()
+            .find(|entry| entry.job.operation == operation)
+            .filter(|entry| !matches!(entry.state, ToolState::Completed(_)))
+            .filter(|entry| result.id == entry.job.call.id)
+            .filter(|entry| result.invocation.name == entry.job.call.name)
+            .map(|entry| {
+                entry.state = ToolState::Completed(result.clone());
+                result
+            })
+    }
+
+    pub fn pending_operations(&self) -> impl Iterator<Item = OperationId> + '_ {
+        self.entries
+            .iter()
+            .filter(|entry| !matches!(entry.state, ToolState::Completed(_)))
+            .map(|entry| entry.job.operation)
+    }
+
+    pub fn messages(&self) -> [Message; 2] {
+        let outputs = self.entries.iter().map(|entry| match &entry.state {
+            ToolState::Completed(result) => ContentBlock::ToolResult {
+                tool_id: result.id.clone(),
+                content: result.content(),
+                is_error: result.outcome.is_err().then_some(true),
+            },
+            ToolState::Queued => entry.job.call.error_content("Not executed: the turn stopped before this tool started."),
+            ToolState::Running => entry.job.call.error_content("Interrupted operation: completion is unknown. Inspect possible partial effects before retrying."),
+        }).collect();
+        [
+            self.assistant_message(),
+            Message {
+                role: Role::User,
+                content: outputs,
+            },
+        ]
+    }
+}
+
+#[derive(Default)]
+pub struct FailureTracker(HashMap<FailureFingerprint, u8>);
+#[derive(PartialEq, Eq, Hash)]
+struct FailureFingerprint {
+    revision: WorkspaceRevision,
+    tool: String,
+    arguments: String,
+    kind: ToolFailureKind,
+    message: String,
+}
+impl FailureTracker {
+    pub fn record(&mut self, result: &ToolResult, revision: WorkspaceRevision) -> Continuation {
+        match &result.outcome {
+            Err(failure) => {
+                let fingerprint = FailureFingerprint {
+                    revision,
+                    tool: result.invocation.name.to_string(),
+                    arguments: serde_json::Value::Object(result.invocation.input.clone())
+                        .to_string(),
+                    kind: failure.kind,
+                    message: failure.message.clone(),
+                };
+                let count = self.0.entry(fingerprint).or_default();
+                *count = count.saturating_add(1);
+                match (*count, failure.stops_turn()) {
+                    (0..=2, false) => Continuation::Continue,
+                    _ => Continuation::Stop(tool_failure(failure)),
+                }
+            }
+            Ok(_) => Continuation::Continue,
+        }
+    }
+}
+
+pub fn tool_failure(failure: &ToolFailure) -> Failure {
+    let kind = match failure.kind {
+        ToolFailureKind::Worker => FailureKind::Worker,
+        ToolFailureKind::InvalidInput => FailureKind::InvalidInput,
+        _ => FailureKind::Tool,
+    };
+    Failure::new(
+        kind,
+        format!("{failure}. Automatic continuation stopped; inspect the result before retrying."),
+    )
+}
+
+#[cfg(test)]
+#[path = "turn_tests.rs"]
+mod tests;

@@ -92,7 +92,7 @@ pub enum ActorContext<C: Context> {
     ActorInfo(ActorInfo<C>),
 }
 pub struct ActorInfo<C: Context> {
-    pub services: std::sync::Arc<crate::states::services::ActorServices<C>>,
+    pub services: std::sync::Arc<crate::states::services::ActorServices<C, ActorContext<C>>>,
     pub runtime: crate::states::runtime::Runtime,
     pub owner: String,
     pub actor_ref: ActorRef<Message>,
@@ -122,7 +122,7 @@ impl<W: ContextWorker> Worker for W {
         message: Message,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
-        let scope = state.workspace.runtime().scope.clone();
+        let scope = state.runtime.scope.clone();
         scope
             .enter(async {
                 match message {
@@ -157,11 +157,12 @@ impl<W: ContextWorker> Worker for W {
                         }
                     }
                     Message::RunWorker(reply) => {
-                        state.dispatch(SessionEvent::StartWorker(reply)).await
+                        let request = state.worker_replies.insert(reply);
+                        state.dispatch(SessionEvent::StartWorker(request)).await
                     }
                     Message::Provider { tag, event } => state.provider_event(tag, event).await,
                     Message::Tools { tag, event } => {
-                        let revision = state.workspace.runtime().workspace.revision();
+                        let revision = state.runtime.workspace.revision();
                         state
                             .dispatch(SessionEvent::Tools {
                                 tag,
@@ -208,10 +209,9 @@ impl<W: ContextWorker> Worker for W {
     ) -> Result<(), ActorProcessingErr> {
         state.dispatch(Event::Shutdown).await;
         state
-            .workspace
-            .runtime()
+            .runtime
             .immutable_workers
-            .clear(&state.workspace.worker_owner())
+            .clear(&state.runtime.worker_owner(state.context.get_id()))
             .await;
         if let Some(watcher) = &state.file_actor {
             watcher.stop_and_wait(None, None).await?;

@@ -1,16 +1,15 @@
 use super::*;
-use crate::states::runtime::Workspace;
-use crate::states::stream_processor::ProcessedItem;
-use crate::states::turn::ToolBatch;
-use crate::tool_call::ToolCall;
+use crate::turn::ToolBatch;
 use clients::failure::FailureKind;
+use clients::response::ProcessedItem;
+use clients::response::ToolCall;
 use common_models::runtime_ids::OperationId;
 use tools::tool_defs::{ToolEffect, ToolId, ToolInvocation};
 
 fn machine() -> TurnMachine {
     TurnMachine::new(
         ExecutionScope::default(),
-        crate::context::RequestMode::Continue,
+        clients::response::RequestMode::Continue,
     )
 }
 
@@ -77,7 +76,7 @@ fn tool(machine: &mut TurnMachine, tag: Tag, event: ToolEvent) -> Vec<Effect> {
     machine.transition(SessionEvent::Tools {
         tag,
         event,
-        revision: Workspace::new(1).revision(),
+        revision: WorkspaceRevision(0),
     })
 }
 
@@ -472,17 +471,17 @@ fn stopping_accepts_matching_tool_results_once_and_preserves_uncertain_work() {
 #[test]
 fn completed_worker_replies_after_cleanup_and_does_not_start_queued_work() {
     let mut machine = machine();
-    let (reply, _receive) = tokio::sync::oneshot::channel();
-    machine.transition(SessionEvent::StartWorker(reply.into()));
+    let reply = OperationId::new();
+    machine.transition(SessionEvent::StartWorker(reply));
     let tag = provider(&machine).tag;
-    let (second, _receive) = tokio::sync::oneshot::channel();
-    let effects = machine.transition(SessionEvent::StartWorker(second.into()));
+    let second = OperationId::new();
+    let effects = machine.transition(SessionEvent::StartWorker(second));
     assert!(matches!(
         effects.as_slice(),
         [Effect::ReplyWorker {
+            request,
             outcome: WorkerOutcome::Failed(WorkerFailure::AlreadyRunning),
-            ..
-        }]
+        }] if *request == second
     ));
     machine.transition(SessionEvent::Start(FollowUp::new(Some("queued".into()))));
     let effects = response(&mut machine, tag, Ok(complete_response()));
@@ -495,9 +494,9 @@ fn completed_worker_replies_after_cleanup_and_does_not_start_queued_work() {
     assert!(effects.iter().any(|effect| matches!(
         effect,
         Effect::ReplyWorker {
+            request,
             outcome: WorkerOutcome::Completed,
-            ..
-        }
+        } if *request == reply
     )));
     assert!(matches!(effects.last(), Some(Effect::StopActor)));
     assert!(!launches_provider(&effects));
@@ -506,8 +505,8 @@ fn completed_worker_replies_after_cleanup_and_does_not_start_queued_work() {
 #[test]
 fn shutdown_waits_for_resources_before_publishing_cancellation_or_resolving_worker() {
     let mut machine = machine();
-    let (reply, _receive) = tokio::sync::oneshot::channel();
-    machine.transition(SessionEvent::StartWorker(reply.into()));
+    let reply = OperationId::new();
+    machine.transition(SessionEvent::StartWorker(reply));
     let tag = provider(&machine).tag;
     machine.transition(SessionEvent::Start(FollowUp::new(Some("queued".into()))));
     let effects = machine.transition(Event::Shutdown);
@@ -691,8 +690,8 @@ fn graceful_stop_accepts_final_tool_results_without_restarting_work() {
 fn graceful_worker_stop_resolves_after_cleanup_with_a_forced_stop_fallback() {
     for forced in [false, true] {
         let mut machine = machine();
-        let (reply, _receive) = tokio::sync::oneshot::channel();
-        machine.transition(SessionEvent::StartWorker(reply.into()));
+        let reply = OperationId::new();
+        machine.transition(SessionEvent::StartWorker(reply));
         let tag = provider(&machine).tag;
         let effects = machine.transition(Event::StopRequested);
         assert!(
@@ -707,8 +706,8 @@ fn graceful_worker_stop_resolves_after_cleanup_with_a_forced_stop_fallback() {
         );
         assert!(machine.provider_response(tag).is_none());
         assert!(response(&mut machine, tag, Ok(complete_response())).is_empty());
-        let (reply, _receive) = tokio::sync::oneshot::channel();
-        let rejected = machine.transition(SessionEvent::StartWorker(reply.into()));
+        let reply = OperationId::new();
+        let rejected = machine.transition(SessionEvent::StartWorker(reply));
         assert!(matches!(
             rejected.as_slice(),
             [Effect::ReplyWorker {

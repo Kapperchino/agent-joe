@@ -136,7 +136,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                         let client = self.llm.snapshot();
                         let input = self.context_input(run.tag.turn, &client);
                         ProviderTask {
-                            budget: match &self.workspace.runtime().role {
+                            budget: match &self.runtime.role {
                                 ExecutionRole::Worker { execution } => {
                                     Some(execution.budget.clone())
                                 }
@@ -147,7 +147,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                                 tag: run.tag,
                             },
                             client,
-                            timeout: self.workspace.runtime().request_timeout,
+                            timeout: self.runtime.request_timeout,
                         }
                         .spawn(input, &run, &owner, previous);
                     }
@@ -181,11 +181,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             Effect::UpdateContext { tag, result } => {
                 self.record_validation_progress(&result);
                 self.record_plan_evidence(&result);
-                match update_tool_context(
-                    &self.services.tools,
-                    self.workspace.context_mut(),
-                    &result,
-                ) {
+                match update_tool_context(&self.services.tools, &mut self.context, &result) {
                     Ok(()) => EffectOutcome::Applied,
                     Err(failure) => EffectOutcome::ContextFailed { tag, failure },
                 }
@@ -193,7 +189,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             Effect::Cleanup { turn, scope } => {
                 scope.cancel.cancel();
                 let actor = self.actor_ref.clone();
-                self.workspace.runtime().scope.tasks.spawn(async move {
+                self.runtime.scope.tasks.spawn(async move {
                     scope.finish().await;
                     let _ = actor.send_message(Message::CleanupFinished { turn });
                 });
@@ -204,10 +200,10 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                     ShutdownScope::Session => {}
                     ShutdownScope::Turn(scope) => scope.finish().await,
                 }
-                self.workspace.runtime().scope.finish().await;
+                self.runtime.scope.finish().await;
                 EffectOutcome::ShutdownFinished
             }
-            Effect::ReplyWorker { reply, outcome } => {
+            Effect::ReplyWorker { request, outcome } => {
                 let outcome = match &self.persistence {
                     Persistence::Ready => outcome,
                     Persistence::Failed(failure) => {
@@ -223,7 +219,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                         .unwrap_or_default()),
                     WorkerOutcome::Failed(failure) => Err(failure),
                 };
-                let _ = reply.send(result);
+                self.worker_replies.complete(request, result);
                 EffectOutcome::Applied
             }
             Effect::StopActor => {
@@ -271,22 +267,33 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                     ProviderUpdate::Finished(Ok(crate::states::turn::AcceptedResponse::Compacted))
                 }
                 ProviderEvent::Item(item) => {
-                    match response.process(&mut self.stream_processor, item).await {
+                    let processed = match response.accept(item) {
+                        Ok(item) => {
+                            self.stream_output
+                                .process(&mut self.stream_processor, item)
+                                .await
+                        }
+                        Err(error) => Err(error),
+                    };
+                    match processed {
                         Ok(step) => ProviderUpdate::Progress(step),
                         Err(error) => ProviderUpdate::Finished(Err(provider_input_error(error))),
                     }
                 }
                 ProviderEvent::Finished(Err(failure)) => ProviderUpdate::Finished(Err(failure)),
                 ProviderEvent::Finished(Ok(())) => {
-                    ProviderUpdate::Finished(response.finish(tag.turn, &mut self.stream_processor))
+                    ProviderUpdate::Finished(crate::states::stream_processor::finish_response(
+                        response,
+                        tag.turn,
+                        &mut self.stream_processor,
+                    ))
                 }
             };
             let pending = self
-                .workspace
-                .runtime()
+                .runtime
                 .workers
-                .pending(&self.workspace.worker_owner());
-            let review = match (self.request_mode, &self.workspace.runtime().role) {
+                .pending(&self.runtime.worker_owner(self.context.get_id()));
+            let review = match (self.request_mode, &self.runtime.role) {
                 (RequestMode::Continue, ExecutionRole::Root) => {
                     self.interaction.planning().review()
                 }
@@ -413,9 +420,9 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                     .await
             }
             Command::PrintContext => {
-                let context = self.workspace.context().clone();
+                let context = self.context.clone();
                 let reporter = self.reporter.clone();
-                let scope = self.workspace.runtime().scope.clone();
+                let scope = self.runtime.scope.clone();
                 scope.tasks.clone().spawn(async move {
                     tokio::select! {
                         _ = scope.cancel.cancelled() => {},

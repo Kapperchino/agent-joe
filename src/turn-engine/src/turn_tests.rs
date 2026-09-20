@@ -1,9 +1,5 @@
 use super::*;
-use crate::states::runtime::Workspace;
-use tools::{
-    tool_defs::{ToolEffect, ToolId},
-    tool_error::ToolEffects,
-};
+use tools::{tool_defs::ToolId, tool_error::ToolEffects};
 
 fn call(id: &str) -> ToolCall {
     ToolCall {
@@ -46,31 +42,26 @@ fn batch_rejects_unknown_mismatched_and_duplicate_completions() {
     );
 }
 
-#[tokio::test]
-async fn workspace_mutation_resets_the_repeated_failure_budget() {
-    let workspace = Workspace::new(4);
+#[test]
+fn workspace_revision_resets_the_repeated_failure_budget() {
+    let revision = WorkspaceRevision(0);
     let mut failures = FailureTracker::default();
     let result = failure(&call("accepted"));
     for _ in 0..2 {
         assert!(matches!(
-            failures.record(&result, workspace.revision()),
+            failures.record(&result, revision),
             Continuation::Continue
         ));
     }
-    drop(
-        workspace
-            .acquire(ToolEffect::Write, &ExecutionScope::default())
-            .await
-            .unwrap(),
-    );
+    let revision = WorkspaceRevision(1);
     for _ in 0..2 {
         assert!(matches!(
-            failures.record(&result, workspace.revision()),
+            failures.record(&result, revision),
             Continuation::Continue
         ));
     }
     assert!(matches!(
-        failures.record(&result, workspace.revision()),
+        failures.record(&result, revision),
         Continuation::Stop(_)
     ));
 }

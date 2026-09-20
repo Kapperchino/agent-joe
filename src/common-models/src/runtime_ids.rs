@@ -30,3 +30,11 @@ impl fmt::Display for OperationId {
         self.0.fmt(f)
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct WorkspaceRevision(pub u64);
+impl std::fmt::Display for WorkspaceRevision {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}

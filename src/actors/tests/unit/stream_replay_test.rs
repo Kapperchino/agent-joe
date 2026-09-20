@@ -26,7 +26,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     #[cfg(test)]
     pub fn build_request(&self) -> clients::llm::ClientRequest {
         clients::llm::ClientRequest::new(self.conversation.history().to_vec())
-            .with_system(self.workspace.context().effective_instructions().unwrap())
+            .with_system(self.context.effective_instructions().unwrap())
             .with_tools(self.tool_definitions())
             .with_thinking()
     }
@@ -161,19 +161,17 @@ async fn runtime_state_is_excluded_from_inherited_worker_constraints() {
             ),
         )],
     });
-    let executor = h.state.executor(h.state.workspace.runtime().scope.child());
+    let executor = h.state.executor(h.state.runtime.scope.child());
     assert!(
         executor
-            .workspace
-            .runtime()
+            .runtime
             .inherited_constraints
             .iter()
             .any(|text| text == "Preserve this user constraint")
     );
     assert!(
         executor
-            .workspace
-            .runtime()
+            .runtime
             .inherited_constraints
             .iter()
             .all(|text| !text.contains("Old worker status marker"))
@@ -245,11 +243,11 @@ async fn helpers_preserve_parent_interaction_without_root_tools_or_plan_context(
         WorkMode::Plan
     );
     assert!(input.instructions.contains("Runtime state updates"));
-    let scope = h.state.workspace.runtime().scope.clone();
+    let scope = h.state.runtime.scope.clone();
     assert!(
         crate::session::interaction_state::Interaction::new(
             &h.state.interaction,
-            &h.state.workspace.runtime().role,
+            &h.state.runtime.role,
             &h.state.persistence,
             &scope,
         )
@@ -257,10 +255,7 @@ async fn helpers_preserve_parent_interaction_without_root_tools_or_plan_context(
     );
     h.state.clear_history().await.unwrap();
     assert_eq!(interaction.mode(), WorkMode::Plan);
-    assert!(matches!(
-        h.state.workspace.runtime().role,
-        ExecutionRole::Helper
-    ));
+    assert!(matches!(h.state.runtime.role, ExecutionRole::Helper));
 }
 
 #[tokio::test]
@@ -297,13 +292,9 @@ async fn context_budget_follows_the_active_model_and_preserves_overrides() {
     assert_eq!(small.limits.ceiling(), 200_000);
     assert!(matches!(small.plan().unwrap(), BudgetPlan::Compact(_)));
 
-    let mut runtime = h.state.workspace.runtime().clone();
+    let mut runtime = h.state.runtime.clone();
     runtime.context_budget = ContextBudget::new(Some(1_000_000), 2048).unwrap();
-    h.state.workspace = crate::states::workspace::ActiveWorkspace::new(
-        h.state.workspace.context().clone(),
-        runtime,
-    )
-    .unwrap();
+    h.state.runtime = runtime;
     let overridden = h.state.context_input(turn, &h.state.llm).unwrap();
     assert_eq!(overridden.limits.ceiling(), 1_000_000);
     let BudgetPlan::Ready(request) = overridden.plan().unwrap() else {
@@ -311,13 +302,9 @@ async fn context_budget_follows_the_active_model_and_preserves_overrides() {
     };
     assert_eq!(request.max_output_tokens, Some(2048));
 
-    let mut runtime = h.state.workspace.runtime().clone();
+    let mut runtime = h.state.runtime.clone();
     runtime.context_budget = ContextBudget::new(None, 100_000).unwrap();
-    h.state.workspace = crate::states::workspace::ActiveWorkspace::new(
-        h.state.workspace.context().clone(),
-        runtime,
-    )
-    .unwrap();
+    h.state.runtime = runtime;
     assert!(h.state.context_input(turn, &h.state.llm).is_err());
 }
 
@@ -326,7 +313,11 @@ async fn consume(
     event: llm::StreamEvent,
 ) -> anyhow::Result<()> {
     let event = serde_json::from_value(serde_json::to_value(event)?)?;
-    match state.stream_processor.process_stream_event(event).await? {
+    match state
+        .stream_output
+        .process(&mut state.stream_processor, event)
+        .await?
+    {
         StreamNextStep::ToolUse => {
             let items = state.stream_processor.extract_and_pre_process()?;
             let batch = crate::states::turn::ToolBatch::new(
@@ -334,7 +325,7 @@ async fn consume(
                 items,
             );
             let batch = state
-                .executor(state.workspace.runtime().scope.clone())
+                .executor(state.runtime.scope.clone())
                 .replay(batch)
                 .await;
             state.conversation.append(batch.messages());
@@ -517,7 +508,7 @@ async fn failed_evidence_persistence_preserves_the_live_plan() {
     };
     h.state.record_plan_evidence(&result("before"));
     let before = serde_json::to_value(h.state.interaction.planning()).unwrap();
-    let session = h.state.workspace.runtime().session.as_ref().unwrap();
+    let session = h.state.runtime.session.as_ref().unwrap();
     crate::session::tests::invalidate(&store, &session.id);
     h.state.record_plan_evidence(&result("after"));
     assert_eq!(
@@ -538,9 +529,9 @@ async fn rejected_workspace_relocation_preserves_context_and_conversation() {
     let directory = crate::session::tests::Workspace::new();
     let runtime = crate::states::runtime::Runtime::for_workspace(directory.path.clone()).unwrap();
     assert!(h.state.relocate_session_workspace(runtime).await.is_err());
-    assert!(h.state.workspace.runtime().scope.workspace().is_err());
+    assert!(h.state.runtime.scope.workspace().is_err());
     assert_eq!(
-        h.state.workspace.context().task.as_deref(),
+        h.state.context.task.as_deref(),
         Some("Inspect the fixture.")
     );
     assert_eq!(
@@ -556,7 +547,7 @@ async fn clear_reloads_workspace_and_keeps_instructions_without_the_old_task() {
     h.state
         .conversation
         .push(llm::Message::new_assistant("Old result.".into()));
-    h.state.workspace.context_mut().revision = 2;
+    h.state.context.revision = 2;
     h.state.clear_history().await.unwrap();
     let request = h.state.build_request();
     assert_eq!(
@@ -565,7 +556,7 @@ async fn clear_reloads_workspace_and_keeps_instructions_without_the_old_task() {
     );
     assert_eq!(request.messages.len(), 1);
     assert_eq!(request.messages[0].text(), "workspace revision 2");
-    assert!(h.state.workspace.context().task.is_none());
+    assert!(h.state.context.task.is_none());
 }
 
 #[tokio::test]

@@ -18,3 +18,5 @@ pub mod test_support;
 
 pub mod discovery;
 pub mod inventory;
+
+pub mod text;

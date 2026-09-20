@@ -12,24 +12,27 @@ dependencies = [
  "clients",
  "commands",
  "common-models",
+ "conversation",
  "flume",
  "futures",
  "git2",
  "heed",
+ "interaction",
  "itertools 0.15.0",
  "libc",
  "notify-types",
  "ra_ap_vfs",
  "ractor",
  "ractor_actors",
+ "response-stream",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
- "tiktoken-rs",
  "tokio",
  "tools",
  "tracing",
  "turbo-code-macros",
+ "turn-engine",
  "utils",
  "uuid",
  "zstd",
@@ -779,6 +782,21 @@ name = "constant_time_eq"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
+
+[[package]]
+name = "conversation"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clients",
+ "common-models",
+ "serde",
+ "serde_json",
+ "tiktoken-rs",
+ "tools",
+ "utils",
+ "uuid",
+]
 
 [[package]]
 name = "convert_case"
@@ -2279,6 +2297,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "interaction"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "common-models",
+ "serde_json",
+ "tools",
 ]
 
 [[package]]
@@ -4588,6 +4616,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "response-stream"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clients",
+ "common-models",
+ "serde_json",
+ "tools",
+]
+
+[[package]]
 name = "retry-policies"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5935,6 +5974,20 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.3",
+]
+
+[[package]]
+name = "turn-engine"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clients",
+ "common-models",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tools",
+ "utils",
 ]
 
 [[package]]

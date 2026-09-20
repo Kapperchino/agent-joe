@@ -92,10 +92,9 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             self.conversation
                 .commit_checkpoint(self.persistence.committed(compaction.checkpoint)?);
             let view = self
-                .workspace
-                .runtime()
+                .runtime
                 .immutable_workers
-                .insert(&self.workspace.worker_owner(), worker);
+                .insert(&self.runtime.worker_owner(self.context.get_id()), worker);
             self.reporter.send(ActorToTuiPacket::ContextNotice(
                 format!("Context compacted. Immutable worker {} preserves the older context; use ask_immutable_worker to query it. The saved transcript and full output artifacts remain available.", view.worker_id),
             ));
@@ -108,8 +107,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
 
     pub fn append_history(&mut self, messages: Vec<llm::Message>) {
         let stored = self
-            .workspace
-            .runtime()
+            .runtime
             .session
             .as_ref()
             .map(|session| session.snapshot())
@@ -129,8 +127,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
 
     pub fn persist(&mut self, event: Event) {
         let result = self
-            .workspace
-            .runtime()
+            .runtime
             .session
             .as_ref()
             .map(|session| session.record(event))
@@ -147,7 +144,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     }
 
     pub fn queue_input(&mut self, input: &FollowUp) {
-        if let Some(session) = &self.workspace.runtime().session {
+        if let Some(session) = &self.runtime.session {
             self.persist(Event::Queued(QueuedInput {
                 turn: session.key(input.id),
                 prompt: input.prompt.clone(),
@@ -156,7 +153,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     }
 
     pub async fn prepare_session_workspace(&mut self) -> anyhow::Result<()> {
-        let mut runtime = self.workspace.runtime().clone();
+        let mut runtime = self.runtime.clone();
         match (&runtime.role, &runtime.project, &runtime.session) {
             (ExecutionRole::Root, Some(_), Some(session))
                 if session.snapshot()?.worktree.is_none() =>
@@ -175,10 +172,13 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     }
 
     pub async fn relocate_session_workspace(&mut self, runtime: Runtime) -> anyhow::Result<()> {
-        let workspace = self.workspace.relocated(runtime)?;
-        let fresh = llm::Message::new(workspace.context().get_ctx().await);
-        self.turn.relocate(workspace.runtime().scope.clone())?;
-        self.workspace = workspace;
+        let mut context = self.context.clone();
+        context.clear_task_context();
+        context.relocate(runtime.scope.workspace()?.root().to_path_buf())?;
+        let fresh = llm::Message::new(context.get_ctx().await);
+        self.turn.relocate(runtime.scope.clone())?;
+        self.context = context;
+        self.runtime = runtime;
         self.conversation.relocate(fresh);
         self.relocate_watcher()?;
         Ok(())
@@ -193,7 +193,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         if let (Some(_), None) = (&input.prompt, self.merge_approval.resolution(input.id)) {
             self.reconcile_plan();
         }
-        let scope = self.workspace.runtime().scope.clone();
+        let scope = self.runtime.scope.clone();
         let changes = scope.changes.clone();
         let baseline = match (scope.workspace(), self.request_mode) {
             (Ok(_), RequestMode::Continue | RequestMode::Compact) => {
@@ -208,7 +208,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         if let Err(error) = baseline {
             self.persistence_failed(error);
         }
-        if let Some(session) = &self.workspace.runtime().session {
+        if let Some(session) = &self.runtime.session {
             self.persist(Event::Began(QueuedInput {
                 turn: session.key(input.id),
                 prompt: input.prompt.clone(),
@@ -220,8 +220,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     }
 
     pub fn prepare_batch(&mut self) {
-        if let (Some(session), Some(batch)) = (&self.workspace.runtime().session, self.turn.batch())
-        {
+        if let (Some(session), Some(batch)) = (&self.runtime.session, self.turn.batch()) {
             self.persist(Event::Prepared(PendingBatch::new(session, batch)));
         }
     }
@@ -234,7 +233,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 state,
                 detail,
             },
-        ) = (&self.workspace.runtime().session, packet)
+        ) = (&self.runtime.session, packet)
         {
             self.persist(Event::Status {
                 turn: session.key(turn_id),
@@ -262,14 +261,12 @@ impl<C: Context + Clone + 'static> ActorState<C> {
 
     async fn run_session_command(&mut self, command: &Command) -> anyhow::Result<ActorToTuiPacket> {
         let store = self
-            .workspace
-            .runtime()
+            .runtime
             .sessions
             .clone()
             .ok_or_else(|| anyhow::anyhow!("Session storage is not configured"))?;
         let current = self
-            .workspace
-            .runtime()
+            .runtime
             .session
             .as_ref()
             .map(|session| session.id.as_str());
@@ -279,7 +276,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 Self::list_sessions(&store, current)?,
             ),
             SessionAction::Prune(mode) => {
-                let runtime = self.workspace.runtime();
+                let runtime = &self.runtime;
                 runtime
                     .interaction
                     .authorize(tools::tool_defs::ToolEffect::Write)?;
@@ -300,12 +297,11 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             }
             SessionAction::Resume { id } => {
                 let workspace = self
-                    .workspace
-                    .runtime()
+                    .runtime
                     .project
                     .clone()
                     .map(Ok)
-                    .unwrap_or_else(|| self.workspace.runtime().scope.workspace())?;
+                    .unwrap_or_else(|| self.runtime.scope.workspace())?;
                 let session =
                     ResumableSession::new(&store, id, &workspace, &self.llm.session_provider())?
                         .resume()?;
@@ -327,8 +323,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             }
             SessionAction::Fork => {
                 let current = self
-                    .workspace
-                    .runtime()
+                    .runtime
                     .session
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("There is no current session"))?;
@@ -443,7 +438,8 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         session: Arc<Session>,
         source: Option<&SessionWorktree>,
     ) -> anyhow::Result<()> {
-        let activation = SessionActivation::resume(&self.workspace, session, source).await?;
+        let activation =
+            SessionActivation::resume(&self.context, &self.runtime, session, source).await?;
         self.activate_session(activation).await?;
         self.sync_question_gate().await;
         self.reporter.send(ActorToTuiPacket::TokensUpdated(

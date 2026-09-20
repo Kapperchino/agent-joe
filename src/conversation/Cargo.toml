@@ -1,0 +1,15 @@
+[package]
+name = "conversation"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clients = { path = "../clients" }
+common-models = { path = "../common-models" }
+tools = { path = "../tools" }
+utils = { path = "../utils" }
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1", features = ["v4"] }
+tiktoken-rs = "0.12.0"

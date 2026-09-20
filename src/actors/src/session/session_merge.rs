@@ -314,12 +314,12 @@ impl MergeApproval {
 impl<C: Context + Clone + 'static> ActorState<C> {
     pub async fn offer_merge(&mut self, turn: TurnId) -> anyhow::Result<()> {
         if let Some(workspace) = MergeWorkspace::for_offer(
-            self.workspace.runtime(),
+            &self.runtime,
             &self.turn,
             &self.persistence,
             self.conversation.request_mode(turn, self.request_mode),
         )? {
-            let runtime = self.workspace.runtime();
+            let runtime = &self.runtime;
             let lease = runtime
                 .workspace
                 .acquire(ToolEffect::Write, &runtime.scope)
@@ -370,7 +370,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                         crate::commit_message::generate(
                             self.llm.snapshot(),
                             diff,
-                            self.workspace.runtime().request_timeout,
+                            self.runtime.request_timeout,
                             Some(format!("{}:commit", self.conversation.cache_key())),
                         )
                         .await
@@ -410,7 +410,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         )?;
         match &decision {
             MergeDecision::Merge { .. } => {
-                MergeWorkspace::new(self.workspace.runtime(), &self.persistence)?;
+                MergeWorkspace::new(&self.runtime, &self.persistence)?;
             }
             MergeDecision::Keep => {}
         }
@@ -436,8 +436,8 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     async fn merge_commit(&mut self, commit: String) -> anyhow::Result<String> {
         let approved = commit.clone();
         let outcome = async {
-            let workspace = MergeWorkspace::new(self.workspace.runtime(), &self.persistence)?;
-            let runtime = self.workspace.runtime();
+            let workspace = MergeWorkspace::new(&self.runtime, &self.persistence)?;
+            let runtime = &self.runtime;
             let lease = runtime
                 .workspace
                 .acquire(ToolEffect::Write, &runtime.scope)
@@ -451,7 +451,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             Ok(MergeResult::Cleaned { message }) => {
                 self.persist(Event::Worktree(None));
                 self.record_merge(MergeEvent::Finished)?;
-                let mut runtime = self.workspace.runtime().clone();
+                let mut runtime = self.runtime.clone();
                 let project = runtime
                     .project
                     .as_ref()
@@ -482,13 +482,13 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     }
 
     async fn resolve_merge(&mut self, conflict: MergeConflict) -> anyhow::Result<String> {
-        let workspace = MergeWorkspace::new(self.workspace.runtime(), &self.persistence)?;
+        let workspace = MergeWorkspace::new(&self.runtime, &self.persistence)?;
         let turn = TurnId::new();
         self.record_merge(MergeEvent::Conflicted {
             conflict: conflict.clone(),
             turn,
         })?;
-        let runtime = self.workspace.runtime();
+        let runtime = &self.runtime;
         let lease = runtime
             .workspace
             .acquire(ToolEffect::Write, &runtime.scope)
@@ -500,7 +500,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         })
         .await??;
         drop(lease);
-        self.workspace.context().refresh_workspace().await?;
+        self.context.refresh_workspace().await?;
         self.refresh_interaction();
         self.actor_ref
             .send_message(crate::actor::Message::ResolveMerge { turn })?;

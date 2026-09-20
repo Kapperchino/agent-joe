@@ -3,9 +3,9 @@ use crate::session::conversation::Conversation;
 use crate::session::interaction_state::InteractionState;
 use crate::session::session_merge::MergeApproval;
 use crate::states::runtime::{ExecutionRole, Runtime};
-use crate::states::stream_processor::StreamProcessor;
+use crate::states::services::ActorServices;
+use crate::states::stream_processor::{StreamOutput, StreamProcessor};
 use crate::states::turn_machine::TurnMachine;
-use crate::states::{services::ActorServices, workspace::ActiveWorkspace};
 use crate::{
     actor::{self, ActorContext, Dependency},
     background_actors::file_actor,
@@ -28,13 +28,16 @@ pub struct ActorState<C: Context> {
     pub persistence: Persistence,
     pub merge_approval: MergeApproval,
     pub turn: TurnMachine,
+    pub worker_replies: crate::worker::WorkerReplies,
     pub llm: LLmClient,
     pub file_actor: Option<ActorRef<file_actor::Message>>,
     pub stream_processor: StreamProcessor,
     pub reporter: EventReporter,
     pub actor_ref: ActorRef<actor::Message>,
-    pub services: Arc<ActorServices<C>>,
-    pub workspace: ActiveWorkspace<C>,
+    pub services: Arc<ActorServices<C, ActorContext<C>>>,
+    pub context: C,
+    pub runtime: Runtime,
+    pub stream_output: StreamOutput,
 }
 
 pub enum ActorMode {
@@ -136,10 +139,9 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             runtime,
         } = dependency;
         let activation = SessionActivation::start(context, runtime, &client).await?;
-        let workspace = activation.workspace;
-        if let (Some(watcher), Some(project)) =
-            (&file_actor, workspace.context().analysis_project())
-        {
+        let context = activation.context;
+        let runtime = activation.runtime;
+        if let (Some(watcher), Some(project)) = (&file_actor, context.analysis_project()) {
             watcher.send_message(file_actor::Message::Relocate(project))?;
         }
         let services = Arc::new(ActorServices {
@@ -149,7 +151,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             debug_mode,
         });
 
-        let stream_log = services.stream_log(workspace.runtime())?;
+        let stream_log = Self::stream_log(&services, &runtime)?;
         Ok(Self {
             conversation: activation.conversation,
             interaction: activation.interaction,
@@ -157,19 +159,22 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             persistence: Persistence::Ready,
             merge_approval: activation.merge_approval,
             llm: client,
-            turn: TurnMachine::new(workspace.runtime().scope.clone(), request_mode),
+            turn: TurnMachine::new(runtime.scope.clone(), request_mode),
+            worker_replies: Default::default(),
             reporter: reporter.clone(),
             file_actor,
             stream_processor: StreamProcessor {
                 batches: Vec::new(),
-                stream_log,
                 token_count: activation.usage,
-                reporter,
                 cur_state: State::Ready,
-                debug: debug_mode,
+            },
+            stream_output: StreamOutput {
+                stream_log,
+                reporter,
             },
             services,
-            workspace,
+            context,
+            runtime,
             actor_ref,
         })
     }
@@ -177,40 +182,37 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     pub fn context_input(&self, turn: TurnId, client: &LLmClient) -> anyhow::Result<ContextInput> {
         let interaction = match self.request_mode {
             RequestMode::SingleResponse => None,
-            RequestMode::Continue | RequestMode::Compact => {
-                Some(self.workspace.runtime().role.get_guidance())
-            }
+            RequestMode::Continue | RequestMode::Compact => Some(self.runtime.role.get_guidance()),
         };
-        let instructions = std::iter::once(self.workspace.context().effective_instructions()?)
+        let instructions = std::iter::once(self.context.effective_instructions()?)
             .chain(interaction)
             .collect::<Vec<_>>()
             .join("\n");
         let runtime = match self.request_mode {
             RequestMode::SingleResponse => None,
             _ => Some(clients::runtime_update::RuntimeSnapshot {
-                planning: match self.workspace.runtime().role {
+                planning: match self.runtime.role {
                     ExecutionRole::Root => self.interaction.planning().into(),
                     _ => clients::runtime_update::PlanningState {
-                        mode: self.workspace.runtime().interaction.mode(),
+                        mode: self.runtime.interaction.mode(),
                         ..Default::default()
                     },
                 },
-                evidence: match self.workspace.runtime().role {
+                evidence: match self.runtime.role {
                     ExecutionRole::Root => self.interaction.planning().evidence.clone(),
                     _ => Default::default(),
                 },
                 questions: self.interaction.questions().pending().to_vec(),
                 workers: self
-                    .workspace
-                    .runtime()
+                    .runtime
                     .workers
-                    .pending(&self.workspace.worker_owner()),
+                    .pending(&self.runtime.worker_owner(self.context.get_id())),
             }),
         };
         Ok(ContextInput {
             runtime,
             prompt_cache_key: Some(self.conversation.cache_key().to_owned()),
-            purpose: match (&self.workspace.runtime().role, self.request_mode) {
+            purpose: match (&self.runtime.role, self.request_mode) {
                 (_, RequestMode::SingleResponse) => clients::llm::RequestPurpose::Compaction,
                 (ExecutionRole::Root, _) => clients::llm::RequestPurpose::Conversation,
                 _ => clients::llm::RequestPurpose::Worker,
@@ -220,17 +222,16 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             instructions,
             tools: self.tool_definitions(),
             limits: self
-                .workspace
-                .runtime()
+                .runtime
                 .context_budget
                 .resolve(client.context_window())?,
-            native: self.workspace.runtime().native_compaction,
+            native: self.runtime.native_compaction,
             mode: self.conversation.request_mode(turn, self.request_mode),
         })
     }
 
     pub async fn clear_history(&mut self) -> anyhow::Result<()> {
-        let activation = SessionActivation::clear(&self.workspace, &self.llm).await?;
+        let activation = SessionActivation::clear(&self.context, &self.runtime, &self.llm).await?;
         self.activate_session(activation).await
     }
 
@@ -238,16 +239,14 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         &mut self,
         activation: SessionActivation<C>,
     ) -> anyhow::Result<()> {
-        self.workspace
-            .runtime()
+        self.runtime
             .immutable_workers
-            .clear(&self.workspace.worker_owner())
+            .clear(&self.runtime.worker_owner(self.context.get_id()))
             .await;
-        self.turn = TurnMachine::new(
-            activation.workspace.runtime().scope.clone(),
-            self.request_mode,
-        );
-        self.workspace = activation.workspace;
+        self.turn = TurnMachine::new(activation.runtime.scope.clone(), self.request_mode);
+        self.worker_replies = Default::default();
+        self.context = activation.context;
+        self.runtime = activation.runtime;
         self.conversation = activation.conversation;
         self.interaction = activation.interaction;
         self.merge_approval = activation.merge_approval;
@@ -255,8 +254,8 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         self.stream_processor.clear();
         self.stream_processor.token_count = activation.usage;
         activation.workers.apply(
-            &self.workspace.runtime().workers,
-            &self.workspace.worker_owner(),
+            &self.runtime.workers,
+            &self.runtime.worker_owner(self.context.get_id()),
         );
         self.relocate_watcher()?;
         self.restore_merge_question()?;
@@ -265,13 +264,34 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     }
 
     pub fn relocate_watcher(&self) -> anyhow::Result<()> {
-        if let (Some(watcher), Some(project)) = (
-            &self.file_actor,
-            self.workspace.context().analysis_project(),
-        ) {
+        if let (Some(watcher), Some(project)) = (&self.file_actor, self.context.analysis_project())
+        {
             watcher.send_message(file_actor::Message::Relocate(project))?;
         }
         Ok(())
+    }
+
+    fn stream_log(
+        services: &ActorServices<C, ActorContext<C>>,
+        runtime: &Runtime,
+    ) -> anyhow::Result<Option<tokio::fs::File>> {
+        match runtime.role {
+            ExecutionRole::Root if services.debug_mode => {
+                let timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let path = std::path::PathBuf::from(format!("./logs/stream_{timestamp}.jsonl"));
+                let workspace = runtime
+                    .project
+                    .clone()
+                    .map(Ok)
+                    .unwrap_or_else(|| runtime.scope.workspace())?;
+                let file = workspace.open_append(&path)?;
+                Ok(Some(tokio::fs::File::from_std(file)))
+            }
+            _ => Ok(None),
+        }
     }
 
     pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
@@ -280,8 +300,9 @@ impl<C: Context + Clone + 'static> ActorState<C> {
 
     pub fn executor(&self, scope: ExecutionScope) -> crate::states::scheduler::Executor<C> {
         crate::states::scheduler::Executor {
-            workspace: self
-                .workspace
+            context: self.context.clone(),
+            runtime: self
+                .runtime
                 .execution(scope, self.conversation.constraints()),
             services: self.services.clone(),
             actor: self.actor_ref.clone(),
@@ -289,6 +310,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     }
 
     pub fn change_state(&mut self, new_state: State) {
-        self.stream_processor.change_state(new_state)
+        self.stream_output
+            .send(self.stream_processor.change_state(new_state));
     }
 }

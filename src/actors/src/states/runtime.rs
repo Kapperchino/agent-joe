@@ -12,13 +12,7 @@ use tools::{
 };
 use utils::execution::ExecutionScope;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct WorkspaceRevision(pub u64);
-impl std::fmt::Display for WorkspaceRevision {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
+pub use common_models::runtime_ids::WorkspaceRevision;
 
 #[derive(Clone)]
 pub enum ExecutionRole {
@@ -90,6 +84,30 @@ impl Default for Runtime {
     }
 }
 impl Runtime {
+    pub fn worker_owner(&self, actor_id: u64) -> String {
+        self.session
+            .as_ref()
+            .map(|session| session.id.clone())
+            .unwrap_or_else(|| format!("actor-{actor_id}"))
+    }
+
+    pub fn execution(
+        &self,
+        scope: ExecutionScope,
+        constraints: impl IntoIterator<Item = String>,
+    ) -> Self {
+        let runtime = self.child(scope.clone());
+        Self {
+            turn_scope: Some(scope),
+            inherited_constraints: runtime
+                .inherited_constraints
+                .into_iter()
+                .chain(constraints)
+                .collect(),
+            ..runtime
+        }
+    }
+
     pub fn for_workspace(root: std::path::PathBuf) -> anyhow::Result<Self> {
         Self::with_session_namespace(root, "sessions")
     }

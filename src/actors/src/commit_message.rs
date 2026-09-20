@@ -1,9 +1,8 @@
-use crate::event_reporter::EventReporter;
 use crate::states::stream_processor::{StreamNextStep, StreamProcessor};
 use crate::states::turn::{AcceptedResponse, ResponseState};
 use anyhow::Context;
 use clients::llm::{ClientRequest, LLmClient, Message, StreamEvent};
-use common_models::{runtime_ids::TurnId, tui_models::State};
+use common_models::runtime_ids::TurnId;
 use futures::TryStreamExt;
 use std::time::Duration;
 use utils::git::worktrees::session::CommitMessage;
@@ -46,19 +45,8 @@ struct CommitResponse {
 
 impl CommitResponse {
     fn new() -> Self {
-        let (tui_tx, _) = flume::unbounded();
         Self {
-            processor: StreamProcessor {
-                batches: Vec::new(),
-                stream_log: None,
-                token_count: Default::default(),
-                reporter: EventReporter::Interactive {
-                    actor_id: 0,
-                    tui_tx,
-                },
-                cur_state: State::Ready,
-                debug: false,
-            },
+            processor: StreamProcessor::default(),
             state: ResponseState::Awaiting,
             bytes: 0,
         }
@@ -69,7 +57,8 @@ impl CommitResponse {
         self.bytes = (bytes <= MAX_RESPONSE_BYTES)
             .then_some(bytes)
             .context("Commit summary response exceeds 64 KiB")?;
-        let step = self.state.process(&mut self.processor, event).await?;
+        let event = self.state.accept(event)?;
+        let step = self.processor.process_stream_event(event).next?;
         self.state = match step {
             StreamNextStep::ToolUse | StreamNextStep::Refused => Err(anyhow::anyhow!(
                 "Expected a commit subject without tools or refusal"
@@ -80,10 +69,12 @@ impl CommitResponse {
     }
 
     fn finish(mut self) -> anyhow::Result<CommitMessage> {
-        match self
-            .state
-            .finish(TurnId::new(), &mut self.processor)?
-            .text_only()?
+        match crate::states::stream_processor::finish_response(
+            self.state,
+            TurnId::new(),
+            &mut self.processor,
+        )?
+        .text_only()?
         {
             AcceptedResponse::Complete(message) => CommitMessage::new(&message.text()),
             _ => Err(anyhow::anyhow!("Expected a completed commit subject")),

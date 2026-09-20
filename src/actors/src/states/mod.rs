@@ -9,4 +9,3 @@ pub mod stream_processor;
 pub mod turn;
 mod turn_driver;
 pub mod turn_machine;
-pub mod workspace;

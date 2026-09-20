@@ -438,7 +438,7 @@ async fn capture_preserves_full_transcript_and_existing_compaction_memory() {
     let expected = serde_json::to_value(state.conversation.history()).unwrap();
     let snapshot = state.capture_snapshot().unwrap();
     state.conversation = crate::session::conversation::Conversation::new(Vec::new(), None);
-    state.workspace.context_mut().revision = 99;
+    state.context.revision = 99;
     let snapshot = SnapshotHarness::spawn(snapshot, requests).await;
     let result = snapshot.ask("Recall the old exact requirement");
     let (request, reply) = snapshot.request().await;

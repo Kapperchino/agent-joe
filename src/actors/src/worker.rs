@@ -197,30 +197,33 @@ impl RunningWorker {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum WorkerFailure {
-    #[error("Worker is already running")]
-    AlreadyRunning,
-    #[error("Worker startup failed: {0}")]
-    Startup(String),
-    #[error("Worker could not start its turn: {0}")]
-    Mailbox(String),
-    #[error("Worker failed: {0}")]
-    Turn(clients::failure::Failure),
-    #[error("Worker cancelled")]
-    Cancelled,
-    #[error("Worker stopped without a result")]
-    Stopped,
-    #[error("Worker task terminated: {0}")]
-    Join(String),
+pub use turn_engine::WorkerFailure;
+
+#[derive(Default)]
+pub struct WorkerReplies {
+    pending: std::collections::HashMap<
+        common_models::runtime_ids::OperationId,
+        ractor::RpcReplyPort<Result<String, WorkerFailure>>,
+    >,
 }
-impl WorkerFailure {
-    pub fn into_tool_failure(self) -> tools::tool_error::ToolFailure {
-        use tools::tool_error::{ToolEffects, ToolFailure, ToolFailureKind};
-        let effects = match self {
-            Self::Startup(_) | Self::AlreadyRunning => ToolEffects::NotStarted,
-            _ => ToolEffects::MayHaveChanged,
-        };
-        ToolFailure::new(ToolFailureKind::Worker, effects, self.to_string())
+
+impl WorkerReplies {
+    pub fn insert(
+        &mut self,
+        reply: ractor::RpcReplyPort<Result<String, WorkerFailure>>,
+    ) -> common_models::runtime_ids::OperationId {
+        let request = common_models::runtime_ids::OperationId::new();
+        self.pending.insert(request, reply);
+        request
+    }
+
+    pub fn complete(
+        &mut self,
+        request: common_models::runtime_ids::OperationId,
+        result: Result<String, WorkerFailure>,
+    ) {
+        if let Some(reply) = self.pending.remove(&request) {
+            let _ = reply.send(result);
+        }
     }
 }

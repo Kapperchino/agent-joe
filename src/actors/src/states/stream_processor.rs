@@ -1,204 +1,33 @@
 use crate::event_reporter::EventReporter;
-use crate::states::batch::{Batch, ContentBlock, ContentKind};
-use crate::tool_call::ToolCall;
-use anyhow::anyhow;
-use clients::llm::{ContentBlockInfo, Delta, StopReason, StreamEvent};
-use common_models::tui_models::{ActorToTuiPacket, State, TokenCount};
+use clients::llm::StreamEvent;
+use response_stream::StreamNotification;
+pub use response_stream::{ProcessedItem, StreamNextStep, StreamProcessor};
 use tokio::io::AsyncWriteExt;
 use tracing::error;
 
-pub struct StreamProcessor {
-    pub batches: Vec<Batch>,
+pub struct StreamOutput {
     pub stream_log: Option<tokio::fs::File>,
-    pub token_count: TokenCount,
     pub reporter: EventReporter,
-    pub cur_state: State,
-    pub debug: bool,
 }
 
-pub enum StreamNextStep {
-    Started,
-    Accum,
-    Done,
-    Refused,
-    ToolUse,
-    Noop,
-}
-
-#[derive(Debug, Clone)]
-pub enum ProcessedItem {
-    Content(clients::llm::ContentBlock),
-    Tool(ToolCall),
-}
-
-impl StreamNextStep {
-    pub fn new(reason: &StopReason, batch: &Batch) -> anyhow::Result<Self> {
-        use clients::failure::{Failure, FailureKind};
-        match reason {
-            StopReason::Refusal => Ok(StreamNextStep::Refused),
-            StopReason::MaxTokens => Err(Failure::new(
-                FailureKind::Truncation,
-                "Provider output reached its token limit; no pending tools were executed",
-            )
-            .into()),
-            StopReason::ContextExceeded => Err(Failure::new(
-                FailureKind::ContextOverflow,
-                "Provider context limit exceeded",
-            )
-            .into()),
-            _ if batch.has_tool() || matches!(reason, StopReason::ToolUse) => {
-                Ok(StreamNextStep::ToolUse)
-            }
-            _ => Ok(StreamNextStep::Done),
-        }
-    }
-}
-impl StreamProcessor {
-    pub async fn process_stream_event(
+impl StreamOutput {
+    pub async fn process(
         &mut self,
+        processor: &mut StreamProcessor,
         item: StreamEvent,
     ) -> anyhow::Result<StreamNextStep> {
         self.log_stream_item(&item).await;
-        self.handle_stream_state(&item);
-        match item {
-            StreamEvent::MessageStart { .. } => {
-                self.batches.push(Batch::new());
-                Ok(StreamNextStep::Started)
-            }
-            StreamEvent::ContentBlockDelta { index, delta } => {
-                self.batches
-                    .last_mut()
-                    .ok_or_else(|| anyhow!("Delta without a response"))?
-                    .accum(&index, delta)?;
-                Ok(StreamNextStep::Accum)
-            }
-            StreamEvent::ContentBlockStart {
-                index,
-                content_block,
-            } => {
-                self.batches
-                    .last_mut()
-                    .ok_or_else(|| anyhow!("Content start without a response"))?
-                    .put(index, ContentBlock::new(content_block));
-                Ok(StreamNextStep::Accum)
-            }
-            StreamEvent::ContentBlockStop { index, id } => {
-                self.batches
-                    .last_mut()
-                    .ok_or_else(|| anyhow!("Content stop without a response"))?
-                    .apply_reduce(&index, id)?;
-                Ok(StreamNextStep::Accum)
-            }
-            StreamEvent::ContentBlockComplete { index, content } => {
-                self.batches
-                    .last_mut()
-                    .ok_or_else(|| anyhow!("Completed item without a response"))?
-                    .complete_item(index, content);
-                Ok(StreamNextStep::Accum)
-            }
-            StreamEvent::MessageStop {} => Ok(StreamNextStep::Noop),
-            StreamEvent::Error { error } => {
-                Err(clients::failure::Failure::api(&error.error_type, &error.message).into())
-            }
-            StreamEvent::MessageDelta { delta, usage } => {
-                if let Some(batch) = self.batches.last()
-                    && let Some(reason) = delta.stop_reason
-                {
-                    StreamNextStep::new(&reason, batch)
-                } else {
-                    error!("No reason provided to stop");
-                    Ok(StreamNextStep::Noop)
-                }
-            }
-            StreamEvent::Accum => Ok(StreamNextStep::Accum),
-            _ => Ok(StreamNextStep::Noop),
+        let update = processor.process_stream_event(item);
+        for notification in update.notifications {
+            self.send(notification);
         }
+        update.next
     }
 
-    pub fn handle_stream_state(&mut self, item: &StreamEvent) {
-        match item {
-            StreamEvent::MessageStart { message } => {
-                self.change_state(State::StreamStart);
-                self.record_usage(TokenCount {
-                    input_tokens: message.usage.input_tokens,
-                    output_tokens: 0,
-                });
-            }
-            StreamEvent::ContentBlockStart {
-                index: _,
-                content_block,
-            } => match content_block {
-                ContentBlockInfo::ToolUse { .. } => self.change_state(State::ToolStart),
-                ContentBlockInfo::Thinking { .. } => self.change_state(State::ThinkingStart),
-                ContentBlockInfo::Text { .. } => self.change_state(State::MessageStart),
-            },
-            StreamEvent::ContentBlockDelta { index, delta } => match delta {
-                Delta::TextDelta { text } => self.reporter.send_delta(text.clone()),
-                Delta::ThinkingDelta { thinking, .. } => {}
-                Delta::InputJsonDelta { .. } => {}
-                Delta::SignatureDelta { .. } => {}
-            },
-            StreamEvent::ContentBlockStop { index, .. } => {
-                self.batches
-                    .last()
-                    .and_then(|t| t.content_kind(index))
-                    .inspect(|t| match t {
-                        ContentKind::Text => self.change_state(State::MessageStop),
-                        ContentKind::Thinking => self.change_state(State::ThinkingStop),
-                        ContentKind::Tool => self.change_state(State::ToolStop),
-                    });
-            }
-            StreamEvent::MessageDelta { usage, .. } => {
-                self.record_usage(TokenCount {
-                    input_tokens: usage.input_tokens,
-                    output_tokens: usage.output_tokens,
-                });
-            }
-            StreamEvent::ContentBlockComplete { content, .. } => {
-                self.change_state(match content {
-                    clients::llm::ContentBlock::OpenAIReasoning(_) => State::ThinkingStop,
-                    clients::llm::ContentBlock::ToolBlock { .. } => State::ToolStop,
-                    _ => State::MessageStop,
-                });
-            }
-            StreamEvent::MessageStop => self.change_state(State::StreamStop),
-            StreamEvent::Ping => {}
-            StreamEvent::Error { .. } => {}
-            _ => {}
-        }
-    }
-
-    pub fn clear(&mut self) {
-        self.batches.clear();
-        self.cur_state = State::Ready
-    }
-
-    fn record_usage(&mut self, usage: TokenCount) {
-        self.token_count.input_tokens = self
-            .token_count
-            .input_tokens
-            .saturating_add(usage.input_tokens);
-        self.token_count.output_tokens = self
-            .token_count
-            .output_tokens
-            .saturating_add(usage.output_tokens);
-        self.reporter.usage(usage);
-        self.reporter
-            .send(ActorToTuiPacket::TokensUpdated(self.token_count.clone()));
-    }
-
-    pub fn send_thinking(&self) -> bool {
-        self.debug
-    }
-
-    pub fn change_state(&mut self, new_state: State) {
-        self.cur_state = new_state.clone();
-        self.reporter.state_changed(new_state.clone())
-    }
-    pub fn extract_and_pre_process(&mut self) -> anyhow::Result<Vec<ProcessedItem>> {
-        match self.batches.last_mut() {
-            Some(batch) => batch.extract_and_pre_process(),
-            None => Err(anyhow!("Can't extract this, batch shouldn't be empty")),
+    pub fn send(&self, notification: StreamNotification) {
+        match notification {
+            StreamNotification::Packet(packet) => self.reporter.send(packet),
+            StreamNotification::Usage(usage) => self.reporter.usage(usage),
         }
     }
 
@@ -216,4 +45,19 @@ impl StreamProcessor {
             }
         }
     }
+}
+
+pub fn finish_response(
+    response: crate::states::turn::ResponseState,
+    turn: common_models::runtime_ids::TurnId,
+    processor: &mut StreamProcessor,
+) -> Result<crate::states::turn::AcceptedResponse, clients::failure::Failure> {
+    let completion = response.completion()?;
+    let items = processor.extract_and_pre_process().map_err(|error| {
+        clients::failure::Failure::new(
+            clients::failure::FailureKind::InvalidInput,
+            error.to_string(),
+        )
+    })?;
+    completion.finish(turn, items)
 }

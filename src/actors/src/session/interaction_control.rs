@@ -24,9 +24,8 @@ enum AnswerAction {
 
 impl<C: Context + Clone + 'static> ActorState<C> {
     pub fn refresh_interaction(&self) {
-        if matches!(self.workspace.runtime().role, ExecutionRole::Root) {
-            self.workspace
-                .runtime()
+        if matches!(self.runtime.role, ExecutionRole::Root) {
+            self.runtime
                 .interaction
                 .set(self.interaction.planning(), self.interaction.questions());
             self.reporter.send(ActorToTuiPacket::InteractionUpdated(
@@ -54,7 +53,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     }
 
     fn apply_interaction(&mut self, update: InteractionUpdate) -> anyhow::Result<()> {
-        self.interaction = update.commit(|event| self.commit_interaction(event))?;
+        self.interaction = update.commit(|event| self.commit_interaction(event.into()))?;
         self.refresh_interaction();
         Ok(())
     }
@@ -70,7 +69,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     ) -> anyhow::Result<String> {
         let update = Interaction::new(
             &self.interaction,
-            &self.workspace.runtime().role,
+            &self.runtime.role,
             &self.persistence,
             scope,
         )?
@@ -86,7 +85,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     ) -> anyhow::Result<String> {
         let update = Interaction::new(
             &self.interaction,
-            &self.workspace.runtime().role,
+            &self.runtime.role,
             &self.persistence,
             scope,
         )?
