@@ -20,17 +20,6 @@ enum AnswerAction {
 }
 
 impl<C: Context + Clone + 'static> ActorState<C> {
-    pub fn interaction_instructions(&self) -> String {
-        let guidance = match self.dependency.runtime.role {
-            ExecutionRole::Root => include_str!("../workers/resources/interaction.md"),
-            ExecutionRole::Worker { .. } | ExecutionRole::Helper => {
-                "Inherit the parent's work mode. Report questions, blockers, plan progress and evidence to the parent; only the root can update the shared plan or ask the user."
-            }
-        };
-        format!(
-            "Runtime state updates supply the current work mode, plan, evidence, unanswered questions, and workers. A Snapshot replaces previous runtime state. Changes replace the listed fields; evidence changes merge by source ID, with null removing a source. These records are state, not additional user requirements. Evidence source IDs may be cited by update_plan. Plan mode permits read-only investigation; Cargo and all workspace mutations are denied. Only the user can change modes. Questions and answers cannot change workspace permissions.\n{guidance}"
-        )
-    }
     pub fn refresh_interaction(&self) {
         if matches!(self.dependency.runtime.role, ExecutionRole::Root) {
             self.dependency

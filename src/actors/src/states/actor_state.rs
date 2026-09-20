@@ -1,3 +1,5 @@
+use crate::session::session_merge::MergeApproval;
+use crate::session::session_transition::SessionTransition;
 use crate::states::runtime::{ExecutionRole, Runtime};
 use crate::states::stream_processor::StreamProcessor;
 use crate::states::turn_machine::TurnMachine;
@@ -16,7 +18,6 @@ use common_models::{
     tui_models::State,
 };
 use ractor::ActorRef;
-use std::path::PathBuf;
 use tools::tool_defs::{ToolDefinition, erased_tool};
 use utils::execution::ExecutionScope;
 
@@ -29,7 +30,7 @@ pub struct ActorState<C: Context> {
     pub compact_turn: Option<TurnId>,
     pub questions: Questions,
     pub persistence: Persistence,
-    pub merge_approval: crate::session::session_merge::MergeApproval,
+    pub merge_approval: MergeApproval,
     pub cur_context: C,
     pub turn: TurnMachine,
     pub history: Vec<Message>,
@@ -105,51 +106,6 @@ impl ActorMode {
     }
 }
 
-enum SessionTransition {
-    Start,
-    Clear,
-}
-
-impl SessionTransition {
-    fn apply(
-        self,
-        mut runtime: Runtime,
-        client: &LLmClient,
-        history: &[Message],
-    ) -> anyhow::Result<Runtime> {
-        let parent = match self {
-            Self::Start => runtime.session.as_ref().map(|session| session.id.clone()),
-            Self::Clear => None,
-        };
-        runtime.session = match &runtime.sessions {
-            Some(store) => {
-                Some(store.create(client.session_provider(), parent, history.to_vec())?)
-            }
-            None => runtime.session,
-        };
-        runtime.activate_session(None)?;
-        runtime.scope.changes = match self {
-            Self::Start => {
-                if let ExecutionRole::Worker { execution } = &runtime.role {
-                    execution.attach_session(runtime.session.clone())?;
-                }
-                match &runtime.session {
-                    Some(session) if session.snapshot()?.parent.is_none() => {
-                        session.change_tracker(Default::default())
-                    }
-                    _ => runtime.scope.changes,
-                }
-            }
-            Self::Clear => runtime
-                .session
-                .as_ref()
-                .map(|session| session.change_tracker(Default::default()))
-                .unwrap_or_default(),
-        };
-        Ok(runtime)
-    }
-}
-
 impl<C: Context + Clone + 'static> ActorState<C> {
     pub async fn new(
         dependency: Dependency<C>,
@@ -181,7 +137,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         {
             watcher.send_message(file_actor::Message::Relocate(project))?;
         }
-        let stream_log = Self::stream_log(&dependency)?;
+        let stream_log = dependency.stream_log()?;
         let request_mode = mode.request_mode();
         let reporter = mode.reporter(&dependency);
 
@@ -223,27 +179,6 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         })
     }
 
-    fn stream_log(dependency: &Dependency<C>) -> anyhow::Result<Option<tokio::fs::File>> {
-        match &dependency.runtime.role {
-            ExecutionRole::Root if dependency.debug_mode => {
-                let timestamp = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
-                let path = PathBuf::from(format!("./logs/stream_{timestamp}.jsonl"));
-                let workspace = dependency
-                    .runtime
-                    .project
-                    .clone()
-                    .map(Ok)
-                    .unwrap_or_else(|| dependency.runtime.scope.workspace())?;
-                let file = workspace.open_append(&path)?;
-                Ok(Some(tokio::fs::File::from_std(file)))
-            }
-            _ => Ok(None),
-        }
-    }
-
     async fn initial_history(context: &C) -> Vec<Message> {
         std::iter::once(Message::new(context.get_ctx().await))
             .chain(
@@ -254,22 +189,12 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             .collect()
     }
 
-    #[cfg(test)]
-    pub fn build_request(&self) -> clients::llm::ClientRequest {
-        clients::llm::ClientRequest::new(self.history.clone())
-            .with_system(self.cur_context.effective_instructions().unwrap())
-            .with_tools(self.tool_definitions())
-            .with_thinking()
-    }
-
-    pub fn context_input(
-        &self,
-        turn: TurnId,
-        client: &LLmClient,
-    ) -> anyhow::Result<ContextInput> {
+    pub fn context_input(&self, turn: TurnId, client: &LLmClient) -> anyhow::Result<ContextInput> {
         let interaction = match self.request_mode {
             RequestMode::SingleResponse => None,
-            RequestMode::Continue | RequestMode::Compact => Some(self.interaction_instructions()),
+            RequestMode::Continue | RequestMode::Compact => {
+                Some(self.dependency.runtime.role.get_guidance())
+            }
         };
         let instructions = std::iter::once(self.cur_context.effective_instructions()?)
             .chain(interaction)

@@ -814,6 +814,7 @@ impl Operation {
 #[cfg(test)]
 #[path = "../../tests/unit/session/tests.rs"]
 pub mod tests;
+pub mod session_transition;
 
 impl utils::changes::ChangeStore for Session {
     fn save(&self, snapshot: &utils::changes::ChangeSnapshot) -> anyhow::Result<()> {

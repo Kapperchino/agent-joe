@@ -22,6 +22,16 @@ pub struct TestContext {
     pub revision: usize,
 }
 
+impl<C: Context + Clone + 'static> ActorState<C> {
+    #[cfg(test)]
+    pub fn build_request(&self) -> clients::llm::ClientRequest {
+        clients::llm::ClientRequest::new(self.history.clone())
+            .with_system(self.cur_context.effective_instructions().unwrap())
+            .with_tools(self.tool_definitions())
+            .with_thinking()
+    }
+}
+
 #[async_trait]
 impl Context for TestContext {
     type LineIndexCreator = RustContextLineIndexCreator;

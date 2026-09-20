@@ -1,5 +1,7 @@
+use crate::session::interaction_control;
 use crate::states::actor_state::ActorState;
 use crate::states::provider_task::ProviderEvent;
+use crate::states::runtime::ExecutionRole;
 use crate::states::scheduler::ToolEvent;
 use crate::states::turn::{FollowUp, HistoryDisposition, Tag};
 use crate::states::turn_machine::{Event, SessionEvent};
@@ -11,6 +13,7 @@ use commands::command::Command;
 use common_models::{runtime_ids::TurnId, tui_models::ActorToTui};
 use flume::Sender;
 use ractor::{ActorProcessingErr, ActorRef, RpcReplyPort};
+use std::path::PathBuf;
 use tools::tool_defs::ErasedToolRef;
 
 pub trait IntoActorErr<T> {
@@ -92,6 +95,27 @@ impl<C: Context> Dependency<C> {
     pub fn tool(&self, name: &str) -> Option<&ErasedToolRef<C, ActorContext<C>>> {
         self.tools.iter().find(|tool| tool.name() == name)
     }
+
+    pub fn stream_log(&self) -> anyhow::Result<Option<tokio::fs::File>> {
+        match self.runtime.role {
+            ExecutionRole::Root if self.debug_mode => {
+                let timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let path = PathBuf::from(format!("./logs/stream_{timestamp}.jsonl"));
+                let workspace = self
+                    .runtime
+                    .project
+                    .clone()
+                    .map(Ok)
+                    .unwrap_or_else(|| self.runtime.scope.workspace())?;
+                let file = workspace.open_append(&path)?;
+                Ok(Some(tokio::fs::File::from_std(file)))
+            }
+            _ => Ok(None),
+        }
+    }
 }
 
 pub enum ActorContext<C: Context> {
@@ -139,11 +163,8 @@ impl<W: ContextWorker> Worker for W {
                         scope,
                         reply,
                     } => {
-                        let result = crate::session::interaction_control::Interaction::new(
-                            state,
-                            &scope.execution,
-                        )
-                        .and_then(|interaction| interaction.ask(question));
+                        let result = interaction_control::Interaction::new(state, &scope.execution)
+                            .and_then(|interaction| interaction.ask(question));
                         state.sync_question_gate().await;
                         let _ = reply.send(result.map_err(|error| error.to_string()));
                     }
@@ -152,11 +173,8 @@ impl<W: ContextWorker> Worker for W {
                         scope,
                         reply,
                     } => {
-                        let result = crate::session::interaction_control::Interaction::new(
-                            state,
-                            &scope.execution,
-                        )
-                        .and_then(|interaction| interaction.update_plan(update));
+                        let result = interaction_control::Interaction::new(state, &scope.execution)
+                            .and_then(|interaction| interaction.update_plan(update));
                         let _ = reply.send(result.map_err(|error| error.to_string()));
                     }
                     Message::StartWork(prompt) => {
