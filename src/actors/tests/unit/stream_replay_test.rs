@@ -22,16 +22,6 @@ pub struct TestContext {
     pub revision: usize,
 }
 
-impl<C: Context + Clone + 'static> ActorState<C> {
-    #[cfg(test)]
-    pub fn build_request(&self) -> clients::llm::ClientRequest {
-        clients::llm::ClientRequest::new(self.conversation.history().to_vec())
-            .with_system(self.context.effective_instructions().unwrap())
-            .with_tools(self.tool_definitions())
-            .with_thinking()
-    }
-}
-
 #[async_trait]
 impl Context for TestContext {
     type LineIndexCreator = RustContextLineIndexCreator;
@@ -244,10 +234,9 @@ async fn helpers_preserve_parent_interaction_without_root_tools_or_plan_context(
     assert!(input.instructions.contains("Runtime state updates"));
     let scope = h.state.runtime.scope.clone();
     assert!(
-        crate::session::interaction_state::Interaction::new(
+        interaction::access::Interaction::new(
             &h.state.interaction,
-            &h.state.runtime.role,
-            &h.state.persistence,
+            h.state.runtime.role.interaction_role(),
             &scope,
         )
         .is_err()
@@ -487,7 +476,7 @@ async fn claude_replay_preserves_thinking_signatures_and_typed_tool_input() {
 
 #[tokio::test]
 async fn failed_evidence_persistence_preserves_the_live_plan() {
-    let directory = crate::session::tests::Workspace::new();
+    let directory = session::test_support::Workspace::new();
     let runtime = crate::states::runtime::Runtime::for_workspace(directory.path.clone()).unwrap();
     let store = runtime.sessions.clone().unwrap();
     let mut h = harness_with_runtime(runtime).await;
@@ -503,18 +492,22 @@ async fn failed_evidence_persistence_preserves_the_live_plan() {
         },
         outcome: Ok("Evidence collected".into()),
     };
-    h.state.record_plan_evidence(&result("before"));
+    h.state
+        .interaction_control()
+        .record_plan_evidence(&result("before"));
     let before = serde_json::to_value(h.state.interaction.planning()).unwrap();
     let session = h.state.runtime.session.as_ref().unwrap();
-    crate::session::tests::invalidate(&store, &session.id);
-    h.state.record_plan_evidence(&result("after"));
+    session::test_support::invalidate(&store, &session.id);
+    h.state
+        .interaction_control()
+        .record_plan_evidence(&result("after"));
     assert_eq!(
         serde_json::to_value(h.state.interaction.planning()).unwrap(),
         before
     );
     assert!(matches!(
         h.state.persistence,
-        crate::session::persistence::Persistence::Failed(_)
+        session::persistence::Persistence::Failed(_)
     ));
 }
 
@@ -523,7 +516,7 @@ async fn rejected_workspace_relocation_preserves_context_and_conversation() {
     let mut h = harness().await;
     let before = serde_json::to_value(h.state.conversation.history()).unwrap();
     let cache_key = h.state.conversation.cache_key().to_owned();
-    let directory = crate::session::tests::Workspace::new();
+    let directory = session::test_support::Workspace::new();
     let runtime = crate::states::runtime::Runtime::for_workspace(directory.path.clone()).unwrap();
     assert!(h.state.relocate_session_workspace(runtime).await.is_err());
     assert!(h.state.runtime.scope.workspace().is_err());

@@ -15,9 +15,7 @@ pub mod workers;
 #[cfg(test)]
 #[path = "../tests/unit/runtime_test.rs"]
 mod runtime_test;
-pub mod session;
 
-mod commit_message;
 pub mod compactor;
 
 pub mod states;

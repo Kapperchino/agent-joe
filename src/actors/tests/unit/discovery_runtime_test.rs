@@ -79,7 +79,7 @@ struct RepositoryActor {
     requests: flume::Receiver<Request>,
     events: flume::Receiver<ActorToTui>,
     context: RustContext,
-    store: Arc<crate::session::SessionStore>,
+    store: Arc<session::SessionStore>,
 }
 
 impl RepositoryActor {
@@ -187,7 +187,7 @@ fn result_text(request: &llm::ClientRequest) -> String {
 #[tokio::test]
 async fn patch_mismatch_continues_to_read_and_retry_in_both_worker_modes() {
     for mode in [Mode::Simple, Mode::Delegated] {
-        let workspace = crate::session::tests::Workspace::new();
+        let workspace = session::test_support::Workspace::new();
         std::fs::write(workspace.path.join("target.txt"), "current\n").unwrap();
         let actor = match mode {
             Mode::Simple => RepositoryActor::new(SimpleWorker::new(), workspace.path.clone()).await,
@@ -301,7 +301,7 @@ async fn patch_mismatch_continues_to_read_and_retry_in_both_worker_modes() {
 #[tokio::test]
 async fn simple_and_delegated_turns_receive_scoped_rules_before_editing_and_read_fresh_files() {
     for mode in [Mode::Simple, Mode::Delegated] {
-        let workspace = crate::session::tests::Workspace::new();
+        let workspace = session::test_support::Workspace::new();
         std::fs::create_dir_all(workspace.path.join("docs")).unwrap();
         std::fs::write(
             workspace.path.join("AGENTS.md"),
@@ -545,7 +545,7 @@ async fn simple_and_delegated_turns_receive_scoped_rules_before_editing_and_read
 #[tokio::test]
 async fn shared_watcher_handles_create_modify_rename_and_delete_in_both_root_modes() {
     for mode in [Mode::Simple, Mode::Delegated] {
-        let workspace = crate::session::tests::Workspace::new();
+        let workspace = session::test_support::Workspace::new();
         let actor = match mode {
             Mode::Simple => RepositoryActor::new(SimpleWorker::new(), workspace.path.clone()).await,
             Mode::Delegated => {
@@ -626,7 +626,7 @@ mod worker_tests;
 async fn simple_and_validation_workers_manage_targets_and_archive_completion() {
     if utils::test_support::sandbox_available() {
         for mode in [Mode::Simple, Mode::Delegated] {
-            let workspace = crate::session::tests::Workspace::new();
+            let workspace = session::test_support::Workspace::new();
             std::fs::create_dir(workspace.path.join("examples")).unwrap();
             std::fs::write(
                 workspace.path.join("Cargo.toml"),
@@ -781,7 +781,7 @@ fn latest_cargo(request: &llm::ClientRequest) -> utils::cargo::CargoResult {
 #[tokio::test]
 async fn typed_tools_reproduce_patch_and_verify_a_rust_regression() {
     if utils::test_support::sandbox_available() {
-        let workspace = crate::session::tests::Workspace::new();
+        let workspace = session::test_support::Workspace::new();
         std::fs::create_dir(workspace.path.join("src")).unwrap();
         std::fs::write(workspace.path.join("Cargo.toml"), "[package]\nname = 'regression_fixture'\nversion = '0.1.0'\nedition = '2024'\n[features]\nregression = []\n").unwrap();
         std::fs::write(workspace.path.join("src/lib.rs"), "pub fn answer() -> u32 { 41 }\n#[cfg(all(test, feature = \"regression\"))]\nmod tests {\n    #[test]\n    fn answer() { assert_eq!(super::answer(), 42); }\n}\n").unwrap();

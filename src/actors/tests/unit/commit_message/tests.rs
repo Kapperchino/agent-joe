@@ -1,5 +1,5 @@
 use super::*;
-use crate::commit_message::generate;
+use merge_workflow::commit_message::generate;
 use utils::git::worktrees::session::CommitMessage;
 
 const DIFF: &str =

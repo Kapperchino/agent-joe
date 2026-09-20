@@ -1,10 +1,8 @@
-use crate::{
-    actor::ActorContext,
-    session::artifacts::{ArtifactPage, ArtifactRange},
-};
+use crate::actor::ActorContext;
 use analysis::contexts::context::Context;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use session::artifacts::{ArtifactPage, ArtifactRange};
 use tools::tool_defs::{ToolDefTrait, ToolEffect, ToolId, ToolTrait, ToolType};
 use turbo_code_macros::{ToolDef, ToolInput};
 use utils::utils::FnvHashMap;

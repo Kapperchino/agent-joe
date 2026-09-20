@@ -595,5 +595,5 @@ impl SessionStore {
 }
 
 #[cfg(test)]
-#[path = "../../tests/unit/session/generations/tests.rs"]
+#[path = "../tests/unit/session/generations/tests.rs"]
 mod tests;

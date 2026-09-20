@@ -3,7 +3,7 @@ use commands::command::{Command, ResumeTarget};
 
 #[tokio::test]
 async fn tool_cycles_resume_and_forks_keep_runtime_history_and_isolate_cache_keys() {
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
     let store = runtime.sessions.clone().unwrap();
     let (read, entered) = gate("read", ToolEffect::Read);
@@ -102,7 +102,7 @@ async fn tool_cycles_resume_and_forks_keep_runtime_history_and_isolate_cache_key
 #[tokio::test]
 async fn quota_exhaustion_retains_history_and_cancels_queued_continuation() {
     for code in ["usage_limit_reached", "insufficient_quota"] {
-        let workspace = crate::session::tests::Workspace::new();
+        let workspace = session::test_support::Workspace::new();
         let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
         let store = runtime.sessions.clone().unwrap();
         let h = Harness::with_runtime(vec![], runtime).await;

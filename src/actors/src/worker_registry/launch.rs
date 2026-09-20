@@ -130,7 +130,7 @@ pub(crate) fn start(
     let parent_session = info.runtime.session.clone();
     parent_session
         .as_ref()
-        .map(|session| session.record(crate::session::Event::Worker(Box::new(initial.clone()))))
+        .map(|session| session.record(session::Event::Worker(Box::new(initial.clone()))))
         .transpose()
         .map_err(|error| {
             registry.complete(
@@ -179,7 +179,7 @@ pub(crate) fn start(
         let persisted = parent_session
             .as_ref()
             .map(|session| {
-                session.record(crate::session::Event::Worker(Box::new(WorkerView {
+                session.record(session::Event::Worker(Box::new(WorkerView {
                     worker_id: execution.id.clone(),
                     request: execution.request.clone(),
                     status: report.status,

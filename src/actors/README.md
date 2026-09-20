@@ -7,21 +7,26 @@ with independently compiled state components.
 | Crate | Owns | Boundary |
 | --- | --- | --- |
 | `conversation` | Transcript, deferred input, checkpoints, context budgeting | Restores from `SavedConversation`; produces provider request data |
-| `interaction` | Plan and question transitions, tool policy | Produces `InteractionEvent`; commits through a supplied recording function |
+| `interaction` | Plan and question transitions, access checks, commands, tool policy | `InteractionControl` commits through `InteractionPersistence` before publishing state |
 | `response-stream` | Stream accumulation, usage, completed response items | Produces `StreamUpdate` notifications; performs no reporting or file I/O |
 | `turn-engine` | Turn lifecycle, tool batches, retries, cleanup sequencing | Consumes events and produces effects; worker replies carry request IDs |
 | `worker-registry` | Worker lifecycle, request limits, accounting, evidence, reports | Accepts cancellation tokens, token usage updates, and supplied report evidence |
 | `workspace-access` | Reader limits, write leases, workspace revisions | Acquires leases using tool effects and execution scopes |
+| `merge-workflow` | Merge approval, Git execution, commit descriptions, conflict resolution, recovery | `SessionMerge` uses `MergePersistence` and returns relocation or resolution actions |
+| `session` | Session storage, artifacts, persistence, activation, transitions, commands | Owns `SessionRuntime`; implements interaction and merge persistence interfaces |
 
-These six crates do not depend on `actors` or on one another. Shared values live
+These eight crates do not depend on `actors`. `session` composes the conversation,
+interaction, turn, worker, workspace, and merge components. Merge execution uses
+interaction control and the response components. Shared values live
 in `common-models`, `clients::response`, and the existing tool and execution
 contracts. Artifact references live in `utils::artifacts` and are shared by Cargo
-output, session storage, and worker reports. Changes that coordinate components
-belong in `actors`.
+output, session storage, and worker reports. Actor lifecycle coordination belongs
+in `actors`.
 
 Session activation maps stored snapshots into each component's input type. The
-actor records interaction events before installing the resulting state, delivers
-stream notifications, resolves worker reply IDs, and executes turn effects.
+session controllers record interaction events before installing the resulting
+state. The actor delivers stream notifications, resolves worker reply IDs, and
+executes turn effects.
 Context is owned directly by the actor and cloned when preparing tool execution;
 it does not contain the runtime or session store.
 
@@ -31,6 +36,25 @@ accepts `RequestReservation` and `UsageUpdate`; the provider adapter estimates
 request tokens and translates provider usage. `WorkerSession` filters inherited
 artifacts and supplies `StoredWorkerEvidence` after cleanup. Reports retain
 observed tool evidence when session evidence cannot be retrieved.
+
+Session control, interaction control, merge execution, and workspace transitions
+take explicit component references and have no dependency on `ActorState`.
+`session::persistence::SessionPersistence` records events and reports storage
+failures. `interaction::control::InteractionControl` publishes only committed
+state. Session commands return reports, clear requests, or prepared activations.
+Merge execution returns a
+workspace relocation or conflict-resolution request when actor work is needed.
+`states::actor_state` applies these results, synchronizes the question gate, and
+coordinates actor lifecycle operations. The actor maps its runtime into
+`SessionRuntime` and `MergeEnvironment`, attaches worker sessions, and implements
+`common_models::tui_models::EventSink` for UI delivery.
+
+Merge approval does not inspect the turn machine, runtime, or session store.
+`merge_workflow::execution::SessionMerge` maps activity and persistence state into
+`MergeReadiness`, records approval transitions, and performs Git operations.
+The workflow decides whether
+a proposal needs approval and whether a saved question must be restored. Saved
+resolutions resume paused, preserving the existing storage format.
 
 Callers import domain types from their owning crates. Actor modules contain the
 adapters that coordinate those types. Component unit tests live in their owning

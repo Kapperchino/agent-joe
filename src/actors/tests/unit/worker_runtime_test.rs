@@ -32,7 +32,7 @@ async fn interaction_command(
 async fn plan_mode_denies_all_cargo_and_mutation_tools_in_both_root_modes() {
     use commands::command::Command;
     for mode in [Mode::Simple, Mode::Delegated] {
-        let workspace = crate::session::tests::Workspace::new();
+        let workspace = session::test_support::Workspace::new();
         std::fs::write(workspace.path.join("original.txt"), "user work").unwrap();
         let actor = match mode {
             Mode::Simple => RepositoryActor::new(SimpleWorker::new(), workspace.path.clone()).await,
@@ -170,7 +170,7 @@ async fn plan_mode_denies_all_cargo_and_mutation_tools_in_both_root_modes() {
 #[tokio::test]
 async fn plan_mode_is_inherited_by_read_workers_and_denies_dynamic_writer_launches() {
     use commands::command::Command;
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     let actor = RepositoryActor::new(BaseWorker::new(), workspace.path.clone()).await;
     interaction_command(&actor, Command::Plan).await;
     let started = StartedWorker::new(&actor, worker_input("find_files", ".")).await;
@@ -218,8 +218,8 @@ async fn plan_mode_is_inherited_by_read_workers_and_denies_dynamic_writer_launch
 #[tokio::test]
 async fn question_answers_cannot_expand_the_project_boundary() {
     use commands::command::Command;
-    let workspace = crate::session::tests::Workspace::new();
-    let outside = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
+    let outside = session::test_support::Workspace::new();
     let private = outside.path.join("private.txt");
     std::fs::write(&private, "outside content marker").unwrap();
     let actor = RepositoryActor::new(SimpleWorker::new(), workspace.path.clone()).await;
@@ -369,7 +369,7 @@ async fn completed_root(actor: &RepositoryActor, reply: oneshot::Sender<anyhow::
 #[tokio::test]
 async fn root_modes_complete_small_changes_directly_and_simple_has_no_delegation() {
     for mode in [Mode::Simple, Mode::Delegated] {
-        let workspace = crate::session::tests::Workspace::new();
+        let workspace = session::test_support::Workspace::new();
         let actor = match mode {
             Mode::Simple => RepositoryActor::new(SimpleWorker::new(), workspace.path.clone()).await,
             Mode::Delegated => {
@@ -422,7 +422,7 @@ struct ReferenceWorker;
 #[tokio::test]
 async fn both_root_modes_query_automatically_created_compaction_snapshots() {
     for mode in [Mode::Simple, Mode::Delegated] {
-        let workspace = crate::session::tests::Workspace::new();
+        let workspace = session::test_support::Workspace::new();
         let runtime = Runtime {
             context_budget: conversation::context::ContextBudget::new(Some(48_000), 2048).unwrap(),
             ..Runtime::for_workspace(workspace.path.clone()).unwrap()
@@ -564,7 +564,7 @@ impl crate::worker::Worker for ReferenceWorker {
 async fn both_root_modes_list_and_ask_non_snapshot_immutable_workers() {
     use crate::immutable_workers::{ImmutableWorker, ImmutableWorkerDescription};
     for mode in [Mode::Simple, Mode::Delegated] {
-        let workspace = crate::session::tests::Workspace::new();
+        let workspace = session::test_support::Workspace::new();
         let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
         let registry = runtime.immutable_workers.clone();
         let actor = match mode {
@@ -647,7 +647,7 @@ async fn both_root_modes_list_and_ask_non_snapshot_immutable_workers() {
 
 #[tokio::test]
 async fn qualified_worker_tools_execute_with_scoped_read_access() {
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     std::fs::create_dir(workspace.path.join("assigned")).unwrap();
     std::fs::write(
         workspace.path.join("assigned/evidence.txt"),
@@ -723,7 +723,7 @@ async fn qualified_worker_tools_execute_with_scoped_read_access() {
 
 #[tokio::test]
 async fn bounded_worker_inherits_constraints_denies_other_paths_and_returns_observed_changes() {
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     std::fs::create_dir_all(workspace.path.join("assigned")).unwrap();
     std::fs::write(workspace.path.join("secret.txt"), "secret content").unwrap();
     std::fs::write(
@@ -845,7 +845,7 @@ async fn bounded_worker_inherits_constraints_denies_other_paths_and_returns_obse
 
 #[tokio::test]
 async fn writer_ownership_rejects_overlapping_workers_and_root_edits_until_cleanup() {
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     let actor = RepositoryActor::new(BaseWorker::new(), workspace.path.clone()).await;
     let started = StartedWorker::new(&actor, worker_input("apply_patch", ".")).await;
     answer(
@@ -915,7 +915,7 @@ async fn worker_inherits_parent_response_limits_without_total_token_or_request_b
         ContextBudget::new(Some(128_000), 32_000).unwrap(),
         ContextBudget::new(None, 2048).unwrap(),
     ] {
-        let workspace = crate::session::tests::Workspace::new();
+        let workspace = session::test_support::Workspace::new();
         let runtime = Runtime {
             context_budget,
             ..Runtime::for_workspace(workspace.path.clone()).unwrap()
@@ -983,7 +983,7 @@ async fn timeout_failure_and_tool_budget_are_reported_with_cleanup() {
         WorkerStatus::Failed,
         WorkerStatus::BudgetExhausted,
     ] {
-        let workspace = crate::session::tests::Workspace::new();
+        let workspace = session::test_support::Workspace::new();
         let actor = RepositoryActor::new(BaseWorker::new(), workspace.path.clone()).await;
         let mut input = worker_input("find_files", ".");
         input["seconds"] = match failure {
@@ -1043,7 +1043,7 @@ async fn timeout_failure_and_tool_budget_are_reported_with_cleanup() {
 
 #[tokio::test]
 async fn parent_interrupt_cancels_and_journals_children_without_replaying_them() {
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     let actor = RepositoryActor::new(BaseWorker::new(), workspace.path.clone()).await;
     let started = StartedWorker::new(&actor, worker_input("find_files", ".")).await;
     actor.actor.send_message(Message::Interrupt).unwrap();
@@ -1069,7 +1069,7 @@ async fn parent_interrupt_cancels_and_journals_children_without_replaying_them()
     let id = root.id.clone();
     actor.stop().await;
     let policy = utils::workspace::WorkspacePolicy::workspace(workspace.path.clone()).unwrap();
-    let resumed = crate::session::ResumableSession::new(
+    let resumed = session::ResumableSession::new(
         &actor_store(&workspace.path),
         &id,
         &policy,
@@ -1078,7 +1078,7 @@ async fn parent_interrupt_cancels_and_journals_children_without_replaying_them()
     assert!(resumed.is_ok(), "{:?}", resumed.err());
 }
 
-fn actor_store(path: &std::path::Path) -> Arc<crate::session::SessionStore> {
+fn actor_store(path: &std::path::Path) -> Arc<session::SessionStore> {
     Runtime::for_workspace(path.to_path_buf())
         .unwrap()
         .sessions
@@ -1108,7 +1108,7 @@ fn worker_contracts_reject_invalid_deadlines_and_widened_permissions() {
 
 #[tokio::test]
 async fn independent_read_workers_run_concurrently_and_followups_receive_only_selected_reports() {
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     let actor = RepositoryActor::new(BaseWorker::new(), workspace.path.clone()).await;
     actor
         .actor
@@ -1218,7 +1218,7 @@ async fn independent_read_workers_run_concurrently_and_followups_receive_only_se
 
 #[tokio::test]
 async fn uncollected_worker_reports_prevent_silent_parent_completion() {
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     let actor = RepositoryActor::new(BaseWorker::new(), workspace.path.clone()).await;
     let started = StartedWorker::new(&actor, worker_input("find_files", ".")).await;
     answer(
@@ -1245,7 +1245,7 @@ async fn uncollected_worker_reports_prevent_silent_parent_completion() {
 
 #[tokio::test]
 async fn worker_reports_preserve_actual_validation_failure_and_original_parameters() {
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     let actor = RepositoryActor::new(BaseWorker::new(), workspace.path.clone()).await;
     let started = StartedWorker::new(&actor, worker_input("cargo", ".")).await;
     answer(
@@ -1291,7 +1291,7 @@ async fn worker_reports_preserve_actual_validation_failure_and_original_paramete
 
 #[tokio::test]
 async fn scoped_workers_reject_whole_workspace_cargo_tools_before_startup() {
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     std::fs::create_dir(workspace.path.join("assigned")).unwrap();
     let actor = RepositoryActor::new(BaseWorker::new(), workspace.path.clone()).await;
     actor
@@ -1323,7 +1323,7 @@ async fn scoped_workers_reject_whole_workspace_cargo_tools_before_startup() {
 #[tokio::test]
 async fn worker_cancellation_drains_managed_targets_and_reports_final_process_evidence() {
     if utils::test_support::sandbox_available() {
-        let workspace = crate::session::tests::Workspace::new();
+        let workspace = session::test_support::Workspace::new();
         std::fs::create_dir(workspace.path.join("examples")).unwrap();
         std::fs::write(
             workspace.path.join("Cargo.toml"),
@@ -1390,7 +1390,7 @@ async fn worker_cancellation_drains_managed_targets_and_reports_final_process_ev
 
 #[tokio::test]
 async fn worker_edits_share_parent_journal_and_exclude_root_undo_and_worktree_writes() {
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     std::fs::create_dir(workspace.path.join("assigned")).unwrap();
     std::fs::write(workspace.path.join("existing.txt"), "user baseline").unwrap();
     let actor = RepositoryActor::new(BaseWorker::new(), workspace.path.clone()).await;

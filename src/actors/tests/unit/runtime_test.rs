@@ -1475,7 +1475,7 @@ async fn failed_validation_is_an_error_with_diagnostics_in_history() {
 #[tokio::test]
 async fn durable_session_resumes_after_actor_restart_and_clear_keeps_the_archive() {
     use commands::command::{Command, ResumeTarget};
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
     let store = runtime.sessions.clone().unwrap();
     let (write, entered) = gate("write", ToolEffect::Write);
@@ -1572,7 +1572,7 @@ async fn durable_session_resumes_after_actor_restart_and_clear_keeps_the_archive
 
 #[tokio::test]
 async fn durable_worker_sessions_link_to_the_parent_and_commit_intent_before_execution() {
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
     let store = runtime.sessions.clone().unwrap();
     let (write, entered) = gate("write", ToolEffect::Write);
@@ -1596,7 +1596,7 @@ async fn durable_worker_sessions_link_to_the_parent_and_commit_intent_before_exe
         .unwrap();
     assert!(matches!(
         child.pending.as_ref().unwrap().operations[0].state,
-        crate::session::OperationState::Intended {
+        session::OperationState::Intended {
             effect: ToolEffect::Write
         }
     ));
@@ -1623,7 +1623,7 @@ async fn durable_worker_sessions_link_to_the_parent_and_commit_intent_before_exe
 
 #[tokio::test]
 async fn persistence_failure_prevents_tool_execution_and_further_provider_requests() {
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
     let store = runtime.sessions.clone().unwrap();
     let (write, entered) = gate("write", ToolEffect::Write);
@@ -1631,7 +1631,7 @@ async fn persistence_failure_prevents_tool_execution_and_further_provider_reques
     let id = store.list().unwrap()[0].id.clone();
     h.start("make changes");
     let (_, reply) = h.request().await;
-    crate::session::tests::invalidate(&store, &id);
+    session::test_support::invalidate(&store, &id);
     answer(reply, response(vec![call("write", "edit")]));
     h.terminal(Lifecycle::Failed).await;
     assert!(entered.is_empty());
@@ -1642,7 +1642,7 @@ async fn persistence_failure_prevents_tool_execution_and_further_provider_reques
 #[tokio::test]
 async fn resume_rejects_an_active_turn_and_refreshes_old_workspace_context() {
     use commands::command::{Command, ResumeTarget};
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     let runtime =
         Runtime::with_session_namespace(workspace.path.clone(), "custom-sessions").unwrap();
     let store = runtime.sessions.clone().unwrap();
@@ -1723,7 +1723,7 @@ async fn resume_rejects_an_active_turn_and_refreshes_old_workspace_context() {
 
 #[tokio::test]
 async fn shutdown_preserves_durable_results_even_when_the_actor_cannot_receive_them() {
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
     let store = runtime.sessions.clone().unwrap();
     let (write, entered) = gate("write", ToolEffect::Write);
@@ -1751,7 +1751,7 @@ async fn shutdown_preserves_durable_results_even_when_the_actor_cannot_receive_t
 
 #[tokio::test]
 async fn graceful_actor_stop_drains_turn_events_and_rejects_followups() {
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
     let store = runtime.sessions.clone().unwrap();
     let (mut write, entered) = gate("write", ToolEffect::Write);
@@ -1836,7 +1836,7 @@ async fn graceful_actor_stop_drains_turn_events_and_rejects_followups() {
 
 #[tokio::test]
 async fn graceful_actor_stop_preserves_completed_provider_content() {
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
     let store = runtime.sessions.clone().unwrap();
     let mut h = Harness::with_runtime(vec![], runtime).await;
@@ -1896,7 +1896,7 @@ mod discovery;
 #[tokio::test]
 async fn cargo_cancellation_keeps_output_before_turn_cleanup() {
     if utils::test_support::sandbox_available() {
-        let workspace = crate::session::tests::Workspace::new();
+        let workspace = session::test_support::Workspace::new();
         std::fs::create_dir(workspace.path.join("examples")).unwrap();
         std::fs::write(
             workspace.path.join("Cargo.toml"),

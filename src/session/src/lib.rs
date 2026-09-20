@@ -11,14 +11,18 @@ use utils::workspace::WorkspacePolicy;
 pub mod activation;
 mod artifact_index;
 pub mod artifacts;
+pub mod control;
+#[cfg(test)]
+#[path = "../tests/unit/session_control_test.rs"]
+mod control_tests;
 mod generations;
-pub mod interaction_control;
-pub mod interaction_state;
 mod ownership;
 pub mod persistence;
 mod prune;
-pub mod session_control;
-pub mod session_merge;
+pub mod runtime;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
+pub mod transition;
 use generations::SessionDatabase;
 pub use generations::SessionStore;
 use ownership::Owner;
@@ -120,7 +124,7 @@ pub struct Snapshot {
     #[serde(default)]
     pub worktree: Option<utils::git::worktrees::session::SessionWorktree>,
     #[serde(default)]
-    pub merge_approval: session_merge::MergeApproval,
+    pub merge_approval: merge_workflow::MergeApproval,
     pub id: String,
     workspace: String,
     provider: SessionProvider,
@@ -240,7 +244,7 @@ pub enum OperationState {
 pub enum Event {
     Worktree(Option<utils::git::worktrees::session::SessionWorktree>),
     WorktreePruned,
-    MergeApproval(session_merge::MergeApproval),
+    MergeApproval(merge_workflow::MergeApproval),
     Planning(common_models::interaction::Planning),
     Worker(Box<worker_registry::report::WorkerView>),
     Created,
@@ -377,7 +381,7 @@ impl SessionStore {
 }
 
 impl SessionDatabase {
-    pub(super) fn owner(
+    pub(crate) fn owner(
         &self,
         transaction: &heed::RoTxn<'_>,
         id: &str,
@@ -392,7 +396,7 @@ impl SessionDatabase {
         Ok(owner)
     }
 
-    pub(super) fn snapshot(
+    pub(crate) fn snapshot(
         &self,
         transaction: &heed::RoTxn<'_>,
         id: &str,
@@ -813,9 +817,8 @@ impl Operation {
     }
 }
 
-pub mod session_transition;
 #[cfg(test)]
-#[path = "../../tests/unit/session/tests.rs"]
+#[path = "../tests/unit/session/tests.rs"]
 pub mod tests;
 
 impl utils::changes::ChangeStore for Session {

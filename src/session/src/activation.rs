@@ -1,12 +1,12 @@
 use super::Session;
-use super::session_merge::MergeApproval;
-use super::session_transition::SessionTransition;
-use crate::states::runtime::Runtime;
+use super::transition::SessionTransition;
+use crate::runtime::SessionRuntime;
 use analysis::contexts::context::Context;
 use clients::llm::{LLmClient, Message};
 use common_models::tui_models::TokenCount;
 use conversation::{Conversation, SavedConversation};
 use interaction::InteractionState;
+use merge_workflow::MergeApproval;
 use std::{collections::BTreeMap, sync::Arc};
 use utils::git::worktrees::session::SessionWorktree;
 use worker_registry::WorkerRegistry;
@@ -14,7 +14,7 @@ use worker_registry::report::WorkerView;
 
 pub struct SessionActivation<C: Context> {
     pub context: C,
-    pub runtime: Runtime,
+    pub runtime: SessionRuntime,
     pub conversation: Conversation,
     pub interaction: InteractionState,
     pub merge_approval: MergeApproval,
@@ -39,11 +39,19 @@ impl WorkerRecovery {
 }
 
 impl<C: Context + Clone> SessionActivation<C> {
-    pub async fn start(context: C, runtime: Runtime, client: &LLmClient) -> anyhow::Result<Self> {
+    pub async fn start(
+        context: C,
+        runtime: SessionRuntime,
+        client: &LLmClient,
+    ) -> anyhow::Result<Self> {
         Self::fresh(context, runtime, client, SessionTransition::Start).await
     }
 
-    pub async fn clear(context: &C, runtime: &Runtime, client: &LLmClient) -> anyhow::Result<Self> {
+    pub async fn clear(
+        context: &C,
+        runtime: &SessionRuntime,
+        client: &LLmClient,
+    ) -> anyhow::Result<Self> {
         let mut context = context.clone();
         context.clear_task_context();
         Self::fresh(context, runtime.clone(), client, SessionTransition::Clear).await
@@ -51,7 +59,7 @@ impl<C: Context + Clone> SessionActivation<C> {
 
     async fn fresh(
         context: C,
-        runtime: Runtime,
+        runtime: SessionRuntime,
         client: &LLmClient,
         transition: SessionTransition,
     ) -> anyhow::Result<Self> {
@@ -79,7 +87,7 @@ impl<C: Context + Clone> SessionActivation<C> {
 
     pub async fn resume(
         context: &C,
-        runtime: &Runtime,
+        runtime: &SessionRuntime,
         session: Arc<Session>,
         source: Option<&SessionWorktree>,
     ) -> anyhow::Result<Self> {
@@ -112,7 +120,7 @@ impl<C: Context + Clone> SessionActivation<C> {
             },
         })
     }
-    fn relocate(mut context: C, runtime: &Runtime) -> anyhow::Result<C> {
+    fn relocate(mut context: C, runtime: &SessionRuntime) -> anyhow::Result<C> {
         match runtime
             .session
             .as_ref()

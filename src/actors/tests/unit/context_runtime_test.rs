@@ -1,7 +1,7 @@
 use super::*;
-use crate::session::SessionStore;
 use commands::command::{Command, ResumeTarget};
 use conversation::context::{ContextBudget, ContextLimits, estimated_tokens};
+use session::SessionStore;
 
 struct NativeRequest {
     request: llm::ClientRequest,
@@ -38,7 +38,7 @@ impl StreamProvider for NativeProvider {
     }
 }
 
-fn configured_runtime(workspace: &crate::session::tests::Workspace) -> Runtime {
+fn configured_runtime(workspace: &session::test_support::Workspace) -> Runtime {
     Runtime {
         context_budget: ContextBudget::Fixed(configured_limits()),
         ..Runtime::for_workspace(workspace.path.clone()).unwrap()
@@ -94,7 +94,7 @@ fn summary(reply: oneshot::Sender<anyhow::Result<Events>>) {
 
 #[tokio::test]
 async fn fitting_context_reports_tokens_and_continues_without_repeated_compaction() {
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     let runtime = configured_runtime(&workspace);
     let store = runtime.sessions.clone().unwrap();
     let history = std::iter::once(llm::Message::new("workspace".into()))
@@ -153,7 +153,7 @@ async fn fitting_context_reports_tokens_and_continues_without_repeated_compactio
 
 #[tokio::test]
 async fn automatic_compaction_survives_restart_and_forks() {
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     let runtime = configured_runtime(&workspace);
     let store = runtime.sessions.clone().unwrap();
     let id = saved_history(&store);
@@ -245,7 +245,7 @@ async fn automatic_compaction_survives_restart_and_forks() {
 
 #[tokio::test]
 async fn manual_compaction_preserves_the_transcript_and_queued_followups() {
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     let runtime = configured_runtime(&workspace);
     let store = runtime.sessions.clone().unwrap();
     let id = saved_history(&store);
@@ -291,7 +291,7 @@ async fn manual_compaction_preserves_the_transcript_and_queued_followups() {
 
 #[tokio::test]
 async fn cancelled_compaction_cannot_commit() {
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     let runtime = configured_runtime(&workspace);
     let store = runtime.sessions.clone().unwrap();
     let id = saved_history(&store);
@@ -321,7 +321,7 @@ async fn cancelled_compaction_cannot_commit() {
 
 #[tokio::test]
 async fn failed_or_malformed_summaries_leave_history_intact_and_can_be_retried() {
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     let runtime = configured_runtime(&workspace);
     let store = runtime.sessions.clone().unwrap();
     let id = saved_history(&store);
@@ -395,7 +395,7 @@ async fn failed_or_malformed_summaries_leave_history_intact_and_can_be_retried()
 
 #[tokio::test]
 async fn compaction_worker_reports_partial_usage_and_is_drained_on_shutdown() {
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     let runtime = configured_runtime(&workspace);
     let store = runtime.sessions.clone().unwrap();
     let id = saved_history(&store);
@@ -483,7 +483,7 @@ async fn compaction_worker_reports_partial_usage_and_is_drained_on_shutdown() {
 #[tokio::test]
 async fn giant_validation_output_is_bounded_and_retrievable_in_simple_and_worker_modes() {
     for delegated in [false, true] {
-        let workspace = crate::session::tests::Workspace::new();
+        let workspace = session::test_support::Workspace::new();
         let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
         let store = runtime.sessions.clone().unwrap();
         let (mut validation, entered) = gate("cargo", ToolEffect::Validate);
@@ -581,7 +581,7 @@ async fn giant_validation_output_is_bounded_and_retrievable_in_simple_and_worker
 
 #[tokio::test]
 async fn native_compaction_commits_and_replays_all_opaque_items_after_restart() {
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     let runtime = configured_runtime(&workspace);
     let store = runtime.sessions.clone().unwrap();
     let id = saved_history(&store);
@@ -669,7 +669,7 @@ async fn native_compaction_commits_and_replays_all_opaque_items_after_restart() 
 
 #[tokio::test]
 async fn compaction_storage_failure_stops_before_the_next_provider_request() {
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     let runtime = configured_runtime(&workspace);
     let store = runtime.sessions.clone().unwrap();
     let id = saved_history(&store);
@@ -680,7 +680,7 @@ async fn compaction_storage_failure_stops_before_the_next_provider_request() {
         .send_message(Message::Command(Command::Compact))
         .unwrap();
     let (_, reply) = h.request().await;
-    crate::session::tests::invalidate(&store, &id);
+    session::test_support::invalidate(&store, &id);
     summary(reply);
     h.terminal(Lifecycle::Failed).await;
     assert!(h.requests.is_empty());
@@ -691,7 +691,7 @@ async fn compaction_storage_failure_stops_before_the_next_provider_request() {
 
 #[tokio::test]
 async fn compaction_snapshots_keep_independent_windows_and_stop_on_clear() {
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     let runtime = configured_runtime(&workspace);
     let store = runtime.sessions.clone().unwrap();
     let id = saved_history(&store);
@@ -791,7 +791,7 @@ async fn oversized_mandatory_context_fails_without_calling_the_provider() {
 
 #[tokio::test]
 async fn quota_exhaustion_during_summary_stops_without_continuation_or_history_loss() {
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     let runtime = configured_runtime(&workspace);
     let store = runtime.sessions.clone().unwrap();
     let id = saved_history(&store);
@@ -845,7 +845,7 @@ async fn quota_exhaustion_during_summary_stops_without_continuation_or_history_l
 
 #[tokio::test]
 async fn delegated_workers_compact_between_complete_tool_exchanges() {
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     let runtime = configured_runtime(&workspace);
     let store = runtime.sessions.clone().unwrap();
     let (read, entered) = gate("read", ToolEffect::Read);

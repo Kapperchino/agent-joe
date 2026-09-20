@@ -13,6 +13,14 @@ pub enum ExecutionRole {
 }
 
 impl ExecutionRole {
+    pub fn interaction_role(&self) -> interaction::access::InteractionRole {
+        use interaction::access::InteractionRole;
+        match self {
+            Self::Root => InteractionRole::Root,
+            Self::Worker { .. } | Self::Helper => InteractionRole::Delegated,
+        }
+    }
+
     pub fn allows_tool(&self, name: &str) -> bool {
         match self {
             Self::Root | Self::Helper => true,
@@ -43,9 +51,9 @@ pub struct Runtime {
     pub inherited_constraints: Vec<String>,
     pub context_budget: conversation::context::ContextBudget,
     pub native_compaction: conversation::context::NativeCompaction,
-    pub sessions: Option<Arc<crate::session::SessionStore>>,
+    pub sessions: Option<Arc<session::SessionStore>>,
     pub project: Option<Arc<utils::workspace::WorkspacePolicy>>,
-    pub session: Option<Arc<crate::session::Session>>,
+    pub session: Option<Arc<session::Session>>,
     pub workspace: Arc<Workspace>,
     pub scope: ExecutionScope,
     pub tool_timeout: Duration,
@@ -105,16 +113,8 @@ impl Runtime {
         root: std::path::PathBuf,
         namespace: &str,
     ) -> anyhow::Result<Self> {
-        let workspace = utils::workspace::WorkspacePolicy::workspace(root)?;
-        let sessions = crate::session::SessionStore::open(&workspace, namespace)?;
-        Ok(Self {
-            sessions: Some(sessions),
-            project: Some(Arc::new(utils::workspace::WorkspacePolicy::workspace(
-                workspace.root().to_path_buf(),
-            )?)),
-            scope: ExecutionScope::with_workspace(workspace),
-            ..Self::default()
-        })
+        let runtime = session::runtime::SessionRuntime::with_session_namespace(root, namespace)?;
+        Ok(Self::default().with_session(runtime))
     }
 
     pub fn child(&self, mut scope: ExecutionScope) -> Self {
@@ -125,30 +125,27 @@ impl Runtime {
         }
     }
 
-    pub fn activate_session(
-        &mut self,
-        source: Option<&utils::git::worktrees::session::SessionWorktree>,
-    ) -> anyhow::Result<()> {
-        if let (ExecutionRole::Root, Some(project), Some(session)) =
-            (&self.role, &self.project, &self.session)
-        {
-            let worktree = match session.snapshot()?.worktree {
-                Some(worktree) => Some(worktree),
-                None => {
-                    let worktree = utils::git::worktrees::session::SessionWorktree::create(
-                        project,
-                        &session.id,
-                        source,
-                    )?;
-                    session.record(crate::session::Event::Worktree(worktree.clone()))?;
-                    worktree
-                }
-            };
-            if let Some(worktree) = worktree {
-                self.scope = self.scope.relocated(worktree.workspace(project)?);
-                self.workspace = Arc::new(Workspace::new(self.workspace.read_limit()));
-            }
+    pub fn session_runtime(&self) -> session::runtime::SessionRuntime {
+        session::runtime::SessionRuntime {
+            interaction: self.interaction.clone(),
+            role: self.role.interaction_role(),
+            sessions: self.sessions.clone(),
+            project: self.project.clone(),
+            session: self.session.clone(),
+            workspace: self.workspace.clone(),
+            scope: self.scope.clone(),
         }
-        Ok(())
+    }
+
+    pub fn with_session(self, runtime: session::runtime::SessionRuntime) -> Self {
+        Self {
+            interaction: runtime.interaction,
+            sessions: runtime.sessions,
+            project: runtime.project,
+            session: runtime.session,
+            workspace: runtime.workspace,
+            scope: runtime.scope,
+            ..self
+        }
     }
 }

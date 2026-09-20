@@ -146,5 +146,5 @@ fn process_start(_: u32) -> anyhow::Result<Option<String>> {
 }
 
 #[cfg(test)]
-#[path = "../../tests/unit/session/ownership/tests.rs"]
+#[path = "../tests/unit/session/ownership/tests.rs"]
 mod tests;

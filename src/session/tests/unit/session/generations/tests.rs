@@ -1,8 +1,9 @@
 use super::*;
-use crate::session::{
+use crate::{
     Event, ResumableSession, Session,
     artifacts::ArtifactRange,
-    tests::{Workspace, history, save_output},
+    test_support::Workspace,
+    tests::{history, save_output},
 };
 use clients::llm::{Message, SessionProvider};
 
@@ -328,7 +329,7 @@ fn another_process_rotates_without_invalidating_active_session_handles() {
     let status = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
-            "session::generations::tests::rotation_process_fixture",
+            "generations::tests::rotation_process_fixture",
             "--nocapture",
         ])
         .env("JOE_SESSION_ROTATION_WORKSPACE", &workspace.path)
@@ -370,7 +371,7 @@ fn rotation_process_fixture() {
 
 #[test]
 fn map_full_preserves_the_tool_completion_and_archives_its_output_once() {
-    use crate::session::tests::{batch, success};
+    use crate::tests::{batch, success};
     use tools::tool_defs::{ToolEffect, ToolResult};
     let workspace = Workspace::new();
     let store = store(&workspace);

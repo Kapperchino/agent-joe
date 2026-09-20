@@ -1,9 +1,9 @@
 use super::*;
-use crate::session::{Event, Operation, PendingBatch};
 use clients::{
     llm::{Message, Role, SessionProvider},
     response::ToolCall,
 };
+use session::{Event, Operation, PendingBatch};
 use tools::tool_defs::{ToolId, ToolInvocation, ToolResult};
 
 fn archive(session: &Session, id: &str) {
@@ -53,7 +53,7 @@ fn archive(session: &Session, id: &str) {
 
 #[test]
 fn worker_reports_exclude_inherited_artifacts_and_detach_cleanly() {
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     let store = workspace.store();
     let parent = store
         .create(SessionProvider::Injected, None, Vec::new())
@@ -83,7 +83,7 @@ fn worker_reports_exclude_inherited_artifacts_and_detach_cleanly() {
 
 #[test]
 fn missing_session_evidence_is_reported_and_failed_attachment_preserves_the_previous_session() {
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     let store = workspace.store();
     let session = store
         .create(SessionProvider::Injected, None, Vec::new())
@@ -94,10 +94,10 @@ fn missing_session_evidence_is_reported_and_failed_attachment_preserves_the_prev
     let invalid = store
         .create(SessionProvider::Injected, None, Vec::new())
         .unwrap();
-    crate::session::tests::invalidate(&store, &invalid.id);
+    session::test_support::invalidate(&store, &invalid.id);
     assert!(worker.attach(Some(invalid)).is_err());
     assert_eq!(worker.evidence().artifacts.len(), 1);
-    crate::session::tests::invalidate(&store, &session.id);
+    session::test_support::invalidate(&store, &session.id);
     let evidence = worker.evidence();
     assert!(evidence.artifacts.is_empty());
     assert_eq!(evidence.unresolved_issues.len(), 1);

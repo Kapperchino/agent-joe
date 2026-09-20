@@ -1,12 +1,4 @@
 use super::*;
-use clients::failure::{Failure, FailureKind};
-use clients::response::RequestMode;
-use common_models::interaction::{Planning, WorkMode};
-use turn_engine::machine::SessionEvent;
-
-fn machine() -> TurnMachine {
-    TurnMachine::new(Default::default(), RequestMode::Continue)
-}
 
 fn awaiting() -> MergeApproval {
     MergeApproval::Awaiting {
@@ -32,10 +24,6 @@ fn resolving(turn: TurnId) -> MergeApproval {
             turn,
         })
         .unwrap()
-}
-
-fn failed_storage() -> Persistence {
-    Persistence::Failed(Failure::new(FailureKind::Tool, "Fixture storage failure"))
 }
 
 #[test]
@@ -78,8 +66,11 @@ fn only_the_approved_resolution_turn_keeps_running() {
         MergeApproval::Resolving {
             conflict,
             activity: ResolutionActivity::Paused,
-        } if conflict.approved == "approved-commit" && conflict.target == "main-commit"
+        } if conflict.approved == "approved-commit"
     ));
+    assert!(
+        matches!(&paused, MergeApproval::Resolving { conflict, .. } if conflict.target == "main-commit")
+    );
     assert!(paused.resolution(turn).is_none());
     assert!(
         paused
@@ -209,12 +200,11 @@ fn persisted_approvals_keep_their_format_and_restore_resolutions_paused() {
 
 #[test]
 fn merge_decisions_require_a_pending_question_and_a_listed_choice() {
-    let turn = machine();
     let merge = Answer::Choice {
         choice_id: "merge".into(),
     };
     assert!(matches!(
-        MergeDecision::new(&awaiting(), "merge-fixture", &merge, &turn, &Persistence::Ready).unwrap(),
+        MergeDecision::new(&awaiting(), "merge-fixture", &merge, MergeReadiness::Ready).unwrap(),
         MergeDecision::Merge { commit } if commit == "approved-commit"
     ));
     assert!(matches!(
@@ -224,8 +214,7 @@ fn merge_decisions_require_a_pending_question_and_a_listed_choice() {
             &Answer::Choice {
                 choice_id: "keep".into()
             },
-            &turn,
-            &Persistence::Ready,
+            MergeReadiness::Ready,
         )
         .unwrap(),
         MergeDecision::Keep
@@ -237,38 +226,19 @@ fn merge_decisions_require_a_pending_question_and_a_listed_choice() {
         Answer::Text("merge".into()),
     ] {
         assert!(
-            MergeDecision::new(
-                &awaiting(),
-                "merge-fixture",
-                &answer,
-                &turn,
-                &Persistence::Ready
-            )
-            .is_err()
+            MergeDecision::new(&awaiting(), "merge-fixture", &answer, MergeReadiness::Ready)
+                .is_err()
         );
     }
     assert!(
-        MergeDecision::new(
-            &awaiting(),
-            "stale-question",
-            &merge,
-            &turn,
-            &Persistence::Ready
-        )
-        .is_err()
+        MergeDecision::new(&awaiting(), "stale-question", &merge, MergeReadiness::Ready).is_err()
     );
     for approval in [MergeApproval::None, approved(), resolving(TurnId::new())] {
         assert_eq!(
-            MergeDecision::new(
-                &approval,
-                "merge-fixture",
-                &merge,
-                &turn,
-                &Persistence::Ready
-            )
-            .err()
-            .unwrap()
-            .to_string(),
+            MergeDecision::new(&approval, "merge-fixture", &merge, MergeReadiness::Ready)
+                .err()
+                .unwrap()
+                .to_string(),
             "No merge is awaiting approval"
         );
     }
@@ -276,124 +246,61 @@ fn merge_decisions_require_a_pending_question_and_a_listed_choice() {
 
 #[test]
 fn active_tasks_and_failed_storage_block_both_merge_choices() {
-    let idle = machine();
-    let mut active = machine();
-    active.transition(SessionEvent::Start(FollowUp::new(Some("task".into()))));
-    assert!(!active.is_idle());
-    for choice in ["merge", "keep"] {
-        let answer = Answer::Choice {
-            choice_id: choice.into(),
-        };
-        assert!(
-            MergeDecision::new(
-                &awaiting(),
-                "merge-fixture",
-                &answer,
-                &active,
-                &Persistence::Ready
-            )
-            .is_err()
-        );
-        assert!(
-            MergeDecision::new(
-                &awaiting(),
-                "merge-fixture",
-                &answer,
-                &idle,
-                &failed_storage()
-            )
-            .is_err()
-        );
+    for readiness in [MergeReadiness::TaskActive, MergeReadiness::StorageFailed] {
+        for choice in ["merge", "keep"] {
+            let answer = Answer::Choice {
+                choice_id: choice.into(),
+            };
+            assert!(MergeDecision::new(&awaiting(), "merge-fixture", &answer, readiness).is_err());
+        }
     }
 }
 
 #[test]
-fn unavailable_offers_skip_snapshot_access_but_eligible_offers_propagate_errors() {
-    let workspace = crate::session::tests::Workspace::new();
-    let mut runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
-    let store = runtime.sessions.clone().unwrap();
-    let session = store
-        .create(clients::llm::SessionProvider::Injected, None, vec![])
-        .unwrap();
-    runtime.session = Some(session.clone());
-    let idle = machine();
-    assert!(
-        MergeWorkspace::for_offer(&runtime, &idle, &Persistence::Ready, RequestMode::Continue)
-            .unwrap()
-            .is_none()
-    );
-    crate::session::tests::invalidate(&store, &session.id);
-    assert!(
-        MergeWorkspace::for_offer(&runtime, &idle, &Persistence::Ready, RequestMode::Continue)
-            .is_err()
-    );
-    for mode in [RequestMode::Compact, RequestMode::SingleResponse] {
+fn recovery_preserves_live_questions_and_replaces_missing_or_mismatched_questions() {
+    let approval = awaiting();
+    let question = approval.question().unwrap();
+    assert!(approval.recovery(&[question.clone()]).is_none());
+    for pending in [
+        Vec::new(),
+        vec![Question {
+            id: "stale-question".into(),
+            ..question.clone()
+        }],
+        vec![Question {
+            purpose: QuestionPurpose::Clarification,
+            ..question.clone()
+        }],
+    ] {
+        let event = approval.recovery(&pending).unwrap();
+        let recovered = approval.transition(event).unwrap();
+        let replacement = recovered.question().unwrap();
+        assert_ne!(replacement.id, question.id);
+        let merge = Answer::Choice {
+            choice_id: "merge".into(),
+        };
         assert!(
-            MergeWorkspace::for_offer(&runtime, &idle, &Persistence::Ready, mode)
-                .unwrap()
-                .is_none()
+            MergeDecision::new(&recovered, &question.id, &merge, MergeReadiness::Ready).is_err()
         );
+        assert!(matches!(
+            MergeDecision::new(&recovered, &replacement.id, &merge, MergeReadiness::Ready).unwrap(),
+            MergeDecision::Merge { commit } if commit == "approved-commit"
+        ));
     }
-    assert!(
-        MergeWorkspace::for_offer(&runtime, &idle, &failed_storage(), RequestMode::Continue)
-            .unwrap()
-            .is_none()
-    );
+}
 
-    let mut active = machine();
-    active.transition(SessionEvent::Start(FollowUp::new(Some("task".into()))));
+#[test]
+fn recovery_asks_again_after_interrupted_approval_and_preserves_resolution_state() {
+    let approval = approved();
+    let event = approval.recovery(&[]).unwrap();
+    let recovered = approval.transition(event).unwrap();
+    assert!(recovered.question().is_some());
     assert!(
-        MergeWorkspace::for_offer(
-            &runtime,
-            &active,
-            &Persistence::Ready,
-            RequestMode::Continue
-        )
-        .unwrap()
-        .is_none()
+        matches!(recovered, MergeApproval::Awaiting { commit, .. } if commit == "approved-commit")
     );
-    let helper = Runtime {
-        role: ExecutionRole::Helper,
-        ..runtime.clone()
-    };
-    assert!(
-        MergeWorkspace::for_offer(&helper, &idle, &Persistence::Ready, RequestMode::Continue)
-            .unwrap()
-            .is_none()
-    );
-    let unconfigured = Runtime {
-        project: None,
-        ..runtime.clone()
-    };
-    assert!(
-        MergeWorkspace::for_offer(
-            &unconfigured,
-            &idle,
-            &Persistence::Ready,
-            RequestMode::Continue
-        )
-        .unwrap()
-        .is_none()
-    );
-    let inactive = Runtime {
-        session: None,
-        ..runtime.clone()
-    };
-    assert!(
-        MergeWorkspace::for_offer(&inactive, &idle, &Persistence::Ready, RequestMode::Continue)
-            .unwrap()
-            .is_none()
-    );
-    runtime.interaction.set(
-        &Planning {
-            mode: WorkMode::Plan,
-            ..Default::default()
-        },
-        &Default::default(),
-    );
-    assert!(
-        MergeWorkspace::for_offer(&runtime, &idle, &Persistence::Ready, RequestMode::Continue)
-            .unwrap()
-            .is_none()
-    );
+    let resolving = resolving(TurnId::new());
+    let paused = resolving.transition(MergeEvent::Paused).unwrap();
+    for approval in [MergeApproval::None, resolving, paused] {
+        assert!(approval.recovery(&[]).is_none());
+    }
 }

@@ -255,7 +255,7 @@ impl<C: Context + Clone + 'static> Executor<C> {
     fn record_intent(&self, prepared: &PreparedTool<C>) -> Result<(), ToolFailure> {
         match &self.runtime.session {
             Some(session) => session
-                .record(crate::session::Event::Intent {
+                .record(session::Event::Intent {
                     operation: session.key(prepared.job.operation),
                     effect: prepared.effect,
                 })

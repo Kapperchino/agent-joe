@@ -4,11 +4,11 @@ use commands::command::{Answer, Command, PruneMode, QuestionAnswer, ResumeTarget
 use common_models::interaction::QuestionPurpose;
 
 struct GitHarness {
-    workspace: crate::session::tests::Workspace,
+    workspace: session::test_support::Workspace,
     repo: git2::Repository,
     actor: ActorRef<Message>,
     handle: tokio::task::JoinHandle<()>,
-    store: Arc<crate::session::SessionStore>,
+    store: Arc<session::SessionStore>,
     requests: flume::Receiver<Request>,
     events: flume::Receiver<ActorToTui>,
 }
@@ -34,7 +34,7 @@ impl GitHarness {
             .unwrap()
     }
     async fn new() -> Self {
-        let workspace = crate::session::tests::Workspace::new();
+        let workspace = session::test_support::Workspace::new();
         let repo = git2::Repository::init(&workspace.path).unwrap();
         repo.set_head("refs/heads/main").unwrap();
         std::fs::write(
@@ -101,7 +101,7 @@ impl GitHarness {
         }
     }
 
-    fn snapshot(&self, id: &str) -> crate::session::Snapshot {
+    fn snapshot(&self, id: &str) -> session::Snapshot {
         self.store
             .list()
             .unwrap()
@@ -283,7 +283,7 @@ async fn force_prune_discards_inactive_worktrees_preserves_history_and_allows_re
     assert!(pruned.questions.pending().is_empty());
     assert!(matches!(
         pruned.merge_approval,
-        crate::session::session_merge::MergeApproval::None
+        merge_workflow::MergeApproval::None
     ));
     assert_eq!(
         serde_json::to_value(&pruned.history[..saved.history.len()]).unwrap(),
@@ -338,7 +338,7 @@ async fn prune_skips_live_sessions_and_continues_after_locked_worktrees() {
         utils::git::worktrees::session::SessionWorktree::create(&project, &live.id, None)
             .unwrap()
             .unwrap();
-    live.record(crate::session::Event::Worktree(Some(live_worktree.clone())))
+    live.record(session::Event::Worktree(Some(live_worktree.clone())))
         .unwrap();
     std::fs::write(live_worktree.path.join("lib.rs"), "live edits\n").unwrap();
     let locked = h
@@ -350,9 +350,7 @@ async fn prune_skips_live_sessions_and_continues_after_locked_worktrees() {
             .unwrap()
             .unwrap();
     locked
-        .record(crate::session::Event::Worktree(Some(
-            locked_worktree.clone(),
-        )))
+        .record(session::Event::Worktree(Some(locked_worktree.clone())))
         .unwrap();
     std::fs::write(locked_worktree.path.join("local.txt"), "local\n").unwrap();
     let child = git2::Repository::open(&locked_worktree.path).unwrap();
@@ -435,7 +433,7 @@ async fn prune_recovers_interrupted_cleanup_and_clears_saved_worktree_state() {
     assert!(snapshot.worktree.is_none());
     assert!(matches!(
         snapshot.merge_approval,
-        crate::session::session_merge::MergeApproval::None
+        merge_workflow::MergeApproval::None
     ));
     assert!(h.repo.find_reference(&reference).is_err());
     assert!(
@@ -553,7 +551,7 @@ async fn unchanged_tasks_do_not_request_a_commit_subject_or_merge() {
     assert_eq!(h.repo.refname_to_id("HEAD").unwrap(), base);
     assert!(matches!(
         h.snapshot(&id).merge_approval,
-        crate::session::session_merge::MergeApproval::None
+        merge_workflow::MergeApproval::None
     ));
     h.stop().await;
 }
@@ -651,7 +649,7 @@ async fn approving_a_conflicted_merge_resolves_and_merges_without_another_questi
     );
     assert!(matches!(
         h.snapshot(&id).merge_approval,
-        crate::session::session_merge::MergeApproval::None
+        merge_workflow::MergeApproval::None
     ));
     assert!(h.snapshot(&id).worktree.is_none());
     assert!(!worktree.path.exists());
@@ -741,8 +739,8 @@ async fn interrupting_conflict_resolution_keeps_main_unchanged() {
     assert_eq!(h.repo.refname_to_id("HEAD").unwrap(), target);
     assert!(matches!(
         h.snapshot(&id).merge_approval,
-        crate::session::session_merge::MergeApproval::Resolving {
-            activity: crate::session::session_merge::ResolutionActivity::Paused,
+        merge_workflow::MergeApproval::Resolving {
+            activity: merge_workflow::ResolutionActivity::Paused,
             ..
         }
     ));
@@ -810,7 +808,7 @@ async fn merge_questions_survive_session_switches_and_failed_tasks_revoke_approv
     .await;
     assert!(matches!(
         h.snapshot(&id).merge_approval,
-        crate::session::session_merge::MergeApproval::None
+        merge_workflow::MergeApproval::None
     ));
     assert!(h.snapshot(&id).questions.pending().is_empty());
     assert_eq!(h.repo.refname_to_id("HEAD").unwrap(), base);
@@ -913,7 +911,7 @@ async fn successful_tasks_prompt_and_only_explicit_acceptance_updates_main() {
     );
     assert!(matches!(
         h.snapshot(&id).merge_approval,
-        crate::session::session_merge::MergeApproval::None
+        merge_workflow::MergeApproval::None
     ));
     h.stop().await;
 }
@@ -978,7 +976,7 @@ async fn forks_withdraw_merge_questions_without_affecting_the_parent() {
     assert!(fork.questions.pending().is_empty());
     assert!(matches!(
         fork.merge_approval,
-        crate::session::session_merge::MergeApproval::None
+        merge_workflow::MergeApproval::None
     ));
     assert_eq!(
         h.snapshot(&original).questions.pending(),
@@ -994,7 +992,8 @@ async fn forks_withdraw_merge_questions_without_affecting_the_parent() {
 
 #[tokio::test]
 async fn legacy_and_interrupted_merge_approvals_restore_as_shared_questions() {
-    use crate::session::{Event, ResumableSession, session_merge::MergeApproval};
+    use merge_workflow::MergeApproval;
+    use session::{Event, ResumableSession};
     enum SavedApproval {
         Legacy,
         Interrupted,
@@ -1128,7 +1127,7 @@ async fn new_fork_and_resume_keep_distinct_workspaces_and_switch_context() {
     drop(reply);
     assert!(matches!(
         h.snapshot(&original).merge_approval,
-        crate::session::session_merge::MergeApproval::None
+        merge_workflow::MergeApproval::None
     ));
     assert!(
         std::fs::read_to_string(h.workspace.path.join("lib.rs"))
@@ -1167,7 +1166,7 @@ async fn another_task_after_merge_gets_a_fresh_isolated_workspace() {
     );
     assert!(matches!(
         h.snapshot(&id).merge_approval,
-        crate::session::session_merge::MergeApproval::None
+        merge_workflow::MergeApproval::None
     ));
     let merged = h.repo.refname_to_id("HEAD").unwrap();
     let history = h.snapshot(&id).history.len();

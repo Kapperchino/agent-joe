@@ -71,13 +71,9 @@ impl CommitResponse {
     }
 
     fn finish(mut self) -> anyhow::Result<CommitMessage> {
-        match crate::states::stream_processor::finish_response(
-            self.state,
-            TurnId::new(),
-            &mut self.processor,
-        )?
-        .text_only()?
-        {
+        let completion = self.state.completion()?;
+        let items = self.processor.extract_and_pre_process()?;
+        match completion.finish(TurnId::new(), items)?.text_only()? {
             AcceptedResponse::Complete(message) => CommitMessage::new(&message.text()),
             _ => Err(anyhow::anyhow!("Expected a completed commit subject")),
         }
@@ -109,5 +105,5 @@ pub async fn generate(
 }
 
 #[cfg(test)]
-#[path = "../tests/unit/commit_message/request_tests.rs"]
+#[path = "../tests/unit/commit_request.rs"]
 mod tests;

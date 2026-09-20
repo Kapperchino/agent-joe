@@ -34,3 +34,9 @@ impl EventReporter {
         }
     }
 }
+
+impl common_models::tui_models::EventSink for EventReporter {
+    fn send(&self, packet: ActorToTuiPacket) {
+        EventReporter::send(self, packet);
+    }
+}

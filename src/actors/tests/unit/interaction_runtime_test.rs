@@ -466,7 +466,7 @@ async fn required_question_pauses_and_prevents_later_batch_writes_until_typed_an
 #[tokio::test]
 async fn answers_during_tools_preserve_complete_exchanges_and_durable_order() {
     for required in [false, true] {
-        let workspace = crate::session::tests::Workspace::new();
+        let workspace = session::test_support::Workspace::new();
         let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
         let store = runtime.sessions.clone().unwrap();
         let (read, entered) = gate("read", ToolEffect::Read);
@@ -550,7 +550,7 @@ async fn optional_questions_allow_continuation_and_persist_without_inferred_answ
 
 #[tokio::test]
 async fn resume_pending_questions_restores_mode_and_clear_and_new_reset_interaction() {
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
     let store = runtime.sessions.clone().unwrap();
     let h = Harness::with_runtime(vec![], runtime).await;
@@ -627,7 +627,7 @@ async fn resume_pending_questions_restores_mode_and_clear_and_new_reset_interact
 
 #[tokio::test]
 async fn stale_plan_completion_recovers_and_persists_the_reconciled_plan() {
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
     let store = runtime.sessions.clone().unwrap();
     let h = Harness::with_runtime(vec![], runtime).await;
@@ -789,7 +789,7 @@ async fn steering_cancels_active_tools_and_queue_then_reconciles_plan() {
 #[tokio::test]
 async fn tracked_plan_uses_observed_evidence_and_survives_compaction_and_fork() {
     use common_models::interaction::PlanEvidence;
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
     let store = runtime.sessions.clone().unwrap();
     let (read, entered) = gate("read", ToolEffect::Read);
@@ -906,7 +906,7 @@ async fn questions_do_not_wait_for_an_independent_workspace_writer() {
 
 #[tokio::test]
 async fn clear_and_new_cancel_waiting_queues_and_archive_unanswered_questions() {
-    let workspace = crate::session::tests::Workspace::new();
+    let workspace = session::test_support::Workspace::new();
     let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
     let store = runtime.sessions.clone().unwrap();
     let h = Harness::with_runtime(vec![], runtime).await;

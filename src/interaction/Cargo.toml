@@ -8,3 +8,6 @@ common-models = { path = "../common-models" }
 tools = { path = "../tools" }
 anyhow = "1.0"
 serde_json = "1.0"
+commands = { path = "../commands" }
+utils = { path = "../utils" }
+turn-engine = { path = "../turn-engine" }

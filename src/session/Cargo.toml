@@ -1,0 +1,36 @@
+[package]
+name = "session"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+test-support = []
+
+[dependencies]
+sandbox = { path = "../sandbox" }
+tracing = "0.1"
+analysis = { path = "../analysis" }
+clients = { path = "../clients" }
+commands = { path = "../commands" }
+common-models = { path = "../common-models" }
+conversation = { path = "../conversation" }
+interaction = { path = "../interaction" }
+merge-workflow = { path = "../merge-workflow" }
+tools = { path = "../tools" }
+turn-engine = { path = "../turn-engine" }
+utils = { path = "../utils" }
+worker-registry = { path = "../worker-registry" }
+workspace-access = { path = "../workspace-access" }
+anyhow = "1.0"
+heed = "0.22.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["rt", "macros"] }
+zstd = "0.13.3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+flume = "0.12.0"
+utils = { path = "../utils", features = ["test-support"] }

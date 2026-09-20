@@ -126,3 +126,16 @@ impl Lifecycle {
         matches!(self, Self::Completed | Self::Cancelled | Self::Failed)
     }
 }
+
+pub trait EventSink: Send + Sync {
+    fn send(&self, packet: ActorToTuiPacket);
+}
+
+impl<F> EventSink for F
+where
+    F: Fn(ActorToTuiPacket) + Send + Sync,
+{
+    fn send(&self, packet: ActorToTuiPacket) {
+        self(packet);
+    }
+}

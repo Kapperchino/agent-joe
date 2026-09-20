@@ -6,60 +6,7 @@ use heed::{
 use std::path::PathBuf;
 use tools::tool_defs::{ToolId, ToolInvocation};
 
-pub struct Workspace {
-    pub path: PathBuf,
-}
-
-impl Workspace {
-    pub fn new() -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "joe-m4-{}-{}",
-            std::process::id(),
-            common_models::runtime_ids::OperationId::new()
-        ));
-        std::fs::create_dir(&path).unwrap();
-        Self { path }
-    }
-
-    pub fn store(&self) -> Arc<SessionStore> {
-        open(&self.path)
-    }
-    fn resume(
-        &self,
-        store: &Arc<SessionStore>,
-        id: &str,
-        provider: &SessionProvider,
-    ) -> anyhow::Result<Arc<Session>> {
-        let policy = WorkspacePolicy::workspace(self.path.clone())?;
-        ResumableSession::new(store, id, &policy, provider)?.resume()
-    }
-}
-
-impl Drop for Workspace {
-    fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.path).unwrap();
-    }
-}
-
-fn open(path: &std::path::Path) -> Arc<SessionStore> {
-    SessionStore::open(
-        &WorkspacePolicy::workspace(path.to_owned()).unwrap(),
-        "sessions",
-    )
-    .unwrap()
-}
-
-pub fn invalidate(store: &SessionStore, id: &str) {
-    let access = store.access().unwrap();
-    let database = &access.current;
-    let mut transaction = database.env.write_txn().unwrap();
-    database
-        .snapshots
-        .put(&mut transaction, id, br#"{"version":999}"#)
-        .unwrap();
-    transaction.commit().unwrap();
-    drop(access);
-}
+use crate::test_support::{Workspace, invalidate, open};
 
 pub(super) fn history() -> Vec<Message> {
     vec![
@@ -156,7 +103,7 @@ fn merge_answers_preserve_the_plan_and_record_durable_evidence() {
         blocked_reason: None,
     });
     session.record(Event::Planning(planning.clone())).unwrap();
-    let approval = session_merge::MergeApproval::Awaiting {
+    let approval = merge_workflow::MergeApproval::Awaiting {
         question: "merge-fixture".into(),
         commit: "approved-commit".into(),
     };
@@ -1241,7 +1188,7 @@ fn another_process_cannot_take_ownership_of_a_loaded_session() {
         .create(SessionProvider::Injected, None, history())
         .unwrap();
     let status = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "session::tests::lock_fixture", "--nocapture"])
+        .args(["--exact", "tests::lock_fixture", "--nocapture"])
         .env("JOE_M4_LOCK_WORKSPACE", &workspace.path)
         .env("JOE_M4_LOCK_SESSION", &session.id)
         .status()
@@ -1286,7 +1233,7 @@ struct ClaimProcess {
 impl ClaimProcess {
     fn new(workspace: &Workspace, id: &str) -> Self {
         let mut process = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "session::tests::claim_fixture", "--nocapture"])
+            .args(["--exact", "tests::claim_fixture", "--nocapture"])
             .env("JOE_M4_CLAIM_WORKSPACE", &workspace.path)
             .env("JOE_M4_CLAIM_SESSION", id)
             .stdin(std::process::Stdio::piped())
@@ -1627,7 +1574,7 @@ fn worker_linkage_is_retained_and_workers_cannot_be_resumed_as_roots() {
 fn process_exit_leaves_a_durable_intent_and_discards_an_uncommitted_completion() {
     let workspace = Workspace::new();
     let status = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "session::tests::crash_fixture", "--nocapture"])
+        .args(["--exact", "tests::crash_fixture", "--nocapture"])
         .env("JOE_M4_CRASH_WORKSPACE", &workspace.path)
         .status()
         .unwrap();
@@ -1689,7 +1636,7 @@ fn crash_fixture() {
 async fn cargo_artifacts_preserve_structured_results_and_managed_recovery() {
     use utils::cargo::{CargoAction, CargoInput, CargoOperation};
     let workspace = Workspace::new();
-    let runtime = crate::states::runtime::Runtime::for_workspace(workspace.path.clone()).unwrap();
+    let runtime = crate::runtime::SessionRuntime::for_workspace(workspace.path.clone()).unwrap();
     let store = runtime.sessions.clone().unwrap();
     let session = store
         .create(SessionProvider::Injected, None, history())

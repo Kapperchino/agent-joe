@@ -16,10 +16,9 @@ dependencies = [
  "flume",
  "futures",
  "git2",
- "heed",
  "interaction",
  "itertools 0.15.0",
- "libc",
+ "merge-workflow",
  "notify-types",
  "ra_ap_vfs",
  "ractor",
@@ -28,6 +27,7 @@ dependencies = [
  "sandbox",
  "serde",
  "serde_json",
+ "session",
  "thiserror 2.0.18",
  "tokio",
  "tools",
@@ -38,7 +38,6 @@ dependencies = [
  "uuid",
  "worker-registry",
  "workspace-access",
- "zstd",
 ]
 
 [[package]]
@@ -2307,9 +2306,12 @@ name = "interaction"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "commands",
  "common-models",
  "serde_json",
  "tools",
+ "turn-engine",
+ "utils",
 ]
 
 [[package]]
@@ -2931,6 +2933,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "merge-workflow"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clients",
+ "common-models",
+ "conversation",
+ "futures",
+ "interaction",
+ "response-stream",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tools",
+ "turn-engine",
+ "utils",
+ "workspace-access",
 ]
 
 [[package]]
@@ -5023,6 +5045,34 @@ dependencies = [
  "itoa",
  "ryu",
  "serde",
+]
+
+[[package]]
+name = "session"
+version = "0.1.0"
+dependencies = [
+ "analysis",
+ "anyhow",
+ "clients",
+ "commands",
+ "common-models",
+ "conversation",
+ "flume",
+ "heed",
+ "interaction",
+ "libc",
+ "merge-workflow",
+ "sandbox",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tools",
+ "tracing",
+ "turn-engine",
+ "utils",
+ "worker-registry",
+ "workspace-access",
+ "zstd",
 ]
 
 [[package]]

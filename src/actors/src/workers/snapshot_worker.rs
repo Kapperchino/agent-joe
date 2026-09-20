@@ -1,9 +1,7 @@
-use crate::states::actor_state::ActorState;
 use crate::worker::Worker;
-use analysis::contexts::context::Context;
 use anyhow::Context as _;
 use async_trait::async_trait;
-use clients::llm::{ClientRequest, ContentBlock, LLmClient, Message, Role, StreamEvent};
+use clients::llm::{ClientRequest, LLmClient, Message, StreamEvent};
 use clients::response::StreamNextStep;
 use common_models::runtime_ids::TurnId;
 use conversation::context::{CompleteHistory, ContextLimits, estimated_tokens};
@@ -153,48 +151,6 @@ impl Worker for SnapshotWorker {
             }
         }
         Ok(())
-    }
-}
-
-impl<C: Context + Clone + 'static> ActorState<C> {
-    pub fn capture_snapshot(&self) -> anyhow::Result<Snapshot> {
-        match (self.turn.is_idle(), self.conversation.has_deferred_input()) {
-            (true, false) => Ok(()),
-            _ => Err(anyhow::anyhow!(
-                "Finish the active turn before capturing an immutable snapshot"
-            )),
-        }?;
-        let input = self.context_input(TurnId::new(), &self.llm)?;
-        let memory = input
-            .checkpoint
-            .memory
-            .as_ref()
-            .map(serde_json::to_string)
-            .transpose()?
-            .map(|memory| Message::new(format!("Frozen compaction memory:\n{memory}")));
-        let runtime = input.runtime.map(|runtime| Message {
-            role: Role::User,
-            content: vec![ContentBlock::RuntimeUpdate(
-                clients::runtime_update::RuntimeUpdate::Snapshot(runtime),
-            )],
-        });
-        let request = ClientRequest::new(
-            input
-                .history
-                .into_iter()
-                .chain(memory)
-                .chain(runtime)
-                .collect(),
-        )
-        .with_system(input.instructions)
-        .with_tools(input.tools)
-        .with_thinking();
-        Snapshot::new(
-            request,
-            &self.llm,
-            input.limits,
-            self.runtime.request_timeout,
-        )
     }
 }
 
