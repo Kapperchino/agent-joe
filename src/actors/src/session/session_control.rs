@@ -523,6 +523,8 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             self.dependency.runtime.scope.clone(),
             self.request_mode,
         );
+        self.persistence = Persistence::Ready;
+        self.restore_merge_question()?;
         self.sync_question_gate().await;
         self.compact_turn = None;
         self.dependency
@@ -530,7 +532,6 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             .workers
             .restore(&session.id, snapshot.workers);
         self.dependency.runtime.session = Some(session);
-        self.persistence = Persistence::Ready;
         self.reporter.send(ActorToTuiPacket::TokensUpdated(
             self.stream_processor.token_count.clone(),
         ));

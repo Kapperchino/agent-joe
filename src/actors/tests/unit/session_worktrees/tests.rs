@@ -1,6 +1,7 @@
 use super::*;
 use analysis::contexts::rust_context::RustContext;
 use commands::command::{Answer, Command, PruneMode, QuestionAnswer, ResumeTarget};
+use common_models::interaction::QuestionPurpose;
 
 struct GitHarness {
     workspace: crate::session::tests::Workspace,
@@ -279,6 +280,7 @@ async fn force_prune_discards_inactive_worktrees_preserves_history_and_allows_re
     assert_eq!(std::fs::read(h.repo.path().join("index")).unwrap(), index);
     let pruned = h.snapshot(&id);
     assert!(pruned.worktree.is_none());
+    assert!(pruned.questions.pending().is_empty());
     assert!(matches!(
         pruned.merge_approval,
         crate::session::session_merge::MergeApproval::None
@@ -566,14 +568,17 @@ async fn approving_a_conflicted_merge_resolves_and_merges_without_another_questi
     let message = h.answer_merge(&question, "merge").await;
     assert!(message.contains("Resolving merge conflicts"), "{message}");
     let (request, reply) = within(h.requests.recv_async()).await.unwrap();
-    assert!(
-        request
-            .messages
-            .last()
-            .unwrap()
+    assert!(request.messages.iter().any(|message| {
+        message
             .text()
             .contains("Do not ask for merge approval again")
-    );
+    }));
+    assert!(request.messages.iter().any(|message| {
+        message
+            .text()
+            .contains(&format!("Answer to question {}", question.id))
+    }));
+    assert!(h.snapshot(&id).questions.pending().is_empty());
     assert_eq!(h.repo.refname_to_id("HEAD").unwrap(), target);
     let conflicted = std::fs::read_to_string(worktree.path.join("lib.rs")).unwrap();
     assert!(conflicted.contains("<<<<<<<"));
@@ -765,11 +770,19 @@ async fn merge_questions_survive_session_switches_and_failed_tasks_revoke_approv
         h.snapshot(&id).merge_approval.question().unwrap().id,
         question.id
     );
+    assert_eq!(h.snapshot(&id).questions.pending(), &[question.clone()]);
     h.command(Command::Plan).await;
     assert!(
         h.answer_merge(&question, "merge")
             .await
             .contains("Plan mode")
+    );
+    assert_eq!(h.snapshot(&id).questions.pending(), &[question.clone()]);
+    assert!(
+        !h.snapshot(&id)
+            .planning
+            .evidence
+            .contains_key(&format!("answer:{}", question.id))
     );
     h.command(Command::Implement).await;
     h.actor
@@ -799,6 +812,7 @@ async fn merge_questions_survive_session_switches_and_failed_tasks_revoke_approv
         h.snapshot(&id).merge_approval,
         crate::session::session_merge::MergeApproval::None
     ));
+    assert!(h.snapshot(&id).questions.pending().is_empty());
     assert_eq!(h.repo.refname_to_id("HEAD").unwrap(), base);
     assert!(
         h.answer_merge(&question, "merge")
@@ -817,6 +831,9 @@ async fn successful_tasks_prompt_and_only_explicit_acceptance_updates_main() {
     let base = h.repo.refname_to_id("HEAD").unwrap();
     let question = h.complete(Some(PATCH)).await;
     assert!(question.prompt.contains("main"));
+    assert_eq!(question.purpose, QuestionPurpose::Merge);
+    assert_eq!(h.snapshot(&id).questions.pending(), &[question.clone()]);
+    assert!(h.command(Command::Questions).await.contains(&question.id));
     assert_eq!(h.repo.refname_to_id("HEAD").unwrap(), base);
     assert!(
         std::fs::read_to_string(worktree.path.join("lib.rs"))
@@ -833,6 +850,22 @@ async fn successful_tasks_prompt_and_only_explicit_acceptance_updates_main() {
             .await
             .contains("Kept changes")
     );
+    let kept = h.snapshot(&id);
+    assert!(kept.questions.pending().is_empty());
+    assert_eq!(
+        kept.planning.evidence[&format!("answer:{}", question.id)],
+        "Keep changes in this session"
+    );
+    assert!(kept.history.iter().any(|message| {
+        message
+            .text()
+            .contains(&format!("Answer to question {}", question.id))
+    }));
+    assert!(
+        h.answer_merge(&question, "merge")
+            .await
+            .contains("not pending")
+    );
     assert_eq!(h.repo.refname_to_id("HEAD").unwrap(), base);
     let question = h.complete(None).await;
     assert!(h.snapshot(&id).worktree.is_some());
@@ -844,6 +877,17 @@ async fn successful_tasks_prompt_and_only_explicit_acceptance_updates_main() {
         "{message}"
     );
     assert!(h.snapshot(&id).worktree.is_none());
+    let merged = h.snapshot(&id);
+    assert!(merged.questions.pending().is_empty());
+    assert_eq!(
+        merged.planning.evidence[&format!("answer:{}", question.id)],
+        "Merge into main"
+    );
+    assert!(merged.history.iter().any(|message| {
+        message
+            .text()
+            .contains(&format!("Answer to question {}", question.id))
+    }));
     assert!(!worktree.path.exists());
     assert!(h.repo.find_worktree(&id).is_err());
     assert!(
@@ -872,6 +916,142 @@ async fn successful_tasks_prompt_and_only_explicit_acceptance_updates_main() {
         crate::session::session_merge::MergeApproval::None
     ));
     h.stop().await;
+}
+
+#[tokio::test]
+async fn failed_merges_record_the_answer_and_offer_a_fresh_retry() {
+    let h = GitHarness::new().await;
+    let id = h.store.list().unwrap()[0].id.clone();
+    let base = h.repo.refname_to_id("HEAD").unwrap();
+    let question = h.complete(Some(PATCH)).await;
+    std::fs::write(h.workspace.path.join("lib.rs"), "uncommitted main edit\n").unwrap();
+    let message = h.answer_merge(&question, "merge").await;
+    assert!(!message.contains("Cleaned up"), "{message}");
+    assert_eq!(h.repo.refname_to_id("HEAD").unwrap(), base);
+    let snapshot = h.snapshot(&id);
+    assert_eq!(
+        snapshot.planning.evidence[&format!("answer:{}", question.id)],
+        "Merge into main"
+    );
+    let retry = snapshot.questions.pending()[0].clone();
+    assert_ne!(retry.id, question.id);
+    assert_eq!(retry.prompt, question.prompt);
+    assert!(
+        h.answer_merge(&question, "merge")
+            .await
+            .contains("not pending")
+    );
+    let message = h
+        .command(Command::Answer(QuestionAnswer {
+            id: retry.id.clone(),
+            answer: Answer::Text("merge".into()),
+        }))
+        .await;
+    assert!(message.contains("requires a listed choice"), "{message}");
+    assert_eq!(h.snapshot(&id).questions.pending(), &[retry.clone()]);
+    std::fs::write(
+        h.workspace.path.join("lib.rs"),
+        "pub fn value() -> u32 { 1 }\n",
+    )
+    .unwrap();
+    assert!(h.answer_merge(&retry, "merge").await.contains("Cleaned up"));
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn forks_withdraw_merge_questions_without_affecting_the_parent() {
+    let h = GitHarness::new().await;
+    let original = h.store.list().unwrap()[0].id.clone();
+    let question = h.complete(Some(PATCH)).await;
+    assert!(
+        h.command(Command::Fork)
+            .await
+            .contains("Forked conversation")
+    );
+    let fork = h
+        .store
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|snapshot| snapshot.id != original)
+        .unwrap();
+    assert!(fork.questions.pending().is_empty());
+    assert!(matches!(
+        fork.merge_approval,
+        crate::session::session_merge::MergeApproval::None
+    ));
+    assert_eq!(
+        h.snapshot(&original).questions.pending(),
+        &[question.clone()]
+    );
+    assert!(
+        h.answer_merge(&question, "merge")
+            .await
+            .contains("not pending")
+    );
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn legacy_and_interrupted_merge_approvals_restore_as_shared_questions() {
+    use crate::session::{Event, ResumableSession, session_merge::MergeApproval};
+    enum SavedApproval {
+        Legacy,
+        Interrupted,
+    }
+    for saved in [SavedApproval::Legacy, SavedApproval::Interrupted] {
+        let h = GitHarness::new().await;
+        let id = h.store.list().unwrap()[0].id.clone();
+        let base = h.repo.refname_to_id("HEAD").unwrap();
+        let question = h.complete(Some(PATCH)).await;
+        let commit = match h.snapshot(&id).merge_approval {
+            MergeApproval::Awaiting { commit, .. } => commit,
+            _ => panic!("Expected pending merge"),
+        };
+        h.command(Command::New).await;
+        let session = ResumableSession::new(
+            &h.store,
+            &id,
+            &utils::workspace::WorkspacePolicy::workspace(h.workspace.path.clone()).unwrap(),
+            &llm::SessionProvider::Injected,
+        )
+        .unwrap()
+        .resume()
+        .unwrap();
+        session
+            .record(Event::QuestionsWithdrawn(QuestionPurpose::Merge))
+            .unwrap();
+        let approval = match saved {
+            SavedApproval::Legacy => MergeApproval::Awaiting {
+                question: "legacy-merge".into(),
+                commit,
+            },
+            SavedApproval::Interrupted => MergeApproval::Approved { commit },
+        };
+        session.record(Event::MergeApproval(approval)).unwrap();
+        drop(session);
+        h.actor
+            .send_message(Message::Command(Command::Resume(ResumeTarget::Session {
+                id: id.clone(),
+            })))
+            .unwrap();
+        assert!(matches!(
+            h.event(|packet| matches!(packet, ActorToTuiPacket::SessionResumed(_)))
+                .await,
+            ActorToTuiPacket::SessionResumed(Ok(_))
+        ));
+        let restored = h.snapshot(&id).questions.pending()[0].clone();
+        assert_eq!(restored.purpose, QuestionPurpose::Merge);
+        assert_eq!(restored.prompt, question.prompt);
+        assert_eq!(h.repo.refname_to_id("HEAD").unwrap(), base);
+        assert!(h.command(Command::Questions).await.contains(&restored.id));
+        assert!(
+            h.answer_merge(&restored, "merge")
+                .await
+                .contains("Cleaned up")
+        );
+        h.stop().await;
+    }
 }
 
 #[tokio::test]
@@ -1109,7 +1289,14 @@ async fn cleanup_failure_reports_successful_merge_and_preserves_data_for_retry()
             .contains("{ 2 }")
     );
     std::fs::remove_file(lock).unwrap();
-    let message = h.answer_merge(&question, "merge").await;
+    let retry = h.snapshot(&id).questions.pending()[0].clone();
+    assert_ne!(retry.id, question.id);
+    assert!(
+        h.answer_merge(&question, "merge")
+            .await
+            .contains("not pending")
+    );
+    let message = h.answer_merge(&retry, "merge").await;
     assert!(message.contains("already in main"), "{message}");
     assert!(message.contains("Cleaned up"), "{message}");
     assert!(h.snapshot(&id).worktree.is_none());

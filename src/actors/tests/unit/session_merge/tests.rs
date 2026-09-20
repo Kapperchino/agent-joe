@@ -14,6 +14,12 @@ fn awaiting() -> MergeApproval {
     }
 }
 
+fn approved() -> MergeApproval {
+    MergeApproval::Approved {
+        commit: "approved-commit".into(),
+    }
+}
+
 fn resolving(turn: TurnId) -> MergeApproval {
     MergeApproval::None
         .transition(MergeEvent::Conflicted {
@@ -33,12 +39,14 @@ fn failed_storage() -> Persistence {
 
 #[test]
 fn starting_a_task_revokes_pending_approval() {
-    assert!(matches!(
-        awaiting().transition(MergeEvent::TaskStarted {
-            turn: TurnId::new(),
-        }),
-        Some(MergeApproval::None)
-    ));
+    for approval in [awaiting(), approved()] {
+        assert!(matches!(
+            approval.transition(MergeEvent::TaskStarted {
+                turn: TurnId::new(),
+            }),
+            Some(MergeApproval::None)
+        ));
+    }
     assert!(
         MergeApproval::None
             .transition(MergeEvent::TaskStarted {
@@ -84,7 +92,7 @@ fn pausing_changes_only_running_resolutions() {
     let turn = TurnId::new();
     let paused = resolving(turn).transition(MergeEvent::Paused).unwrap();
     assert!(paused.resolution(turn).is_none());
-    for approval in [MergeApproval::None, awaiting(), paused] {
+    for approval in [MergeApproval::None, awaiting(), approved(), paused] {
         assert!(approval.transition(MergeEvent::Paused).is_none());
     }
 }
@@ -101,11 +109,12 @@ fn proposals_preserve_the_new_commit_before_automatic_merge() {
     let pending = approval.transition(proposal.event()).unwrap();
     assert!(matches!(
         &pending,
-        MergeApproval::Awaiting { commit, .. } if commit == "resolved-commit"
+        MergeApproval::Approved { commit } if commit == "resolved-commit"
     ));
-    let question = pending.question().unwrap();
+    assert!(pending.question().is_none());
+    let question = awaiting().question().unwrap();
     assert!(question.id.starts_with("merge-"));
-    assert!(question.prompt.contains("resolved-commit"));
+    assert!(question.prompt.contains("approved-commit"));
     assert!(!question.required);
     assert!(!question.allow_free_text);
 }
@@ -117,6 +126,7 @@ fn only_an_active_matching_resolution_can_skip_approval() {
     for approval in [
         MergeApproval::None,
         awaiting(),
+        approved(),
         resolving(TurnId::new()),
         paused,
     ] {
@@ -136,7 +146,13 @@ fn only_an_active_matching_resolution_can_skip_approval() {
 fn an_empty_proposal_finishes_every_approval_state() {
     let turn = TurnId::new();
     let paused = resolving(turn).transition(MergeEvent::Paused).unwrap();
-    for approval in [MergeApproval::None, awaiting(), resolving(turn), paused] {
+    for approval in [
+        MergeApproval::None,
+        awaiting(),
+        approved(),
+        resolving(turn),
+        paused,
+    ] {
         let proposal = MergeProposal::new(&approval, turn, None);
         assert!(matches!(&proposal, MergeProposal::Empty));
         assert!(matches!(proposal.event(), MergeEvent::Finished));
@@ -197,12 +213,13 @@ fn merge_decisions_require_a_pending_question_and_a_listed_choice() {
         choice_id: "merge".into(),
     };
     assert!(matches!(
-        MergeDecision::new(&awaiting(), &merge, &turn, &Persistence::Ready).unwrap(),
+        MergeDecision::new(&awaiting(), "merge-fixture", &merge, &turn, &Persistence::Ready).unwrap(),
         MergeDecision::Merge { commit } if commit == "approved-commit"
     ));
     assert!(matches!(
         MergeDecision::new(
             &awaiting(),
+            "merge-fixture",
             &Answer::Choice {
                 choice_id: "keep".into()
             },
@@ -218,14 +235,39 @@ fn merge_decisions_require_a_pending_question_and_a_listed_choice() {
         },
         Answer::Text("merge".into()),
     ] {
-        assert!(MergeDecision::new(&awaiting(), &answer, &turn, &Persistence::Ready).is_err());
+        assert!(
+            MergeDecision::new(
+                &awaiting(),
+                "merge-fixture",
+                &answer,
+                &turn,
+                &Persistence::Ready
+            )
+            .is_err()
+        );
     }
-    for approval in [MergeApproval::None, resolving(TurnId::new())] {
+    assert!(
+        MergeDecision::new(
+            &awaiting(),
+            "stale-question",
+            &merge,
+            &turn,
+            &Persistence::Ready
+        )
+        .is_err()
+    );
+    for approval in [MergeApproval::None, approved(), resolving(TurnId::new())] {
         assert_eq!(
-            MergeDecision::new(&approval, &merge, &turn, &Persistence::Ready)
-                .err()
-                .unwrap()
-                .to_string(),
+            MergeDecision::new(
+                &approval,
+                "merge-fixture",
+                &merge,
+                &turn,
+                &Persistence::Ready
+            )
+            .err()
+            .unwrap()
+            .to_string(),
             "No merge is awaiting approval"
         );
     }
@@ -241,8 +283,26 @@ fn active_tasks_and_failed_storage_block_both_merge_choices() {
         let answer = Answer::Choice {
             choice_id: choice.into(),
         };
-        assert!(MergeDecision::new(&awaiting(), &answer, &active, &Persistence::Ready).is_err());
-        assert!(MergeDecision::new(&awaiting(), &answer, &idle, &failed_storage()).is_err());
+        assert!(
+            MergeDecision::new(
+                &awaiting(),
+                "merge-fixture",
+                &answer,
+                &active,
+                &Persistence::Ready
+            )
+            .is_err()
+        );
+        assert!(
+            MergeDecision::new(
+                &awaiting(),
+                "merge-fixture",
+                &answer,
+                &idle,
+                &failed_storage()
+            )
+            .is_err()
+        );
     }
 }
 

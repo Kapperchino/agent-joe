@@ -168,11 +168,13 @@ and retries the merge automatically without asking for approval again. `main`
 stays unchanged until resolution succeeds; unresolved conflict markers block the
 merge. Interrupting resolution stops the automatic merge. Local edits in the
 `main` checkout or `main` checked out in another worktree stop the merge and leave
-the session available for recovery. Resolve the blocker and retry the answer, or
-complete another task to prepare a fresh merge proposal.
+the session available for recovery. Resolve the blocker and answer the new pending
+merge question to retry, or complete another task to prepare a fresh merge proposal.
 After merging, Joe stops the session sandbox and deletes the session branch and
 the entire worktree directory, including ignored files and build caches. Unmerged
 commits, uncommitted source changes, and pending Git operations block cleanup.
+Merge choices are saved in the normal question/answer history. Cleanup failures
+also produce a new pending merge question for retrying after resolving the blocker.
 Session history stays in the original project. `/resume` or another task creates
 a fresh worktree from current `main` after cleanup; `/fork` creates a separate
 worktree including the current session's edits.

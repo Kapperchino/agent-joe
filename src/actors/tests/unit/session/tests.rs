@@ -106,6 +106,7 @@ fn answering_a_question_atomically_marks_the_saved_plan_for_reconciliation() {
     session
         .record(Event::QuestionAsked(
             Question::try_from(QuestionInput {
+                purpose: Default::default(),
                 id: "target".into(),
                 prompt: "Which target?".into(),
                 required: true,
@@ -134,6 +135,74 @@ fn answering_a_question_atomically_marks_the_saved_plan_for_reconciliation() {
     let saved = serde_json::to_value(&snapshot).unwrap();
     assert_eq!(saved["questions"], serde_json::json!([]));
     assert_eq!(saved["answered_questions"], serde_json::json!(["target"]));
+}
+
+#[test]
+fn merge_answers_preserve_the_plan_and_record_durable_evidence() {
+    use common_models::interaction::{Answer, PlanStep, Planning, StepState};
+    let workspace = Workspace::new();
+    let store = workspace.store();
+    let session = store
+        .create(SessionProvider::Injected, None, history())
+        .unwrap();
+    let mut planning = Planning::default();
+    planning.plan.steps.push(PlanStep {
+        id: "edit".into(),
+        description: "Update the function".into(),
+        dependencies: Vec::new(),
+        acceptance: "Tests pass".into(),
+        state: StepState::Completed,
+        evidence: Vec::new(),
+        blocked_reason: None,
+    });
+    session.record(Event::Planning(planning.clone())).unwrap();
+    let approval = session_merge::MergeApproval::Awaiting {
+        question: "merge-fixture".into(),
+        commit: "approved-commit".into(),
+    };
+    session
+        .record(Event::MergeApproval(approval.clone()))
+        .unwrap();
+    session
+        .record(Event::QuestionAsked(approval.question().unwrap()))
+        .unwrap();
+    session
+        .record(Event::QuestionAnswered {
+            id: "merge-fixture".into(),
+            answer: Answer::Choice {
+                choice_id: "merge".into(),
+            },
+        })
+        .unwrap();
+    let snapshot = session.snapshot().unwrap();
+    assert!(snapshot.questions.pending().is_empty());
+    assert_eq!(
+        snapshot.planning.requirements_revision,
+        planning.requirements_revision
+    );
+    assert_eq!(snapshot.planning.review(), planning.review());
+    assert_eq!(
+        snapshot.planning.evidence["answer:merge-fixture"],
+        "Merge into main"
+    );
+    assert!(
+        snapshot
+            .history
+            .last()
+            .unwrap()
+            .text()
+            .contains("Answer to question merge-fixture")
+    );
+    assert!(
+        session
+            .record(Event::QuestionAnswered {
+                id: "merge-fixture".into(),
+                answer: Answer::Choice {
+                    choice_id: "merge".into()
+                },
+            })
+            .is_err()
+    );
 }
 
 pub(super) fn save_output(session: &Session, content: &str) -> ToolResult {
@@ -771,6 +840,7 @@ fn compacted_sessions_reject_replayed_checkpoints_and_isolate_fork_questions() {
         )]))
         .unwrap();
     let question = PendingQuestion {
+        purpose: Default::default(),
         choices: Vec::new(),
         allow_free_text: true,
         id: "q1".into(),

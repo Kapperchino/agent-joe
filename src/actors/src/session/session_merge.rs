@@ -9,7 +9,7 @@ use crate::{
 };
 use analysis::contexts::context::Context;
 use common_models::{
-    interaction::{Answer, Choice, Question},
+    interaction::{Answer, Choice, Question, QuestionPurpose},
     runtime_ids::{OperationId, TurnId},
     tui_models::ActorToTuiPacket,
 };
@@ -26,6 +26,9 @@ pub enum MergeApproval {
     None,
     Awaiting {
         question: String,
+        commit: String,
+    },
+    Approved {
         commit: String,
     },
     Resolving {
@@ -49,6 +52,9 @@ pub enum MergeEvent {
         turn: TurnId,
     },
     Proposed {
+        commit: String,
+    },
+    Approved {
         commit: String,
     },
     Conflicted {
@@ -77,14 +83,17 @@ impl MergeProposal {
     fn event(&self) -> MergeEvent {
         match self {
             Self::Empty => MergeEvent::Finished,
-            Self::AwaitingApproval { commit } | Self::Approved { commit } => MergeEvent::Proposed {
+            Self::AwaitingApproval { commit } => MergeEvent::Proposed {
+                commit: commit.clone(),
+            },
+            Self::Approved { commit } => MergeEvent::Approved {
                 commit: commit.clone(),
             },
         }
     }
 }
 
-enum MergeDecision {
+pub(super) enum MergeDecision {
     Merge { commit: String },
     Keep,
 }
@@ -92,12 +101,14 @@ enum MergeDecision {
 impl MergeDecision {
     fn new(
         approval: &MergeApproval,
+        id: &str,
         answer: &Answer,
         turn: &TurnMachine,
         persistence: &Persistence,
     ) -> anyhow::Result<Self> {
         approval
             .question()
+            .filter(|question| question.id == id)
             .ok_or_else(|| anyhow::anyhow!("No merge is awaiting approval"))?
             .answer(answer)?;
         match approval {
@@ -228,7 +239,9 @@ impl MergeApproval {
 
     fn transition(&self, event: MergeEvent) -> Option<Self> {
         match (self, event) {
-            (Self::Awaiting { .. }, MergeEvent::TaskStarted { .. }) => Some(Self::None),
+            (Self::Awaiting { .. } | Self::Approved { .. }, MergeEvent::TaskStarted { .. }) => {
+                Some(Self::None)
+            }
             (
                 Self::Resolving {
                     activity: ResolutionActivity::Running { turn: approved },
@@ -251,6 +264,7 @@ impl MergeApproval {
                 question: format!("merge-{}", OperationId::new()),
                 commit,
             }),
+            (_, MergeEvent::Approved { commit }) => Some(Self::Approved { commit }),
             (_, MergeEvent::Conflicted { conflict, turn }) => Some(Self::Resolving {
                 conflict,
                 activity: ResolutionActivity::Running { turn },
@@ -261,8 +275,9 @@ impl MergeApproval {
 
     pub fn question(&self) -> Option<Question> {
         match self {
-            Self::None | Self::Resolving { .. } => None,
+            Self::None | Self::Approved { .. } | Self::Resolving { .. } => None,
             Self::Awaiting { question, commit } => Some(Question {
+                purpose: QuestionPurpose::Merge,
                 id: question.clone(),
                 prompt: format!(
                     "Task completed successfully. Merge session commit {commit} into main, resolving any conflicts, then delete the entire session workspace, including ignored files and build caches?"
@@ -369,9 +384,35 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         }
     }
 
-    pub async fn answer_merge(&mut self, answer: &Answer) -> anyhow::Result<String> {
-        match MergeDecision::new(&self.merge_approval, answer, &self.turn, &self.persistence)? {
-            MergeDecision::Merge { commit } => self.merge_commit(commit).await,
+    pub(super) fn merge_decision(
+        &self,
+        id: &str,
+        answer: &Answer,
+    ) -> anyhow::Result<MergeDecision> {
+        let decision = MergeDecision::new(
+            &self.merge_approval,
+            id,
+            answer,
+            &self.turn,
+            &self.persistence,
+        )?;
+        match &decision {
+            MergeDecision::Merge { .. } => {
+                MergeWorkspace::new(&self.dependency.runtime, &self.persistence)?;
+            }
+            MergeDecision::Keep => {}
+        }
+        Ok(decision)
+    }
+
+    pub(super) async fn answer_merge(&mut self, decision: MergeDecision) -> anyhow::Result<String> {
+        match decision {
+            MergeDecision::Merge { commit } => {
+                self.record_merge(MergeEvent::Approved {
+                    commit: commit.clone(),
+                })?;
+                self.merge_commit(commit).await
+            }
             MergeDecision::Keep => {
                 self.record_merge(MergeEvent::Finished)?;
                 self.refresh_interaction();
@@ -381,14 +422,19 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     }
 
     async fn merge_commit(&mut self, commit: String) -> anyhow::Result<String> {
-        let workspace = MergeWorkspace::new(&self.dependency.runtime, &self.persistence)?;
-        let runtime = &self.dependency.runtime;
-        let lease = runtime
-            .workspace
-            .acquire(ToolEffect::Write, &runtime.scope)
-            .await?;
-        let outcome = tokio::task::spawn_blocking(move || workspace.merge(&commit)).await?;
-        drop(lease);
+        let approved = commit.clone();
+        let outcome = async {
+            let workspace = MergeWorkspace::new(&self.dependency.runtime, &self.persistence)?;
+            let runtime = &self.dependency.runtime;
+            let lease = runtime
+                .workspace
+                .acquire(ToolEffect::Write, &runtime.scope)
+                .await?;
+            let outcome = tokio::task::spawn_blocking(move || workspace.merge(&approved)).await?;
+            drop(lease);
+            outcome
+        }
+        .await;
         match outcome {
             Ok(MergeResult::Cleaned { message }) => {
                 self.persist(Event::Worktree(None));
@@ -408,6 +454,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 ))
             }
             Ok(MergeResult::Retained { message, error }) => {
+                self.record_merge(MergeEvent::Proposed { commit })?;
                 self.refresh_interaction();
                 Ok(format!(
                     "{message}\nCleanup could not finish; the session workspace and branch remain recorded for inspection: {error:#}. Retry the merge after resolving the cleanup issue."
@@ -415,6 +462,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             }
             Ok(MergeResult::Conflicted { conflict }) => self.resolve_merge(conflict).await,
             Err(error) => {
+                self.record_merge(MergeEvent::Proposed { commit })?;
                 self.refresh_interaction();
                 Err(error)
             }
@@ -468,14 +516,40 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     }
 
     pub fn record_merge(&mut self, event: MergeEvent) -> anyhow::Result<()> {
-        if let Some(approval) = self.merge_approval.transition(event) {
-            self.merge_approval = approval;
-            self.persist(Event::MergeApproval(self.merge_approval.clone()));
+        let question = match self.merge_approval.transition(event) {
+            Some(approval) => {
+                self.withdraw_questions(QuestionPurpose::Merge)?;
+                self.commit_interaction(Event::MergeApproval(approval.clone()))?;
+                self.merge_approval = approval;
+                self.merge_approval.question()
+            }
+            None => None,
+        };
+        if let Some(question) = question {
+            self.ask_question(question)?;
         }
         match &self.persistence {
             Persistence::Ready => Ok(()),
             Persistence::Failed(failure) => Err(anyhow::anyhow!(failure.to_string())),
         }
+    }
+
+    pub(super) fn restore_merge_question(&mut self) -> anyhow::Result<()> {
+        let commit = match &self.merge_approval {
+            MergeApproval::Awaiting { question, commit }
+                if !self.questions.pending().iter().any(|pending| {
+                    pending.id == *question && pending.purpose == QuestionPurpose::Merge
+                }) =>
+            {
+                Some(commit.clone())
+            }
+            MergeApproval::Approved { commit } => Some(commit.clone()),
+            _ => None,
+        };
+        if let Some(commit) = commit {
+            self.record_merge(MergeEvent::Proposed { commit })?;
+        }
+        Ok(())
     }
 
     pub fn pause_merge(&mut self) {

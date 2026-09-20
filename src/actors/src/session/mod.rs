@@ -251,6 +251,7 @@ pub enum Event {
         usage: TokenCount,
     },
     QuestionAsked(PendingQuestion),
+    QuestionsWithdrawn(common_models::interaction::QuestionPurpose),
     QuestionAnswered {
         id: String,
         answer: common_models::interaction::Answer,
@@ -448,6 +449,9 @@ impl Session {
             snapshot.changes = Default::default();
             snapshot.worktree = None;
             snapshot.merge_approval = Default::default();
+            snapshot
+                .questions
+                .withdraw(common_models::interaction::QuestionPurpose::Merge);
             snapshot.parent = None;
             snapshot.forked_from = Some(self.id.clone());
             snapshot.status = Lifecycle::Ready;
@@ -599,6 +603,8 @@ impl Snapshot {
                 self.worktree = None;
                 self.changes = Default::default();
                 self.merge_approval = Default::default();
+                self.questions
+                    .withdraw(common_models::interaction::QuestionPurpose::Merge);
                 self.history.push(Message::new(
                     "The session worktree was pruned. Its unmerged commits and local files were discarded. Resuming creates a fresh worktree from current main; previous edits and merge approvals no longer apply.".into(),
                 ));
@@ -613,6 +619,7 @@ impl Snapshot {
                 self.usage = transition.usage;
             }
             Event::QuestionAsked(question) => self.questions.ask(question.clone())?,
+            Event::QuestionsWithdrawn(purpose) => self.questions.withdraw(*purpose),
             Event::QuestionAnswered { id, answer } => {
                 let answered = self.questions.answer(id, answer)?;
                 self.planning = self.planning.with_answer(&answered)?;

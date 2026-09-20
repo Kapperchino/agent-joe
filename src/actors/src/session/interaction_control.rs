@@ -1,5 +1,5 @@
 use crate::{
-    session::{Event, session_control::Persistence},
+    session::{Event, session_control::Persistence, session_merge::MergeDecision},
     states::{
         actor_state::ActorState, runtime::ExecutionRole, turn::FollowUp, turn_machine::SessionEvent,
     },
@@ -7,10 +7,17 @@ use crate::{
 use analysis::contexts::context::Context;
 use commands::command::Command;
 use common_models::{
-    interaction::{Answer, InteractionView, PlanUpdate, Planning, Question, WorkMode},
+    interaction::{
+        Answer, InteractionView, PlanUpdate, Planning, Question, QuestionPurpose, WorkMode,
+    },
     tui_models::ActorToTuiPacket,
 };
 use utils::execution::ExecutionScope;
+
+enum AnswerAction {
+    Clarification,
+    Merge(MergeDecision),
+}
 
 impl<C: Context + Clone + 'static> ActorState<C> {
     pub fn interaction_instructions(&self) -> String {
@@ -33,13 +40,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             self.reporter
                 .send(ActorToTuiPacket::InteractionUpdated(InteractionView {
                     planning: self.planning.clone(),
-                    questions: self
-                        .questions
-                        .pending()
-                        .iter()
-                        .cloned()
-                        .chain(self.merge_approval.question())
-                        .collect(),
+                    questions: self.questions.pending().to_vec(),
                 }));
         }
     }
@@ -57,7 +58,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         }))?)
     }
 
-    fn commit_interaction(&mut self, event: Event) -> anyhow::Result<()> {
+    pub(super) fn commit_interaction(&mut self, event: Event) -> anyhow::Result<()> {
         if matches!(self.persistence, Persistence::Ready) {
             self.persist(event);
         }
@@ -105,35 +106,19 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         let result = match &command {
             Command::Plan => self.set_work_mode(WorkMode::Plan),
             Command::Implement => self.set_work_mode(WorkMode::Implement),
-            Command::Questions => Ok(
-                match self.questions.pending().is_empty()
-                    && self.merge_approval.question().is_none()
-                {
-                    true => "No pending questions.".into(),
-                    false => self
-                        .questions
-                        .pending()
-                        .iter()
-                        .cloned()
-                        .chain(self.merge_approval.question())
-                        .map(|question| question.display())
-                        .collect::<Vec<_>>()
-                        .join("\n\n"),
-                },
-            ),
-            Command::Answer(input)
-                if self
-                    .merge_approval
-                    .question()
-                    .is_some_and(|question| question.id == input.id) =>
-            {
-                self.answer_merge(&input.answer).await
-            }
+            Command::Questions => Ok(match self.questions.pending().is_empty() {
+                true => "No pending questions.".into(),
+                false => self
+                    .questions
+                    .pending()
+                    .iter()
+                    .map(|question| question.display())
+                    .collect::<Vec<_>>()
+                    .join("\n\n"),
+            }),
             Command::Answer(input) => {
-                let result = self.answer_question(&input.id, input.answer.clone());
-                if result.is_ok() {
-                    self.sync_question_gate().await;
-                }
+                let result = self.answer_question(&input.id, input.answer.clone()).await;
+                self.sync_question_gate().await;
                 result
             }
             Command::Steer(_) if !self.turn.accepts_input() => Err(anyhow::anyhow!(
@@ -187,9 +172,36 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         Ok(format!("{mode}\n{steps}"))
     }
 
-    fn answer_question(&mut self, id: &str, answer: Answer) -> anyhow::Result<String> {
+    pub(super) fn ask_question(&mut self, question: Question) -> anyhow::Result<()> {
+        let mut questions = self.questions.clone();
+        questions.ask(question.clone())?;
+        self.commit_interaction(Event::QuestionAsked(question))?;
+        self.questions = questions;
+        self.refresh_interaction();
+        Ok(())
+    }
+
+    pub(super) fn withdraw_questions(&mut self, purpose: QuestionPurpose) -> anyhow::Result<()> {
+        if self
+            .questions
+            .pending()
+            .iter()
+            .any(|question| question.purpose == purpose)
+        {
+            self.commit_interaction(Event::QuestionsWithdrawn(purpose))?;
+            self.questions.withdraw(purpose);
+            self.refresh_interaction();
+        }
+        Ok(())
+    }
+
+    async fn answer_question(&mut self, id: &str, answer: Answer) -> anyhow::Result<String> {
         let mut questions = self.questions.clone();
         let answered = questions.answer(id, &answer)?;
+        let action = match answered.purpose {
+            QuestionPurpose::Clarification => AnswerAction::Clarification,
+            QuestionPurpose::Merge => AnswerAction::Merge(self.merge_decision(id, &answer)?),
+        };
         let planning = self.planning.with_answer(&answered)?;
         self.commit_interaction(Event::QuestionAnswered {
             id: id.into(),
@@ -203,7 +215,10 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             None => self.history.push(message),
         }
         self.refresh_interaction();
-        Ok(format!("Answered question {id}."))
+        match action {
+            AnswerAction::Clarification => Ok(format!("Answered question {id}.")),
+            AnswerAction::Merge(decision) => self.answer_merge(decision).await,
+        }
     }
 }
 
@@ -228,12 +243,12 @@ impl<'a, C: Context + Clone + 'static> Interaction<'a, C> {
     }
 
     pub fn ask(self, question: Question) -> anyhow::Result<String> {
-        let mut questions = self.state.questions.clone();
-        questions.ask(question.clone())?;
-        self.state
-            .commit_interaction(Event::QuestionAsked(question))?;
-        self.state.questions = questions;
-        self.state.refresh_interaction();
+        match question.purpose {
+            QuestionPurpose::Clarification => self.state.ask_question(question),
+            QuestionPurpose::Merge => Err(anyhow::anyhow!(
+                "Only the runtime can request merge approval"
+            )),
+        }?;
         self.state.interaction_content()
     }
 

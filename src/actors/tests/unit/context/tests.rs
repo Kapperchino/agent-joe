@@ -94,6 +94,7 @@ fn repeated_compaction_preserves_requirements_questions_evidence_and_recent_pair
         .unwrap()
         .questions
         .push(crate::session::PendingQuestion {
+            purpose: Default::default(),
             choices: Vec::new(),
             allow_free_text: true,
             id: "target".into(),

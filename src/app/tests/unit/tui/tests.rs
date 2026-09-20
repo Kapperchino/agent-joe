@@ -492,6 +492,7 @@ async fn interaction_commands_questions_and_queue_preserve_vim_and_transcript() 
         },
         questions: vec![
             Question::try_from(QuestionInput {
+                purpose: Default::default(),
                 id: "target".into(),
                 prompt: "Which target?".into(),
                 required: true,
@@ -998,6 +999,7 @@ async fn all_input_modes_render_within_small_terminal_bounds() {
 
 fn question(id: &str, allow_free_text: bool) -> Question {
     Question::try_from(QuestionInput {
+        purpose: Default::default(),
         id: id.into(),
         prompt: "Which target should be built?".into(),
         required: true,

@@ -3,7 +3,8 @@ mod question;
 
 pub use plan::{Plan, PlanEvidence, PlanStep, PlanUpdate, StepState};
 pub use question::{
-    Answer, AnsweredQuestion, Choice, Question, QuestionGate, QuestionInput, Questions,
+    Answer, AnsweredQuestion, Choice, Question, QuestionGate, QuestionInput, QuestionPurpose,
+    Questions,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -54,7 +55,10 @@ impl Planning {
     }
 
     pub fn with_answer(&self, answer: &AnsweredQuestion) -> anyhow::Result<Self> {
-        let mut planning = self.requirements_changed()?;
+        let mut planning = match answer.purpose {
+            QuestionPurpose::Clarification => self.requirements_changed()?,
+            QuestionPurpose::Merge => self.clone(),
+        };
         planning.record_evidence(format!("answer:{}", answer.id), answer.text.clone());
         Ok(planning)
     }

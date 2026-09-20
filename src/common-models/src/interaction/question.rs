@@ -10,9 +10,19 @@ pub struct Choice {
     pub label: String,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestionPurpose {
+    #[default]
+    Clarification,
+    Merge,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QuestionInput {
+    #[serde(default)]
+    pub purpose: QuestionPurpose,
     pub id: String,
     pub prompt: String,
     pub required: bool,
@@ -29,6 +39,7 @@ fn allow_text() -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "QuestionInput")]
 pub struct Question {
+    pub purpose: QuestionPurpose,
     pub id: String,
     pub prompt: String,
     pub required: bool,
@@ -56,6 +67,7 @@ impl TryFrom<QuestionInput> for Question {
             && (input.allow_free_text || !input.choices.is_empty())
         {
             true => Ok(Self {
+                purpose: input.purpose,
                 id: input.id,
                 prompt: input.prompt,
                 required: input.required,
@@ -132,6 +144,7 @@ pub struct Questions {
 
 #[derive(Debug)]
 pub struct AnsweredQuestion {
+    pub purpose: QuestionPurpose,
     pub id: String,
     pub prompt: String,
     pub text: String,
@@ -175,6 +188,16 @@ impl Questions {
         }
     }
 
+    pub fn withdraw(&mut self, purpose: QuestionPurpose) {
+        self.answered.extend(
+            self.pending
+                .iter()
+                .filter(|question| question.purpose == purpose)
+                .map(|question| question.id.clone()),
+        );
+        self.pending.retain(|question| question.purpose != purpose);
+    }
+
     pub fn answer(&mut self, id: &str, answer: &Answer) -> anyhow::Result<AnsweredQuestion> {
         let question = self
             .pending
@@ -182,6 +205,7 @@ impl Questions {
             .find(|question| question.id == id)
             .ok_or_else(|| anyhow::anyhow!("Question {id} is not pending"))?;
         let answered = AnsweredQuestion {
+            purpose: question.purpose,
             id: id.into(),
             prompt: question.prompt.clone(),
             text: question.answer(answer)?,
