@@ -49,7 +49,7 @@ pub struct ProviderTask {
 impl ProviderTask {
     pub fn spawn(
         self,
-        input: anyhow::Result<conversation::context::ContextInput>,
+        input: Result<conversation::context::ContextInput, Failure>,
         run: &ProviderRun,
         owner: &ExecutionScope,
         previous: Option<ExecutionScope>,
@@ -81,15 +81,10 @@ impl ProviderTask {
 
     async fn pump(
         mut self,
-        input: anyhow::Result<conversation::context::ContextInput>,
+        input: Result<conversation::context::ContextInput, Failure>,
         attempt: u8,
     ) -> Result<(), Failure> {
-        let input = input.map_err(|error| {
-            Failure::new(
-                FailureKind::InvalidInput,
-                format!("Request context configuration failed: {error}"),
-            )
-        })?;
+        let input = input?;
         if self.budget.is_some()
             && matches!(
                 input.plan(),

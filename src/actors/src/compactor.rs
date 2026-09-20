@@ -1,21 +1,11 @@
-use crate::actor::Message;
-use crate::event_reporter::EventReporter;
-use crate::immutable_workers::{ImmutableWorker, ImmutableWorkerDescription};
 use crate::states::provider_task::{ProviderEvent, ProviderTask};
-use crate::states::runtime::Runtime;
 use crate::workers::compaction_worker::CompactionWorker;
 use crate::workers::snapshot_worker::Snapshot;
-use crate::workers::snapshot_worker::SnapshotWorker;
-use clients::failure::{Failure, FailureKind};
 use clients::llm::ClientRequest;
-use common_models::tui_models::ActorToTuiPacket;
 use common_models::tui_models::{RequestContext, TokenCount};
 use conversation::context::{
     BudgetPlan, Checkpoint, ContextInput, ContextLimits, Memory, NativeCompaction, estimated_tokens,
 };
-use ractor::ActorRef;
-use session::persistence::Persistence;
-use session::state::SessionState;
 
 #[derive(Debug)]
 pub struct CompactedContext {
@@ -141,60 +131,5 @@ impl CompactionMethod {
             Self::Native => "provider-native compaction",
             Self::Summary => "a conversation summary",
         }
-    }
-}
-
-pub struct ContextCommit<'a> {
-    pub session: &'a mut SessionState,
-    pub runtime: &'a Runtime,
-    pub reporter: &'a EventReporter,
-    pub actor: &'a ActorRef<Message>,
-    pub actor_id: u64,
-    pub usage: TokenCount,
-}
-
-impl ContextCommit<'_> {
-    pub async fn commit(self, update: ContextUpdate) -> Result<RequestContext, Failure> {
-        if let Some(compaction) = update.compaction {
-            let worker = ImmutableWorker::spawn(
-                SnapshotWorker,
-                compaction.snapshot,
-                ImmutableWorkerDescription {
-                    kind: "snapshot".into(),
-                    description: format!(
-                        "Older context preserved by compaction generation {}. Includes the compacted exchanges and any earlier compaction memory.",
-                        compaction.checkpoint.generation
-                    ),
-                },
-                self.actor,
-            )
-            .await
-            .map_err(|error| Failure::new(FailureKind::Worker, error.to_string()))?;
-            self.session
-                .control(self.runtime.session_access(self.reporter))
-                .persistence
-                .record(session::Event::Compacted {
-                    context: compaction.checkpoint.clone(),
-                    usage: self.usage.clone(),
-                });
-            self.session
-                .conversation
-                .commit_checkpoint(self.session.persistence.committed(compaction.checkpoint)?);
-            let view = self
-                .runtime
-                .immutable_workers
-                .insert(&self.runtime.worker_owner(self.actor_id), worker);
-            self.reporter.send(ActorToTuiPacket::ContextNotice(
-                format!("Context compacted. Immutable worker {} preserves the older context; use ask_immutable_worker to query it. The saved transcript and full output artifacts remain available.", view.worker_id),
-            ));
-        }
-        if let (Persistence::Ready, Some(message)) =
-            (&self.session.persistence, update.runtime_update)
-        {
-            self.session
-                .control(self.runtime.session_access(self.reporter))
-                .append_history(vec![message]);
-        }
-        self.session.persistence.committed(update.request)
     }
 }

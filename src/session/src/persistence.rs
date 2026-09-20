@@ -1,6 +1,7 @@
 use super::{Event, PendingBatch, Session};
 use clients::failure::{Failure, FailureKind};
-use common_models::tui_models::{ActorToTuiPacket, EventSink};
+use common_models::runtime_ids::TurnId;
+use common_models::tui_models::{ActorToTuiPacket, EventSink, Lifecycle};
 use interaction::{InteractionEvent, control::InteractionPersistence};
 
 pub struct SessionPersistence<'a> {
@@ -16,7 +17,7 @@ impl SessionPersistence<'_> {
         }
     }
 
-    pub fn persist_report(&mut self, packet: &ActorToTuiPacket) {
+    pub fn report(&mut self, mut packet: ActorToTuiPacket) -> Option<TurnId> {
         if let (
             Some(session),
             ActorToTuiPacket::TurnChanged {
@@ -24,7 +25,7 @@ impl SessionPersistence<'_> {
                 state,
                 detail,
             },
-        ) = (self.session, packet)
+        ) = (self.session, &packet)
         {
             self.record(Event::Status {
                 turn: session.key(turn_id),
@@ -32,6 +33,25 @@ impl SessionPersistence<'_> {
                 detail: detail.clone(),
             });
         }
+        match (&mut packet, &self.state) {
+            (ActorToTuiPacket::TurnChanged { state, detail, .. }, Persistence::Failed(failure))
+                if state.terminal() =>
+            {
+                *state = Lifecycle::Failed;
+                *detail = Some(failure.to_string());
+            }
+            _ => {}
+        }
+        let completed = match &packet {
+            ActorToTuiPacket::TurnChanged {
+                turn_id,
+                state: Lifecycle::Completed,
+                ..
+            } => Some(*turn_id),
+            _ => None,
+        };
+        self.reporter.send(packet);
+        completed
     }
 
     pub fn record(&mut self, event: Event) {

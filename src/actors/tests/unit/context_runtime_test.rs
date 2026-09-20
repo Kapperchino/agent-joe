@@ -290,6 +290,41 @@ async fn manual_compaction_preserves_the_transcript_and_queued_followups() {
 }
 
 #[tokio::test]
+async fn manual_compaction_rejects_active_work_without_interrupting_queued_followups() {
+    let h = Harness::new(vec![], Duration::from_secs(10)).await;
+    h.start("Finish the current task");
+    let (_, reply) = h.request().await;
+    h.actor
+        .send_message(Message::Command(Command::Compact))
+        .unwrap();
+    let result = h
+        .event(|packet| matches!(packet, ActorToTuiPacket::CommandResult(Command::Compact, _)))
+        .await;
+    assert!(matches!(
+        result,
+        ActorToTuiPacket::CommandResult(_, message)
+            if message.starts_with("Interrupt the active turn before compacting manually.")
+    ));
+    assert!(!reply.is_closed());
+    h.start("Continue with the next task");
+    h.event(|packet| matches!(packet, ActorToTuiPacket::Queued { .. }))
+        .await;
+    answer(reply, response(vec![text("Current task finished")]));
+    h.terminal(Lifecycle::Completed).await;
+    let (request, reply) = h.request().await;
+    assert!(matches!(request.purpose, llm::RequestPurpose::Conversation));
+    assert!(
+        request
+            .messages
+            .iter()
+            .any(|message| { message.text() == "Continue with the next task" })
+    );
+    answer(reply, response(vec![text("Next task finished")]));
+    h.terminal(Lifecycle::Completed).await;
+    h.stop().await;
+}
+
+#[tokio::test]
 async fn cancelled_compaction_cannot_commit() {
     let workspace = session::test_support::Workspace::new();
     let runtime = configured_runtime(&workspace);

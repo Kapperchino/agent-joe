@@ -151,7 +151,9 @@ impl ProviderStream {
     }
 
     pub async fn process(&mut self, item: StreamEvent) -> anyhow::Result<StreamNextStep> {
-        self.log_stream_item(&item).await;
+        if let Err(error) = self.log_stream_item(&item).await {
+            error!("Failed to write stream log: {error}");
+        }
         let update = self.processor.process_stream_event(item);
         for notification in update.notifications {
             self.send(notification);
@@ -166,19 +168,13 @@ impl ProviderStream {
         }
     }
 
-    async fn log_stream_item(&mut self, item: &StreamEvent) {
+    async fn log_stream_item(&mut self, item: &StreamEvent) -> anyhow::Result<()> {
         if let Some(file) = self.stream_log.as_mut() {
-            let result = async {
-                let mut line = serde_json::to_vec(item)?;
-                line.push(b'\n');
-                file.write_all(&line).await?;
-                Ok::<_, anyhow::Error>(())
-            }
-            .await;
-            if let Err(error) = result {
-                error!("Failed to write stream log: {error}");
-            }
+            let mut line = serde_json::to_vec(item)?;
+            line.push(b'\n');
+            file.write_all(&line).await?;
         }
+        Ok(())
     }
 }
 

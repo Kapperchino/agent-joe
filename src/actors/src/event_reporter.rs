@@ -1,3 +1,4 @@
+use commands::command::{Command, ResumeTarget};
 use common_models::tui_models::{ActorToTui, ActorToTuiPacket, State, TokenCount};
 use flume::Sender;
 #[derive(Clone)]
@@ -10,6 +11,38 @@ pub enum EventReporter {
 }
 
 impl EventReporter {
+    pub fn command(&self, command: Command, result: anyhow::Result<Option<ActorToTuiPacket>>) {
+        let packet = match result {
+            Ok(packet) => packet,
+            Err(error) => Some(match command {
+                Command::Resume(ResumeTarget::Picker) => {
+                    ActorToTuiPacket::SessionChoices(Err(error.to_string()))
+                }
+                Command::Resume(ResumeTarget::Session { .. }) => {
+                    ActorToTuiPacket::SessionResumed(Err(error.to_string()))
+                }
+                Command::Diff | Command::Undo(_) => ActorToTuiPacket::CommandResult(
+                    command,
+                    format!("Change operation failed: {error:#}"),
+                ),
+                Command::Logout => {
+                    ActorToTuiPacket::CommandResult(command, format!("Deletion failed: {error}"))
+                }
+                Command::Plan
+                | Command::Implement
+                | Command::Questions
+                | Command::Answer(_)
+                | Command::Steer(_) => {
+                    ActorToTuiPacket::CommandResult(command, format!("{error:#}"))
+                }
+                command => ActorToTuiPacket::CommandResult(command, error.to_string()),
+            }),
+        };
+        if let Some(packet) = packet {
+            self.send(packet);
+        }
+    }
+
     pub fn validation(&self, result: &tools::tool_defs::ToolResult) {
         use common_models::tui_models::{ValidationProgress, ValidationState};
         let operation = result

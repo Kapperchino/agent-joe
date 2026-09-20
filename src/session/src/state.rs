@@ -36,6 +36,24 @@ impl<'a> SessionAccess<'a> {
 }
 
 impl SessionState {
+    pub fn worker_result(
+        &self,
+        outcome: turn_engine::machine::WorkerOutcome,
+    ) -> Result<String, turn_engine::WorkerFailure> {
+        self.persistence
+            .committed(())
+            .map_err(turn_engine::WorkerFailure::Turn)?;
+        match outcome {
+            turn_engine::machine::WorkerOutcome::Completed => Ok(self
+                .conversation
+                .history()
+                .last()
+                .map(clients::llm::Message::text)
+                .unwrap_or_default()),
+            turn_engine::machine::WorkerOutcome::Failed(failure) => Err(failure),
+        }
+    }
+
     pub fn new(
         conversation: Conversation,
         interaction: InteractionState,

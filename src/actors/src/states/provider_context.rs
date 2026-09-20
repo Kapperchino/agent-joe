@@ -1,6 +1,8 @@
 use crate::actor::ActorContext;
+use crate::states::provider_task::{ProviderTarget, ProviderTask};
 use crate::states::runtime::{ExecutionRole, Runtime};
 use crate::states::services::ActorServices;
+use crate::states::stream_processor::ProviderAction;
 use crate::workers::snapshot_worker::Snapshot;
 use analysis::contexts::context::Context;
 use clients::failure::{Failure, FailureKind};
@@ -11,6 +13,8 @@ use common_models::runtime_ids::TurnId;
 use conversation::context::ContextInput;
 use session::state::SessionState;
 use turn_engine::machine::{ProviderUpdate, TurnMachine};
+use turn_engine::turn::{AcceptedResponse, ProviderRun};
+use utils::execution::ExecutionScope;
 
 pub struct ProviderContext<'a, C: Context> {
     pub context: &'a C,
@@ -21,6 +25,49 @@ pub struct ProviderContext<'a, C: Context> {
 }
 
 impl<C: Context> ProviderContext<'_, C> {
+    pub fn inspect(&self, reporter: crate::event_reporter::EventReporter)
+    where
+        C: Clone + 'static,
+    {
+        let context = self.context.clone();
+        let scope = self.runtime.scope.clone();
+        scope.tasks.clone().spawn(async move {
+            tokio::select! {
+                _ = scope.cancel.cancelled() => {},
+                text = scope.enter(context.inspect_context()) => reporter.send(common_models::tui_models::ActorToTuiPacket::CommandResult(commands::command::Command::PrintContext, text.unwrap_or_else(|error| format!("Context inspection failed: {error}")))),
+            }
+        });
+    }
+
+    pub fn spawn(
+        &self,
+        client: &LLmClient,
+        target: ProviderTarget,
+        run: &ProviderRun,
+        owner: &ExecutionScope,
+        previous: Option<ExecutionScope>,
+    ) {
+        let client = client.snapshot();
+        let input = self.session.persistence.committed(()).and_then(|()| {
+            self.input(run.tag.turn, &client).map_err(|error| {
+                Failure::new(
+                    FailureKind::InvalidInput,
+                    format!("Request context configuration failed: {error}"),
+                )
+            })
+        });
+        ProviderTask {
+            budget: match &self.runtime.role {
+                ExecutionRole::Worker { execution, .. } => Some(execution.budget.clone()),
+                ExecutionRole::Root | ExecutionRole::Helper => None,
+            },
+            target,
+            client,
+            timeout: self.runtime.request_timeout,
+        }
+        .spawn(input, run, owner, previous);
+    }
+
     pub fn input(&self, turn: TurnId, client: &LLmClient) -> anyhow::Result<ContextInput> {
         let interaction = match self.request_mode {
             RequestMode::SingleResponse => None,
@@ -84,19 +131,18 @@ impl<C: Context> ProviderContext<'_, C> {
             turn.is_idle(),
             self.session.conversation.has_deferred_input(),
         ) {
-            (true, false) => Ok(()),
+            (true, false) => Snapshot::from_input(
+                self.input(TurnId::new(), client)?,
+                client,
+                self.runtime.request_timeout,
+            ),
             _ => Err(anyhow::anyhow!(
                 "Finish the active turn before capturing an immutable snapshot"
             )),
-        }?;
-        Snapshot::from_input(
-            self.input(TurnId::new(), client)?,
-            client,
-            self.runtime.request_timeout,
-        )
+        }
     }
 
-    pub fn review(&self, update: ProviderUpdate) -> ProviderUpdate {
+    pub fn review(&self, action: ProviderAction) -> ProviderAction {
         let pending = self
             .runtime
             .workers
@@ -107,32 +153,33 @@ impl<C: Context> ProviderContext<'_, C> {
             }
             _ => PlanReview::Current,
         };
-        match (update, review) {
+        match (action, review, pending.as_slice()) {
             (
-                ProviderUpdate::Finished(Ok(turn_engine::turn::AcceptedResponse::Complete(
+                ProviderAction::Update(ProviderUpdate::Finished(Ok(AcceptedResponse::Complete(
                     message,
-                ))),
+                )))),
                 PlanReview::Required,
-            ) => ProviderUpdate::ReconcilePlan {
+                _,
+            ) => ProviderAction::Update(ProviderUpdate::ReconcilePlan {
                 message,
                 instruction: format!(
                     "Runtime plan review: this turn is still active. Requirements changed; reconcile the saved plan with update_plan using revision={} and requirements_revision={} from the current planning state. Reopen completed steps for review, then continue the user's request before completing the turn.",
                     self.session.interaction.planning().plan.revision,
                     self.session.interaction.planning().requirements_revision,
                 ),
-            },
-            (ProviderUpdate::Finished(Ok(turn_engine::turn::AcceptedResponse::Complete(_))), _)
-                if !pending.is_empty() =>
-            {
-                ProviderUpdate::Finished(Err(Failure::new(
-                    FailureKind::Worker,
-                    format!(
-                        "Worker reports have not been collected: {}",
-                        pending.join("; ")
-                    ),
-                )))
-            }
-            (update, _) => update,
+            }),
+            (
+                ProviderAction::Update(ProviderUpdate::Finished(Ok(AcceptedResponse::Complete(_)))),
+                PlanReview::Current,
+                [_, ..],
+            ) => ProviderAction::Update(ProviderUpdate::Finished(Err(Failure::new(
+                FailureKind::Worker,
+                format!(
+                    "Worker reports have not been collected: {}",
+                    pending.join("; ")
+                ),
+            )))),
+            (action, _, _) => action,
         }
     }
 }

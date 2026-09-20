@@ -1,41 +1,34 @@
 use crate::actor::{self, ActorContext, Dependency, Message};
 use crate::background_actors::file_actor;
-use crate::compactor::{ContextCommit, ContextUpdate};
 use crate::event_reporter::EventReporter;
 use crate::states::actor_mode::ActorMode;
 use crate::states::provider_context::ProviderContext;
-use crate::states::provider_task::{ProviderEvent, ProviderTarget, ProviderTask};
+use crate::states::provider_session::ProviderSession;
+use crate::states::provider_task::{ProviderEvent, ProviderTarget};
 use crate::states::runtime::{ExecutionRole, Runtime};
 use crate::states::services::ActorServices;
-use crate::states::stream_processor::{ProviderAction, ProviderStream};
-use crate::workers::snapshot_worker::Snapshot;
+use crate::states::stream_processor::ProviderStream;
 use analysis::contexts::context::Context;
-use clients::failure::Failure;
-use clients::llm::{self, LLmClient};
+use clients::llm::LLmClient;
 use clients::response::RequestMode;
-use commands::command::{Command, ResumeTarget};
-use common_models::interaction::{Answer, PlanUpdate, Question, QuestionPurpose};
+use commands::command::Command;
 use common_models::runtime_ids::TurnId;
-use common_models::tui_models::{ActorToTuiPacket, RequestContext, State, TokenCount};
-use conversation::context::ContextInput;
-use interaction::access::InteractionReadiness;
+use common_models::tui_models::{ActorToTuiPacket, TokenCount};
 use interaction::control::{InteractionAction, InteractionControl};
-use merge_workflow::execution::{MergeAction, MergeActivity, MergeCompletion, SessionMerge};
-use merge_workflow::{MergeDecision, MergeEvent};
+use merge_workflow::execution::{MergeAction, MergeCompletion};
 use ractor::ActorRef;
 use session::activation::SessionActivation;
 use session::changes::SessionChanges;
 use session::control::{SessionCommand, SessionCommands, SessionControl};
-use session::persistence::{Persistence, SessionPersistence};
+use session::persistence::SessionPersistence;
 use session::state::SessionState;
 use session::transition::SessionRelocation;
+use session::turn::SessionTurn;
 use std::{collections::VecDeque, sync::Arc};
-use tools::tool_defs::ToolDefinition;
 use turn_engine::machine::{
-    Effect, EffectOutcome, Event, ProviderUpdate, SessionEvent, ShutdownScope, TurnMachine,
-    WorkerOutcome,
+    Effect, EffectOutcome, Event, SessionEvent, ShutdownScope, TurnMachine,
 };
-use turn_engine::turn::{FollowUp, HistoryDisposition, Tag};
+use turn_engine::turn::{HistoryDisposition, Tag};
 use utils::execution::ExecutionScope;
 
 pub struct ActorState<C: Context> {
@@ -51,11 +44,6 @@ pub struct ActorState<C: Context> {
     pub services: Arc<ActorServices<C, ActorContext<C>>>,
     pub context: C,
     pub runtime: Runtime,
-}
-
-enum AnswerAction {
-    Clarification,
-    Merge(MergeDecision),
 }
 
 impl<C: Context + Clone + 'static> ActorState<C> {
@@ -117,11 +105,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         })
     }
 
-    pub fn context_input(&self, turn: TurnId, client: &LLmClient) -> anyhow::Result<ContextInput> {
-        self.provider_context().input(turn, client)
-    }
-
-    fn provider_context(&self) -> ProviderContext<'_, C> {
+    pub fn provider_context(&self) -> ProviderContext<'_, C> {
         ProviderContext {
             context: &self.context,
             session: &self.session,
@@ -157,8 +141,8 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             &self.runtime.worker_owner(self.context.get_id()),
         );
         self.relocate_watcher()?;
-        self.session_merge().restore_merge_question()?;
-        self.refresh_interaction();
+        self.session_turn().merge().restore_merge_question()?;
+        self.interaction_control().refresh_interaction();
         Ok(())
     }
 
@@ -168,10 +152,6 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             watcher.send_message(file_actor::Message::Relocate(project))?;
         }
         Ok(())
-    }
-
-    pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
-        self.services.tool_definitions()
     }
 
     pub fn executor(&self, scope: ExecutionScope) -> crate::states::scheduler::Executor<C> {
@@ -185,83 +165,18 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         }
     }
 
-    pub fn change_state(&mut self, new_state: State) {
-        self.stream.change_state(new_state);
-    }
-
-    pub(crate) fn session_control(&mut self) -> SessionControl<'_> {
-        self.session
-            .control(self.runtime.session_access(&self.reporter))
-    }
-
-    pub(crate) fn interaction_control(&mut self) -> InteractionControl<'_, SessionPersistence<'_>> {
-        self.session
-            .interaction_control(self.runtime.session_access(&self.reporter))
-    }
-
-    pub(crate) fn session_merge(&mut self) -> SessionMerge<'_, SessionPersistence<'_>> {
-        self.session.merge(
-            self.runtime.session_access(&self.reporter),
-            self.runtime.merge_environment(),
-            match self.turn.is_idle() {
-                true => MergeActivity::Idle,
-                false => MergeActivity::Active,
-            },
-        )
-    }
-
-    pub fn persist(&mut self, event: session::Event) {
-        self.session_control().persistence.record(event);
-    }
-
-    pub fn persistence_failed(&mut self, error: anyhow::Error) {
-        self.session_control().persistence.fail(error);
-    }
-
-    pub fn refresh_interaction(&mut self) {
-        self.interaction_control().refresh_interaction();
-    }
-
     pub async fn sync_question_gate(&mut self) {
-        self.refresh_interaction();
+        self.interaction_control().refresh_interaction();
         self.dispatch(SessionEvent::QuestionsChanged(
             self.session.interaction.questions().gate(),
         ))
         .await;
     }
 
-    pub fn request_question(
-        &mut self,
-        question: Question,
-        scope: &ExecutionScope,
-    ) -> anyhow::Result<String> {
-        self.interaction_control().request_question(question, scope)
-    }
-
-    pub fn update_plan(
-        &mut self,
-        update: PlanUpdate,
-        scope: &ExecutionScope,
-    ) -> anyhow::Result<String> {
-        self.interaction_control().update_plan(update, scope)
-    }
-
-    pub fn merge_input(&mut self, turn: TurnId) -> Option<FollowUp> {
-        self.session_merge().merge_input(turn)
-    }
-
-    pub async fn offer_merge(&mut self, turn: TurnId) -> anyhow::Result<()> {
-        let mode = self
-            .session
-            .conversation
-            .request_mode(turn, self.request_mode);
+    async fn offer_merge(&mut self, turn: TurnId) -> anyhow::Result<()> {
         let client = self.llm.clone();
-        let cache_key = self.session.conversation.cache_key().to_owned();
-        if let Some(completion) = self
-            .session_merge()
-            .offer_merge(turn, mode, &client, &cache_key)
-            .await?
-        {
+        let mode = self.request_mode;
+        if let Some(completion) = self.session_turn().offer_merge(turn, mode, &client).await? {
             let message = self.complete_merge(completion).await?;
             self.reporter.send(ActorToTuiPacket::ContextNotice(message));
         }
@@ -275,11 +190,11 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 let mut runtime = self.runtime.clone();
                 runtime.scope = runtime.scope.relocated(workspace);
                 self.relocate_session_workspace(runtime).await?;
-                self.refresh_interaction();
+                self.interaction_control().refresh_interaction();
             }
             MergeAction::Resolve { turn } => {
                 self.context.refresh_workspace().await?;
-                self.refresh_interaction();
+                self.interaction_control().refresh_interaction();
                 self.actor_ref
                     .send_message(actor::Message::ResolveMerge { turn })?;
             }
@@ -304,163 +219,65 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         self.relocate_watcher()
     }
 
-    pub async fn commit_context(
-        &mut self,
-        update: ContextUpdate,
-    ) -> Result<RequestContext, Failure> {
-        ContextCommit {
-            session: &mut self.session,
-            runtime: &self.runtime,
-            reporter: &self.reporter,
-            actor: &self.actor_ref,
-            actor_id: self.context.get_id(),
-            usage: self.stream.usage(),
-        }
-        .commit(update)
-        .await
-    }
-
-    pub async fn begin_turn(&mut self, input: FollowUp) {
-        self.llm.begin_turn();
-        if let Err(error) = self
-            .session_merge()
-            .record_merge(MergeEvent::TaskStarted { turn: input.id })
-        {
-            self.persistence_failed(error);
-        }
-        self.refresh_interaction();
-        if let (Some(_), None) = (
-            &input.prompt,
-            self.session.merge_approval.resolution(input.id),
-        ) {
-            self.interaction_control().reconcile_plan();
-        }
-        let baseline = SessionChanges {
-            runtime: &self.runtime.session_runtime(),
-        }
-        .begin_turn(self.request_mode)
-        .await;
-        if let Err(error) = baseline {
-            self.persistence_failed(error);
-        }
-        self.session_control().begin_turn(input);
-    }
-
-    pub fn prepare_batch(&mut self) {
-        self.session
-            .control(self.runtime.session_access(&self.reporter))
-            .persistence
-            .prepare_batch(self.turn.batch());
-    }
-
     pub async fn relocate_session_workspace(&mut self, runtime: Runtime) -> anyhow::Result<()> {
         let relocation = SessionRelocation::new(&self.context, runtime.session_runtime()).await?;
         self.relocate_session(relocation)
     }
 
-    pub async fn interaction_command(&mut self, command: Command) {
-        let readiness = match (self.turn.is_idle(), self.turn.accepts_input()) {
-            (true, _) => InteractionReadiness::Idle,
-            (false, true) => InteractionReadiness::Active,
-            (false, false) => InteractionReadiness::Stopping,
-        };
-        let action = self.interaction_control().command(&command, readiness);
-        let result = match action {
-            Ok(InteractionAction::Reply(message)) => Ok(message),
-            Ok(InteractionAction::Answer(input)) => {
-                let result = self.answer_question(&input.id, input.answer).await;
+    async fn interaction_command(&mut self, command: &Command) -> anyhow::Result<String> {
+        match self.session_turn().command(command)? {
+            InteractionAction::Reply(message) => Ok(message),
+            InteractionAction::Answer(input) => {
+                let result = async {
+                    match self.session_turn().answer(&input).await? {
+                        Some(completion) => self.complete_merge(completion).await,
+                        None => Ok(format!("Answered question {}.", input.id)),
+                    }
+                }
+                .await;
                 self.sync_question_gate().await;
                 result
             }
-            Ok(InteractionAction::Steer(input)) => {
+            InteractionAction::Steer(input) => {
                 self.dispatch(SessionEvent::Steer(input)).await;
                 Ok("Correction accepted. Active work and queued follow-ups are cancelled; the corrected task continues after cleanup.".into())
             }
-            Err(error) => Err(error),
-        };
-        self.reporter.send(ActorToTuiPacket::CommandResult(
-            command,
-            result.unwrap_or_else(|error| format!("{error:#}")),
-        ));
-    }
-
-    async fn answer_question(&mut self, id: &str, answer: Answer) -> anyhow::Result<String> {
-        let answered = self.session.interaction.answered(id, answer.clone())?;
-        let action = match answered.answer.purpose {
-            QuestionPurpose::Clarification => AnswerAction::Clarification,
-            QuestionPurpose::Merge => {
-                AnswerAction::Merge(self.session_merge().merge_decision(id, &answer)?)
-            }
-        };
-        let message = llm::Message::new(answered.answer.to_string());
-        self.interaction_control()
-            .apply_interaction(answered.update)?;
-        match self.turn.batch() {
-            Some(_) => self.session.conversation.defer(message),
-            None => self.session.conversation.push(message),
-        }
-        match action {
-            AnswerAction::Clarification => Ok(format!("Answered question {id}.")),
-            AnswerAction::Merge(decision) => {
-                let completion = self.session_merge().answer_merge(decision).await?;
-                self.complete_merge(completion).await
-            }
         }
     }
 
-    pub async fn session_command(&mut self, command: Command) {
-        let result = async {
-            let action = SessionCommands {
-                context: &self.context,
-                runtime: &self.runtime.session_runtime(),
-                client: &self.llm,
-                turn: &self.turn,
-                conversation: &self.session.conversation,
-            }.run(&command).await?;
-            match action {
-                SessionCommand::Report(packet) => Ok(packet),
-                SessionCommand::Clear => {
-                    self.dispatch(SessionEvent::Interrupt(HistoryDisposition::Retain)).await;
-                    self.clear_history().await?;
-                    self.reporter.send(ActorToTuiPacket::SessionChanged);
-                    self.reporter.send(ActorToTuiPacket::TokensUpdated(TokenCount::default()));
-                    Ok(ActorToTuiPacket::CommandResult(command.clone(), "Started a new session. Previous sessions remain available through /sessions.".into()))
-                }
-                SessionCommand::Activate { activation, packet } => {
-                    self.activate_session(*activation).await?;
-                    self.sync_question_gate().await;
-                    self.reporter.send(ActorToTuiPacket::TokensUpdated(self.stream.usage()));
-                    Ok(packet)
-                }
-            }
-        }.await;
-        let packet = result.unwrap_or_else(|error: anyhow::Error| match command {
-            Command::Resume(ResumeTarget::Picker) => {
-                ActorToTuiPacket::SessionChoices(Err(error.to_string()))
-            }
-            Command::Resume(ResumeTarget::Session { .. }) => {
-                ActorToTuiPacket::SessionResumed(Err(error.to_string()))
-            }
-            command => ActorToTuiPacket::CommandResult(command, error.to_string()),
-        });
-        self.reporter.send(packet);
-    }
-
-    pub async fn change_command(&mut self, command: Command) {
-        let result = SessionChanges {
+    async fn session_command(&mut self, command: &Command) -> anyhow::Result<ActorToTuiPacket> {
+        let action = SessionCommands {
+            context: &self.context,
             runtime: &self.runtime.session_runtime(),
+            client: &self.llm,
+            turn: &self.turn,
+            conversation: &self.session.conversation,
         }
-        .run(&command, &self.turn)
-        .await;
-        self.reporter.send(ActorToTuiPacket::CommandResult(
-            command,
-            result.unwrap_or_else(|error| format!("Change operation failed: {error:#}")),
-        ));
-    }
-
-    pub fn capture_snapshot(&self) -> anyhow::Result<Snapshot> {
-        self.provider_context()
-            .capture_snapshot(&self.turn, &self.llm)
+        .run(command)
+        .await?;
+        match action {
+            SessionCommand::Report(packet) => Ok(packet),
+            SessionCommand::Clear => {
+                self.dispatch(SessionEvent::Interrupt(HistoryDisposition::Retain))
+                    .await;
+                self.clear_history().await?;
+                self.reporter.send(ActorToTuiPacket::SessionChanged);
+                self.reporter
+                    .send(ActorToTuiPacket::TokensUpdated(TokenCount::default()));
+                Ok(ActorToTuiPacket::CommandResult(
+                    command.clone(),
+                    "Started a new session. Previous sessions remain available through /sessions."
+                        .into(),
+                ))
+            }
+            SessionCommand::Activate { activation, packet } => {
+                self.activate_session(*activation).await?;
+                self.sync_question_gate().await;
+                self.reporter
+                    .send(ActorToTuiPacket::TokensUpdated(self.stream.usage()));
+                Ok(packet)
+            }
+        }
     }
 
     pub async fn dispatch(&mut self, event: impl Into<Event>) {
@@ -470,16 +287,9 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             false => Ok(()),
         };
         if let Err(error) = workspace {
-            self.persistence_failed(error);
+            self.session_control().persistence.fail(error);
         }
-        if matches!(
-            &event,
-            Event::StopRequested
-                | Event::Shutdown
-                | Event::Session(SessionEvent::Interrupt(_) | SessionEvent::Steer(_))
-        ) {
-            self.session_merge().pause_merge();
-        }
+        self.session_turn().observe(&event);
         let mut effects = VecDeque::from(self.turn.transition(event));
         while let Some(effect) = effects.pop_front() {
             let outcome = self.execute(effect).await;
@@ -497,7 +307,9 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 EffectOutcome::Applied
             }
             Effect::BeginTurn(input) => {
-                self.begin_turn(input).await;
+                self.llm.begin_turn();
+                let mode = self.request_mode;
+                self.session_turn().begin(input, mode).await;
                 EffectOutcome::Applied
             }
             Effect::AppendHistory(messages) => {
@@ -514,7 +326,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                             "Started a new session. Previous history remains available through /sessions.".into(),
                         ));
                     }
-                    Err(error) => self.persistence_failed(error),
+                    Err(error) => self.session_control().persistence.fail(error),
                 }
                 EffectOutcome::Applied
             }
@@ -523,34 +335,17 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 EffectOutcome::Applied
             }
             Effect::PreserveCompletedContent => {
-                self.preserve_completed_content();
+                if let Some(message) = self.stream.take_completed() {
+                    self.session_control().append_history(vec![message]);
+                }
                 EffectOutcome::Applied
             }
             Effect::ChangeState(state) => {
-                self.change_state(state);
+                self.stream.change_state(state);
                 EffectOutcome::Applied
             }
-            Effect::Report(mut packet) => {
-                self.session_control().persistence.persist_report(&packet);
-                match (&mut packet, &self.session.persistence) {
-                    (
-                        ActorToTuiPacket::TurnChanged { state, detail, .. },
-                        Persistence::Failed(failure),
-                    ) if state.terminal() => {
-                        *state = common_models::tui_models::Lifecycle::Failed;
-                        *detail = Some(failure.to_string());
-                    }
-                    _ => {}
-                }
-                let completed = match &packet {
-                    ActorToTuiPacket::TurnChanged {
-                        turn_id,
-                        state: common_models::tui_models::Lifecycle::Completed,
-                        ..
-                    } => Some(*turn_id),
-                    _ => None,
-                };
-                self.reporter.send(packet);
+            Effect::Report(packet) => {
+                let completed = self.session_control().persistence.report(packet);
                 let merge = match completed {
                     Some(turn) => self.offer_merge(turn).await,
                     None => Ok(()),
@@ -570,52 +365,25 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 if let Some(previous) = &previous {
                     previous.cancel.cancel();
                 }
-                self.persist(session::Event::Usage(self.stream.usage()));
-                match &self.session.persistence {
-                    Persistence::Ready => {
-                        let client = self.llm.snapshot();
-                        let input = self.context_input(run.tag.turn, &client);
-                        ProviderTask {
-                            budget: match &self.runtime.role {
-                                ExecutionRole::Worker { execution, .. } => {
-                                    Some(execution.budget.clone())
-                                }
-                                ExecutionRole::Root | ExecutionRole::Helper => None,
-                            },
-                            target: ProviderTarget {
-                                actor: self.actor_ref.clone(),
-                                tag: run.tag,
-                            },
-                            client,
-                            timeout: self.runtime.request_timeout,
-                        }
-                        .spawn(input, &run, &owner, previous);
-                    }
-                    Persistence::Failed(failure) => {
-                        let _ = self.actor_ref.send_message(Message::Provider {
-                            tag: run.tag,
-                            event: ProviderEvent::Finished(Err(failure.clone())),
-                        });
-                    }
-                }
+                let usage = self.stream.usage();
+                self.session_control()
+                    .persistence
+                    .record(session::Event::Usage(usage));
+                self.provider_context().spawn(
+                    &self.llm,
+                    ProviderTarget {
+                        actor: self.actor_ref.clone(),
+                        tag: run.tag,
+                    },
+                    &run,
+                    &owner,
+                    previous,
+                );
                 EffectOutcome::Applied
             }
             Effect::LaunchTools { jobs, tag, scope } => {
-                self.prepare_batch();
-                match &self.session.persistence {
-                    Persistence::Ready => self.executor(scope).spawn(jobs, tag),
-                    Persistence::Failed(failure) => {
-                        let failure = tools::tool_error::ToolFailure::new(
-                            tools::tool_error::ToolFailureKind::Persistence,
-                            tools::tool_error::ToolEffects::NotStarted,
-                            failure.to_string(),
-                        );
-                        let _ = self.actor_ref.send_message(Message::Tools {
-                            tag,
-                            event: turn_engine::ToolEvent::Finished(Err(failure)),
-                        });
-                    }
-                }
+                let jobs = self.session_turn().prepare_tools(jobs);
+                self.executor(scope).spawn(jobs, tag);
                 EffectOutcome::Applied
             }
             Effect::UpdateContext { tag, result } => {
@@ -644,23 +412,8 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 EffectOutcome::ShutdownFinished
             }
             Effect::ReplyWorker { request, outcome } => {
-                let outcome = match &self.session.persistence {
-                    Persistence::Ready => outcome,
-                    Persistence::Failed(failure) => {
-                        WorkerOutcome::Failed(turn_engine::WorkerFailure::Turn(failure.clone()))
-                    }
-                };
-                let result = match outcome {
-                    WorkerOutcome::Completed => Ok(self
-                        .session
-                        .conversation
-                        .history()
-                        .last()
-                        .map(llm::Message::text)
-                        .unwrap_or_default()),
-                    WorkerOutcome::Failed(failure) => Err(failure),
-                };
-                self.worker_replies.complete(request, result);
+                self.worker_replies
+                    .complete(request, self.session.worker_result(outcome));
                 EffectOutcome::Applied
             }
             Effect::StopActor => {
@@ -672,49 +425,24 @@ impl<C: Context + Clone + 'static> ActorState<C> {
 
     pub async fn provider_event(&mut self, tag: Tag, event: ProviderEvent) {
         if let Some(response) = self.turn.provider_response(tag) {
-            let update = match self.stream.event(response, tag, event).await {
-                ProviderAction::Update(update) => update,
-                ProviderAction::Usage(usage) => {
-                    self.persist(session::Event::Usage(usage.clone()));
-                    self.reporter.send(ActorToTuiPacket::TokensUpdated(usage));
-                    ProviderUpdate::Progress(clients::response::StreamNextStep::Noop)
-                }
-                ProviderAction::Commit { update, reply } => {
-                    let result = self.commit_context(update).await.map(|request| {
-                        self.reporter
-                            .send(ActorToTuiPacket::ContextUpdated(request));
-                    });
-                    let _ = reply.send(result);
-                    ProviderUpdate::Progress(clients::response::StreamNextStep::Noop)
-                }
-            };
-            let update = self.provider_context().review(update);
-            if let ProviderUpdate::Finished(Err(failure)) = &update {
-                tracing::warn!(
-                    turn_id = %tag.turn,
-                    operation_id = %tag.operation,
-                    error = %failure,
-                    "Provider request failed"
-                );
+            let action = self.stream.event(response, tag, event).await;
+            let action = self.provider_context().review(action);
+            let update = ProviderSession {
+                session: &mut self.session,
+                runtime: &self.runtime,
+                reporter: &self.reporter,
+                actor: &self.actor_ref,
+                actor_id: self.context.get_id(),
+                usage: self.stream.usage(),
             }
-            if matches!(
-                update,
-                ProviderUpdate::Finished(_) | ProviderUpdate::ReconcilePlan { .. }
-            ) {
-                self.persist(session::Event::Usage(self.stream.usage()));
-            }
+            .apply(tag, action)
+            .await;
             self.dispatch(SessionEvent::Provider { tag, update }).await;
         }
     }
 
-    fn preserve_completed_content(&mut self) {
-        if let Some(message) = self.stream.take_completed() {
-            self.session_control().append_history(vec![message]);
-        }
-    }
-
     #[cfg(test)]
-    pub fn visible_history(&self) -> Vec<llm::Message> {
+    pub fn visible_history(&self) -> Vec<clients::llm::Message> {
         let mut history = self.session.conversation.history().to_vec();
         if let Some(batch) = self.turn.batch() {
             history.extend(batch.messages());
@@ -723,65 +451,78 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     }
 
     pub async fn command(&mut self, command: Command) {
-        match command {
-            Command::Plan | Command::Implement | Command::Questions | Command::Answer(..) | Command::Steer(_) => self.interaction_command(command).await,
-            Command::Diff | Command::Undo(_) => self.change_command(command).await,
-            Command::Sessions | Command::Resume(_) | Command::New | Command::Fork | Command::Prune(_) => {
-                self.session_command(command).await
-            }
-            Command::Compact => {
-                match self.turn.is_idle() {
-                    true => {
-                        let follow_up = turn_engine::turn::FollowUp::new(None);
-                        self.session.conversation.compact(follow_up.id);
-                        self.dispatch(SessionEvent::Start(follow_up)).await;
+        let result = async {
+            Ok(match &command {
+                Command::Plan
+                | Command::Implement
+                | Command::Questions
+                | Command::Answer(_)
+                | Command::Steer(_) => Some(ActorToTuiPacket::CommandResult(
+                    command.clone(),
+                    self.interaction_command(&command).await?,
+                )),
+                Command::Diff | Command::Undo(_) => {
+                    let message = SessionChanges {
+                        runtime: &self.runtime.session_runtime(),
                     }
-                    false => self.reporter.send(ActorToTuiPacket::CommandResult(Command::Compact, "Interrupt the active turn before compacting manually. Automatic compaction runs between complete tool exchanges.".into())),
+                    .run(&command, &self.turn)
+                    .await?;
+                    Some(ActorToTuiPacket::CommandResult(command.clone(), message))
                 }
-            }
-            Command::Clear => {
-                self.dispatch(SessionEvent::Interrupt(HistoryDisposition::Clear))
-                    .await
-            }
-            Command::PrintContext => {
-                let context = self.context.clone();
-                let reporter = self.reporter.clone();
-                let scope = self.runtime.scope.clone();
-                scope.tasks.clone().spawn(async move {
-                    tokio::select! {
-                        _ = scope.cancel.cancelled() => {},
-                        text = scope.enter(context.inspect_context()) => reporter.send(ActorToTuiPacket::CommandResult(Command::PrintContext, text.unwrap_or_else(|error| format!("Context inspection failed: {error}")))),
-                    }
-                });
-            }
-            Command::Logout => {
-                let result = clients::config::Config::delete()
-                    .await
-                    .map(|_| "Logged out. Removed config".to_owned())
-                    .unwrap_or_else(|err| format!("Deletion failed: {err}"));
-                self.reporter
-                    .send(ActorToTuiPacket::CommandResult(Command::Logout, result));
-            }
-            Command::ChangeModel(name, effort) => {
-                if let Err(error) = self
-                    .llm
-                    .change_model_and_effort(name.clone(), effort.clone())
-                    .await
-                {
-                    self.reporter.send(ActorToTuiPacket::CommandResult(
-                        Command::ChangeModel(name, effort),
-                        error.to_string(),
-                    ));
+                Command::Sessions
+                | Command::Resume(_)
+                | Command::New
+                | Command::Fork
+                | Command::Prune(_) => Some(self.session_command(&command).await?),
+                Command::Compact => {
+                    let event = self.session_turn().compact()?;
+                    self.dispatch(event).await;
+                    None
                 }
-            }
+                Command::Clear => {
+                    self.dispatch(SessionEvent::Interrupt(HistoryDisposition::Clear))
+                        .await;
+                    None
+                }
+                Command::PrintContext => {
+                    self.provider_context().inspect(self.reporter.clone());
+                    None
+                }
+                Command::Logout => {
+                    clients::config::Config::delete().await?;
+                    Some(ActorToTuiPacket::CommandResult(
+                        command.clone(),
+                        "Logged out. Removed config".into(),
+                    ))
+                }
+                Command::ChangeModel(name, effort) => {
+                    self.llm
+                        .change_model_and_effort(name.clone(), effort.clone())
+                        .await?;
+                    None
+                }
+            })
         }
+        .await;
+        self.reporter.command(command, result);
     }
 
-    #[cfg(test)]
-    pub fn build_request(&self) -> clients::llm::ClientRequest {
-        clients::llm::ClientRequest::new(self.session.conversation.history().to_vec())
-            .with_system(self.context.effective_instructions().unwrap())
-            .with_tools(self.tool_definitions())
-            .with_thinking()
+    pub(crate) fn session_control(&mut self) -> SessionControl<'_> {
+        self.session
+            .control(self.runtime.session_access(&self.reporter))
+    }
+
+    pub(crate) fn interaction_control(&mut self) -> InteractionControl<'_, SessionPersistence<'_>> {
+        self.session
+            .interaction_control(self.runtime.session_access(&self.reporter))
+    }
+
+    pub(crate) fn session_turn(&mut self) -> SessionTurn<'_> {
+        SessionTurn {
+            state: &mut self.session,
+            access: self.runtime.session_access(&self.reporter),
+            environment: self.runtime.merge_environment(),
+            turn: &self.turn,
+        }
     }
 }

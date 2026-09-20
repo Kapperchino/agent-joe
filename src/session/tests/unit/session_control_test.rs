@@ -177,3 +177,74 @@ fn session_control_keeps_queued_input_and_live_history_in_sync_without_an_actor(
         serde_json::to_value(control.conversation.history()).unwrap()
     );
 }
+
+#[test]
+fn failed_terminal_report_cannot_trigger_merge_or_a_successful_worker_reply() {
+    use common_models::tui_models::Lifecycle;
+    use turn_engine::machine::WorkerOutcome;
+
+    let workspace = Workspace::new();
+    let store = workspace.store();
+    let history = vec![Message::new_assistant("Completed work".into())];
+    let session = store
+        .create(SessionProvider::Injected, None, history.clone())
+        .unwrap();
+    let mut state = SessionState::new(
+        Conversation::new(history, None),
+        InteractionState::default(),
+        MergeApproval::None,
+    );
+    let policy = InteractionPolicy::default();
+    let (packets, events) = flume::unbounded();
+    let reporter = |packet| packets.send(packet).unwrap();
+    let access = SessionAccess {
+        session: Some(&session),
+        reporter: &reporter,
+        policy: &policy,
+        role: InteractionRole::Root,
+    };
+    let turn = TurnId::new();
+    let completed = || ActorToTuiPacket::TurnChanged {
+        turn_id: turn,
+        state: Lifecycle::Completed,
+        detail: None,
+    };
+    assert_eq!(
+        state.control(access).persistence.report(completed()),
+        Some(turn)
+    );
+    assert_eq!(session.snapshot().unwrap().status, Lifecycle::Completed);
+    assert!(matches!(
+        events.recv().unwrap(),
+        ActorToTuiPacket::TurnChanged {
+            state: Lifecycle::Completed,
+            ..
+        }
+    ));
+
+    crate::test_support::invalidate(&store, &session.id);
+    assert!(
+        state
+            .control(access)
+            .persistence
+            .report(completed())
+            .is_none()
+    );
+    assert!(matches!(
+        events.recv().unwrap(),
+        ActorToTuiPacket::SessionError(_)
+    ));
+    assert!(matches!(
+        events.recv().unwrap(),
+        ActorToTuiPacket::TurnChanged {
+            state: Lifecycle::Failed,
+            detail: Some(_),
+            ..
+        }
+    ));
+    assert!(matches!(
+        state.worker_result(WorkerOutcome::Completed),
+        Err(turn_engine::WorkerFailure::Turn(_))
+    ));
+    assert!(events.is_empty());
+}

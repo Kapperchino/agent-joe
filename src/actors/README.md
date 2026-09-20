@@ -10,16 +10,22 @@ the following responsibilities:
 | Type | Responsibility |
 | --- | --- |
 | `session::state::SessionState` | Owns conversation, interaction, persistence, and merge state; lends them to the existing domain controllers |
+| `session::turn::SessionTurn` | Coordinates turn startup, answer commits, merge readiness, and persisted tool batches |
 | `session::changes::SessionChanges` | Starts change tracking and executes authorized diff and undo commands |
-| `ProviderContext` | Builds request context, captures immutable snapshots, and reviews completion against plans and pending workers |
+| `ProviderContext` | Builds and launches requests, captures immutable snapshots, and reviews completion against plans and pending workers |
 | `ProviderStream` | Owns stream accumulation, logging, usage, notifications, and provider event translation |
-| `ContextCommit` | Persists compaction before installing checkpoints and registers immutable context workers |
+| `ProviderSession` | Persists provider usage and context updates, installs committed checkpoints, and registers immutable context workers |
 | `ActorServices` | Resolves tools and applies tool context updates with failure handling |
 | `ActorMode` | Configures startup tools, request mode, and event reporting |
+| `EventReporter` | Delivers notifications and formats command results through one path |
 
 Session activation replaces `SessionState` as a unit and resets the provider
 stream with the restored usage. Stream actions request persistence or context
 commits from the actor before the turn machine advances.
+`SessionPersistence` reports terminal storage failures before merge or worker
+completion can proceed. Provider input failures drain the previous request and
+use the same task completion path as provider responses. Tool launchers report
+rejected batches without running tools.
 
 | Crate | Owns | Boundary |
 | --- | --- | --- |

@@ -410,21 +410,26 @@ impl<C: Context + Clone + 'static> Executor<C> {
         Ok(())
     }
 
-    pub fn spawn(self, jobs: Vec<ToolJob>, tag: Tag) {
-        self.runtime.scope.tasks.clone().spawn(async move {
-            let scope = self.runtime.scope.clone();
-            let result = scope
-                .enter(AssertUnwindSafe(self.run(jobs, tag)).catch_unwind())
-                .await;
-            let result = result.map(|_| ()).map_err(|_| {
-                ToolFailure::new(
-                    ToolFailureKind::Panicked,
-                    ToolEffects::MayHaveChanged,
-                    "Tool scheduler panicked",
-                )
-            });
-            self.emit(tag, ToolEvent::Finished(result));
-        });
+    pub fn spawn(self, jobs: Result<Vec<ToolJob>, ToolFailure>, tag: Tag) {
+        match jobs {
+            Err(failure) => self.emit(tag, ToolEvent::Finished(Err(failure))),
+            Ok(jobs) => {
+                self.runtime.scope.tasks.clone().spawn(async move {
+                    let scope = self.runtime.scope.clone();
+                    let result = scope
+                        .enter(AssertUnwindSafe(self.run(jobs, tag)).catch_unwind())
+                        .await;
+                    let result = result.map(|_| ()).map_err(|_| {
+                        ToolFailure::new(
+                            ToolFailureKind::Panicked,
+                            ToolEffects::MayHaveChanged,
+                            "Tool scheduler panicked",
+                        )
+                    });
+                    self.emit(tag, ToolEvent::Finished(result));
+                });
+            }
+        }
     }
 
     fn concurrent(&self, job: &ToolJob) -> bool {

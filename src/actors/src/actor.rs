@@ -127,14 +127,20 @@ impl<W: ContextWorker> Worker for W {
             .enter(async {
                 match message {
                     Message::CaptureSnapshot(reply) => {
-                        let _ = reply.send(state.capture_snapshot());
+                        let _ = reply.send(
+                            state
+                                .provider_context()
+                                .capture_snapshot(&state.turn, &state.llm),
+                        );
                     }
                     Message::AskQuestion {
                         question,
                         scope,
                         reply,
                     } => {
-                        let result = state.request_question(question, &scope.execution);
+                        let result = state
+                            .interaction_control()
+                            .request_question(question, &scope.execution);
                         state.sync_question_gate().await;
                         let _ = reply.send(result.map_err(|error| error.to_string()));
                     }
@@ -143,7 +149,9 @@ impl<W: ContextWorker> Worker for W {
                         scope,
                         reply,
                     } => {
-                        let result = state.update_plan(update, &scope.execution);
+                        let result = state
+                            .interaction_control()
+                            .update_plan(update, &scope.execution);
                         let _ = reply.send(result.map_err(|error| error.to_string()));
                     }
                     Message::StartWork(prompt) => {
@@ -152,7 +160,7 @@ impl<W: ContextWorker> Worker for W {
                             .await
                     }
                     Message::ResolveMerge { turn } => {
-                        if let Some(input) = state.merge_input(turn) {
+                        if let Some(input) = state.session_turn().merge().merge_input(turn) {
                             state.dispatch(SessionEvent::Start(input)).await;
                         }
                     }
@@ -175,7 +183,10 @@ impl<W: ContextWorker> Worker for W {
                         state.dispatch(SessionEvent::CleanupFinished(turn)).await
                     }
                     Message::ProcessPersistenceFailed(error) => {
-                        state.persistence_failed(anyhow::anyhow!(error));
+                        state
+                            .session_control()
+                            .persistence
+                            .fail(anyhow::anyhow!(error));
                         state
                             .dispatch(SessionEvent::Interrupt(HistoryDisposition::Retain))
                             .await

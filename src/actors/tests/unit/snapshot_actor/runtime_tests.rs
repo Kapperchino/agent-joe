@@ -436,7 +436,10 @@ async fn capture_preserves_full_transcript_and_existing_compaction_memory() {
         .unwrap(),
     );
     let expected = serde_json::to_value(state.session.conversation.history()).unwrap();
-    let snapshot = state.capture_snapshot().unwrap();
+    let snapshot = state
+        .provider_context()
+        .capture_snapshot(&state.turn, &state.llm)
+        .unwrap();
     state.session.conversation = conversation::Conversation::new(Vec::new(), None);
     state.context.revision = 99;
     let snapshot = SnapshotHarness::spawn(snapshot, requests).await;

@@ -25,6 +25,7 @@ pub mod state;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 pub mod transition;
+pub mod turn;
 use generations::SessionDatabase;
 pub use generations::SessionStore;
 use ownership::Owner;

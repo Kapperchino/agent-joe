@@ -34,8 +34,10 @@ impl ChangeOperation {
 }
 
 impl SessionChanges<'_> {
-    pub async fn begin_turn(&self, mode: RequestMode) -> anyhow::Result<()> {
-        let scope = self.runtime.scope.clone();
+    pub async fn begin_turn(
+        scope: &utils::execution::ExecutionScope,
+        mode: RequestMode,
+    ) -> anyhow::Result<()> {
         let changes = scope.changes.clone();
         match (scope.workspace(), mode) {
             (Ok(_), RequestMode::Continue | RequestMode::Compact) => {

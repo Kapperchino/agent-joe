@@ -16,6 +16,15 @@ use std::sync::{
 use tools::tool_defs::{ErasedToolTrait, ToolDefinition, ToolEffect, ToolId};
 use utils::utils::FnvHashMap;
 
+fn build_request<C: Context + Clone + 'static>(
+    state: &ActorState<C>,
+) -> clients::llm::ClientRequest {
+    clients::llm::ClientRequest::new(state.session.conversation.history().to_vec())
+        .with_system(state.context.effective_instructions().unwrap())
+        .with_tools(state.services.tool_definitions())
+        .with_thinking()
+}
+
 #[derive(Clone)]
 pub struct TestContext {
     pub task: Option<String>,
@@ -222,11 +231,12 @@ async fn helpers_preserve_parent_interaction_without_root_tools_or_plan_context(
     planning.record_evidence("helper".into(), "Helper evidence".into());
     h.state.session.interaction =
         interaction::InteractionState::restored(planning, Default::default());
-    h.state.refresh_interaction();
+    h.state.interaction_control().refresh_interaction();
     assert_eq!(interaction.mode(), WorkMode::Plan);
     let input = h
         .state
-        .context_input(common_models::runtime_ids::TurnId::new(), &h.state.llm)
+        .provider_context()
+        .input(common_models::runtime_ids::TurnId::new(), &h.state.llm)
         .unwrap();
     assert!(input.runtime.as_ref().unwrap().evidence.is_empty());
     assert_eq!(
@@ -273,19 +283,31 @@ async fn context_budget_follows_the_active_model_and_preserves_overrides() {
     }));
     let turn = common_models::runtime_ids::TurnId::new();
     h.state.llm = client("claude-opus-4-7");
-    let large = h.state.context_input(turn, &h.state.llm).unwrap();
+    let large = h
+        .state
+        .provider_context()
+        .input(turn, &h.state.llm)
+        .unwrap();
     assert_eq!(large.limits.ceiling(), 1_000_000);
     assert!(matches!(large.plan().unwrap(), BudgetPlan::Ready(_)));
 
     h.state.llm = client("claude-haiku-4-5");
-    let small = h.state.context_input(turn, &h.state.llm).unwrap();
+    let small = h
+        .state
+        .provider_context()
+        .input(turn, &h.state.llm)
+        .unwrap();
     assert_eq!(small.limits.ceiling(), 200_000);
     assert!(matches!(small.plan().unwrap(), BudgetPlan::Compact(_)));
 
     let mut runtime = h.state.runtime.clone();
     runtime.context_budget = ContextBudget::new(Some(1_000_000), 2048).unwrap();
     h.state.runtime = runtime;
-    let overridden = h.state.context_input(turn, &h.state.llm).unwrap();
+    let overridden = h
+        .state
+        .provider_context()
+        .input(turn, &h.state.llm)
+        .unwrap();
     assert_eq!(overridden.limits.ceiling(), 1_000_000);
     let BudgetPlan::Ready(request) = overridden.plan().unwrap() else {
         panic!("The explicit override should allow the full request")
@@ -295,7 +317,12 @@ async fn context_budget_follows_the_active_model_and_preserves_overrides() {
     let mut runtime = h.state.runtime.clone();
     runtime.context_budget = ContextBudget::new(None, 100_000).unwrap();
     h.state.runtime = runtime;
-    assert!(h.state.context_input(turn, &h.state.llm).is_err());
+    assert!(
+        h.state
+            .provider_context()
+            .input(turn, &h.state.llm)
+            .is_err()
+    );
 }
 
 async fn consume(
@@ -355,7 +382,7 @@ async fn replay_preserves_reasoning_phase_arguments_and_results_across_turns() {
     assert_eq!(h.state.session.conversation.history().len(), 4);
     assert_eq!(h.state.session.conversation.history()[2].content.len(), 4);
     assert_eq!(h.state.session.conversation.history()[3].content.len(), 2);
-    let request = openai::ClientRequest::try_from(h.state.build_request()).unwrap();
+    let request = openai::ClientRequest::try_from(build_request(&h.state)).unwrap();
     assert_eq!(
         request.instructions.as_deref(),
         Some("Follow the fixture's operating instructions.")
@@ -413,7 +440,7 @@ async fn replay_preserves_reasoning_phase_arguments_and_results_across_turns() {
         openai_event(&mut h.state, event).await.unwrap();
     }
     assert_eq!(h.calls.load(Ordering::SeqCst), 3);
-    let request = openai::ClientRequest::try_from(h.state.build_request()).unwrap();
+    let request = openai::ClientRequest::try_from(build_request(&h.state)).unwrap();
     let input = serde_json::to_value(request.input).unwrap();
     let items = input.as_array().unwrap();
     let reasoning: Vec<_> = items.iter().filter(|x| x["type"] == "reasoning").collect();
@@ -436,7 +463,7 @@ async fn replay_preserves_reasoning_phase_arguments_and_results_across_turns() {
             .to_string()
             .contains("opaque-state")
     );
-    assert!(claude::ClientRequest::try_from(h.state.build_request()).is_err());
+    assert!(claude::ClientRequest::try_from(build_request(&h.state)).is_err());
 }
 
 #[tokio::test]
@@ -462,7 +489,7 @@ async fn claude_replay_preserves_thinking_signatures_and_typed_tool_input() {
         let event: claude::StreamEvent = serde_json::from_value(event).unwrap();
         consume(&mut h.state, event.into()).await.unwrap();
     }
-    let request = claude::ClientRequest::try_from(h.state.build_request()).unwrap();
+    let request = claude::ClientRequest::try_from(build_request(&h.state)).unwrap();
     assert_eq!(
         request.system.as_deref(),
         Some("Follow the fixture's operating instructions.")
@@ -475,7 +502,7 @@ async fn claude_replay_preserves_thinking_signatures_and_typed_tool_input() {
     assert_eq!(messages[2]["content"][1]["input"], arguments);
     assert_eq!(messages[3]["content"][0]["tool_use_id"], "tool_1");
     assert_eq!(h.calls.load(Ordering::SeqCst), 1);
-    assert!(openai::ClientRequest::try_from(h.state.build_request()).is_err());
+    assert!(openai::ClientRequest::try_from(build_request(&h.state)).is_err());
 }
 
 #[tokio::test]
@@ -544,7 +571,7 @@ async fn clear_reloads_workspace_and_keeps_instructions_without_the_old_task() {
         .push(llm::Message::new_assistant("Old result.".into()));
     h.state.context.revision = 2;
     h.state.clear_history().await.unwrap();
-    let request = h.state.build_request();
+    let request = build_request(&h.state);
     assert_eq!(
         request.system.as_deref(),
         Some("Follow the fixture's operating instructions.")
@@ -565,7 +592,7 @@ async fn unknown_tool_with_nested_input_is_recorded_as_a_recoverable_result() {
     ] {
         openai_event(&mut h.state, event).await.unwrap();
     }
-    let request = openai::ClientRequest::try_from(h.state.build_request()).unwrap();
+    let request = openai::ClientRequest::try_from(build_request(&h.state)).unwrap();
     let input = serde_json::to_value(request.input).unwrap();
     assert!(
         input[3]["output"]
@@ -715,7 +742,7 @@ async fn a_streamed_tool_can_receive_its_id_at_completion() {
         openai_event(&mut h.state, event).await.unwrap();
     }
     assert_eq!(h.calls.load(Ordering::SeqCst), 1);
-    let request = openai::ClientRequest::try_from(h.state.build_request()).unwrap();
+    let request = openai::ClientRequest::try_from(build_request(&h.state)).unwrap();
     let input = serde_json::to_value(request.input).unwrap();
     assert_eq!(input[2]["id"], "fc_1");
     assert_eq!(input[2]["call_id"], "call_1");
@@ -732,4 +759,79 @@ impl llm::StreamProvider for UnusedProvider {
     > {
         Box::pin(async { Err(anyhow::anyhow!("Replay fixtures never open a transport")) })
     }
+}
+
+#[tokio::test]
+async fn rejected_provider_input_drains_the_previous_request_before_reporting_failure() {
+    use crate::states::provider_task::{ProviderEvent, ProviderTarget, ProviderTask};
+    use clients::failure::{Failure, FailureKind};
+    use common_models::runtime_ids::TurnId;
+    use std::time::Duration;
+    use turn_engine::turn::ProviderRun;
+    use utils::execution::ExecutionScope;
+
+    struct Observer;
+    impl Actor for Observer {
+        type Msg = Message;
+        type State = flume::Sender<ProviderEvent>;
+        type Arguments = flume::Sender<ProviderEvent>;
+
+        async fn pre_start(
+            &self,
+            _: ActorRef<Message>,
+            events: Self::Arguments,
+        ) -> Result<Self::State, ActorProcessingErr> {
+            Ok(events)
+        }
+
+        async fn handle(
+            &self,
+            _: ActorRef<Message>,
+            message: Message,
+            events: &mut Self::State,
+        ) -> Result<(), ActorProcessingErr> {
+            if let Message::Provider { event, .. } = message {
+                events.send(event)?;
+            }
+            Ok(())
+        }
+    }
+
+    let (events, received) = flume::unbounded();
+    let (actor, actor_task) = Actor::spawn(None, Observer, events).await.unwrap();
+    let owner = ExecutionScope::default();
+    let previous = owner.child();
+    let cancelled = previous.cancel.clone();
+    previous
+        .tasks
+        .spawn(async move { cancelled.cancelled().await });
+    let run = ProviderRun::new(TurnId::new(), owner.child(), 0);
+    ProviderTask {
+        budget: None,
+        target: ProviderTarget {
+            actor: actor.clone(),
+            tag: run.tag,
+        },
+        client: LLmClient::Injected(Arc::new(UnusedProvider)),
+        timeout: Duration::from_secs(5),
+    }
+    .spawn(
+        Err(Failure::new(FailureKind::Tool, "Session storage failed")),
+        &run,
+        &owner,
+        Some(previous.clone()),
+    );
+
+    let event = tokio::time::timeout(Duration::from_secs(5), received.recv_async())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(event, ProviderEvent::Finished(Err(failure)) if failure.kind == FailureKind::Tool && failure.message == "Session storage failed")
+    );
+    assert!(previous.cancel.is_cancelled());
+    assert!(previous.tasks.is_empty());
+    owner.finish().await;
+    actor.stop(None);
+    actor_task.await.unwrap();
 }

@@ -34,6 +34,7 @@ pub trait MergePersistence: InteractionPersistence {
     fn clear_worktree(&mut self);
 }
 
+#[derive(Clone, Copy)]
 pub struct MergeEnvironment<'a> {
     pub project: Option<&'a Arc<WorkspacePolicy>>,
     pub workspace: &'a workspace_access::Workspace,
