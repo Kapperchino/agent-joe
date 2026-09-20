@@ -22,19 +22,19 @@ use tools::tool_defs::{ToolDefinition, erased_tool};
 use utils::execution::ExecutionScope;
 
 pub struct ActorState<C: Context> {
-    pub(crate) conversation: Conversation,
-    pub(crate) interaction: InteractionState,
-    pub(crate) request_mode: RequestMode,
-    pub(crate) persistence: Persistence,
-    pub(crate) merge_approval: MergeApproval,
-    pub(crate) turn: TurnMachine,
-    pub(crate) llm: LLmClient,
-    pub(crate) file_actor: Option<ActorRef<file_actor::Message>>,
-    pub(crate) stream_processor: StreamProcessor,
-    pub(crate) reporter: EventReporter,
-    pub(crate) actor_ref: ActorRef<actor::Message>,
-    pub(crate) services: Arc<ActorServices<C>>,
-    pub(crate) workspace: ActiveWorkspace<C>,
+    pub conversation: Conversation,
+    pub interaction: InteractionState,
+    pub request_mode: RequestMode,
+    pub persistence: Persistence,
+    pub merge_approval: MergeApproval,
+    pub turn: TurnMachine,
+    pub llm: LLmClient,
+    pub file_actor: Option<ActorRef<file_actor::Message>>,
+    pub stream_processor: StreamProcessor,
+    pub reporter: EventReporter,
+    pub actor_ref: ActorRef<actor::Message>,
+    pub services: Arc<ActorServices<C>>,
+    pub workspace: ActiveWorkspace<C>,
 }
 
 pub enum ActorMode {
@@ -234,7 +234,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         self.activate_session(activation).await
     }
 
-    pub(crate) async fn activate_session(
+    pub async fn activate_session(
         &mut self,
         activation: SessionActivation<C>,
     ) -> anyhow::Result<()> {

@@ -15,7 +15,7 @@ use common_models::tui_models::TokenCount;
 use std::{collections::BTreeMap, sync::Arc};
 use utils::git::worktrees::session::SessionWorktree;
 
-pub(crate) struct SessionActivation<C: Context> {
+pub struct SessionActivation<C: Context> {
     pub workspace: ActiveWorkspace<C>,
     pub conversation: Conversation,
     pub interaction: InteractionState,
@@ -24,7 +24,7 @@ pub(crate) struct SessionActivation<C: Context> {
     pub workers: WorkerRecovery,
 }
 
-pub(crate) enum WorkerRecovery {
+pub enum WorkerRecovery {
     Fresh,
     Saved {
         workers: BTreeMap<String, WorkerView>,

@@ -7,7 +7,7 @@ pub enum SessionTransition {
 }
 
 impl SessionTransition {
-    pub(crate) fn apply(
+    pub fn apply(
         self,
         mut runtime: Runtime,
         client: &LLmClient,

@@ -546,7 +546,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         }
     }
 
-    pub(crate) fn restore_merge_question(&mut self) -> anyhow::Result<()> {
+    pub fn restore_merge_question(&mut self) -> anyhow::Result<()> {
         let commit = match &self.merge_approval {
             MergeApproval::Awaiting { question, commit }
                 if !self

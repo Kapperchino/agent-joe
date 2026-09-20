@@ -6,14 +6,14 @@ pub enum Persistence {
 }
 
 impl Persistence {
-    pub(crate) fn committed<T>(&self, value: T) -> Result<T, Failure> {
+    pub fn committed<T>(&self, value: T) -> Result<T, Failure> {
         match self {
             Self::Ready => Ok(value),
             Self::Failed(failure) => Err(failure.clone()),
         }
     }
 
-    pub(crate) fn fail(&mut self, error: anyhow::Error) -> Option<String> {
+    pub fn fail(&mut self, error: anyhow::Error) -> Option<String> {
         match self {
             Self::Ready => {
                 let message =

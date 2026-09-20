@@ -50,7 +50,7 @@ impl<C: Context> ActiveWorkspace<C> {
     }
 }
 
-pub(crate) async fn initial_history<C: Context>(context: &C) -> Vec<Message> {
+pub async fn initial_history<C: Context>(context: &C) -> Vec<Message> {
     std::iter::once(Message::new(context.get_ctx().await))
         .chain(
             context

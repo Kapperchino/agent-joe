@@ -8,7 +8,7 @@ use tools::{
 };
 use utils::workspace::WorkspacePolicy;
 
-pub(crate) mod activation;
+pub mod activation;
 mod artifact_index;
 pub mod artifacts;
 pub mod conversation;
