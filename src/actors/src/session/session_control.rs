@@ -1,10 +1,17 @@
 use crate::{
-    context,
+    context::{RequestMode, compactor::ContextUpdate},
+    immutable_workers::{ImmutableWorker, ImmutableWorkerDescription},
     session::{
         Event, PendingBatch, QueuedInput, ResumableSession, Session, SessionStore,
         session_merge::MergeEvent,
     },
-    states::{actor_state::ActorState, turn::FollowUp},
+    states::{
+        actor_state::ActorState,
+        runtime::{ExecutionRole, Runtime},
+        turn::{FollowUp, HistoryDisposition},
+        turn_machine::{SessionEvent, TurnMachine},
+    },
+    workers::snapshot_worker::SnapshotWorker,
 };
 use analysis::contexts::context::Context;
 use clients::{
@@ -13,10 +20,10 @@ use clients::{
 };
 use commands::command::{Command, ResumeTarget};
 use common_models::tui_models::{
-    ActorToTuiPacket, SessionMessage, SessionSummary, SessionTranscript, TokenCount,
+    ActorToTuiPacket, RequestContext, SessionMessage, SessionTranscript, TokenCount,
 };
 use std::sync::Arc;
-use utils::git::worktrees::session::PruneMode;
+use utils::git::worktrees::session::{PruneMode, SessionWorktree};
 
 pub enum Persistence {
     Ready,
@@ -24,6 +31,13 @@ pub enum Persistence {
 }
 
 impl Persistence {
+    fn committed<T>(&self, value: T) -> Result<T, Failure> {
+        match self {
+            Self::Ready => Ok(value),
+            Self::Failed(failure) => Err(failure.clone()),
+        }
+    }
+
     fn fail(&mut self, error: anyhow::Error) -> Option<String> {
         match self {
             Self::Ready => {
@@ -50,7 +64,7 @@ enum SessionAction<'a> {
 impl<'a> SessionAction<'a> {
     fn new(
         command: &'a Command,
-        turn: &crate::states::turn_machine::TurnMachine,
+        turn: &TurnMachine,
         current: Option<&str>,
     ) -> anyhow::Result<Self> {
         match command {
@@ -77,22 +91,16 @@ impl<'a> SessionAction<'a> {
     }
 }
 
-enum SessionReply {
-    Message(String),
-    Choices(Vec<SessionSummary>),
-    Resumed(SessionTranscript),
-}
-
 impl<C: Context + Clone + 'static> ActorState<C> {
     pub async fn commit_context(
         &mut self,
-        update: context::compactor::ContextUpdate,
-    ) -> Result<common_models::tui_models::RequestContext, Failure> {
+        update: ContextUpdate,
+    ) -> Result<RequestContext, Failure> {
         if let Some(compaction) = update.compaction {
-            let worker = crate::immutable_workers::ImmutableWorker::spawn(
-                crate::workers::snapshot_worker::SnapshotWorker,
+            let worker = ImmutableWorker::spawn(
+                SnapshotWorker,
                 compaction.snapshot,
-                crate::immutable_workers::ImmutableWorkerDescription {
+                ImmutableWorkerDescription {
                     kind: "snapshot".into(),
                     description: format!(
                         "Older context preserved by compaction generation {}. Includes the compacted exchanges and any earlier compaction memory.",
@@ -103,7 +111,11 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             )
             .await
             .map_err(|error| Failure::new(FailureKind::Worker, error.to_string()))?;
-            self.context_checkpoint = self.save_checkpoint(compaction.checkpoint)?;
+            self.persist(Event::Compacted {
+                context: compaction.checkpoint.clone(),
+                usage: self.stream_processor.token_count.clone(),
+            });
+            self.context_checkpoint = self.persistence.committed(compaction.checkpoint)?;
             let view = self
                 .dependency
                 .runtime
@@ -116,24 +128,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         if let (Persistence::Ready, Some(message)) = (&self.persistence, update.runtime_update) {
             self.append_history(vec![message]);
         }
-        match &self.persistence {
-            Persistence::Ready => Ok(update.request),
-            Persistence::Failed(failure) => Err(failure.clone()),
-        }
-    }
-
-    fn save_checkpoint(
-        &mut self,
-        checkpoint: crate::context::Checkpoint,
-    ) -> Result<crate::context::Checkpoint, Failure> {
-        self.persist(Event::Compacted {
-            context: checkpoint.clone(),
-            usage: self.stream_processor.token_count.clone(),
-        });
-        match &self.persistence {
-            Persistence::Ready => Ok(checkpoint),
-            Persistence::Failed(failure) => Err(failure.clone()),
-        }
+        self.persistence.committed(update.request)
     }
 
     pub fn append_history(&mut self, messages: Vec<llm::Message>) {
@@ -188,29 +183,24 @@ impl<C: Context + Clone + 'static> ActorState<C> {
 
     pub async fn prepare_session_workspace(&mut self) -> anyhow::Result<()> {
         let mut runtime = self.dependency.runtime.clone();
-        if let (crate::states::runtime::ExecutionRole::Root, Some(session)) =
-            (&runtime.role, &runtime.session)
-            && runtime.project.is_some()
-            && session.snapshot()?.worktree.is_none()
-        {
-            let session = session.clone();
-            runtime.activate_session(None)?;
-            let snapshot = session.snapshot()?;
-            match snapshot.worktree {
-                Some(_) => {
+        match (&runtime.role, &runtime.project, &runtime.session) {
+            (ExecutionRole::Root, Some(_), Some(session))
+                if session.snapshot()?.worktree.is_none() =>
+            {
+                let session = session.clone();
+                runtime.activate_session(None)?;
+                let snapshot = session.snapshot()?;
+                if snapshot.worktree.is_some() {
                     runtime.scope.changes = session.change_tracker(snapshot.changes);
                     self.relocate_session_workspace(runtime).await?;
                 }
-                None => {}
             }
+            _ => {}
         }
         Ok(())
     }
 
-    pub async fn relocate_session_workspace(
-        &mut self,
-        runtime: crate::states::runtime::Runtime,
-    ) -> anyhow::Result<()> {
+    pub async fn relocate_session_workspace(&mut self, runtime: Runtime) -> anyhow::Result<()> {
         let mut context = self.cur_context.clone();
         context.clear_task_context();
         context.relocate(runtime.scope.workspace()?.root().to_path_buf())?;
@@ -232,13 +222,13 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             self.persistence_failed(error);
         }
         self.refresh_interaction();
-        if input.prompt.is_some() && self.merge_approval.resolution(input.id).is_none() {
+        if let (Some(_), None) = (&input.prompt, self.merge_approval.resolution(input.id)) {
             self.reconcile_plan();
         }
         let scope = self.dependency.runtime.scope.clone();
         let changes = scope.changes.clone();
-        let baseline = match (scope.workspace().is_ok(), self.request_mode) {
-            (true, mode) if mode != crate::context::RequestMode::SingleResponse => {
+        let baseline = match (scope.workspace(), self.request_mode) {
+            (Ok(_), RequestMode::Continue | RequestMode::Compact) => {
                 scope
                     .enter(utils::files::operation(move |workspace| {
                         changes.start(workspace)
@@ -260,20 +250,21 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     }
 
     pub fn prepare_batch(&mut self) {
-        if let Some(session) = &self.dependency.runtime.session
-            && let Some(batch) = self.turn.batch()
+        if let (Some(session), Some(batch)) = (&self.dependency.runtime.session, self.turn.batch())
         {
             self.persist(Event::Prepared(PendingBatch::new(session, batch)));
         }
     }
 
     pub fn persist_report(&mut self, packet: &ActorToTuiPacket) {
-        if let Some(session) = &self.dependency.runtime.session
-            && let ActorToTuiPacket::TurnChanged {
+        if let (
+            Some(session),
+            ActorToTuiPacket::TurnChanged {
                 turn_id,
                 state,
                 detail,
-            } = packet
+            },
+        ) = (&self.dependency.runtime.session, packet)
         {
             self.persist(Event::Status {
                 turn: session.key(turn_id),
@@ -284,29 +275,22 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     }
 
     pub async fn session_command(&mut self, command: Command) {
-        let result = self.run_session_command(&command).await;
-        let packet = match (command, result) {
-            (command, Ok(SessionReply::Message(message))) => {
-                ActorToTuiPacket::CommandResult(command, message)
-            }
-            (_, Ok(SessionReply::Choices(choices))) => {
-                ActorToTuiPacket::SessionChoices(Ok(choices))
-            }
-            (_, Ok(SessionReply::Resumed(transcript))) => {
-                ActorToTuiPacket::SessionResumed(Ok(transcript))
-            }
-            (Command::Resume(ResumeTarget::Picker), Err(error)) => {
-                ActorToTuiPacket::SessionChoices(Err(error.to_string()))
-            }
-            (Command::Resume(ResumeTarget::Session { .. }), Err(error)) => {
-                ActorToTuiPacket::SessionResumed(Err(error.to_string()))
-            }
-            (command, Err(error)) => ActorToTuiPacket::CommandResult(command, error.to_string()),
-        };
+        let packet =
+            self.run_session_command(&command)
+                .await
+                .unwrap_or_else(|error| match command {
+                    Command::Resume(ResumeTarget::Picker) => {
+                        ActorToTuiPacket::SessionChoices(Err(error.to_string()))
+                    }
+                    Command::Resume(ResumeTarget::Session { .. }) => {
+                        ActorToTuiPacket::SessionResumed(Err(error.to_string()))
+                    }
+                    command => ActorToTuiPacket::CommandResult(command, error.to_string()),
+                });
         self.reporter.send(packet);
     }
 
-    async fn run_session_command(&mut self, command: &Command) -> anyhow::Result<SessionReply> {
+    async fn run_session_command(&mut self, command: &Command) -> anyhow::Result<ActorToTuiPacket> {
         let store = self
             .dependency
             .runtime
@@ -319,8 +303,11 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             .session
             .as_ref()
             .map(|session| session.id.as_str());
-        match SessionAction::new(command, &self.turn, current)? {
-            SessionAction::List => Self::list_sessions(&store, current).map(SessionReply::Message),
+        Ok(match SessionAction::new(command, &self.turn, current)? {
+            SessionAction::List => ActorToTuiPacket::CommandResult(
+                command.clone(),
+                Self::list_sessions(&store, current)?,
+            ),
             SessionAction::Prune(mode) => {
                 let runtime = &self.dependency.runtime;
                 runtime
@@ -333,12 +320,14 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 let report =
                     tokio::task::spawn_blocking(move || store.prune_worktrees(&project, mode))
                         .await??;
-                Ok(SessionReply::Message(report))
+                ActorToTuiPacket::CommandResult(command.clone(), report)
             }
-            SessionAction::Pick => store
-                .resume_choices(&self.llm.session_provider(), current)
-                .map(SessionReply::Choices),
-            SessionAction::Current { id } => Ok(SessionReply::Resumed(self.session_transcript(id))),
+            SessionAction::Pick => ActorToTuiPacket::SessionChoices(Ok(
+                store.resume_choices(&self.llm.session_provider(), current)?
+            )),
+            SessionAction::Current { id } => {
+                ActorToTuiPacket::SessionResumed(Ok(self.session_transcript(id)))
+            }
             SessionAction::Resume { id } => {
                 let workspace = self
                     .dependency
@@ -351,38 +340,30 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                     ResumableSession::new(&store, id, &workspace, &self.llm.session_provider())?
                         .resume()?;
                 self.restore_session(session, None).await?;
-                Ok(SessionReply::Resumed(self.session_transcript(id)))
+                ActorToTuiPacket::SessionResumed(Ok(self.session_transcript(id)))
             }
             SessionAction::New => {
-                self.dispatch(crate::states::turn_machine::SessionEvent::Interrupt(
-                    crate::states::turn::HistoryDisposition::Retain,
-                ))
-                .await;
+                self.dispatch(SessionEvent::Interrupt(HistoryDisposition::Retain))
+                    .await;
                 self.clear_history().await?;
                 self.reporter.send(ActorToTuiPacket::SessionChanged);
                 self.reporter
                     .send(ActorToTuiPacket::TokensUpdated(TokenCount::default()));
-                Ok(SessionReply::Message(
+                ActorToTuiPacket::CommandResult(
+                    command.clone(),
                     "Started a new session. Previous sessions remain available through /sessions."
                         .into(),
-                ))
+                )
             }
             SessionAction::Fork => {
-                let source = self
+                let current = self
                     .dependency
                     .runtime
                     .session
                     .as_ref()
-                    .map(|session| session.snapshot())
-                    .transpose()?
-                    .and_then(|snapshot| snapshot.worktree);
-                let session = self
-                    .dependency
-                    .runtime
-                    .session
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("There is no current session"))?
-                    .fork()?;
+                    .ok_or_else(|| anyhow::anyhow!("There is no current session"))?;
+                let source = current.snapshot()?.worktree;
+                let session = current.fork()?;
                 let id = session.id.clone();
                 self.restore_session(session, source.as_ref()).await?;
                 let workspace = match source {
@@ -391,11 +372,12 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                         "Both conversations use the same workspace; filesystem changes are shared."
                     }
                 };
-                Ok(SessionReply::Message(format!(
-                    "Forked conversation into session {id}. {workspace}"
-                )))
+                ActorToTuiPacket::CommandResult(
+                    command.clone(),
+                    format!("Forked conversation into session {id}. {workspace}"),
+                )
             }
-        }
+        })
     }
 
     fn session_transcript(&self, id: &str) -> SessionTranscript {
@@ -488,7 +470,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     async fn restore_session(
         &mut self,
         session: Arc<Session>,
-        source: Option<&utils::git::worktrees::session::SessionWorktree>,
+        source: Option<&SessionWorktree>,
     ) -> anyhow::Result<()> {
         let mut runtime = self.dependency.runtime.clone();
         runtime.session = Some(session.clone());
@@ -519,10 +501,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         self.questions = snapshot.questions;
         self.planning = snapshot.planning;
         self.deferred_input = snapshot.deferred_input;
-        self.turn = crate::states::turn_machine::TurnMachine::new(
-            self.dependency.runtime.scope.clone(),
-            self.request_mode,
-        );
+        self.turn = TurnMachine::new(self.dependency.runtime.scope.clone(), self.request_mode);
         self.persistence = Persistence::Ready;
         self.restore_merge_question()?;
         self.sync_question_gate().await;
@@ -531,7 +510,6 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             .runtime
             .workers
             .restore(&session.id, snapshot.workers);
-        self.dependency.runtime.session = Some(session);
         self.reporter.send(ActorToTuiPacket::TokensUpdated(
             self.stream_processor.token_count.clone(),
         ));
