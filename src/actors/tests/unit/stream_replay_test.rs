@@ -25,8 +25,8 @@ pub struct TestContext {
 impl<C: Context + Clone + 'static> ActorState<C> {
     #[cfg(test)]
     pub fn build_request(&self) -> clients::llm::ClientRequest {
-        clients::llm::ClientRequest::new(self.history.clone())
-            .with_system(self.cur_context.effective_instructions().unwrap())
+        clients::llm::ClientRequest::new(self.conversation.history().to_vec())
+            .with_system(self.workspace.context().effective_instructions().unwrap())
             .with_tools(self.tool_definitions())
             .with_thinking()
     }
@@ -148,9 +148,9 @@ async fn harness() -> Harness {
 async fn runtime_state_is_excluded_from_inherited_worker_constraints() {
     let mut h = harness().await;
     h.state
-        .history
+        .conversation
         .push(llm::Message::new("Preserve this user constraint".into()));
-    h.state.history.push(llm::Message {
+    h.state.conversation.push(llm::Message {
         role: llm::Role::User,
         content: vec![llm::ContentBlock::RuntimeUpdate(
             clients::runtime_update::RuntimeUpdate::Snapshot(
@@ -161,19 +161,19 @@ async fn runtime_state_is_excluded_from_inherited_worker_constraints() {
             ),
         )],
     });
-    let executor = h.state.executor(h.state.dependency.runtime.scope.child());
+    let executor = h.state.executor(h.state.workspace.runtime().scope.child());
     assert!(
         executor
-            .dependency
-            .runtime
+            .workspace
+            .runtime()
             .inherited_constraints
             .iter()
             .any(|text| text == "Preserve this user constraint")
     );
     assert!(
         executor
-            .dependency
-            .runtime
+            .workspace
+            .runtime()
             .inherited_constraints
             .iter()
             .all(|text| !text.contains("Old worker status marker"))
@@ -226,13 +226,13 @@ async fn helpers_preserve_parent_interaction_without_root_tools_or_plan_context(
         &Default::default(),
     );
     let mut h = harness_with_runtime(runtime).await;
-    assert!(h.state.dependency.tool("echo").is_some());
-    assert!(h.state.dependency.tool("request_user_input").is_none());
-    assert!(h.state.dependency.tool("update_plan").is_none());
-    h.state.planning.mode = WorkMode::Implement;
-    h.state
-        .planning
-        .record_evidence("helper".into(), "Helper evidence".into());
+    assert!(h.state.services.tool("echo").is_some());
+    assert!(h.state.services.tool("request_user_input").is_none());
+    assert!(h.state.services.tool("update_plan").is_none());
+    let mut planning = Planning::default();
+    planning.record_evidence("helper".into(), "Helper evidence".into());
+    h.state.interaction =
+        crate::session::interaction_state::InteractionState::restored(planning, Default::default());
     h.state.refresh_interaction();
     assert_eq!(interaction.mode(), WorkMode::Plan);
     let input = h
@@ -245,12 +245,20 @@ async fn helpers_preserve_parent_interaction_without_root_tools_or_plan_context(
         WorkMode::Plan
     );
     assert!(input.instructions.contains("Runtime state updates"));
-    let scope = h.state.dependency.runtime.scope.clone();
-    assert!(crate::session::interaction_control::Interaction::new(&mut h.state, &scope).is_err());
+    let scope = h.state.workspace.runtime().scope.clone();
+    assert!(
+        crate::session::interaction_state::Interaction::new(
+            &h.state.interaction,
+            &h.state.workspace.runtime().role,
+            &h.state.persistence,
+            &scope,
+        )
+        .is_err()
+    );
     h.state.clear_history().await.unwrap();
     assert_eq!(interaction.mode(), WorkMode::Plan);
     assert!(matches!(
-        h.state.dependency.runtime.role,
+        h.state.workspace.runtime().role,
         ExecutionRole::Helper
     ));
 }
@@ -272,7 +280,7 @@ async fn context_budget_follows_the_active_model_and_preserves_overrides() {
         })))
         .unwrap()
     };
-    h.state.history.extend((0..6).flat_map(|_| {
+    h.state.conversation.append((0..6).flat_map(|_| {
         [
             llm::Message::new_assistant("detail ".repeat(35_000)),
             llm::Message::new("Continue".into()),
@@ -289,7 +297,13 @@ async fn context_budget_follows_the_active_model_and_preserves_overrides() {
     assert_eq!(small.limits.ceiling(), 200_000);
     assert!(matches!(small.plan().unwrap(), BudgetPlan::Compact(_)));
 
-    h.state.dependency.runtime.context_budget = ContextBudget::new(Some(1_000_000), 2048).unwrap();
+    let mut runtime = h.state.workspace.runtime().clone();
+    runtime.context_budget = ContextBudget::new(Some(1_000_000), 2048).unwrap();
+    h.state.workspace = crate::states::workspace::ActiveWorkspace::new(
+        h.state.workspace.context().clone(),
+        runtime,
+    )
+    .unwrap();
     let overridden = h.state.context_input(turn, &h.state.llm).unwrap();
     assert_eq!(overridden.limits.ceiling(), 1_000_000);
     let BudgetPlan::Ready(request) = overridden.plan().unwrap() else {
@@ -297,7 +311,13 @@ async fn context_budget_follows_the_active_model_and_preserves_overrides() {
     };
     assert_eq!(request.max_output_tokens, Some(2048));
 
-    h.state.dependency.runtime.context_budget = ContextBudget::new(None, 100_000).unwrap();
+    let mut runtime = h.state.workspace.runtime().clone();
+    runtime.context_budget = ContextBudget::new(None, 100_000).unwrap();
+    h.state.workspace = crate::states::workspace::ActiveWorkspace::new(
+        h.state.workspace.context().clone(),
+        runtime,
+    )
+    .unwrap();
     assert!(h.state.context_input(turn, &h.state.llm).is_err());
 }
 
@@ -314,10 +334,10 @@ async fn consume(
                 items,
             );
             let batch = state
-                .executor(state.dependency.runtime.scope.clone())
+                .executor(state.workspace.runtime().scope.clone())
                 .replay(batch)
                 .await;
-            state.history.extend(batch.messages());
+            state.conversation.append(batch.messages());
         }
         StreamNextStep::Done => {
             let items = state.stream_processor.extract_and_pre_process()?;
@@ -330,7 +350,7 @@ async fn consume(
                     }
                 })
                 .collect::<anyhow::Result<Vec<_>>>()?;
-            state.history.push(llm::Message {
+            state.conversation.push(llm::Message {
                 role: llm::Role::Assistant,
                 content,
             });
@@ -357,9 +377,9 @@ async fn replay_preserves_reasoning_phase_arguments_and_results_across_turns() {
             .unwrap();
     }
     assert_eq!(h.calls.load(Ordering::SeqCst), 2);
-    assert_eq!(h.state.history.len(), 4);
-    assert_eq!(h.state.history[2].content.len(), 4);
-    assert_eq!(h.state.history[3].content.len(), 2);
+    assert_eq!(h.state.conversation.history().len(), 4);
+    assert_eq!(h.state.conversation.history()[2].content.len(), 4);
+    assert_eq!(h.state.conversation.history()[3].content.len(), 2);
     let request = openai::ClientRequest::try_from(h.state.build_request()).unwrap();
     assert_eq!(
         request.instructions.as_deref(),
@@ -390,7 +410,7 @@ async fn replay_preserves_reasoning_phase_arguments_and_results_across_turns() {
     assert_eq!(input[6]["call_id"], "call_1");
     assert_eq!(input[7]["output"], "Execution: synthetic tool failure");
     assert!(matches!(
-        &h.state.history[3].content[1],
+        &h.state.conversation.history()[3].content[1],
         llm::ContentBlock::ToolResult {
             is_error: Some(true),
             ..
@@ -426,8 +446,15 @@ async fn replay_preserves_reasoning_phase_arguments_and_results_across_turns() {
     assert_eq!(reasoning[0]["encrypted_content"], "opaque-state");
     assert_eq!(reasoning[1]["encrypted_content"], "next-state");
     assert_eq!(items.last().unwrap()["phase"], "final_answer");
-    assert_eq!(h.state.history.last().unwrap().text(), "Finished.");
-    assert!(!h.state.history[2].to_string().contains("opaque-state"));
+    assert_eq!(
+        h.state.conversation.history().last().unwrap().text(),
+        "Finished."
+    );
+    assert!(
+        !h.state.conversation.history()[2]
+            .to_string()
+            .contains("opaque-state")
+    );
     assert!(claude::ClientRequest::try_from(h.state.build_request()).is_err());
 }
 
@@ -471,12 +498,65 @@ async fn claude_replay_preserves_thinking_signatures_and_typed_tool_input() {
 }
 
 #[tokio::test]
+async fn failed_evidence_persistence_preserves_the_live_plan() {
+    let directory = crate::session::tests::Workspace::new();
+    let runtime = crate::states::runtime::Runtime::for_workspace(directory.path.clone()).unwrap();
+    let store = runtime.sessions.clone().unwrap();
+    let mut h = harness_with_runtime(runtime).await;
+    let result = |id: &str| tools::tool_defs::ToolResult {
+        id: ToolId {
+            id: id.to_owned().try_into().unwrap(),
+            call_id: None,
+        },
+        invocation: tools::tool_defs::ToolInvocation {
+            name: "echo".to_owned().try_into().unwrap(),
+            input: Default::default(),
+            display: format!("Observed {id}"),
+        },
+        outcome: Ok("Evidence collected".into()),
+    };
+    h.state.record_plan_evidence(&result("before"));
+    let before = serde_json::to_value(h.state.interaction.planning()).unwrap();
+    let session = h.state.workspace.runtime().session.as_ref().unwrap();
+    crate::session::tests::invalidate(&store, &session.id);
+    h.state.record_plan_evidence(&result("after"));
+    assert_eq!(
+        serde_json::to_value(h.state.interaction.planning()).unwrap(),
+        before
+    );
+    assert!(matches!(
+        h.state.persistence,
+        crate::session::persistence::Persistence::Failed(_)
+    ));
+}
+
+#[tokio::test]
+async fn rejected_workspace_relocation_preserves_context_and_conversation() {
+    let mut h = harness().await;
+    let before = serde_json::to_value(h.state.conversation.history()).unwrap();
+    let cache_key = h.state.conversation.cache_key().to_owned();
+    let directory = crate::session::tests::Workspace::new();
+    let runtime = crate::states::runtime::Runtime::for_workspace(directory.path.clone()).unwrap();
+    assert!(h.state.relocate_session_workspace(runtime).await.is_err());
+    assert!(h.state.workspace.runtime().scope.workspace().is_err());
+    assert_eq!(
+        h.state.workspace.context().task.as_deref(),
+        Some("Inspect the fixture.")
+    );
+    assert_eq!(
+        serde_json::to_value(h.state.conversation.history()).unwrap(),
+        before
+    );
+    assert_eq!(h.state.conversation.cache_key(), cache_key);
+}
+
+#[tokio::test]
 async fn clear_reloads_workspace_and_keeps_instructions_without_the_old_task() {
     let mut h = harness().await;
     h.state
-        .history
+        .conversation
         .push(llm::Message::new_assistant("Old result.".into()));
-    h.state.cur_context.revision = 2;
+    h.state.workspace.context_mut().revision = 2;
     h.state.clear_history().await.unwrap();
     let request = h.state.build_request();
     assert_eq!(
@@ -485,7 +565,7 @@ async fn clear_reloads_workspace_and_keeps_instructions_without_the_old_task() {
     );
     assert_eq!(request.messages.len(), 1);
     assert_eq!(request.messages[0].text(), "workspace revision 2");
-    assert!(h.state.cur_context.task.is_none());
+    assert!(h.state.workspace.context().task.is_none());
 }
 
 #[tokio::test]
@@ -621,7 +701,7 @@ async fn invalid_tool_identity_is_rejected_at_the_provider_boundary() {
                 .is_err()
             );
             assert_eq!(h.calls.load(Ordering::SeqCst), 0);
-            assert_eq!(h.state.history.len(), 2);
+            assert_eq!(h.state.conversation.history().len(), 2);
         }
     }
     for field in ["id", "name"] {

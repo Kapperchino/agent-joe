@@ -317,19 +317,24 @@ fn unavailable_offers_skip_snapshot_access_but_eligible_offers_propagate_errors(
     runtime.session = Some(session.clone());
     let idle = machine();
     assert!(
-        MergeWorkspace::for_offer(&runtime, &idle, &Persistence::Ready, false)
+        MergeWorkspace::for_offer(&runtime, &idle, &Persistence::Ready, RequestMode::Continue)
             .unwrap()
             .is_none()
     );
     crate::session::tests::invalidate(&store, &session.id);
-    assert!(MergeWorkspace::for_offer(&runtime, &idle, &Persistence::Ready, false).is_err());
     assert!(
-        MergeWorkspace::for_offer(&runtime, &idle, &Persistence::Ready, true)
-            .unwrap()
-            .is_none()
+        MergeWorkspace::for_offer(&runtime, &idle, &Persistence::Ready, RequestMode::Continue)
+            .is_err()
     );
+    for mode in [RequestMode::Compact, RequestMode::SingleResponse] {
+        assert!(
+            MergeWorkspace::for_offer(&runtime, &idle, &Persistence::Ready, mode)
+                .unwrap()
+                .is_none()
+        );
+    }
     assert!(
-        MergeWorkspace::for_offer(&runtime, &idle, &failed_storage(), false)
+        MergeWorkspace::for_offer(&runtime, &idle, &failed_storage(), RequestMode::Continue)
             .unwrap()
             .is_none()
     );
@@ -337,16 +342,21 @@ fn unavailable_offers_skip_snapshot_access_but_eligible_offers_propagate_errors(
     let mut active = machine();
     active.transition(SessionEvent::Start(FollowUp::new(Some("task".into()))));
     assert!(
-        MergeWorkspace::for_offer(&runtime, &active, &Persistence::Ready, false)
-            .unwrap()
-            .is_none()
+        MergeWorkspace::for_offer(
+            &runtime,
+            &active,
+            &Persistence::Ready,
+            RequestMode::Continue
+        )
+        .unwrap()
+        .is_none()
     );
     let helper = Runtime {
         role: ExecutionRole::Helper,
         ..runtime.clone()
     };
     assert!(
-        MergeWorkspace::for_offer(&helper, &idle, &Persistence::Ready, false)
+        MergeWorkspace::for_offer(&helper, &idle, &Persistence::Ready, RequestMode::Continue)
             .unwrap()
             .is_none()
     );
@@ -355,16 +365,21 @@ fn unavailable_offers_skip_snapshot_access_but_eligible_offers_propagate_errors(
         ..runtime.clone()
     };
     assert!(
-        MergeWorkspace::for_offer(&unconfigured, &idle, &Persistence::Ready, false)
-            .unwrap()
-            .is_none()
+        MergeWorkspace::for_offer(
+            &unconfigured,
+            &idle,
+            &Persistence::Ready,
+            RequestMode::Continue
+        )
+        .unwrap()
+        .is_none()
     );
     let inactive = Runtime {
         session: None,
         ..runtime.clone()
     };
     assert!(
-        MergeWorkspace::for_offer(&inactive, &idle, &Persistence::Ready, false)
+        MergeWorkspace::for_offer(&inactive, &idle, &Persistence::Ready, RequestMode::Continue)
             .unwrap()
             .is_none()
     );
@@ -376,7 +391,7 @@ fn unavailable_offers_skip_snapshot_access_but_eligible_offers_propagate_errors(
         &Default::default(),
     );
     assert!(
-        MergeWorkspace::for_offer(&runtime, &idle, &Persistence::Ready, false)
+        MergeWorkspace::for_offer(&runtime, &idle, &Persistence::Ready, RequestMode::Continue)
             .unwrap()
             .is_none()
     );

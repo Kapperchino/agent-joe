@@ -8,12 +8,16 @@ use tools::{
 };
 use utils::workspace::WorkspacePolicy;
 
+pub(crate) mod activation;
 mod artifact_index;
 pub mod artifacts;
+pub mod conversation;
 mod generations;
 pub mod interaction_control;
 pub mod interaction_policy;
+pub mod interaction_state;
 mod ownership;
+pub mod persistence;
 mod prune;
 pub mod session_control;
 pub mod session_merge;
@@ -811,10 +815,10 @@ impl Operation {
     }
 }
 
+pub mod session_transition;
 #[cfg(test)]
 #[path = "../../tests/unit/session/tests.rs"]
 pub mod tests;
-pub mod session_transition;
 
 impl utils::changes::ChangeStore for Session {
     fn save(&self, snapshot: &utils::changes::ChangeSnapshot) -> anyhow::Result<()> {

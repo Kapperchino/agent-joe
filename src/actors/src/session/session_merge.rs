@@ -1,5 +1,6 @@
 use crate::{
-    session::{Event, session_control::Persistence},
+    context::RequestMode,
+    session::{Event, persistence::Persistence},
     states::{
         actor_state::ActorState,
         runtime::{ExecutionRole, Runtime},
@@ -111,16 +112,19 @@ impl MergeDecision {
             .filter(|question| question.id == id)
             .ok_or_else(|| anyhow::anyhow!("No merge is awaiting approval"))?
             .answer(answer)?;
-        match approval {
-            _ if !turn.is_idle() || !matches!(persistence, Persistence::Ready) => Err(
-                anyhow::anyhow!("Finish the active task before answering the merge question"),
-            ),
-            MergeApproval::Awaiting { commit, .. } if matches!(answer, Answer::Choice { choice_id } if choice_id == "merge") => {
-                Ok(Self::Merge {
-                    commit: commit.clone(),
-                })
-            }
-            _ => Ok(Self::Keep),
+        match (turn.is_idle(), persistence, approval, answer) {
+            (
+                true,
+                Persistence::Ready,
+                MergeApproval::Awaiting { commit, .. },
+                Answer::Choice { choice_id },
+            ) if choice_id == "merge" => Ok(Self::Merge {
+                commit: commit.clone(),
+            }),
+            (true, Persistence::Ready, _, _) => Ok(Self::Keep),
+            _ => Err(anyhow::anyhow!(
+                "Finish the active task before answering the merge question"
+            )),
         }
     }
 }
@@ -153,20 +157,28 @@ impl MergeWorkspace {
         runtime: &Runtime,
         turn: &TurnMachine,
         persistence: &Persistence,
-        compacting: bool,
+        mode: RequestMode,
     ) -> anyhow::Result<Option<Self>> {
-        match (&runtime.role, &runtime.project, &runtime.session) {
-            (ExecutionRole::Root, Some(project), Some(session))
-                if turn.is_idle()
-                    && runtime.interaction.authorize(ToolEffect::Write).is_ok()
-                    && !compacting
-                    && matches!(persistence, Persistence::Ready) =>
-            {
-                Ok(session.snapshot()?.worktree.map(|worktree| Self {
+        match (
+            mode,
+            persistence,
+            &runtime.role,
+            &runtime.project,
+            &runtime.session,
+        ) {
+            (
+                RequestMode::Continue,
+                Persistence::Ready,
+                ExecutionRole::Root,
+                Some(project),
+                Some(session),
+            ) if turn.is_idle() => match runtime.interaction.authorize(ToolEffect::Write) {
+                Ok(()) => Ok(session.snapshot()?.worktree.map(|worktree| Self {
                     project: project.clone(),
                     worktree,
-                }))
-            }
+                })),
+                Err(_) => Ok(None),
+            },
             _ => Ok(None),
         }
     }
@@ -302,12 +314,12 @@ impl MergeApproval {
 impl<C: Context + Clone + 'static> ActorState<C> {
     pub async fn offer_merge(&mut self, turn: TurnId) -> anyhow::Result<()> {
         if let Some(workspace) = MergeWorkspace::for_offer(
-            &self.dependency.runtime,
+            self.workspace.runtime(),
             &self.turn,
             &self.persistence,
-            self.compact_turn == Some(turn),
+            self.conversation.request_mode(turn, self.request_mode),
         )? {
-            let runtime = &self.dependency.runtime;
+            let runtime = self.workspace.runtime();
             let lease = runtime
                 .workspace
                 .acquire(ToolEffect::Write, &runtime.scope)
@@ -358,8 +370,8 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                         crate::commit_message::generate(
                             self.llm.snapshot(),
                             diff,
-                            self.dependency.runtime.request_timeout,
-                            Some(format!("{}:commit", self.prompt_cache_key)),
+                            self.workspace.runtime().request_timeout,
+                            Some(format!("{}:commit", self.conversation.cache_key())),
                         )
                         .await
                     }
@@ -398,7 +410,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         )?;
         match &decision {
             MergeDecision::Merge { .. } => {
-                MergeWorkspace::new(&self.dependency.runtime, &self.persistence)?;
+                MergeWorkspace::new(self.workspace.runtime(), &self.persistence)?;
             }
             MergeDecision::Keep => {}
         }
@@ -424,8 +436,8 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     async fn merge_commit(&mut self, commit: String) -> anyhow::Result<String> {
         let approved = commit.clone();
         let outcome = async {
-            let workspace = MergeWorkspace::new(&self.dependency.runtime, &self.persistence)?;
-            let runtime = &self.dependency.runtime;
+            let workspace = MergeWorkspace::new(self.workspace.runtime(), &self.persistence)?;
+            let runtime = self.workspace.runtime();
             let lease = runtime
                 .workspace
                 .acquire(ToolEffect::Write, &runtime.scope)
@@ -439,7 +451,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             Ok(MergeResult::Cleaned { message }) => {
                 self.persist(Event::Worktree(None));
                 self.record_merge(MergeEvent::Finished)?;
-                let mut runtime = self.dependency.runtime.clone();
+                let mut runtime = self.workspace.runtime().clone();
                 let project = runtime
                     .project
                     .as_ref()
@@ -470,13 +482,13 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     }
 
     async fn resolve_merge(&mut self, conflict: MergeConflict) -> anyhow::Result<String> {
-        let workspace = MergeWorkspace::new(&self.dependency.runtime, &self.persistence)?;
+        let workspace = MergeWorkspace::new(self.workspace.runtime(), &self.persistence)?;
         let turn = TurnId::new();
         self.record_merge(MergeEvent::Conflicted {
             conflict: conflict.clone(),
             turn,
         })?;
-        let runtime = &self.dependency.runtime;
+        let runtime = self.workspace.runtime();
         let lease = runtime
             .workspace
             .acquire(ToolEffect::Write, &runtime.scope)
@@ -488,7 +500,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         })
         .await??;
         drop(lease);
-        self.cur_context.refresh_workspace().await?;
+        self.workspace.context().refresh_workspace().await?;
         self.refresh_interaction();
         self.actor_ref
             .send_message(crate::actor::Message::ResolveMerge { turn })?;
@@ -534,12 +546,17 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         }
     }
 
-    pub(super) fn restore_merge_question(&mut self) -> anyhow::Result<()> {
+    pub(crate) fn restore_merge_question(&mut self) -> anyhow::Result<()> {
         let commit = match &self.merge_approval {
             MergeApproval::Awaiting { question, commit }
-                if !self.questions.pending().iter().any(|pending| {
-                    pending.id == *question && pending.purpose == QuestionPurpose::Merge
-                }) =>
+                if !self
+                    .interaction
+                    .questions()
+                    .pending()
+                    .iter()
+                    .any(|pending| {
+                        pending.id == *question && pending.purpose == QuestionPurpose::Merge
+                    }) =>
             {
                 Some(commit.clone())
             }

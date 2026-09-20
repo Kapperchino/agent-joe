@@ -69,9 +69,7 @@ impl<C: Context> ToolTrait<C, ActorContext<C>> for RequestUserInput {
         actor: &ActorContext<C>,
     ) -> anyhow::Result<String> {
         let info = match actor {
-            ActorContext::ActorInfo(info)
-                if matches!(info.dep.runtime.role, ExecutionRole::Root) =>
-            {
+            ActorContext::ActorInfo(info) if matches!(info.runtime.role, ExecutionRole::Root) => {
                 Ok(info)
             }
             _ => Err(anyhow::anyhow!("User interaction requires the root actor")),
@@ -81,7 +79,7 @@ impl<C: Context> ToolTrait<C, ActorContext<C>> for RequestUserInput {
             .send_message(Message::AskQuestion {
                 question: input.question,
                 scope: crate::actor::InteractionScope {
-                    execution: info.dep.runtime.scope.clone(),
+                    execution: info.runtime.scope.clone(),
                 },
                 reply: reply.into(),
             })

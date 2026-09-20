@@ -51,7 +51,7 @@ impl<C: Context> ToolTrait<C, ActorContext<C>> for ReadArtifact {
         actor: &ActorContext<C>,
     ) -> anyhow::Result<Self::Output> {
         let session = match actor {
-            ActorContext::ActorInfo(info) => info.dep.runtime.session.as_ref(),
+            ActorContext::ActorInfo(info) => info.runtime.session.as_ref(),
             ActorContext::Noop => None,
         }
         .ok_or_else(|| anyhow::anyhow!("Session storage is unavailable"))?;

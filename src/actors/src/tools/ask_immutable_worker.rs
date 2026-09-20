@@ -102,8 +102,8 @@ impl<C: Context> ToolTrait<C, ActorContext<C>> for AskImmutableWorker {
             ActorContext::ActorInfo(info) => Ok(info),
             ActorContext::Noop => Err(anyhow::anyhow!("Immutable workers require a conversation")),
         }?;
-        let registry = &info.dep.runtime.immutable_workers;
-        let owner = info.dep.worker_owner();
+        let registry = &info.runtime.immutable_workers;
+        let owner = info.owner.clone();
         match action {
             Action::List => Ok(Self::Output::List {
                 workers: registry.list(&owner),
@@ -113,12 +113,7 @@ impl<C: Context> ToolTrait<C, ActorContext<C>> for AskImmutableWorker {
                 question,
             } => Ok(Self::Output::Ask {
                 result: registry
-                    .ask(
-                        &owner,
-                        &worker_id,
-                        question,
-                        info.dep.runtime.request_timeout,
-                    )
+                    .ask(&owner, &worker_id, question, info.runtime.request_timeout)
                     .await?,
             }),
         }

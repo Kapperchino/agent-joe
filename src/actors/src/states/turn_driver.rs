@@ -6,8 +6,9 @@ use crate::states::turn_machine::{
     Effect, EffectOutcome, Event, ProviderUpdate, SessionEvent, ShutdownScope, WorkerOutcome,
 };
 use crate::{
-    actor::{Dependency, Message},
-    session::session_control::Persistence,
+    actor::{ActorContext, Message},
+    context::RequestMode,
+    session::persistence::Persistence,
 };
 use analysis::contexts::context::Context;
 use clients::{
@@ -15,16 +16,18 @@ use clients::{
     llm,
 };
 use commands::command::Command;
-use common_models::tui_models::ActorToTuiPacket;
+use common_models::{interaction::PlanReview, tui_models::ActorToTuiPacket};
 use std::{collections::VecDeque, panic::AssertUnwindSafe};
-use tools::tool_defs::ToolResult;
+use tools::tool_defs::{ErasedToolRef, ToolResult};
 
 impl<C: Context + Clone + 'static> ActorState<C> {
     pub async fn dispatch(&mut self, event: impl Into<Event>) {
         let event = event.into();
-        if self.turn.needs_workspace(&event)
-            && let Err(error) = self.prepare_session_workspace().await
-        {
+        let workspace = match self.turn.needs_workspace(&event) {
+            true => self.prepare_session_workspace().await,
+            false => Ok(()),
+        };
+        if let Err(error) = workspace {
             self.persistence_failed(error);
         }
         if matches!(
@@ -87,12 +90,15 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             }
             Effect::Report(mut packet) => {
                 self.persist_report(&packet);
-                if let ActorToTuiPacket::TurnChanged { state, detail, .. } = &mut packet
-                    && state.terminal()
-                    && let Persistence::Failed(failure) = &self.persistence
-                {
-                    *state = common_models::tui_models::Lifecycle::Failed;
-                    *detail = Some(failure.to_string());
+                match (&mut packet, &self.persistence) {
+                    (
+                        ActorToTuiPacket::TurnChanged { state, detail, .. },
+                        Persistence::Failed(failure),
+                    ) if state.terminal() => {
+                        *state = common_models::tui_models::Lifecycle::Failed;
+                        *detail = Some(failure.to_string());
+                    }
+                    _ => {}
                 }
                 let completed = match &packet {
                     ActorToTuiPacket::TurnChanged {
@@ -103,9 +109,11 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                     _ => None,
                 };
                 self.reporter.send(packet);
-                if let Some(turn) = completed
-                    && let Err(error) = self.offer_merge(turn).await
-                {
+                let merge = match completed {
+                    Some(turn) => self.offer_merge(turn).await,
+                    None => Ok(()),
+                };
+                if let Err(error) = merge {
                     self.reporter.send(ActorToTuiPacket::SessionError(format!(
                         "Session merge could not continue: {error:#}"
                     )));
@@ -128,7 +136,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                         let client = self.llm.snapshot();
                         let input = self.context_input(run.tag.turn, &client);
                         ProviderTask {
-                            budget: match &self.dependency.runtime.role {
+                            budget: match &self.workspace.runtime().role {
                                 ExecutionRole::Worker { execution } => {
                                     Some(execution.budget.clone())
                                 }
@@ -139,7 +147,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                                 tag: run.tag,
                             },
                             client,
-                            timeout: self.dependency.runtime.request_timeout,
+                            timeout: self.workspace.runtime().request_timeout,
                         }
                         .spawn(input, &run, &owner, previous);
                     }
@@ -173,7 +181,11 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             Effect::UpdateContext { tag, result } => {
                 self.record_validation_progress(&result);
                 self.record_plan_evidence(&result);
-                match update_tool_context(&self.dependency, &mut self.cur_context, &result) {
+                match update_tool_context(
+                    &self.services.tools,
+                    self.workspace.context_mut(),
+                    &result,
+                ) {
                     Ok(()) => EffectOutcome::Applied,
                     Err(failure) => EffectOutcome::ContextFailed { tag, failure },
                 }
@@ -181,7 +193,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             Effect::Cleanup { turn, scope } => {
                 scope.cancel.cancel();
                 let actor = self.actor_ref.clone();
-                self.dependency.runtime.scope.tasks.spawn(async move {
+                self.workspace.runtime().scope.tasks.spawn(async move {
                     scope.finish().await;
                     let _ = actor.send_message(Message::CleanupFinished { turn });
                 });
@@ -192,7 +204,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                     ShutdownScope::Session => {}
                     ShutdownScope::Turn(scope) => scope.finish().await,
                 }
-                self.dependency.runtime.scope.finish().await;
+                self.workspace.runtime().scope.finish().await;
                 EffectOutcome::ShutdownFinished
             }
             Effect::ReplyWorker { reply, outcome } => {
@@ -204,7 +216,8 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 };
                 let result = match outcome {
                     WorkerOutcome::Completed => Ok(self
-                        .history
+                        .conversation
+                        .history()
                         .last()
                         .map(llm::Message::text)
                         .unwrap_or_default()),
@@ -269,36 +282,43 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 }
             };
             let pending = self
-                .dependency
-                .runtime
+                .workspace
+                .runtime()
                 .workers
-                .pending(&self.dependency.worker_owner());
-            let update = match update {
-                ProviderUpdate::Finished(Ok(crate::states::turn::AcceptedResponse::Complete(
-                    message,
-                ))) if self.request_mode == crate::context::RequestMode::Continue
-                    && matches!(self.dependency.runtime.role, ExecutionRole::Root)
-                    && self.planning.review()
-                        == common_models::interaction::PlanReview::Required =>
-                {
-                    ProviderUpdate::ReconcilePlan {
-                        message,
-                        instruction: format!(
-                            "Runtime plan review: this turn is still active. Requirements changed; reconcile the saved plan with update_plan using revision={} and requirements_revision={} from the current planning state. Reopen completed steps for review, then continue the user's request before completing the turn.",
-                            self.planning.plan.revision, self.planning.requirements_revision,
-                        ),
-                    }
+                .pending(&self.workspace.worker_owner());
+            let review = match (self.request_mode, &self.workspace.runtime().role) {
+                (RequestMode::Continue, ExecutionRole::Root) => {
+                    self.interaction.planning().review()
                 }
-                ProviderUpdate::Finished(Ok(crate::states::turn::AcceptedResponse::Complete(
+                _ => PlanReview::Current,
+            };
+            let update = match (update, review) {
+                (
+                    ProviderUpdate::Finished(Ok(crate::states::turn::AcceptedResponse::Complete(
+                        message,
+                    ))),
+                    PlanReview::Required,
+                ) => ProviderUpdate::ReconcilePlan {
+                    message,
+                    instruction: format!(
+                        "Runtime plan review: this turn is still active. Requirements changed; reconcile the saved plan with update_plan using revision={} and requirements_revision={} from the current planning state. Reopen completed steps for review, then continue the user's request before completing the turn.",
+                        self.interaction.planning().plan.revision,
+                        self.interaction.planning().requirements_revision,
+                    ),
+                },
+                (
+                    ProviderUpdate::Finished(Ok(crate::states::turn::AcceptedResponse::Complete(
+                        _,
+                    ))),
                     _,
-                ))) if !pending.is_empty() => ProviderUpdate::Finished(Err(Failure::new(
+                ) if !pending.is_empty() => ProviderUpdate::Finished(Err(Failure::new(
                     FailureKind::Worker,
                     format!(
                         "Worker reports have not been collected: {}",
                         pending.join("; ")
                     ),
                 ))),
-                update => update,
+                (update, _) => update,
             };
             if let ProviderUpdate::Finished(Err(failure)) = &update {
                 tracing::warn!(
@@ -322,12 +342,13 @@ impl<C: Context + Clone + 'static> ActorState<C> {
 
     fn record_validation_progress(&self, result: &ToolResult) {
         use common_models::tui_models::{ValidationProgress, ValidationState};
-        if result.invocation.name.as_ref() == "cargo"
-            && let Some(operation @ ("check" | "test" | "clippy" | "fmt_check")) = result
-                .invocation
-                .input
-                .get("operation")
-                .and_then(serde_json::Value::as_str)
+        let operation = result
+            .invocation
+            .input
+            .get("operation")
+            .and_then(serde_json::Value::as_str);
+        if let ("cargo", Some(operation @ ("check" | "test" | "clippy" | "fmt_check"))) =
+            (result.invocation.name.as_ref(), operation)
         {
             let state = match &result.outcome {
                 Ok(_) => ValidationState::Passed,
@@ -363,7 +384,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
 
     #[cfg(test)]
     pub fn visible_history(&self) -> Vec<llm::Message> {
-        let mut history = self.history.clone();
+        let mut history = self.conversation.history().to_vec();
         if let Some(batch) = self.turn.batch() {
             history.extend(batch.messages());
         }
@@ -381,7 +402,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 match self.turn.is_idle() {
                     true => {
                         let follow_up = crate::states::turn::FollowUp::new(None);
-                        self.compact_turn = Some(follow_up.id);
+                        self.conversation.compact(follow_up.id);
                         self.dispatch(SessionEvent::Start(follow_up)).await;
                     }
                     false => self.reporter.send(ActorToTuiPacket::CommandResult(Command::Compact, "Interrupt the active turn before compacting manually. Automatic compaction runs between complete tool exchanges.".into())),
@@ -392,9 +413,9 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                     .await
             }
             Command::PrintContext => {
-                let context = self.cur_context.clone();
+                let context = self.workspace.context().clone();
                 let reporter = self.reporter.clone();
-                let scope = self.dependency.runtime.scope.clone();
+                let scope = self.workspace.runtime().scope.clone();
                 scope.tasks.clone().spawn(async move {
                     tokio::select! {
                         _ = scope.cancel.cancelled() => {},
@@ -434,13 +455,15 @@ fn provider_input_error(error: anyhow::Error) -> Failure {
 }
 
 fn update_tool_context<C: Context>(
-    dependency: &Dependency<C>,
+    tools: &[ErasedToolRef<C, ActorContext<C>>],
     context: &mut C,
     result: &ToolResult,
 ) -> Result<(), Failure> {
     match (
         &result.outcome,
-        dependency.tool(result.invocation.name.as_ref()),
+        tools
+            .iter()
+            .find(|tool| tool.name() == result.invocation.name.as_ref()),
     ) {
         (Ok(content), Some(tool)) => {
             let input = serde_json::Value::Object(result.invocation.input.clone());

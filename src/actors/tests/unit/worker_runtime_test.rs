@@ -1028,10 +1028,14 @@ async fn timeout_failure_and_tool_budget_are_reported_with_cleanup() {
             response(vec![tool(
                 "worker_status",
                 "wait",
-                json!({"action":"wait", "worker_id":started.id, "seconds":2}),
+                json!({"action":"wait", "worker_id":started.id, "seconds":30}),
             )]),
         );
-        let (parent, reply) = actor.request().await;
+        let (parent, reply) =
+            tokio::time::timeout(Duration::from_secs(35), actor.requests.recv_async())
+                .await
+                .expect("Worker completion was not reported before the deadline")
+                .unwrap();
         let expected = serde_json::to_value(failure).unwrap();
         assert_eq!(latest_result(&parent)["workers"][0]["status"], expected);
         completed_root(&actor, reply).await;

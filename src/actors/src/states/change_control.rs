@@ -14,7 +14,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     }
 
     async fn run_change_command(&self, command: &Command) -> anyhow::Result<String> {
-        let runtime = &self.dependency.runtime;
+        let runtime = self.workspace.runtime();
         let scope = runtime.scope.child();
         let effect = match command {
             Command::Undo(_) if !self.turn.is_idle() => Err(anyhow::anyhow!(

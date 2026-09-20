@@ -1,46 +1,40 @@
+use crate::session::activation::SessionActivation;
+use crate::session::conversation::Conversation;
+use crate::session::interaction_state::InteractionState;
 use crate::session::session_merge::MergeApproval;
-use crate::session::session_transition::SessionTransition;
 use crate::states::runtime::{ExecutionRole, Runtime};
 use crate::states::stream_processor::StreamProcessor;
 use crate::states::turn_machine::TurnMachine;
+use crate::states::{services::ActorServices, workspace::ActiveWorkspace};
 use crate::{
     actor::{self, ActorContext, Dependency},
     background_actors::file_actor,
-    context::{Checkpoint, ContextInput, RequestMode},
+    context::{ContextInput, RequestMode},
     event_reporter::EventReporter,
-    session::session_control::Persistence,
+    session::persistence::Persistence,
 };
 use analysis::contexts::context::Context;
-use clients::llm::{LLmClient, Message};
-use common_models::{
-    interaction::{Planning, Questions},
-    runtime_ids::TurnId,
-    tui_models::State,
-};
+use clients::llm::LLmClient;
+use common_models::{runtime_ids::TurnId, tui_models::State};
 use ractor::ActorRef;
+use std::sync::Arc;
 use tools::tool_defs::{ToolDefinition, erased_tool};
 use utils::execution::ExecutionScope;
 
 pub struct ActorState<C: Context> {
-    pub prompt_cache_key: String,
-    pub planning: Planning,
-    pub deferred_input: Vec<Message>,
-    pub request_mode: RequestMode,
-    pub context_checkpoint: Checkpoint,
-    pub compact_turn: Option<TurnId>,
-    pub questions: Questions,
-    pub persistence: Persistence,
-    pub merge_approval: MergeApproval,
-    pub cur_context: C,
-    pub turn: TurnMachine,
-    pub history: Vec<Message>,
-    pub llm: LLmClient,
-    pub file_actor: Option<ActorRef<file_actor::Message>>,
-    pub stream_processor: StreamProcessor,
-    pub reporter: EventReporter,
-    pub debug_mode: bool,
-    pub actor_ref: ActorRef<actor::Message>,
-    pub dependency: Dependency<C>,
+    pub(crate) conversation: Conversation,
+    pub(crate) interaction: InteractionState,
+    pub(crate) request_mode: RequestMode,
+    pub(crate) persistence: Persistence,
+    pub(crate) merge_approval: MergeApproval,
+    pub(crate) turn: TurnMachine,
+    pub(crate) llm: LLmClient,
+    pub(crate) file_actor: Option<ActorRef<file_actor::Message>>,
+    pub(crate) stream_processor: StreamProcessor,
+    pub(crate) reporter: EventReporter,
+    pub(crate) actor_ref: ActorRef<actor::Message>,
+    pub(crate) services: Arc<ActorServices<C>>,
+    pub(crate) workspace: ActiveWorkspace<C>,
 }
 
 pub enum ActorMode {
@@ -71,10 +65,19 @@ impl ActorMode {
                         erased_tool::<crate::tools::update_plan::UpdatePlan, C, ActorContext<C>>(),
                     ]
                 });
-                let artifact_tool = (dependency.runtime.sessions.is_some()
-                    && dependency.tool("read_artifact").is_none()
-                    && dependency.runtime.role.allows_tool("read_artifact"))
-                .then(erased_tool::<crate::tools::read_artifact::ReadArtifact, C, ActorContext<C>>);
+                let artifact_tool = match (
+                    &dependency.runtime.sessions,
+                    dependency.tool("read_artifact"),
+                ) {
+                    (Some(_), None) if dependency.runtime.role.allows_tool("read_artifact") => {
+                        Some(erased_tool::<
+                            crate::tools::read_artifact::ReadArtifact,
+                            C,
+                            ActorContext<C>,
+                        >())
+                    }
+                    _ => None,
+                };
                 Dependency {
                     tools: dependency
                         .tools
@@ -122,217 +125,165 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         mode: ActorMode,
     ) -> anyhow::Result<Self> {
         let dependency = mode.configure(dependency);
-        let history = Self::initial_history(&dependency.context).await;
-        let mut dependency = Dependency {
-            runtime: SessionTransition::Start.apply(
-                dependency.runtime,
-                &dependency.client,
-                &history,
-            )?,
-            ..dependency
-        };
-        Self::relocate_context(&mut dependency.context, &dependency.runtime)?;
-        let history = Self::initial_history(&dependency.context).await;
-        if let (Some(watcher), Some(project)) = (&file_actor, dependency.context.analysis_project())
+        let request_mode = mode.request_mode();
+        let reporter = mode.reporter(&dependency);
+        let Dependency {
+            client,
+            tools,
+            tui_tx,
+            debug_mode,
+            context,
+            runtime,
+        } = dependency;
+        let activation = SessionActivation::start(context, runtime, &client).await?;
+        let workspace = activation.workspace;
+        if let (Some(watcher), Some(project)) =
+            (&file_actor, workspace.context().analysis_project())
         {
             watcher.send_message(file_actor::Message::Relocate(project))?;
         }
-        let stream_log = dependency.stream_log()?;
-        let request_mode = mode.request_mode();
-        let reporter = mode.reporter(&dependency);
+        let services = Arc::new(ActorServices {
+            client: client.clone(),
+            tools,
+            tui_tx,
+            debug_mode,
+        });
 
+        let stream_log = services.stream_log(workspace.runtime())?;
         Ok(Self {
-            prompt_cache_key: dependency
-                .runtime
-                .session
-                .as_ref()
-                .map(|session| session.id.clone())
-                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
-            planning: Planning {
-                mode: dependency.runtime.interaction.mode(),
-                ..Default::default()
-            },
-            deferred_input: Vec::new(),
+            conversation: activation.conversation,
+            interaction: activation.interaction,
             request_mode,
-            context_checkpoint: Default::default(),
-            compact_turn: None,
-            questions: Default::default(),
             persistence: Persistence::Ready,
-            merge_approval: Default::default(),
-            cur_context: dependency.context.clone(),
-            history,
-            llm: dependency.client.clone(),
-            turn: TurnMachine::new(dependency.runtime.scope.clone(), request_mode),
+            merge_approval: activation.merge_approval,
+            llm: client,
+            turn: TurnMachine::new(workspace.runtime().scope.clone(), request_mode),
             reporter: reporter.clone(),
-            debug_mode: dependency.debug_mode,
             file_actor,
             stream_processor: StreamProcessor {
                 batches: Vec::new(),
                 stream_log,
-                token_count: Default::default(),
+                token_count: activation.usage,
                 reporter,
                 cur_state: State::Ready,
-                debug: dependency.debug_mode,
+                debug: debug_mode,
             },
-            dependency,
+            services,
+            workspace,
             actor_ref,
         })
-    }
-
-    async fn initial_history(context: &C) -> Vec<Message> {
-        std::iter::once(Message::new(context.get_ctx().await))
-            .chain(
-                context
-                    .initial_task()
-                    .map(|task| Message::new(task.to_owned())),
-            )
-            .collect()
     }
 
     pub fn context_input(&self, turn: TurnId, client: &LLmClient) -> anyhow::Result<ContextInput> {
         let interaction = match self.request_mode {
             RequestMode::SingleResponse => None,
             RequestMode::Continue | RequestMode::Compact => {
-                Some(self.dependency.runtime.role.get_guidance())
+                Some(self.workspace.runtime().role.get_guidance())
             }
         };
-        let instructions = std::iter::once(self.cur_context.effective_instructions()?)
+        let instructions = std::iter::once(self.workspace.context().effective_instructions()?)
             .chain(interaction)
             .collect::<Vec<_>>()
             .join("\n");
         let runtime = match self.request_mode {
             RequestMode::SingleResponse => None,
             _ => Some(clients::runtime_update::RuntimeSnapshot {
-                planning: match self.dependency.runtime.role {
-                    ExecutionRole::Root => (&self.planning).into(),
+                planning: match self.workspace.runtime().role {
+                    ExecutionRole::Root => self.interaction.planning().into(),
                     _ => clients::runtime_update::PlanningState {
-                        mode: self.dependency.runtime.interaction.mode(),
+                        mode: self.workspace.runtime().interaction.mode(),
                         ..Default::default()
                     },
                 },
-                evidence: match self.dependency.runtime.role {
-                    ExecutionRole::Root => self.planning.evidence.clone(),
+                evidence: match self.workspace.runtime().role {
+                    ExecutionRole::Root => self.interaction.planning().evidence.clone(),
                     _ => Default::default(),
                 },
-                questions: self.questions.pending().to_vec(),
+                questions: self.interaction.questions().pending().to_vec(),
                 workers: self
-                    .dependency
-                    .runtime
+                    .workspace
+                    .runtime()
                     .workers
-                    .pending(&self.dependency.worker_owner()),
+                    .pending(&self.workspace.worker_owner()),
             }),
         };
         Ok(ContextInput {
             runtime,
-            prompt_cache_key: Some(self.prompt_cache_key.clone()),
-            purpose: match (&self.dependency.runtime.role, self.request_mode) {
+            prompt_cache_key: Some(self.conversation.cache_key().to_owned()),
+            purpose: match (&self.workspace.runtime().role, self.request_mode) {
                 (_, RequestMode::SingleResponse) => clients::llm::RequestPurpose::Compaction,
                 (ExecutionRole::Root, _) => clients::llm::RequestPurpose::Conversation,
                 _ => clients::llm::RequestPurpose::Worker,
             },
-            history: self.history.clone(),
-            checkpoint: self.context_checkpoint.clone(),
+            history: self.conversation.history().to_vec(),
+            checkpoint: self.conversation.checkpoint().clone(),
             instructions,
             tools: self.tool_definitions(),
             limits: self
-                .dependency
-                .runtime
+                .workspace
+                .runtime()
                 .context_budget
                 .resolve(client.context_window())?,
-            native: self.dependency.runtime.native_compaction,
-            mode: match self.compact_turn {
-                Some(compact_turn) if compact_turn == turn => RequestMode::Compact,
-                _ => self.request_mode,
-            },
+            native: self.workspace.runtime().native_compaction,
+            mode: self.conversation.request_mode(turn, self.request_mode),
         })
     }
 
     pub async fn clear_history(&mut self) -> anyhow::Result<()> {
-        let mut context = self.cur_context.clone();
-        context.clear_task_context();
-        let history = Self::initial_history(&context).await;
-        let runtime =
-            SessionTransition::Clear.apply(self.dependency.runtime.clone(), &self.llm, &history)?;
-        Self::relocate_context(&mut context, &runtime)?;
-        let history = Self::initial_history(&context).await;
-        self.dependency
-            .runtime
-            .immutable_workers
-            .clear(&self.dependency.worker_owner())
-            .await;
-        self.prompt_cache_key = runtime
-            .session
-            .as_ref()
-            .map(|session| session.id.clone())
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        self.dependency.runtime = runtime;
-        self.dependency.context = context.clone();
-        self.cur_context = context;
-        self.relocate_watcher()?;
-        self.merge_approval = Default::default();
-        self.history = history;
-        self.context_checkpoint = Default::default();
-        self.compact_turn = None;
-        self.questions = Default::default();
-        self.planning = Default::default();
-        self.deferred_input.clear();
-        self.turn = TurnMachine::new(self.dependency.runtime.scope.clone(), self.request_mode);
-        self.refresh_interaction();
-        self.persistence = Persistence::Ready;
-        self.stream_processor.token_count = Default::default();
-        Ok(())
+        let activation = SessionActivation::clear(&self.workspace, &self.llm).await?;
+        self.activate_session(activation).await
     }
 
-    pub fn relocate_context(context: &mut C, runtime: &Runtime) -> anyhow::Result<()> {
-        if let Some(session) = &runtime.session
-            && session.snapshot()?.worktree.is_some()
-        {
-            context.relocate(runtime.scope.workspace()?.root().to_path_buf())?;
-        }
+    pub(crate) async fn activate_session(
+        &mut self,
+        activation: SessionActivation<C>,
+    ) -> anyhow::Result<()> {
+        self.workspace
+            .runtime()
+            .immutable_workers
+            .clear(&self.workspace.worker_owner())
+            .await;
+        self.turn = TurnMachine::new(
+            activation.workspace.runtime().scope.clone(),
+            self.request_mode,
+        );
+        self.workspace = activation.workspace;
+        self.conversation = activation.conversation;
+        self.interaction = activation.interaction;
+        self.merge_approval = activation.merge_approval;
+        self.persistence = Persistence::Ready;
+        self.stream_processor.clear();
+        self.stream_processor.token_count = activation.usage;
+        activation.workers.apply(
+            &self.workspace.runtime().workers,
+            &self.workspace.worker_owner(),
+        );
+        self.relocate_watcher()?;
+        self.restore_merge_question()?;
+        self.refresh_interaction();
         Ok(())
     }
 
     pub fn relocate_watcher(&self) -> anyhow::Result<()> {
-        if let (Some(watcher), Some(project)) =
-            (&self.file_actor, self.cur_context.analysis_project())
-        {
+        if let (Some(watcher), Some(project)) = (
+            &self.file_actor,
+            self.workspace.context().analysis_project(),
+        ) {
             watcher.send_message(file_actor::Message::Relocate(project))?;
         }
         Ok(())
     }
 
     pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
-        self.dependency
-            .tools
-            .iter()
-            .map(|tool| tool.definition())
-            .collect()
+        self.services.tool_definitions()
     }
 
     pub fn executor(&self, scope: ExecutionScope) -> crate::states::scheduler::Executor<C> {
-        let runtime = self.dependency.runtime.child(scope.clone());
-        let runtime = Runtime {
-            turn_scope: Some(scope),
-            inherited_constraints: runtime
-                .inherited_constraints
-                .into_iter()
-                .chain(
-                    self.history
-                        .iter()
-                        .skip(1)
-                        .filter(|message| matches!(message.role, clients::llm::Role::User))
-                        .map(clients::llm::Message::text)
-                        .filter(|text| !text.is_empty()),
-                )
-                .collect(),
-            ..runtime
-        };
         crate::states::scheduler::Executor {
-            dependency: Dependency {
-                runtime,
-                ..self.dependency.clone()
-            },
-            context: self.cur_context.clone(),
+            workspace: self
+                .workspace
+                .execution(scope, self.conversation.constraints()),
+            services: self.services.clone(),
             actor: self.actor_ref.clone(),
         }
     }

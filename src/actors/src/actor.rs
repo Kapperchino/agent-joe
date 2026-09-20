@@ -1,7 +1,5 @@
-use crate::session::interaction_control;
 use crate::states::actor_state::ActorState;
 use crate::states::provider_task::ProviderEvent;
-use crate::states::runtime::ExecutionRole;
 use crate::states::scheduler::ToolEvent;
 use crate::states::turn::{FollowUp, HistoryDisposition, Tag};
 use crate::states::turn_machine::{Event, SessionEvent};
@@ -13,7 +11,6 @@ use commands::command::Command;
 use common_models::{runtime_ids::TurnId, tui_models::ActorToTui};
 use flume::Sender;
 use ractor::{ActorProcessingErr, ActorRef, RpcReplyPort};
-use std::path::PathBuf;
 use tools::tool_defs::ErasedToolRef;
 
 pub trait IntoActorErr<T> {
@@ -85,36 +82,8 @@ impl std::fmt::Debug for InteractionScope {
     }
 }
 impl<C: Context> Dependency<C> {
-    pub fn worker_owner(&self) -> String {
-        self.runtime
-            .session
-            .as_ref()
-            .map(|session| session.id.clone())
-            .unwrap_or_else(|| format!("actor-{}", self.context.get_id()))
-    }
     pub fn tool(&self, name: &str) -> Option<&ErasedToolRef<C, ActorContext<C>>> {
         self.tools.iter().find(|tool| tool.name() == name)
-    }
-
-    pub fn stream_log(&self) -> anyhow::Result<Option<tokio::fs::File>> {
-        match self.runtime.role {
-            ExecutionRole::Root if self.debug_mode => {
-                let timestamp = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
-                let path = PathBuf::from(format!("./logs/stream_{timestamp}.jsonl"));
-                let workspace = self
-                    .runtime
-                    .project
-                    .clone()
-                    .map(Ok)
-                    .unwrap_or_else(|| self.runtime.scope.workspace())?;
-                let file = workspace.open_append(&path)?;
-                Ok(Some(tokio::fs::File::from_std(file)))
-            }
-            _ => Ok(None),
-        }
     }
 }
 
@@ -123,7 +92,9 @@ pub enum ActorContext<C: Context> {
     ActorInfo(ActorInfo<C>),
 }
 pub struct ActorInfo<C: Context> {
-    pub dep: Dependency<C>,
+    pub services: std::sync::Arc<crate::states::services::ActorServices<C>>,
+    pub runtime: crate::states::runtime::Runtime,
+    pub owner: String,
     pub actor_ref: ActorRef<Message>,
 }
 #[async_trait]
@@ -151,7 +122,7 @@ impl<W: ContextWorker> Worker for W {
         message: Message,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
-        let scope = state.dependency.runtime.scope.clone();
+        let scope = state.workspace.runtime().scope.clone();
         scope
             .enter(async {
                 match message {
@@ -163,8 +134,7 @@ impl<W: ContextWorker> Worker for W {
                         scope,
                         reply,
                     } => {
-                        let result = interaction_control::Interaction::new(state, &scope.execution)
-                            .and_then(|interaction| interaction.ask(question));
+                        let result = state.request_question(question, &scope.execution);
                         state.sync_question_gate().await;
                         let _ = reply.send(result.map_err(|error| error.to_string()));
                     }
@@ -173,8 +143,7 @@ impl<W: ContextWorker> Worker for W {
                         scope,
                         reply,
                     } => {
-                        let result = interaction_control::Interaction::new(state, &scope.execution)
-                            .and_then(|interaction| interaction.update_plan(update));
+                        let result = state.update_plan(update, &scope.execution);
                         let _ = reply.send(result.map_err(|error| error.to_string()));
                     }
                     Message::StartWork(prompt) => {
@@ -192,7 +161,7 @@ impl<W: ContextWorker> Worker for W {
                     }
                     Message::Provider { tag, event } => state.provider_event(tag, event).await,
                     Message::Tools { tag, event } => {
-                        let revision = state.dependency.runtime.workspace.revision();
+                        let revision = state.workspace.runtime().workspace.revision();
                         state
                             .dispatch(SessionEvent::Tools {
                                 tag,
@@ -239,10 +208,10 @@ impl<W: ContextWorker> Worker for W {
     ) -> Result<(), ActorProcessingErr> {
         state.dispatch(Event::Shutdown).await;
         state
-            .dependency
-            .runtime
+            .workspace
+            .runtime()
             .immutable_workers
-            .clear(&state.dependency.worker_owner())
+            .clear(&state.workspace.worker_owner())
             .await;
         if let Some(watcher) = &state.file_actor {
             watcher.stop_and_wait(None, None).await?;

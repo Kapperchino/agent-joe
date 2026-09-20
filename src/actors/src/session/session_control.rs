@@ -3,7 +3,7 @@ use crate::{
     immutable_workers::{ImmutableWorker, ImmutableWorkerDescription},
     session::{
         Event, PendingBatch, QueuedInput, ResumableSession, Session, SessionStore,
-        session_merge::MergeEvent,
+        activation::SessionActivation, persistence::Persistence, session_merge::MergeEvent,
     },
     states::{
         actor_state::ActorState,
@@ -24,32 +24,6 @@ use common_models::tui_models::{
 };
 use std::sync::Arc;
 use utils::git::worktrees::session::{PruneMode, SessionWorktree};
-
-pub enum Persistence {
-    Ready,
-    Failed(Failure),
-}
-
-impl Persistence {
-    fn committed<T>(&self, value: T) -> Result<T, Failure> {
-        match self {
-            Self::Ready => Ok(value),
-            Self::Failed(failure) => Err(failure.clone()),
-        }
-    }
-
-    fn fail(&mut self, error: anyhow::Error) -> Option<String> {
-        match self {
-            Self::Ready => {
-                let message =
-                    format!("Session storage failed: {error}. Automatic continuation stopped.");
-                *self = Self::Failed(Failure::new(FailureKind::Tool, message.clone()));
-                Some(message)
-            }
-            Self::Failed(_) => None,
-        }
-    }
-}
 
 enum SessionAction<'a> {
     List,
@@ -115,12 +89,13 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 context: compaction.checkpoint.clone(),
                 usage: self.stream_processor.token_count.clone(),
             });
-            self.context_checkpoint = self.persistence.committed(compaction.checkpoint)?;
+            self.conversation
+                .commit_checkpoint(self.persistence.committed(compaction.checkpoint)?);
             let view = self
-                .dependency
-                .runtime
+                .workspace
+                .runtime()
                 .immutable_workers
-                .insert(&self.dependency.worker_owner(), worker);
+                .insert(&self.workspace.worker_owner(), worker);
             self.reporter.send(ActorToTuiPacket::ContextNotice(
                 format!("Context compacted. Immutable worker {} preserves the older context; use ask_immutable_worker to query it. The saved transcript and full output artifacts remain available.", view.worker_id),
             ));
@@ -133,8 +108,8 @@ impl<C: Context + Clone + 'static> ActorState<C> {
 
     pub fn append_history(&mut self, messages: Vec<llm::Message>) {
         let stored = self
-            .dependency
-            .runtime
+            .workspace
+            .runtime()
             .session
             .as_ref()
             .map(|session| session.snapshot())
@@ -149,14 +124,13 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             }
         };
         self.persist(Event::History(messages.clone()));
-        self.history.extend(messages);
-        self.history.append(&mut self.deferred_input);
+        self.conversation.append(messages);
     }
 
     pub fn persist(&mut self, event: Event) {
         let result = self
-            .dependency
-            .runtime
+            .workspace
+            .runtime()
             .session
             .as_ref()
             .map(|session| session.record(event))
@@ -173,7 +147,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     }
 
     pub fn queue_input(&mut self, input: &FollowUp) {
-        if let Some(session) = &self.dependency.runtime.session {
+        if let Some(session) = &self.workspace.runtime().session {
             self.persist(Event::Queued(QueuedInput {
                 turn: session.key(input.id),
                 prompt: input.prompt.clone(),
@@ -182,7 +156,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     }
 
     pub async fn prepare_session_workspace(&mut self) -> anyhow::Result<()> {
-        let mut runtime = self.dependency.runtime.clone();
+        let mut runtime = self.workspace.runtime().clone();
         match (&runtime.role, &runtime.project, &runtime.session) {
             (ExecutionRole::Root, Some(_), Some(session))
                 if session.snapshot()?.worktree.is_none() =>
@@ -201,17 +175,11 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     }
 
     pub async fn relocate_session_workspace(&mut self, runtime: Runtime) -> anyhow::Result<()> {
-        let mut context = self.cur_context.clone();
-        context.clear_task_context();
-        context.relocate(runtime.scope.workspace()?.root().to_path_buf())?;
-        let fresh = llm::Message::new(context.get_ctx().await);
-        self.turn.relocate(runtime.scope.clone())?;
-        self.dependency.runtime = runtime;
-        self.dependency.context = context.clone();
-        self.cur_context = context;
-        if let Some(initial) = self.history.first_mut() {
-            *initial = fresh;
-        }
+        let workspace = self.workspace.relocated(runtime)?;
+        let fresh = llm::Message::new(workspace.context().get_ctx().await);
+        self.turn.relocate(workspace.runtime().scope.clone())?;
+        self.workspace = workspace;
+        self.conversation.relocate(fresh);
         self.relocate_watcher()?;
         Ok(())
     }
@@ -225,7 +193,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         if let (Some(_), None) = (&input.prompt, self.merge_approval.resolution(input.id)) {
             self.reconcile_plan();
         }
-        let scope = self.dependency.runtime.scope.clone();
+        let scope = self.workspace.runtime().scope.clone();
         let changes = scope.changes.clone();
         let baseline = match (scope.workspace(), self.request_mode) {
             (Ok(_), RequestMode::Continue | RequestMode::Compact) => {
@@ -240,17 +208,19 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         if let Err(error) = baseline {
             self.persistence_failed(error);
         }
-        if let Some(session) = &self.dependency.runtime.session {
+        if let Some(session) = &self.workspace.runtime().session {
             self.persist(Event::Began(QueuedInput {
                 turn: session.key(input.id),
                 prompt: input.prompt.clone(),
             }));
         }
-        self.history.extend(input.prompt.map(llm::Message::new));
+        if let Some(prompt) = input.prompt {
+            self.conversation.push(llm::Message::new(prompt));
+        }
     }
 
     pub fn prepare_batch(&mut self) {
-        if let (Some(session), Some(batch)) = (&self.dependency.runtime.session, self.turn.batch())
+        if let (Some(session), Some(batch)) = (&self.workspace.runtime().session, self.turn.batch())
         {
             self.persist(Event::Prepared(PendingBatch::new(session, batch)));
         }
@@ -264,7 +234,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 state,
                 detail,
             },
-        ) = (&self.dependency.runtime.session, packet)
+        ) = (&self.workspace.runtime().session, packet)
         {
             self.persist(Event::Status {
                 turn: session.key(turn_id),
@@ -292,14 +262,14 @@ impl<C: Context + Clone + 'static> ActorState<C> {
 
     async fn run_session_command(&mut self, command: &Command) -> anyhow::Result<ActorToTuiPacket> {
         let store = self
-            .dependency
-            .runtime
+            .workspace
+            .runtime()
             .sessions
             .clone()
             .ok_or_else(|| anyhow::anyhow!("Session storage is not configured"))?;
         let current = self
-            .dependency
-            .runtime
+            .workspace
+            .runtime()
             .session
             .as_ref()
             .map(|session| session.id.as_str());
@@ -309,7 +279,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 Self::list_sessions(&store, current)?,
             ),
             SessionAction::Prune(mode) => {
-                let runtime = &self.dependency.runtime;
+                let runtime = self.workspace.runtime();
                 runtime
                     .interaction
                     .authorize(tools::tool_defs::ToolEffect::Write)?;
@@ -330,12 +300,12 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             }
             SessionAction::Resume { id } => {
                 let workspace = self
-                    .dependency
-                    .runtime
+                    .workspace
+                    .runtime()
                     .project
                     .clone()
                     .map(Ok)
-                    .unwrap_or_else(|| self.dependency.runtime.scope.workspace())?;
+                    .unwrap_or_else(|| self.workspace.runtime().scope.workspace())?;
                 let session =
                     ResumableSession::new(&store, id, &workspace, &self.llm.session_provider())?
                         .resume()?;
@@ -357,8 +327,8 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             }
             SessionAction::Fork => {
                 let current = self
-                    .dependency
-                    .runtime
+                    .workspace
+                    .runtime()
                     .session
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("There is no current session"))?;
@@ -382,7 +352,8 @@ impl<C: Context + Clone + 'static> ActorState<C> {
 
     fn session_transcript(&self, id: &str) -> SessionTranscript {
         let messages = self
-            .history
+            .conversation
+            .history()
             .iter()
             .skip(1)
             .flat_map(|message| {
@@ -472,44 +443,9 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         session: Arc<Session>,
         source: Option<&SessionWorktree>,
     ) -> anyhow::Result<()> {
-        let mut runtime = self.dependency.runtime.clone();
-        runtime.session = Some(session.clone());
-        runtime.activate_session(source)?;
-        let snapshot = session.snapshot()?;
-        runtime.scope.changes = session.change_tracker(snapshot.changes);
-        let mut context = self.cur_context.clone();
-        context.clear_task_context();
-        Self::relocate_context(&mut context, &runtime)?;
-        self.dependency
-            .runtime
-            .immutable_workers
-            .clear(&self.dependency.worker_owner())
-            .await;
-        self.dependency.runtime = runtime;
-        self.dependency.context = context.clone();
-        let fresh = llm::Message::new(context.get_ctx().await);
-        self.prompt_cache_key = session.id.clone();
-        self.history = std::iter::once(fresh)
-            .chain(snapshot.history.into_iter().skip(1))
-            .collect();
-        self.cur_context = context;
-        self.relocate_watcher()?;
-        self.merge_approval = snapshot.merge_approval;
-        self.stream_processor.clear();
-        self.stream_processor.token_count = snapshot.usage;
-        self.context_checkpoint = snapshot.context;
-        self.questions = snapshot.questions;
-        self.planning = snapshot.planning;
-        self.deferred_input = snapshot.deferred_input;
-        self.turn = TurnMachine::new(self.dependency.runtime.scope.clone(), self.request_mode);
-        self.persistence = Persistence::Ready;
-        self.restore_merge_question()?;
+        let activation = SessionActivation::resume(&self.workspace, session, source).await?;
+        self.activate_session(activation).await?;
         self.sync_question_gate().await;
-        self.compact_turn = None;
-        self.dependency
-            .runtime
-            .workers
-            .restore(&session.id, snapshot.workers);
         self.reporter.send(ActorToTuiPacket::TokensUpdated(
             self.stream_processor.token_count.clone(),
         ));

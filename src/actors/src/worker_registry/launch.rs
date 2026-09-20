@@ -64,10 +64,9 @@ impl PreparedWorker {
             WorkerRole::Read => tools::tool_defs::ToolEffect::DelegateRead,
             WorkerRole::Write => tools::tool_defs::ToolEffect::DelegateWrite,
         };
-        info.dep.runtime.interaction.authorize(effect)?;
-        let parent_scope = match &info.dep.runtime.role {
+        info.runtime.interaction.authorize(effect)?;
+        let parent_scope = match &info.runtime.role {
             ExecutionRole::Root => info
-                .dep
                 .runtime
                 .turn_scope
                 .clone()
@@ -85,8 +84,7 @@ impl PreparedWorker {
             .allowed_tools
             .iter()
             .map(|name| {
-                let tool = info.dep
-                    .tool(name)
+                let tool = info.services.tool(name)
                     .filter(|tool| !tool.effect().delegates() && !matches!(name.as_str(), "update_plan" | "request_user_input"))
                     .cloned()
                     .ok_or_else(|| {
@@ -114,26 +112,26 @@ impl PreparedWorker {
                 TaskWorker::init_prompt(None),
                 context.instructions()
             ),
-            task_prompt: Some(request.prompt(&info.dep.runtime.inherited_constraints)?),
+            task_prompt: Some(request.prompt(&info.runtime.inherited_constraints)?),
             guidance: context.guidance.fork(),
-            id_gen: Arc::new(std::sync::atomic::AtomicU64::new(info.dep.context.gen_id())),
+            id_gen: Arc::new(std::sync::atomic::AtomicU64::new(context.gen_id())),
             ..context.clone()
         };
         let writer = match request.role {
-            WorkerRole::Write => Some(info.dep.runtime.workspace.writer.clone().try_lock_owned().map_err(|_| anyhow::anyhow!("A writer already owns the workspace; wait before starting another write worker"))?),
+            WorkerRole::Write => Some(info.runtime.workspace.writer.clone().try_lock_owned().map_err(|_| anyhow::anyhow!("A writer already owns the workspace; wait before starting another write worker"))?),
             WorkerRole::Read => None,
         };
         let runtime = crate::states::runtime::Runtime {
             turn_scope: None,
-            ..info.dep.runtime.child(scope.clone())
+            ..info.runtime.child(scope.clone())
         };
         Ok(Self {
             parent_scope,
             scope,
             dependency: Dependency {
-                client: info.dep.client.clone(),
-                tui_tx: info.dep.tui_tx.clone(),
-                debug_mode: info.dep.debug_mode,
+                client: info.services.client.clone(),
+                tui_tx: info.services.tui_tx.clone(),
+                debug_mode: info.services.debug_mode,
                 context,
                 tools,
                 runtime,
@@ -151,7 +149,7 @@ impl WorkerRegistry {
         request: WorkerRequest,
     ) -> anyhow::Result<WorkerView> {
         let mut prepared = PreparedWorker::new(info, context, &request)?;
-        let owner = info.dep.worker_owner();
+        let owner = info.owner.clone();
         let execution = self.register(&owner, prepared.scope.clone(), request)?;
         let initial = WorkerView {
             worker_id: execution.id.clone(),
@@ -159,7 +157,7 @@ impl WorkerRegistry {
             status: WorkerStatus::Registered,
             report: None,
         };
-        let parent_session = info.dep.runtime.session.clone();
+        let parent_session = info.runtime.session.clone();
         parent_session
             .as_ref()
             .map(|session| session.record(crate::session::Event::Worker(Box::new(initial.clone()))))

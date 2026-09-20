@@ -22,9 +22,9 @@ pub(super) async fn run(
         context: String::new(),
         completion_criteria: "Complete the stated objective; report findings, requested versus executed validation, and every remaining limitation".into(),
         ..Default::default()
-    }, |name| info.dep.tool(name).map(|tool| tool.effect()))?;
-    let registry = &info.dep.runtime.workers;
-    let owner = info.dep.worker_owner();
+    }, |name| info.services.tool(name).map(|tool| tool.effect()))?;
+    let registry = &info.runtime.workers;
+    let owner = info.owner.clone();
     let mut view = registry.start(info, context, request)?;
     while !view.status.terminal() {
         view = registry.wait(&owner, &view.worker_id, 60).await?;

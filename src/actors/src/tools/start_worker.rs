@@ -49,9 +49,10 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for StartWorker {
         actor: &ActorContext<RustContext>,
     ) -> anyhow::Result<Self::Output> {
         let info = info(actor)?;
-        let request =
-            WorkerRequest::new(input, |name| info.dep.tool(name).map(|tool| tool.effect()))?;
-        info.dep.runtime.workers.start(info, context, request)
+        let request = WorkerRequest::new(input, |name| {
+            info.services.tool(name).map(|tool| tool.effect())
+        })?;
+        info.runtime.workers.start(info, context, request)
     }
 
     fn display_input(input: &Self::Input) -> String {

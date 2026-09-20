@@ -104,8 +104,8 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for WorkerStatusTool {
         actor: &ActorContext<RustContext>,
     ) -> anyhow::Result<Self::Output> {
         let info = super::start_worker::info(actor)?;
-        let registry = &info.dep.runtime.workers;
-        let owner = info.dep.worker_owner();
+        let registry = &info.runtime.workers;
+        let owner = info.owner.clone();
         let workers = match Action::try_from(input)? {
             Action::List => registry.collect(&owner),
             Action::Status(id) => vec![registry.status(&owner, &id)?],
@@ -126,7 +126,7 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for WorkerStatusTool {
                                 "Selected previous worker report:\n{}",
                                 serde_json::to_string(&report)?
                             ),
-                            |name| info.dep.tool(name).map(|tool| tool.effect()),
+                            |name| info.services.tool(name).map(|tool| tool.effect()),
                         )?;
                         vec![registry.start(info, context, request)?]
                     }

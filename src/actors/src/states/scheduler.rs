@@ -1,6 +1,7 @@
-use crate::actor::{ActorContext, ActorInfo, Dependency, Message};
+use crate::actor::{ActorContext, ActorInfo, Message};
 use crate::states::runtime::{ExecutionRole, WorkspaceRevision};
 use crate::states::turn::{Tag, ToolJob};
+use crate::states::{services::ActorServices, workspace::ActiveWorkspace};
 use analysis::contexts::context::Context;
 use common_models::runtime_ids::OperationId;
 use futures::{FutureExt, StreamExt};
@@ -33,8 +34,8 @@ pub enum ToolEvent {
 
 #[derive(Clone)]
 pub struct Executor<C: Context> {
-    pub dependency: Dependency<C>,
-    pub context: C,
+    pub services: std::sync::Arc<ActorServices<C>>,
+    pub workspace: ActiveWorkspace<C>,
     pub actor: ActorRef<Message>,
 }
 
@@ -159,10 +160,10 @@ impl<C: Context + Clone + 'static> PreparedTool<C> {
 
 impl<C: Context + Clone + 'static> Executor<C> {
     fn prepare(&self, job: ToolJob) -> Result<PreparedTool<C>, ToolFailure> {
-        if let ExecutionRole::Worker { execution } = &self.dependency.runtime.role {
+        if let ExecutionRole::Worker { execution } = &self.workspace.runtime().role {
             match self
-                .dependency
-                .runtime
+                .workspace
+                .runtime()
                 .role
                 .allows_tool(job.call.name.as_ref())
             {
@@ -180,7 +181,7 @@ impl<C: Context + Clone + 'static> Executor<C> {
                 )),
             }?;
         }
-        self.dependency
+        self.services
             .tool(job.call.name.as_ref())
             .cloned()
             .ok_or_else(|| {
@@ -220,9 +221,9 @@ impl<C: Context + Clone + 'static> Executor<C> {
                 ..result
             },
         };
-        if let ExecutionRole::Worker { execution } = &self.dependency.runtime.role {
+        if let ExecutionRole::Worker { execution } = &self.workspace.runtime().role {
             let effect = self
-                .dependency
+                .services
                 .tool(job.call.name.as_ref())
                 .and_then(|tool| tool.effect_from_input_erased(&job.call.input_value()).ok())
                 .unwrap_or(ToolEffect::Read);
@@ -243,19 +244,19 @@ impl<C: Context + Clone + 'static> Executor<C> {
         prepared: &PreparedTool<C>,
         tag: Tag,
     ) -> Result<String, ToolFailure> {
-        let scope = self.dependency.runtime.scope.tool_child();
-        self.dependency
-            .runtime
+        let scope = self.workspace.runtime().scope.tool_child();
+        self.workspace
+            .runtime()
             .interaction
             .authorize(prepared.effect)?;
         let _registration = scope.register(ResourceKind::Tool, prepared.job.call.name.to_string());
-        let _writer = match (prepared.effect, &self.dependency.runtime.role) {
-            (ToolEffect::Write | ToolEffect::Validate, ExecutionRole::Root | ExecutionRole::Helper) => Some(self.dependency.runtime.workspace.writer.clone().try_lock_owned().map_err(|_| ToolFailure::new(ToolFailureKind::InvalidInput, ToolEffects::NotStarted, "A worker owns workspace writes; wait for it to finish before editing or validating"))?),
+        let _writer = match (prepared.effect, &self.workspace.runtime().role) {
+            (ToolEffect::Write | ToolEffect::Validate, ExecutionRole::Root | ExecutionRole::Helper) => Some(self.workspace.runtime().workspace.writer.clone().try_lock_owned().map_err(|_| ToolFailure::new(ToolFailureKind::InvalidInput, ToolEffects::NotStarted, "A worker owns workspace writes; wait for it to finish before editing or validating"))?),
             _ => None,
         };
         let lease = self
-            .dependency
-            .runtime
+            .workspace
+            .runtime()
             .workspace
             .acquire(prepared.effect, &scope)
             .await?;
@@ -275,7 +276,7 @@ impl<C: Context + Clone + 'static> Executor<C> {
     }
 
     fn record_intent(&self, prepared: &PreparedTool<C>) -> Result<(), ToolFailure> {
-        match &self.dependency.runtime.session {
+        match &self.workspace.runtime().session {
             Some(session) => session
                 .record(crate::session::Event::Intent {
                     operation: session.key(prepared.job.operation),
@@ -297,7 +298,7 @@ impl<C: Context + Clone + 'static> Executor<C> {
         operation: OperationId,
         result: ToolResult,
     ) -> Result<ToolResult, ToolFailure> {
-        match &self.dependency.runtime.session {
+        match &self.workspace.runtime().session {
             Some(session) => session
                 .complete_tool(session.key(operation), result)
                 .map_err(|error| {
@@ -318,8 +319,8 @@ impl<C: Context + Clone + 'static> Executor<C> {
         tag: Tag,
         revision: Option<WorkspaceRevision>,
     ) -> Result<String, ToolFailure> {
-        self.dependency
-            .runtime
+        self.workspace
+            .runtime()
             .interaction
             .authorize(prepared.effect)?;
         self.record_intent(prepared)?;
@@ -332,19 +333,18 @@ impl<C: Context + Clone + 'static> Executor<C> {
                 display: prepared.display.clone(),
             },
         );
-        let runtime = &self.dependency.runtime;
+        let runtime = self.workspace.runtime();
         let input = prepared.job.call.input_value();
         let context = ActorContext::ActorInfo(ActorInfo {
-            dep: Dependency {
-                runtime: runtime.child(scope.clone()),
-                ..self.dependency.clone()
-            },
+            runtime: runtime.child(scope.clone()),
+            services: self.services.clone(),
+            owner: self.workspace.worker_owner(),
             actor_ref: self.actor.clone(),
         });
         let run = scope.enter(prepared.implementation.run_erased(
             input.clone(),
             prepared.job.call.id.clone(),
-            &self.context,
+            self.workspace.context(),
             &context,
         ));
         tokio::pin!(run);
@@ -394,17 +394,20 @@ impl<C: Context + Clone + 'static> Executor<C> {
         scope: &ExecutionScope,
         result: &CargoResult,
     ) -> anyhow::Result<()> {
-        if prepared.implementation.name() == "cargo"
-            && prepared
-                .job
-                .call
-                .input
-                .get("operation")
-                .and_then(serde_json::Value::as_str)
-                == Some("start")
-            && let Some(id) = result.process_id.clone()
-            && let Some(session) = self.dependency.runtime.session.clone()
-        {
+        let operation = prepared
+            .job
+            .call
+            .input
+            .get("operation")
+            .and_then(serde_json::Value::as_str);
+        if let ("cargo", Some("start"), Some(id), Some(session)) = (
+            prepared.implementation.name().as_str(),
+            operation,
+            &result.process_id,
+            &self.workspace.runtime().session,
+        ) {
+            let id = id.clone();
+            let session = session.clone();
             let owner = scope.process_owner();
             let process = owner.processes.get(&id)?;
             let actor = self.actor.clone();
@@ -434,13 +437,13 @@ impl<C: Context + Clone + 'static> Executor<C> {
     }
 
     pub fn spawn(self, jobs: Vec<ToolJob>, tag: Tag) {
-        self.dependency
-            .runtime
+        self.workspace
+            .runtime()
             .scope
             .tasks
             .clone()
             .spawn(async move {
-                let scope = self.dependency.runtime.scope.clone();
+                let scope = self.workspace.runtime().scope.clone();
                 let result = scope
                     .enter(AssertUnwindSafe(self.run(jobs, tag)).catch_unwind())
                     .await;
@@ -456,7 +459,7 @@ impl<C: Context + Clone + 'static> Executor<C> {
     }
 
     fn concurrent(&self, job: &ToolJob) -> bool {
-        self.dependency
+        self.services
             .tool(job.call.name.as_ref())
             .is_some_and(|tool| {
                 tool.effect_from_input_erased(&job.call.input_value())
@@ -479,14 +482,15 @@ impl<C: Context + Clone + 'static> Executor<C> {
     }
 
     fn schedule(&self, pending: &mut VecDeque<ToolJob>) -> Schedule {
-        match self.dependency.runtime.scope.cancel.is_cancelled()
-            || self.dependency.runtime.interaction.waiting()
-        {
-            true => Schedule::Stopped,
-            false => self
+        match (
+            self.workspace.runtime().scope.cancel.is_cancelled(),
+            self.workspace.runtime().interaction.waiting(),
+        ) {
+            (false, false) => self
                 .next_group(pending)
                 .map(Schedule::Run)
                 .unwrap_or(Schedule::Stopped),
+            _ => Schedule::Stopped,
         }
     }
 
@@ -498,7 +502,7 @@ impl<C: Context + Clone + 'static> Executor<C> {
             let completed = match group {
                 ToolGroup::Reads(jobs) => {
                     futures::stream::iter(jobs.into_iter().map(|job| self.execute(job, tag)))
-                        .buffered(self.dependency.runtime.workspace.read_limit())
+                        .buffered(self.workspace.runtime().workspace.read_limit())
                         .collect::<Vec<_>>()
                         .await
                 }
@@ -523,8 +527,8 @@ impl<C: Context + Clone + 'static> Executor<C> {
     ) -> crate::states::turn::ToolBatch {
         let jobs = batch.jobs();
         let results = self
-            .dependency
-            .runtime
+            .workspace
+            .runtime()
             .scope
             .enter(self.run(jobs.clone(), batch.tag))
             .await;

@@ -160,9 +160,9 @@ impl Worker for SnapshotWorker {
 
 impl<C: Context + Clone + 'static> ActorState<C> {
     pub fn capture_snapshot(&self) -> anyhow::Result<Snapshot> {
-        match self.turn.is_idle() && self.deferred_input.is_empty() {
-            true => Ok(()),
-            false => Err(anyhow::anyhow!(
+        match (self.turn.is_idle(), self.conversation.has_deferred_input()) {
+            (true, false) => Ok(()),
+            _ => Err(anyhow::anyhow!(
                 "Finish the active turn before capturing an immutable snapshot"
             )),
         }?;
@@ -195,7 +195,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             request,
             &self.llm,
             input.limits,
-            self.dependency.runtime.request_timeout,
+            self.workspace.runtime().request_timeout,
         )
     }
 }

@@ -30,9 +30,7 @@ use tools::tool_defs::{
 };
 use utils::utils::FnvHashMap;
 
-pub fn runtime_snapshot(
-    messages: &[llm::Message],
-) -> clients::runtime_update::RuntimeSnapshot {
+pub fn runtime_snapshot(messages: &[llm::Message]) -> clients::runtime_update::RuntimeSnapshot {
     messages
         .iter()
         .flat_map(|message| &message.content)
@@ -309,6 +307,7 @@ enum GateOutcome {
     RenderPanic,
     ContextFailure,
     ContextPanic,
+    ContextRevision,
 }
 struct Active(Arc<AtomicUsize>);
 impl Drop for Active {
@@ -354,8 +353,8 @@ impl ErasedToolTrait<TestContext, ActorContext<TestContext>> for GateTool {
         &self,
         input: Value,
         _: ToolId,
-        _: &TestContext,
-        _: &ActorContext<TestContext>,
+        context: &TestContext,
+        actor: &ActorContext<TestContext>,
     ) -> anyhow::Result<Value> {
         self.active.fetch_add(1, Ordering::SeqCst);
         let _active = Active(self.active.clone());
@@ -364,9 +363,16 @@ impl ErasedToolTrait<TestContext, ActorContext<TestContext>> for GateTool {
             .send((input["id"].as_str().unwrap().into(), tx))
             .unwrap();
         let _ = rx.await;
-        match self.outcome {
-            GateOutcome::Failure => Err(anyhow::anyhow!("fixture failure")),
-            GateOutcome::RunPanic => panic!("fixture execution panic"),
+        match (self.outcome, actor) {
+            (GateOutcome::Failure, _) => Err(anyhow::anyhow!("fixture failure")),
+            (GateOutcome::RunPanic, _) => panic!("fixture execution panic"),
+            (GateOutcome::ContextRevision, ActorContext::ActorInfo(info)) => Ok(json!({
+                "context_revision": context.revision,
+                "owner": info.owner,
+            })),
+            (GateOutcome::ContextRevision, ActorContext::Noop) => {
+                Err(anyhow::anyhow!("Actor context is required"))
+            }
             _ => Ok(input),
         }
     }
@@ -383,10 +389,14 @@ impl ErasedToolTrait<TestContext, ActorContext<TestContext>> for GateTool {
     fn output_is_error_erased(&self, _: &Value, _: &Value) -> anyhow::Result<bool> {
         Ok(matches!(self.outcome, GateOutcome::LargeValidation))
     }
-    fn add_context(&self, _: &Value, _: &mut TestContext, _: &str) -> anyhow::Result<()> {
+    fn add_context(&self, _: &Value, context: &mut TestContext, _: &str) -> anyhow::Result<()> {
         match self.outcome {
             GateOutcome::ContextFailure => Err(anyhow::anyhow!("fixture context failure")),
             GateOutcome::ContextPanic => panic!("fixture context panic"),
+            GateOutcome::ContextRevision => {
+                context.revision += 1;
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -736,6 +746,47 @@ async fn tool_panics_preserve_other_reads_and_stop_subsequent_writes() {
 }
 
 #[tokio::test]
+async fn tool_context_updates_reach_the_next_execution() {
+    let (mut tool, entered) = gate("context_revision", ToolEffect::Read);
+    Arc::get_mut(&mut tool).unwrap().outcome = GateOutcome::ContextRevision;
+    let h = Harness::new(vec![tool], Duration::from_secs(10)).await;
+    h.start("Update context across tool batches");
+    let (_, mut reply) = h.request().await;
+    for revision in 1..=2 {
+        answer(
+            reply,
+            response(vec![call("context_revision", &revision.to_string())]),
+        );
+        within(entered.recv_async())
+            .await
+            .unwrap()
+            .1
+            .send(())
+            .unwrap();
+        let (request, next) = h.request().await;
+        let output = match latest_tool_result(&request) {
+            ContentBlock::ToolResult {
+                content,
+                is_error: None,
+                ..
+            } => serde_json::from_str::<Value>(content).unwrap(),
+            result => panic!("Expected a successful tool result: {result:?}"),
+        };
+        assert_eq!(
+            output,
+            json!({
+                "context_revision": revision,
+                "owner": "actor-1",
+            })
+        );
+        reply = next;
+    }
+    answer(reply, response(vec![text("Context updated")]));
+    h.terminal(Lifecycle::Completed).await;
+    h.stop().await;
+}
+
+#[tokio::test]
 async fn context_update_feedback_stops_before_the_next_provider_request() {
     for outcome in [GateOutcome::ContextFailure, GateOutcome::ContextPanic] {
         let (mut read, entered) = gate("read", ToolEffect::Read);
@@ -824,9 +875,9 @@ impl ErasedToolTrait<TestContext, ActorContext<TestContext>> for DelegateTool {
             client: self.client.clone(),
             tools: self.tools.clone(),
             context: context.clone(),
-            tui_tx: info.dep.tui_tx.clone(),
+            tui_tx: info.services.tui_tx.clone(),
             debug_mode: false,
-            runtime: info.dep.runtime.child(info.dep.runtime.scope.child()),
+            runtime: info.runtime.child(info.runtime.scope.child()),
         };
         let result = if self.panic_start {
             crate::worker::run_worker(FailingWorker, dependency, info.actor_ref.clone())
