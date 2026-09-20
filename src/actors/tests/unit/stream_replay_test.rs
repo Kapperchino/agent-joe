@@ -1,10 +1,10 @@
 use crate::actor::{ActorContext, Dependency, Message};
 use crate::states::actor_state::ActorState;
-use crate::states::stream_processor::StreamNextStep;
 use analysis::contexts::context::Context;
 use analysis::contexts::rust_context::RustContextLineIndexCreator;
 use async_trait::async_trait;
 use clients::llm::{self, LLmClient};
+use clients::response::StreamNextStep;
 use clients::{claude, openai};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use serde_json::{Value, json};
@@ -229,8 +229,7 @@ async fn helpers_preserve_parent_interaction_without_root_tools_or_plan_context(
     assert!(h.state.services.tool("update_plan").is_none());
     let mut planning = Planning::default();
     planning.record_evidence("helper".into(), "Helper evidence".into());
-    h.state.interaction =
-        crate::session::interaction_state::InteractionState::restored(planning, Default::default());
+    h.state.interaction = interaction::InteractionState::restored(planning, Default::default());
     h.state.refresh_interaction();
     assert_eq!(interaction.mode(), WorkMode::Plan);
     let input = h
@@ -260,9 +259,9 @@ async fn helpers_preserve_parent_interaction_without_root_tools_or_plan_context(
 
 #[tokio::test]
 async fn context_budget_follows_the_active_model_and_preserves_overrides() {
-    use crate::context::{BudgetPlan, ContextBudget};
     use clients::config::{Config, ConfigContext};
     use clients::{ClaudeAuthConfig, ClaudeConfig, ClaudeEffort, ClaudeKeyConfig};
+    use conversation::context::{BudgetPlan, ContextBudget};
 
     let mut h = harness().await;
     let client = |model: &str| {
@@ -320,10 +319,8 @@ async fn consume(
     {
         StreamNextStep::ToolUse => {
             let items = state.stream_processor.extract_and_pre_process()?;
-            let batch = crate::states::turn::ToolBatch::new(
-                common_models::runtime_ids::TurnId::new(),
-                items,
-            );
+            let batch =
+                turn_engine::turn::ToolBatch::new(common_models::runtime_ids::TurnId::new(), items);
             let batch = state
                 .executor(state.runtime.scope.clone())
                 .replay(batch)
@@ -335,8 +332,8 @@ async fn consume(
             let content = items
                 .into_iter()
                 .map(|item| match item {
-                    crate::states::stream_processor::ProcessedItem::Content(content) => Ok(content),
-                    crate::states::stream_processor::ProcessedItem::Tool(_) => {
+                    clients::response::ProcessedItem::Content(content) => Ok(content),
+                    clients::response::ProcessedItem::Tool(_) => {
                         Err(anyhow::anyhow!("Unexpected tool in a completed response"))
                     }
                 })

@@ -1,13 +1,11 @@
 use crate::states::provider_task::{ProviderEvent, ProviderTask};
-use crate::{
-    context::{
-        BudgetPlan, Checkpoint, ContextInput, ContextLimits, Memory, NativeCompaction,
-        estimated_tokens,
-    },
-    workers::{compaction_worker::CompactionWorker, snapshot_worker::Snapshot},
-};
+use crate::workers::compaction_worker::CompactionWorker;
+use crate::workers::snapshot_worker::Snapshot;
 use clients::llm::ClientRequest;
 use common_models::tui_models::{RequestContext, TokenCount};
+use conversation::context::{
+    BudgetPlan, Checkpoint, ContextInput, ContextLimits, Memory, NativeCompaction, estimated_tokens,
+};
 
 #[derive(Debug)]
 pub struct CompactedContext {

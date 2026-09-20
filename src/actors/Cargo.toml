@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+sandbox = { path = "../sandbox" }
+worker-registry = { path = "../worker-registry" }
+workspace-access = { path = "../workspace-access" }
 conversation = { path = "../conversation" }
 interaction = { path = "../interaction" }
 response-stream = { path = "../response-stream" }

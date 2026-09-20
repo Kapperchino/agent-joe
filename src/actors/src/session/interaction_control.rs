@@ -1,20 +1,18 @@
-use crate::{
-    session::{
-        Event,
-        interaction_state::{Interaction, InteractionUpdate},
-        persistence::Persistence,
-        session_merge::MergeDecision,
-    },
-    states::{
-        actor_state::ActorState, runtime::ExecutionRole, turn::FollowUp, turn_machine::SessionEvent,
-    },
-};
+use crate::session::Event;
+use crate::session::interaction_state::Interaction;
+use crate::session::persistence::Persistence;
+use crate::session::session_merge::MergeDecision;
+use crate::states::actor_state::ActorState;
+use crate::states::runtime::ExecutionRole;
 use analysis::contexts::context::Context;
 use commands::command::Command;
 use common_models::{
     interaction::{Answer, PlanUpdate, Planning, Question, QuestionPurpose, WorkMode},
     tui_models::ActorToTuiPacket,
 };
+use interaction::InteractionUpdate;
+use turn_engine::machine::SessionEvent;
+use turn_engine::turn::FollowUp;
 use utils::execution::ExecutionScope;
 
 enum AnswerAction {

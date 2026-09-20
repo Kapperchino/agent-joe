@@ -1,15 +1,13 @@
+use crate::actor::{ActorContext, Dependency, IntoActorErr, Message};
+use crate::event_reporter::EventReporter;
 use crate::states::actor_state::{ActorMode, ActorState};
 use crate::states::provider_task::ProviderTask;
 use crate::states::runtime::{ExecutionRole, Runtime};
-use crate::{
-    actor::{ActorContext, Dependency, IntoActorErr, Message},
-    context::{ContextBudget, ContextLimits, Memory, NativeCompaction},
-    event_reporter::EventReporter,
-    worker::{ContextWorker, run_worker},
-};
+use crate::worker::{ContextWorker, run_worker};
 use analysis::contexts::{context::Context, rust_context::RustContextLineIndexCreator};
 use async_trait::async_trait;
 use clients::llm;
+use conversation::context::{ContextBudget, ContextLimits, Memory, NativeCompaction};
 use ractor::{ActorProcessingErr, ActorRef};
 use std::path::PathBuf;
 use tools::tool_defs::ErasedToolRef;
@@ -79,7 +77,7 @@ impl CompactionWorker {
         )
         .await
         .map_err(|error| match error {
-            crate::worker::WorkerFailure::Turn(failure) => anyhow::Error::new(failure),
+            turn_engine::WorkerFailure::Turn(failure) => anyhow::Error::new(failure),
             error => error.into(),
         })?;
         Memory::summary(text, limits)

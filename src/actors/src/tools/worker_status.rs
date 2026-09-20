@@ -1,10 +1,11 @@
-use crate::{actor::ActorContext, worker_registry::report::WorkerView};
+use crate::actor::ActorContext;
 use analysis::contexts::rust_context::RustContext;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tools::tool_defs::{ToolDefTrait, ToolId, ToolTrait, ToolType};
 use turbo_code_macros::{ToolDef, ToolInput};
 use utils::utils::FnvHashMap;
+use worker_registry::report::WorkerView;
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize, ToolDef)]
 #[tool(
@@ -128,7 +129,9 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for WorkerStatusTool {
                             ),
                             |name| info.services.tool(name).map(|tool| tool.effect()),
                         )?;
-                        vec![registry.start(info, context, request)?]
+                        vec![crate::worker_registry::launch::start(
+                            registry, info, context, request,
+                        )?]
                     }
                     _ => Err(anyhow::anyhow!(
                         "Wait for the worker to finish before following up; cancel first to change an active task"

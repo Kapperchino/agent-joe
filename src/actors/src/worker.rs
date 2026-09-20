@@ -197,7 +197,7 @@ impl RunningWorker {
     }
 }
 
-pub use turn_engine::WorkerFailure;
+use turn_engine::WorkerFailure;
 
 #[derive(Default)]
 pub struct WorkerReplies {

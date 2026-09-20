@@ -1,10 +1,11 @@
-use crate::{actor::ActorContext, worker_registry::report::WorkerReport};
+use crate::actor::ActorContext;
 use analysis::contexts::rust_context::RustContext;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tools::tool_defs::{ToolDefTrait, ToolId, ToolTrait, ToolType};
 use turbo_code_macros::{ToolDef, ToolInput};
 use utils::utils::FnvHashMap;
+use worker_registry::report::WorkerReport;
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize, ToolDef)]
 #[tool(

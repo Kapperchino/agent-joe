@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "src/actors", "src/analysis", "src/app", "src/clients", "src/commands", "src/common-models", "src/tools", "src/turbo-code-macros", "src/utils", "src/sandbox", "src/conversation", "src/interaction", "src/response-stream", "src/turn-engine"]
+members = [".", "src/actors", "src/analysis", "src/app", "src/clients", "src/commands", "src/common-models", "src/tools", "src/turbo-code-macros", "src/utils", "src/sandbox", "src/conversation", "src/interaction", "src/response-stream", "src/turn-engine", "src/worker-registry", "src/workspace-access"]
 default-members = [".", "src/sandbox"]
 
 [package]
@@ -11,6 +11,7 @@ edition = "2024"
 opt-level = 3
 
 [dependencies]
+conversation = { path = "src/conversation" }
 utils = { path = "src/utils" }
 anyhow = "1.0"
 actors = { path = "src/actors" }

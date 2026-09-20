@@ -42,7 +42,7 @@ struct Cli {
     #[arg(long, default_value_t = 16_000)]
     response_tokens: u32,
     #[arg(long, default_value = "auto")]
-    native_compaction: actors::context::NativeCompaction,
+    native_compaction: conversation::context::NativeCompaction,
     #[arg(long, default_value = "sessions")]
     session_namespace: String,
     #[arg(long)]
@@ -155,7 +155,7 @@ async fn get_actor<W: ContextWorker<C = RustContext>>(
     let mut runtime =
         actors::states::runtime::Runtime::with_session_namespace(root, &cli.session_namespace)?;
     runtime.context_budget =
-        actors::context::ContextBudget::new(cli.context_tokens, cli.response_tokens)?;
+        conversation::context::ContextBudget::new(cli.context_tokens, cli.response_tokens)?;
     runtime
         .context_budget
         .resolve(config_context.get_config().context_window())?;

@@ -26,8 +26,8 @@ impl SessionTransition {
         runtime.activate_session(None)?;
         runtime.scope.changes = match self {
             Self::Start => {
-                if let ExecutionRole::Worker { execution } = &runtime.role {
-                    execution.attach_session(runtime.session.clone())?;
+                if let ExecutionRole::Worker { session, .. } = &runtime.role {
+                    session.attach(runtime.session.clone())?;
                 }
                 match &runtime.session {
                     Some(session) if session.snapshot()?.parent.is_none() => {

@@ -1,3 +1,4 @@
+pub mod artifacts;
 pub mod cargo;
 pub mod changes;
 pub mod diff;
@@ -8,7 +9,6 @@ pub mod text_search;
 pub mod utils;
 
 pub mod execution;
-pub mod process;
 pub mod sandbox;
 pub mod workspace;
 

@@ -1,24 +1,25 @@
+use crate::actor;
+use crate::actor::{ActorContext, Dependency};
+use crate::background_actors::file_actor;
+use crate::event_reporter::EventReporter;
 use crate::session::activation::SessionActivation;
-use crate::session::conversation::Conversation;
-use crate::session::interaction_state::InteractionState;
+use crate::session::persistence::Persistence;
 use crate::session::session_merge::MergeApproval;
 use crate::states::runtime::{ExecutionRole, Runtime};
 use crate::states::services::ActorServices;
-use crate::states::stream_processor::{StreamOutput, StreamProcessor};
-use crate::states::turn_machine::TurnMachine;
-use crate::{
-    actor::{self, ActorContext, Dependency},
-    background_actors::file_actor,
-    context::{ContextInput, RequestMode},
-    event_reporter::EventReporter,
-    session::persistence::Persistence,
-};
+use crate::states::stream_processor::StreamOutput;
 use analysis::contexts::context::Context;
 use clients::llm::LLmClient;
+use clients::response::RequestMode;
 use common_models::{runtime_ids::TurnId, tui_models::State};
+use conversation::Conversation;
+use conversation::context::ContextInput;
+use interaction::InteractionState;
 use ractor::ActorRef;
+use response_stream::StreamProcessor;
 use std::sync::Arc;
 use tools::tool_defs::{ToolDefinition, erased_tool};
+use turn_engine::machine::TurnMachine;
 use utils::execution::ExecutionScope;
 
 pub struct ActorState<C: Context> {

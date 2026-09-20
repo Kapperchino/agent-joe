@@ -19,13 +19,13 @@ impl Sandbox {
     pub async fn capture(
         operation: impl SandboxOperation,
         timeout_seconds: u64,
-    ) -> anyhow::Result<crate::process::ProcessOutput> {
+    ) -> anyhow::Result<sandbox::process::ProcessOutput> {
         use crate::execution::ExecutionScope;
-        use crate::process::ProcessHandle;
+        use sandbox::process::ProcessHandle;
         let scope = ExecutionScope::current();
         let command = operation.into_command();
         let handle = ProcessHandle::new(
-            crate::process::ProcessCommand::from_command(&command),
+            sandbox::process::ProcessCommand::from_command(&command),
             scope.cancel.child_token(),
         );
         let _guard = handle.cancellation().drop_guard();
@@ -39,11 +39,11 @@ impl Sandbox {
         timeout_seconds: u64,
     ) -> anyhow::Result<String> {
         use crate::execution::ExecutionScope;
-        use crate::process::ProcessHandle;
+        use sandbox::process::ProcessHandle;
         let owner = ExecutionScope::current().process_owner();
         let command = operation.into_command();
         let handle = ProcessHandle::new(
-            crate::process::ProcessCommand::from_command(&command),
+            sandbox::process::ProcessCommand::from_command(&command),
             owner.cancel.child_token(),
         );
         let id = owner.processes.insert(handle.clone())?;
@@ -57,7 +57,7 @@ impl Sandbox {
     async fn launch(
         command: Command,
         timeout_seconds: u64,
-        handle: std::sync::Arc<crate::process::ProcessHandle>,
+        handle: std::sync::Arc<sandbox::process::ProcessHandle>,
         owner: crate::execution::ExecutionScope,
     ) -> anyhow::Result<()> {
         let limits = ProcessLimits::new(
@@ -86,7 +86,7 @@ impl Sandbox {
 async fn launch_command(
     command: Command,
     limits: ProcessLimits,
-    handle: std::sync::Arc<crate::process::ProcessHandle>,
+    handle: std::sync::Arc<sandbox::process::ProcessHandle>,
     owner: crate::execution::ExecutionScope,
 ) -> anyhow::Result<()> {
     let scope = crate::execution::ExecutionScope::current();
@@ -111,11 +111,11 @@ async fn execute(command: Command, limits: ProcessLimits) -> anyhow::Result<Outp
     #[cfg(unix)]
     {
         use crate::execution::ExecutionScope;
-        use crate::process::{ProcessHandle, ProcessStatus};
+        use sandbox::process::{ProcessHandle, ProcessStatus};
         use std::os::unix::process::ExitStatusExt;
         let scope = ExecutionScope::current();
         let handle = ProcessHandle::new(
-            crate::process::ProcessCommand::from_command(&command),
+            sandbox::process::ProcessCommand::from_command(&command),
             scope.cancel.child_token(),
         );
         let _guard = handle.cancellation().drop_guard();

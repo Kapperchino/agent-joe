@@ -148,15 +148,6 @@ fn legacy_budgets_can_be_restored_without_retaining_token_or_request_limits() {
 }
 
 #[test]
-fn worker_tool_schema_has_no_request_limit() {
-    use tools::tool_defs::ToolDefTrait;
-
-    let properties = crate::tools::start_worker::StartWorker::field_properties();
-    assert!(!properties.contains_key("requests"));
-    assert!(properties.contains_key("seconds"));
-}
-
-#[test]
 fn legacy_request_limits_are_discarded_from_inputs_and_followups() {
     for requests in [1, 16, 32] {
         let input: WorkerRequestInput = serde_json::from_value(serde_json::json!({

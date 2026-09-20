@@ -5,7 +5,7 @@ fn request_context_reserves_space_for_output() {
     let diff = "-retries = 3\n+retries = 5\n";
     let request = CommitRequest::new(diff.into(), usize::MAX).unwrap();
     let required =
-        crate::context::estimated_tokens(&request.request).unwrap() + OUTPUT_TOKENS as usize;
+        conversation::context::estimated_tokens(&request.request).unwrap() + OUTPUT_TOKENS as usize;
     assert!(CommitRequest::new(diff.into(), required).is_err());
     assert!(CommitRequest::new(diff.into(), required + 1).is_ok());
 }

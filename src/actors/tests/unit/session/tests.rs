@@ -828,7 +828,7 @@ fn forkable_snapshot_requires_idle_status_without_pending_or_queued_work() {
 
 #[test]
 fn compacted_sessions_reject_replayed_checkpoints_and_isolate_fork_questions() {
-    use crate::context::{Checkpoint, Memory};
+    use conversation::context::{Checkpoint, Memory};
     let workspace = Workspace::new();
     let store = workspace.store();
     let session = store
@@ -901,7 +901,7 @@ pub(super) fn batch() -> PendingBatch {
         .into_iter()
         .map(|id| Operation {
             id: id.into(),
-            call: crate::tool_call::ToolCall {
+            call: clients::response::ToolCall {
                 id: ToolId {
                     id: id.to_owned().try_into().unwrap(),
                     call_id: Some(format!("call_{id}").try_into().unwrap()),
@@ -1708,7 +1708,7 @@ async fn cargo_artifacts_preserve_structured_results_and_managed_recovery() {
     result.stderr.content = "stderr diagnostic\n".repeat(1000);
     result.stderr.next_offset = result.stderr.content.len();
     result.process_id = Some("process-fixture".into());
-    result.status = utils::process::ProcessStatus::Running;
+    result.status = sandbox::process::ProcessStatus::Running;
     let saved = save_output(&session, &serde_json::to_string(&result).unwrap());
     let content = saved.outcome.unwrap();
     assert!(content.len() <= artifacts::INLINE_BYTES);
@@ -1732,7 +1732,7 @@ async fn cargo_artifacts_preserve_structured_results_and_managed_recovery() {
     assert_eq!(restored, result.stdout.content);
     assert_eq!(
         session.snapshot().unwrap().processes["process-fixture"].status,
-        utils::process::ProcessStatus::Running
+        sandbox::process::ProcessStatus::Running
     );
     let id = session.id.clone();
     drop(session);
@@ -1742,7 +1742,7 @@ async fn cargo_artifacts_preserve_structured_results_and_managed_recovery() {
     let snapshot = recovered.snapshot().unwrap();
     assert_eq!(
         snapshot.processes["process-fixture"].status,
-        utils::process::ProcessStatus::Failed
+        sandbox::process::ProcessStatus::Failed
     );
     assert!(
         snapshot
@@ -1750,11 +1750,11 @@ async fn cargo_artifacts_preserve_structured_results_and_managed_recovery() {
             .iter()
             .any(|message| message.text().contains("completion is unknown"))
     );
-    result.status = utils::process::ProcessStatus::Cancelled;
+    result.status = sandbox::process::ProcessStatus::Cancelled;
     recovered.complete_process(result).unwrap();
     assert_eq!(
         recovered.snapshot().unwrap().processes["process-fixture"].status,
-        utils::process::ProcessStatus::Cancelled
+        sandbox::process::ProcessStatus::Cancelled
     );
     runtime.scope.finish().await;
 }

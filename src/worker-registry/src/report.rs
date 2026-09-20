@@ -1,4 +1,8 @@
-use super::{budget::BudgetUsage, request::WorkerRequest};
+use super::{
+    WorkerExecution,
+    budget::{BudgetState, BudgetUsage},
+    request::{WorkerRequest, WorkerRole},
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use tools::tool_defs::{ToolEffect, ToolResult};
@@ -44,7 +48,7 @@ pub struct WorkerReport {
     #[serde(default)]
     pub processes: Vec<utils::cargo::CargoResult>,
     pub unresolved_issues: Vec<String>,
-    pub artifacts: Vec<crate::session::artifacts::ArtifactReference>,
+    pub artifacts: Vec<utils::artifacts::ArtifactReference>,
     pub budget: BudgetUsage,
     pub duration_ms: u128,
     pub completion_criteria: String,
@@ -66,11 +70,11 @@ impl WorkerView {
     }
 
     pub(super) fn recovered_report(&self) -> WorkerReport {
-        match &self.report {
-            Some(report)
-                if self.status.terminal()
-                    && report.status == self.status
-                    && report.worker_id == self.worker_id => report.clone(),
+        match self.report.as_ref()
+            .filter(|_| self.status.terminal())
+            .filter(|report| report.status == self.status)
+            .filter(|report| report.worker_id == self.worker_id) {
+            Some(report) => report.clone(),
             _ => WorkerReport {
                 worker_id: self.worker_id.clone(),
                 status: WorkerStatus::Interrupted,
@@ -91,8 +95,7 @@ impl WorkerView {
 }
 
 #[derive(Default)]
-pub struct Evidence {
-    pub inherited_artifacts: BTreeSet<String>,
+pub(super) struct Evidence {
     pub changed_files: BTreeSet<String>,
     pub possibly_changed_files: BTreeSet<String>,
     pub validation: Vec<ToolResult>,
@@ -122,13 +125,13 @@ impl Evidence {
                 .extend(edit.in_flight.iter().map(|path| path.display().to_string()));
             self.edits.push(edit);
         }
-        if matches!(effect, ToolEffect::Validate | ToolEffect::ProcessControl)
-            || result.invocation.name.as_ref() == "cargo"
-        {
-            self.validation.push(result.clone());
+        match (effect, result.invocation.name.as_ref()) {
+            (ToolEffect::Validate | ToolEffect::ProcessControl, _) | (_, "cargo") => {
+                self.validation.push(result.clone())
+            }
+            _ => {}
         }
-        if effect == ToolEffect::Write
-            && matches!(result.invocation.name.as_ref(), "cargo" | "worktree")
+        if let (ToolEffect::Write, "cargo" | "worktree") = (effect, result.invocation.name.as_ref())
         {
             self.unresolved.push(format!(
                 "{} may modify workspace files; its changed paths are not enumerated in this report and require review",
@@ -139,14 +142,16 @@ impl Evidence {
             self.unresolved
                 .push(format!("{}: {failure}", result.invocation.name));
         }
-        if effect == ToolEffect::Write
-            && let Some(patch) = result
+        let patches = match effect {
+            ToolEffect::Write => result
                 .invocation
                 .input
                 .get("patch")
                 .and_then(serde_json::Value::as_str)
-            && let Ok(patches) = utils::diff::DiffSet::new(patch)
-        {
+                .and_then(|patch| utils::diff::DiffSet::new(patch).ok()),
+            _ => None,
+        };
+        if let Some(patches) = patches {
             use utils::diff::Patch;
             let paths = patches.patches().iter().flat_map(|patch| match patch {
                 Patch::AddFile { path, .. }
@@ -165,6 +170,85 @@ impl Evidence {
                 }
                 _ => {}
             }
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct StoredWorkerEvidence {
+    pub artifacts: Vec<utils::artifacts::ArtifactReference>,
+    pub processes: Vec<utils::cargo::CargoResult>,
+    pub unresolved_issues: Vec<String>,
+}
+
+pub enum WorkerOutcome {
+    Completed(String),
+    Failed(String),
+    Cancelled,
+    TimedOut,
+}
+
+impl WorkerOutcome {
+    fn status(&self) -> WorkerStatus {
+        match self {
+            Self::Completed(_) => WorkerStatus::Completed,
+            Self::Failed(_) => WorkerStatus::Failed,
+            Self::Cancelled => WorkerStatus::Cancelled,
+            Self::TimedOut => WorkerStatus::TimedOut,
+        }
+    }
+
+    fn findings(self) -> String {
+        match self {
+            Self::Completed(findings) | Self::Failed(findings) => findings,
+            Self::Cancelled => "Worker cancelled after cleanup".into(),
+            Self::TimedOut => {
+                "Worker deadline exceeded; owned work was cancelled and cleaned up".into()
+            }
+        }
+    }
+}
+
+impl WorkerExecution {
+    pub fn report(
+        &self,
+        outcome: WorkerOutcome,
+        elapsed: std::time::Duration,
+        stored: StoredWorkerEvidence,
+    ) -> WorkerReport {
+        let evidence = self.evidence.lock().unwrap();
+        let budget = self.budget.usage();
+        let status = match budget.state {
+            BudgetState::Available => outcome.status(),
+            BudgetState::Exhausted => WorkerStatus::BudgetExhausted,
+        };
+        let mut unresolved = evidence.unresolved.clone();
+        unresolved.extend(stored.unresolved_issues);
+        let findings = outcome.findings();
+        let findings = match findings.len() <= 8192 {
+            true => findings,
+            false => {
+                unresolved.push("Model explanation was truncated to 8 KiB; the full response remains in the worker session".into());
+                findings[..findings.floor_char_boundary(8192)].to_owned()
+            }
+        };
+        if let (WorkerRole::Write, []) = (self.request.role, evidence.validation.as_slice()) {
+            unresolved.push("No validation checks were executed by this worker; the parent must assess the completion criteria and validate changes".into());
+        }
+        WorkerReport {
+            worker_id: self.id.clone(),
+            status,
+            findings,
+            changed_files: evidence.changed_files.iter().cloned().collect(),
+            possibly_changed_files: evidence.possibly_changed_files.iter().cloned().collect(),
+            validation: evidence.validation.clone(),
+            edits: evidence.edits.clone(),
+            processes: stored.processes,
+            unresolved_issues: unresolved,
+            artifacts: stored.artifacts,
+            budget,
+            duration_ms: elapsed.as_millis(),
+            completion_criteria: self.request.completion_criteria.clone(),
         }
     }
 }

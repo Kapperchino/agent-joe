@@ -673,7 +673,7 @@ async fn simple_and_validation_workers_manage_targets_and_archive_completion() {
             );
             let (started, reply) = actor.request().await;
             let result = latest_cargo(&started);
-            assert_eq!(result.status, utils::process::ProcessStatus::Running);
+            assert_eq!(result.status, sandbox::process::ProcessStatus::Running);
             let id = result.process_id.unwrap();
             tokio::time::timeout(Duration::from_secs(20), async {
                 while !workspace.path.join("ready").exists() {
@@ -714,7 +714,7 @@ async fn simple_and_validation_workers_manage_targets_and_archive_completion() {
             let (stopped, reply) = actor.request().await;
             assert_eq!(
                 latest_cargo(&stopped).status,
-                utils::process::ProcessStatus::Cancelled
+                sandbox::process::ProcessStatus::Cancelled
             );
             answer(
                 reply,
@@ -757,7 +757,7 @@ async fn simple_and_validation_workers_manage_targets_and_archive_completion() {
                 .iter()
                 .find_map(|session| session.processes.get(&id))
                 .unwrap();
-            assert_eq!(process.status, utils::process::ProcessStatus::Cancelled);
+            assert_eq!(process.status, sandbox::process::ProcessStatus::Cancelled);
             assert!(process.stdout.content.contains("ready"));
             actor.stop().await;
         }

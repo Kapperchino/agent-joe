@@ -1,7 +1,7 @@
 use super::{Event, persistence::Persistence};
 use crate::states::runtime::ExecutionRole;
 use common_models::interaction::{PlanUpdate, Question, QuestionPurpose};
-pub use interaction::{AnsweredInteraction, InteractionEvent, InteractionState, InteractionUpdate};
+use interaction::{InteractionEvent, InteractionState, InteractionUpdate};
 use utils::execution::ExecutionScope;
 
 impl From<InteractionEvent> for Event {

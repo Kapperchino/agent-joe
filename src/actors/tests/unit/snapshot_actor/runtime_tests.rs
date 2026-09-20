@@ -1,7 +1,7 @@
 use super::*;
-use crate::context::ContextLimits;
 use crate::immutable_workers::{ImmutableWorker, ImmutableWorkerDescription, ImmutableWorkerView};
 use crate::workers::snapshot_worker::{Snapshot, SnapshotMessage, SnapshotWorker};
+use conversation::context::ContextLimits;
 
 struct SnapshotHarness {
     actor: ActorRef<SnapshotMessage>,
@@ -427,17 +427,17 @@ async fn capture_preserves_full_transcript_and_existing_compaction_memory() {
         llm::Message::new_assistant("Recent answer".into()),
     ]);
     state.conversation.commit_checkpoint(
-        crate::context::Checkpoint::new(
+        conversation::context::Checkpoint::new(
             state.conversation.history(),
             3,
             1,
-            crate::context::Memory::Summary("Existing summary".into()),
+            conversation::context::Memory::Summary("Existing summary".into()),
         )
         .unwrap(),
     );
     let expected = serde_json::to_value(state.conversation.history()).unwrap();
     let snapshot = state.capture_snapshot().unwrap();
-    state.conversation = crate::session::conversation::Conversation::new(Vec::new(), None);
+    state.conversation = conversation::Conversation::new(Vec::new(), None);
     state.context.revision = 99;
     let snapshot = SnapshotHarness::spawn(snapshot, requests).await;
     let result = snapshot.ask("Recall the old exact requirement");

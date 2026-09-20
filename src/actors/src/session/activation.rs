@@ -1,19 +1,16 @@
-use super::{
-    Session,
-    conversation::{Conversation, SavedConversation},
-    interaction_state::InteractionState,
-    session_merge::MergeApproval,
-    session_transition::SessionTransition,
-};
-use crate::{
-    states::runtime::Runtime,
-    worker_registry::{WorkerRegistry, report::WorkerView},
-};
+use super::Session;
+use super::session_merge::MergeApproval;
+use super::session_transition::SessionTransition;
+use crate::states::runtime::Runtime;
 use analysis::contexts::context::Context;
 use clients::llm::{LLmClient, Message};
 use common_models::tui_models::TokenCount;
+use conversation::{Conversation, SavedConversation};
+use interaction::InteractionState;
 use std::{collections::BTreeMap, sync::Arc};
 use utils::git::worktrees::session::SessionWorktree;
+use worker_registry::WorkerRegistry;
+use worker_registry::report::WorkerView;
 
 pub struct SessionActivation<C: Context> {
     pub context: C,

@@ -1,23 +1,21 @@
 use crate::actor::{ActorContext, ActorInfo, Message};
-use crate::states::runtime::{ExecutionRole, WorkspaceRevision};
-use crate::states::turn::{Tag, ToolJob};
+use crate::states::runtime::ExecutionRole;
 use crate::states::{runtime::Runtime, services::ActorServices};
 use analysis::contexts::context::Context;
-use common_models::runtime_ids::OperationId;
+use common_models::runtime_ids::{OperationId, WorkspaceRevision};
 use futures::{FutureExt, StreamExt};
 use ractor::ActorRef;
+use sandbox::process::ProcessStatus;
 use std::{collections::VecDeque, panic::AssertUnwindSafe};
 use tools::{
     tool_defs::{CancellationMode, ErasedToolRef, ToolEffect, ToolInvocation, ToolResult},
     tool_error::{ToolEffects, ToolFailure, ToolFailureKind},
 };
-use utils::{
-    cargo::{CargoResult, ProcessAction},
-    execution::{ExecutionScope, ResourceKind},
-    process::ProcessStatus,
-};
+use turn_engine::turn::{Tag, ToolJob};
+use utils::cargo::{CargoResult, ProcessAction};
+use utils::execution::{ExecutionScope, ResourceKind};
 
-pub use turn_engine::ToolEvent;
+use turn_engine::ToolEvent;
 
 #[derive(Clone)]
 pub struct Executor<C: Context> {
@@ -148,7 +146,7 @@ impl<C: Context + Clone + 'static> PreparedTool<C> {
 
 impl<C: Context + Clone + 'static> Executor<C> {
     fn prepare(&self, job: ToolJob) -> Result<PreparedTool<C>, ToolFailure> {
-        if let ExecutionRole::Worker { execution } = &self.runtime.role {
+        if let ExecutionRole::Worker { execution, .. } = &self.runtime.role {
             match self.runtime.role.allows_tool(job.call.name.as_ref()) {
                 true => execution.budget.tool_call().map_err(|error| {
                     ToolFailure::new(
@@ -204,7 +202,7 @@ impl<C: Context + Clone + 'static> Executor<C> {
                 ..result
             },
         };
-        if let ExecutionRole::Worker { execution } = &self.runtime.role {
+        if let ExecutionRole::Worker { execution, .. } = &self.runtime.role {
             let effect = self
                 .services
                 .tool(job.call.name.as_ref())
@@ -494,8 +492,8 @@ impl<C: Context + Clone + 'static> Executor<C> {
     #[cfg(test)]
     pub async fn replay(
         &self,
-        mut batch: crate::states::turn::ToolBatch,
-    ) -> crate::states::turn::ToolBatch {
+        mut batch: turn_engine::turn::ToolBatch,
+    ) -> turn_engine::turn::ToolBatch {
         let jobs = batch.jobs();
         let results = self
             .runtime

@@ -4,7 +4,7 @@ use tools::tool_defs::ToolResult;
 
 pub const INLINE_BYTES: usize = 8 * 1024;
 pub const ARTIFACT_PAGE_BYTES: usize = 32 * 1024;
-pub const ARTIFACT_BYTES: usize = 64 * 1024 * 1024;
+pub use utils::artifacts::{ARTIFACT_BYTES, ArtifactReference};
 
 #[derive(Clone, Copy, Default)]
 enum OutputLimit {
@@ -30,12 +30,6 @@ impl OutputLimit {
             Self::ArtifactPage => ARTIFACT_PAGE_BYTES + 512,
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ArtifactReference {
-    pub id: String,
-    pub bytes: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -116,7 +110,7 @@ impl Session {
                     {
                         let artifact =
                             self.save_artifact(database, &mut transaction, &mut snapshot, content)?;
-                        *content = artifact.preview(content);
+                        *content = artifact_preview(&artifact, content);
                         Ok::<_, anyhow::Error>(())
                     }
                     _ => Ok(()),
@@ -156,7 +150,7 @@ impl Session {
                 Err(_) if content.len() > limit => {
                     let artifact =
                         self.save_artifact(database, &mut transaction, &mut snapshot, content)?;
-                    *content = artifact.preview(content);
+                    *content = artifact_preview(&artifact, content);
                 }
                 Err(_) => {}
             }
@@ -184,14 +178,14 @@ impl Session {
             if stream.content.len() > 1024 {
                 let artifact =
                     self.save_artifact(database, transaction, snapshot, &stream.content)?;
-                stream.artifact = Some(artifact.into());
+                stream.artifact = Some(artifact);
                 stream.content = preview(&stream.content, 1024);
             }
         }
         let diagnostics = serde_json::to_string(&result.diagnostics)?;
         if diagnostics.len() > 1024 {
             let artifact = self.save_artifact(database, transaction, snapshot, &diagnostics)?;
-            result.diagnostics_artifact = Some(artifact.into());
+            result.diagnostics_artifact = Some(artifact);
             result.diagnostics.clear();
         }
         Ok(result)
@@ -248,29 +242,11 @@ impl Session {
     }
 }
 
-impl ArtifactReference {
-    fn new(id: String, bytes: usize) -> anyhow::Result<Self> {
-        match bytes <= ARTIFACT_BYTES {
-            true => Ok(Self { id, bytes }),
-            false => Err(anyhow::anyhow!("Output exceeds the 64 MiB artifact limit")),
-        }
-    }
-
-    fn preview(&self, content: &str) -> String {
-        format!(
-            "{}\n[Full output: artifact {} ({} bytes). Use read_artifact for missing sections, up to {ARTIFACT_PAGE_BYTES} bytes per call. Batch independent ranges when the full output is needed.]",
-            preview(content, INLINE_BYTES - 512),
-            self.id,
-            self.bytes,
-        )
-    }
-}
-
-impl From<ArtifactReference> for utils::cargo::OutputArtifact {
-    fn from(artifact: ArtifactReference) -> Self {
-        Self {
-            id: artifact.id,
-            bytes: artifact.bytes,
-        }
-    }
+fn artifact_preview(artifact: &ArtifactReference, content: &str) -> String {
+    format!(
+        "{}\n[Full output: artifact {} ({} bytes). Use read_artifact for missing sections, up to {ARTIFACT_PAGE_BYTES} bytes per call. Batch independent ranges when the full output is needed.]",
+        preview(content, INLINE_BYTES - 512),
+        artifact.id,
+        artifact.bytes,
+    )
 }

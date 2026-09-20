@@ -1,9 +1,7 @@
 use super::*;
-use crate::{
-    context::{ContextBudget, ContextLimits, estimated_tokens},
-    session::SessionStore,
-};
+use crate::session::SessionStore;
 use commands::command::{Command, ResumeTarget};
+use conversation::context::{ContextBudget, ContextLimits, estimated_tokens};
 
 struct NativeRequest {
     request: llm::ClientRequest,

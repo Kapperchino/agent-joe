@@ -9,7 +9,6 @@ mod event_reporter;
 #[cfg(test)]
 #[path = "../tests/unit/stream_replay_test.rs"]
 mod stream_replay_test;
-mod tool_call;
 pub mod tools;
 pub mod workers;
 
@@ -19,6 +18,6 @@ mod runtime_test;
 pub mod session;
 
 mod commit_message;
-pub mod context;
+pub mod compactor;
 
 pub mod states;

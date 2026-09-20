@@ -1,9 +1,6 @@
 use crate::states::actor_state::ActorState;
 use crate::states::provider_task::ProviderEvent;
-use crate::states::scheduler::ToolEvent;
-use crate::states::turn::{FollowUp, HistoryDisposition, Tag};
-use crate::states::turn_machine::{Event, SessionEvent};
-use crate::worker::{ContextWorker, Worker, WorkerFailure};
+use crate::worker::{ContextWorker, Worker};
 use analysis::contexts::context::Context;
 use async_trait::async_trait;
 use clients::llm::LLmClient;
@@ -12,6 +9,9 @@ use common_models::{runtime_ids::TurnId, tui_models::ActorToTui};
 use flume::Sender;
 use ractor::{ActorProcessingErr, ActorRef, RpcReplyPort};
 use tools::tool_defs::ErasedToolRef;
+use turn_engine::machine::{Event, SessionEvent};
+use turn_engine::turn::{FollowUp, HistoryDisposition, Tag};
+use turn_engine::{ToolEvent, WorkerFailure};
 
 pub trait IntoActorErr<T> {
     fn actor_err(self) -> Result<T, ActorProcessingErr>;

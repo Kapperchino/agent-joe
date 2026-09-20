@@ -1,16 +1,10 @@
+use crate::actor::{ActorContext, Message};
+use crate::session::persistence::Persistence;
 use crate::states::actor_state::ActorState;
 use crate::states::provider_task::{ProviderEvent, ProviderTarget, ProviderTask};
 use crate::states::runtime::ExecutionRole;
-use crate::states::turn::{HistoryDisposition, Tag};
-use crate::states::turn_machine::{
-    Effect, EffectOutcome, Event, ProviderUpdate, SessionEvent, ShutdownScope, WorkerOutcome,
-};
-use crate::{
-    actor::{ActorContext, Message},
-    context::RequestMode,
-    session::persistence::Persistence,
-};
 use analysis::contexts::context::Context;
+use clients::response::RequestMode;
 use clients::{
     failure::{Failure, FailureKind},
     llm,
@@ -19,6 +13,10 @@ use commands::command::Command;
 use common_models::{interaction::PlanReview, tui_models::ActorToTuiPacket};
 use std::{collections::VecDeque, panic::AssertUnwindSafe};
 use tools::tool_defs::{ErasedToolRef, ToolResult};
+use turn_engine::machine::{
+    Effect, EffectOutcome, Event, ProviderUpdate, SessionEvent, ShutdownScope, WorkerOutcome,
+};
+use turn_engine::turn::{HistoryDisposition, Tag};
 
 impl<C: Context + Clone + 'static> ActorState<C> {
     pub async fn dispatch(&mut self, event: impl Into<Event>) {
@@ -137,7 +135,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                         let input = self.context_input(run.tag.turn, &client);
                         ProviderTask {
                             budget: match &self.runtime.role {
-                                ExecutionRole::Worker { execution } => {
+                                ExecutionRole::Worker { execution, .. } => {
                                     Some(execution.budget.clone())
                                 }
                                 ExecutionRole::Root | ExecutionRole::Helper => None,
@@ -172,7 +170,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                         );
                         let _ = self.actor_ref.send_message(Message::Tools {
                             tag,
-                            event: crate::states::scheduler::ToolEvent::Finished(Err(failure)),
+                            event: turn_engine::ToolEvent::Finished(Err(failure)),
                         });
                     }
                 }
@@ -207,7 +205,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 let outcome = match &self.persistence {
                     Persistence::Ready => outcome,
                     Persistence::Failed(failure) => {
-                        WorkerOutcome::Failed(crate::worker::WorkerFailure::Turn(failure.clone()))
+                        WorkerOutcome::Failed(turn_engine::WorkerFailure::Turn(failure.clone()))
                     }
                 };
                 let result = match outcome {
@@ -234,7 +232,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             let update = match event {
                 ProviderEvent::ContextNotice(message) => {
                     self.reporter.send(ActorToTuiPacket::ContextNotice(message));
-                    ProviderUpdate::Progress(crate::states::stream_processor::StreamNextStep::Noop)
+                    ProviderUpdate::Progress(clients::response::StreamNextStep::Noop)
                 }
                 ProviderEvent::CompactionUsage(usage) => {
                     self.stream_processor.token_count.input_tokens = self
@@ -253,7 +251,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                     self.reporter.send(ActorToTuiPacket::TokensUpdated(
                         self.stream_processor.token_count.clone(),
                     ));
-                    ProviderUpdate::Progress(crate::states::stream_processor::StreamNextStep::Noop)
+                    ProviderUpdate::Progress(clients::response::StreamNextStep::Noop)
                 }
                 ProviderEvent::ContextPrepared { update, reply } => {
                     let result = self.commit_context(update).await.map(|request| {
@@ -261,10 +259,10 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                             .send(ActorToTuiPacket::ContextUpdated(request));
                     });
                     let _ = reply.send(result);
-                    ProviderUpdate::Progress(crate::states::stream_processor::StreamNextStep::Noop)
+                    ProviderUpdate::Progress(clients::response::StreamNextStep::Noop)
                 }
                 ProviderEvent::Compacted => {
-                    ProviderUpdate::Finished(Ok(crate::states::turn::AcceptedResponse::Compacted))
+                    ProviderUpdate::Finished(Ok(turn_engine::turn::AcceptedResponse::Compacted))
                 }
                 ProviderEvent::Item(item) => {
                     let processed = match response.accept(item) {
@@ -301,7 +299,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             };
             let update = match (update, review) {
                 (
-                    ProviderUpdate::Finished(Ok(crate::states::turn::AcceptedResponse::Complete(
+                    ProviderUpdate::Finished(Ok(turn_engine::turn::AcceptedResponse::Complete(
                         message,
                     ))),
                     PlanReview::Required,
@@ -314,9 +312,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                     ),
                 },
                 (
-                    ProviderUpdate::Finished(Ok(crate::states::turn::AcceptedResponse::Complete(
-                        _,
-                    ))),
+                    ProviderUpdate::Finished(Ok(turn_engine::turn::AcceptedResponse::Complete(_))),
                     _,
                 ) if !pending.is_empty() => ProviderUpdate::Finished(Err(Failure::new(
                     FailureKind::Worker,
@@ -408,7 +404,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             Command::Compact => {
                 match self.turn.is_idle() {
                     true => {
-                        let follow_up = crate::states::turn::FollowUp::new(None);
+                        let follow_up = turn_engine::turn::FollowUp::new(None);
                         self.conversation.compact(follow_up.id);
                         self.dispatch(SessionEvent::Start(follow_up)).await;
                     }

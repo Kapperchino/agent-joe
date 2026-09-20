@@ -1,7 +1,7 @@
 use crate::event_reporter::EventReporter;
 use clients::llm::StreamEvent;
-use response_stream::StreamNotification;
-pub use response_stream::{ProcessedItem, StreamNextStep, StreamProcessor};
+use clients::response::StreamNextStep;
+use response_stream::{StreamNotification, StreamProcessor};
 use tokio::io::AsyncWriteExt;
 use tracing::error;
 
@@ -48,10 +48,10 @@ impl StreamOutput {
 }
 
 pub fn finish_response(
-    response: crate::states::turn::ResponseState,
+    response: turn_engine::turn::ResponseState,
     turn: common_models::runtime_ids::TurnId,
     processor: &mut StreamProcessor,
-) -> Result<crate::states::turn::AcceptedResponse, clients::failure::Failure> {
+) -> Result<turn_engine::turn::AcceptedResponse, clients::failure::Failure> {
     let completion = response.completion()?;
     let items = processor.extract_and_pre_process().map_err(|error| {
         clients::failure::Failure::new(

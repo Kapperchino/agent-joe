@@ -84,7 +84,7 @@ impl BudgetLimits {
         }
     }
 
-    pub(super) fn seconds(self) -> u64 {
+    pub fn seconds(self) -> u64 {
         self.seconds
     }
 }
@@ -109,21 +109,23 @@ impl WorkerRequest {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(PathBuf::from)
-            .collect::<Vec<_>>();
-        let budget = BudgetLimits::new(input.seconds.unwrap_or(180))?;
-        let valid = !input.objective.trim().is_empty()
-            && !input.completion_criteria.trim().is_empty()
-            && !tools.is_empty()
-            && tools.len() <= 32
-            && !paths.is_empty()
-            && paths.len() <= 64
-            && paths.iter().all(|path| {
-                !path.is_absolute()
-                    && !path
-                        .components()
-                        .any(|part| matches!(part, std::path::Component::ParentDir))
+            .map(|path| {
+                match path.components().find(|part| {
+                    matches!(
+                        part,
+                        std::path::Component::ParentDir
+                            | std::path::Component::RootDir
+                            | std::path::Component::Prefix(_)
+                    )
+                }) {
+                    None => Ok(path),
+                    Some(_) => Err(anyhow::anyhow!(
+                        "Worker paths must be project-relative without parent traversal"
+                    )),
+                }
             })
-            && encoded.len() <= 64 * 1024;
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let budget = BudgetLimits::new(input.seconds.unwrap_or(180))?;
         let effects = tools
             .iter()
             .map(|tool| match available(tool) {
@@ -141,8 +143,17 @@ impl WorkerRequest {
             true => WorkerRole::Write,
             false => WorkerRole::Read,
         };
-        match valid {
-            true => Ok(Self {
+        match (
+            input.objective.trim(),
+            input.completion_criteria.trim(),
+            tools.len(),
+            paths.len(),
+            encoded.len(),
+        ) {
+            ("", _, _, _, _) | (_, "", _, _, _) => Err(anyhow::anyhow!(
+                "Worker requests require an objective and completion criteria"
+            )),
+            (_, _, 1..=32, 1..=64, 0..=65536) => Ok(Self {
                 objective: input.objective,
                 constraints: input.constraints,
                 allowed_tools: tools,
@@ -152,10 +163,26 @@ impl WorkerRequest {
                 budget,
                 role,
             }),
-            false => Err(anyhow::anyhow!(
+            _ => Err(anyhow::anyhow!(
                 "Invalid worker request: provide an objective, completion criteria and bounded tool/path lists (handoff limit 64 KiB)"
             )),
         }
+    }
+
+    pub fn role(&self) -> WorkerRole {
+        self.role
+    }
+
+    pub fn budget(&self) -> BudgetLimits {
+        self.budget
+    }
+
+    pub fn allowed_tools(&self) -> &[String] {
+        &self.allowed_tools
+    }
+
+    pub fn allowed_paths(&self) -> &[PathBuf] {
+        &self.allowed_paths
     }
 
     pub fn allows_tool(&self, name: &str) -> bool {
@@ -203,5 +230,5 @@ impl WorkerRequest {
 }
 
 #[cfg(test)]
-#[path = "../../tests/unit/worker_registry/request/tests.rs"]
+#[path = "../tests/unit/request/tests.rs"]
 mod tests;

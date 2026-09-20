@@ -1,14 +1,9 @@
-use crate::{
-    context::RequestMode,
-    session::{Event, persistence::Persistence},
-    states::{
-        actor_state::ActorState,
-        runtime::{ExecutionRole, Runtime},
-        turn::FollowUp,
-        turn_machine::TurnMachine,
-    },
-};
+use crate::session::Event;
+use crate::session::persistence::Persistence;
+use crate::states::actor_state::ActorState;
+use crate::states::runtime::{ExecutionRole, Runtime};
 use analysis::contexts::context::Context;
+use clients::response::RequestMode;
 use common_models::{
     interaction::{Answer, Choice, Question, QuestionPurpose},
     runtime_ids::{OperationId, TurnId},
@@ -16,6 +11,8 @@ use common_models::{
 };
 use std::sync::Arc;
 use tools::tool_defs::ToolEffect;
+use turn_engine::machine::TurnMachine;
+use turn_engine::turn::FollowUp;
 use utils::{
     git::worktrees::session::{CommitMessage, MergeConflict, MergeOutcome, SessionWorktree},
     workspace::WorkspacePolicy,

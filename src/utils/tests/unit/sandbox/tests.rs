@@ -605,7 +605,7 @@ async fn sandbox_crate_observes_caller_cancellation_after_launch() {
             .unwrap()
             .unwrap()
             .unwrap();
-        assert_eq!(result.status, crate::process::ProcessStatus::Cancelled);
+        assert_eq!(result.status, sandbox::process::ProcessStatus::Cancelled);
         tokio::time::timeout(Duration::from_secs(3), scope.finish())
             .await
             .unwrap();

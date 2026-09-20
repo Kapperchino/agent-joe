@@ -16,7 +16,7 @@ pub struct ExecutionScope {
     resources: Arc<Mutex<BTreeMap<u64, Resource>>>,
     workspace: WorkspaceAccess,
     sandbox: Option<sandbox::Sandbox>,
-    pub processes: Arc<crate::process::ProcessRegistry>,
+    pub processes: Arc<sandbox::process::ProcessRegistry>,
     process_owner: Option<Arc<ExecutionScope>>,
 }
 

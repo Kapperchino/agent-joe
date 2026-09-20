@@ -1,8 +1,6 @@
 use super::*;
-use crate::worker_registry::{
-    report::WorkerStatus,
-    request::{WorkerRequest, WorkerRequestInput},
-};
+use worker_registry::report::WorkerStatus;
+use worker_registry::request::{WorkerRequest, WorkerRequestInput};
 
 fn worker_input(tools: &str, paths: &str) -> Value {
     json!({
@@ -426,7 +424,7 @@ async fn both_root_modes_query_automatically_created_compaction_snapshots() {
     for mode in [Mode::Simple, Mode::Delegated] {
         let workspace = crate::session::tests::Workspace::new();
         let runtime = Runtime {
-            context_budget: crate::context::ContextBudget::new(Some(48_000), 2048).unwrap(),
+            context_budget: conversation::context::ContextBudget::new(Some(48_000), 2048).unwrap(),
             ..Runtime::for_workspace(workspace.path.clone()).unwrap()
         };
         let registry = runtime.immutable_workers.clone();
@@ -910,7 +908,7 @@ async fn writer_ownership_rejects_overlapping_workers_and_root_edits_until_clean
 
 #[tokio::test]
 async fn worker_inherits_parent_response_limits_without_total_token_or_request_budgets() {
-    use crate::context::ContextBudget;
+    use conversation::context::ContextBudget;
 
     for context_budget in [
         ContextBudget::default(),
@@ -1345,7 +1343,7 @@ async fn worker_cancellation_drains_managed_targets_and_reports_final_process_ev
         );
         let (child, child_reply) = actor.request().await;
         let process = latest_cargo(&child);
-        assert_eq!(process.status, utils::process::ProcessStatus::Running);
+        assert_eq!(process.status, sandbox::process::ProcessStatus::Running);
         let process_id = process.process_id.unwrap();
         tokio::time::timeout(Duration::from_secs(20), async {
             while !workspace.path.join("ready").exists() {

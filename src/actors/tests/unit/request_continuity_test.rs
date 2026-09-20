@@ -31,7 +31,7 @@ async fn tool_cycles_resume_and_forks_keep_runtime_history_and_isolate_cache_key
         assert_eq!(next.system, previous.system);
         assert_eq!(next.prompt_cache_key, previous.prompt_cache_key);
         assert_eq!(runtime_snapshot(&next.messages).evidence.len(), index + 1);
-        crate::context::CompleteHistory::new(&next.messages).unwrap();
+        conversation::context::CompleteHistory::new(&next.messages).unwrap();
         previous = next;
         reply = next_reply;
     }

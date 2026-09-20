@@ -41,12 +41,12 @@ fn recovery_exposes_uncertain_work_and_preserves_limits_across_forks() {
     assert_eq!(registry.list("fork").len(), 32);
     assert!(
         registry
-            .register("source", ExecutionScope::default(), request.clone())
+            .register("source", CancellationToken::new(), request.clone())
             .is_err()
     );
     assert!(
         registry
-            .register("fork", ExecutionScope::default(), request)
+            .register("fork", CancellationToken::new(), request)
             .is_err()
     );
     registry.cleanup("fork", "saved-0").unwrap();

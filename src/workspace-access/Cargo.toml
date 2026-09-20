@@ -1,0 +1,10 @@
+[package]
+name = "workspace-access"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+common-models = { path = "../common-models" }
+tokio = { version = "1", features = ["macros", "sync"] }
+tools = { path = "../tools" }
+utils = { path = "../utils" }

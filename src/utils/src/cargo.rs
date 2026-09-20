@@ -4,11 +4,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use tokio::process::Command;
 
-use crate::{
-    execution::ExecutionScope,
-    process::{ProcessOutput, ProcessStatus},
-    sandbox::Sandbox,
-};
+use crate::execution::ExecutionScope;
+use crate::sandbox::Sandbox;
+use sandbox::process::{ProcessOutput, ProcessStatus};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CargoAction {
@@ -128,7 +126,7 @@ impl CargoSelector {
     }
 }
 
-pub use crate::process::ProcessCommand as CargoCommand;
+pub use sandbox::process::ProcessCommand as CargoCommand;
 
 pub struct ProgramEnvironment(BTreeMap<String, String>);
 impl ProgramEnvironment {
@@ -364,11 +362,7 @@ pub enum ProcessAction {
     Stop,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OutputArtifact {
-    pub id: String,
-    pub bytes: usize,
-}
+pub use crate::artifacts::ArtifactReference as OutputArtifact;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutputText {

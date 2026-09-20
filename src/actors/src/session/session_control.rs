@@ -1,19 +1,14 @@
-use crate::{
-    context::{RequestMode, compactor::ContextUpdate},
-    immutable_workers::{ImmutableWorker, ImmutableWorkerDescription},
-    session::{
-        Event, PendingBatch, QueuedInput, ResumableSession, Session, SessionStore,
-        activation::SessionActivation, persistence::Persistence, session_merge::MergeEvent,
-    },
-    states::{
-        actor_state::ActorState,
-        runtime::{ExecutionRole, Runtime},
-        turn::{FollowUp, HistoryDisposition},
-        turn_machine::{SessionEvent, TurnMachine},
-    },
-    workers::snapshot_worker::SnapshotWorker,
-};
+use crate::compactor::ContextUpdate;
+use crate::immutable_workers::{ImmutableWorker, ImmutableWorkerDescription};
+use crate::session::activation::SessionActivation;
+use crate::session::persistence::Persistence;
+use crate::session::session_merge::MergeEvent;
+use crate::session::{Event, PendingBatch, QueuedInput, ResumableSession, Session, SessionStore};
+use crate::states::actor_state::ActorState;
+use crate::states::runtime::{ExecutionRole, Runtime};
+use crate::workers::snapshot_worker::SnapshotWorker;
 use analysis::contexts::context::Context;
+use clients::response::RequestMode;
 use clients::{
     failure::{Failure, FailureKind},
     llm,
@@ -23,6 +18,8 @@ use common_models::tui_models::{
     ActorToTuiPacket, RequestContext, SessionMessage, SessionTranscript, TokenCount,
 };
 use std::sync::Arc;
+use turn_engine::machine::{SessionEvent, TurnMachine};
+use turn_engine::turn::{FollowUp, HistoryDisposition};
 use utils::git::worktrees::session::{PruneMode, SessionWorktree};
 
 enum SessionAction<'a> {

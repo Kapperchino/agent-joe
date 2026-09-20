@@ -11,10 +11,8 @@ use utils::workspace::WorkspacePolicy;
 pub mod activation;
 mod artifact_index;
 pub mod artifacts;
-pub mod conversation;
 mod generations;
 pub mod interaction_control;
-pub mod interaction_policy;
 pub mod interaction_state;
 mod ownership;
 pub mod persistence;
@@ -133,13 +131,13 @@ pub struct Snapshot {
     pub status: Lifecycle,
     pub usage: TokenCount,
     #[serde(default)]
-    pub workers: std::collections::BTreeMap<String, crate::worker_registry::report::WorkerView>,
+    pub workers: std::collections::BTreeMap<String, worker_registry::report::WorkerView>,
     #[serde(default)]
     pub artifacts: Vec<artifacts::ArtifactReference>,
     #[serde(default)]
     pub forked_from: Option<String>,
     #[serde(default)]
-    pub context: crate::context::Checkpoint,
+    pub context: conversation::context::Checkpoint,
     #[serde(flatten)]
     pub questions: common_models::interaction::Questions,
     #[serde(default)]
@@ -176,14 +174,14 @@ impl TryFrom<Snapshot> for ForkableSnapshot {
 }
 
 struct CompactionTransition {
-    context: crate::context::Checkpoint,
+    context: conversation::context::Checkpoint,
     usage: TokenCount,
 }
 
 impl CompactionTransition {
     fn new(
         snapshot: &Snapshot,
-        context: &crate::context::Checkpoint,
+        context: &conversation::context::Checkpoint,
         usage: &TokenCount,
     ) -> anyhow::Result<Self> {
         let memory = context
@@ -195,7 +193,7 @@ impl CompactionTransition {
             && snapshot.pending.is_none()
         {
             true => Ok(Self {
-                context: crate::context::Checkpoint::new(
+                context: conversation::context::Checkpoint::new(
                     &snapshot.history,
                     context.through,
                     context.generation,
@@ -227,7 +225,7 @@ pub struct PendingBatch {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Operation {
     pub id: String,
-    pub call: crate::tool_call::ToolCall,
+    pub call: clients::response::ToolCall,
     pub state: OperationState,
 }
 
@@ -244,14 +242,14 @@ pub enum Event {
     WorktreePruned,
     MergeApproval(session_merge::MergeApproval),
     Planning(common_models::interaction::Planning),
-    Worker(Box<crate::worker_registry::report::WorkerView>),
+    Worker(Box<worker_registry::report::WorkerView>),
     Created,
     Changes(utils::changes::ChangeSnapshot),
     Forked {
         source: String,
     },
     Compacted {
-        context: crate::context::Checkpoint,
+        context: conversation::context::Checkpoint,
         usage: TokenCount,
     },
     QuestionAsked(PendingQuestion),
@@ -326,7 +324,7 @@ impl SessionStore {
             workers: Default::default(),
             artifacts: Vec::new(),
             forked_from: None,
-            context: crate::context::Checkpoint::default(),
+            context: conversation::context::Checkpoint::default(),
             questions: Default::default(),
             planning: Default::default(),
             deferred_input: Vec::new(),
@@ -685,8 +683,8 @@ impl Snapshot {
                     worker.recover();
                 }
                 for (id, process) in &mut self.processes {
-                    if process.status == utils::process::ProcessStatus::Running {
-                        process.status = utils::process::ProcessStatus::Failed;
+                    if process.status == sandbox::process::ProcessStatus::Running {
+                        process.status = sandbox::process::ProcessStatus::Failed;
                         process.error = Some("Process completion is unknown after restart; saved IDs cannot be polled, stopped or relaunched".into());
                     }
                     if self.process_reports.insert(id.clone()) {
@@ -726,7 +724,7 @@ impl Snapshot {
 }
 
 impl PendingBatch {
-    pub fn new(session: &Session, batch: &crate::states::turn::ToolBatch) -> Self {
+    pub fn new(session: &Session, batch: &turn_engine::turn::ToolBatch) -> Self {
         Self {
             assistant: batch.assistant_message(),
             operations: batch
@@ -753,7 +751,7 @@ impl PendingBatch {
 }
 
 impl Operation {
-    pub fn new(id: String, call: crate::tool_call::ToolCall) -> Self {
+    pub fn new(id: String, call: clients::response::ToolCall) -> Self {
         Self {
             id,
             call,

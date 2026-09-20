@@ -25,6 +25,7 @@ dependencies = [
  "ractor",
  "ractor_actors",
  "response-stream",
+ "sandbox",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -35,6 +36,8 @@ dependencies = [
  "turn-engine",
  "utils",
  "uuid",
+ "worker-registry",
+ "workspace-access",
  "zstd",
 ]
 
@@ -5951,6 +5954,7 @@ dependencies = [
  "clients",
  "color-eyre",
  "common-models",
+ "conversation",
  "crossterm",
  "dirs",
  "flume",
@@ -6811,6 +6815,30 @@ name = "wit-bindgen"
 version = "0.46.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f17a85883d4e6d00e8a97c586de764dabcc06133f7f1d55dce5cdc070ad7fe59"
+
+[[package]]
+name = "worker-registry"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tools",
+ "turbo-code-macros",
+ "utils",
+]
+
+[[package]]
+name = "workspace-access"
+version = "0.1.0"
+dependencies = [
+ "common-models",
+ "tokio",
+ "tools",
+ "utils",
+]
 
 [[package]]
 name = "writeable"

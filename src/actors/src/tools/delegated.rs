@@ -1,11 +1,7 @@
-use crate::{
-    actor::ActorContext,
-    worker_registry::{
-        report::WorkerReport,
-        request::{WorkerRequest, WorkerRequestInput},
-    },
-};
+use crate::actor::ActorContext;
 use analysis::contexts::rust_context::RustContext;
+use worker_registry::report::WorkerReport;
+use worker_registry::request::{WorkerRequest, WorkerRequestInput};
 
 pub(super) async fn run(
     objective: String,
@@ -25,7 +21,7 @@ pub(super) async fn run(
     }, |name| info.services.tool(name).map(|tool| tool.effect()))?;
     let registry = &info.runtime.workers;
     let owner = info.owner.clone();
-    let mut view = registry.start(info, context, request)?;
+    let mut view = crate::worker_registry::launch::start(registry, info, context, request)?;
     while !view.status.terminal() {
         view = registry.wait(&owner, &view.worker_id, 60).await?;
     }

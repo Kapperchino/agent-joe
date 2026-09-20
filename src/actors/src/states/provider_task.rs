@@ -1,5 +1,4 @@
 use crate::actor::Message;
-use crate::states::turn::{ProviderRun, Tag};
 use clients::{
     failure::{Failure, FailureKind},
     llm::{LLmClient, StreamEvent},
@@ -7,6 +6,7 @@ use clients::{
 use futures::{FutureExt, StreamExt};
 use ractor::ActorRef;
 use std::{panic::AssertUnwindSafe, time::Duration};
+use turn_engine::turn::{ProviderRun, Tag};
 use utils::execution::{ExecutionScope, ResourceKind};
 
 #[derive(Debug)]
@@ -14,7 +14,7 @@ pub enum ProviderEvent {
     ContextNotice(String),
     CompactionUsage(common_models::tui_models::TokenCount),
     ContextPrepared {
-        update: crate::context::compactor::ContextUpdate,
+        update: crate::compactor::ContextUpdate,
         reply: tokio::sync::oneshot::Sender<Result<(), Failure>>,
     },
     Compacted,
@@ -40,7 +40,7 @@ impl ProviderTarget {
 }
 
 pub struct ProviderTask {
-    pub budget: Option<std::sync::Arc<crate::worker_registry::budget::WorkerBudget>>,
+    pub budget: Option<std::sync::Arc<worker_registry::budget::WorkerBudget>>,
     pub target: ProviderTarget,
     pub client: LLmClient,
     pub timeout: Duration,
@@ -49,7 +49,7 @@ pub struct ProviderTask {
 impl ProviderTask {
     pub fn spawn(
         self,
-        input: anyhow::Result<crate::context::ContextInput>,
+        input: anyhow::Result<conversation::context::ContextInput>,
         run: &ProviderRun,
         owner: &ExecutionScope,
         previous: Option<ExecutionScope>,
@@ -81,7 +81,7 @@ impl ProviderTask {
 
     async fn pump(
         mut self,
-        input: anyhow::Result<crate::context::ContextInput>,
+        input: anyhow::Result<conversation::context::ContextInput>,
         attempt: u8,
     ) -> Result<(), Failure> {
         let input = input.map_err(|error| {
@@ -91,7 +91,10 @@ impl ProviderTask {
             )
         })?;
         if self.budget.is_some()
-            && matches!(input.plan(), Ok(crate::context::BudgetPlan::Compact(_)))
+            && matches!(
+                input.plan(),
+                Ok(conversation::context::BudgetPlan::Compact(_))
+            )
         {
             Err(Failure::new(
                 FailureKind::ContextOverflow,
@@ -101,14 +104,12 @@ impl ProviderTask {
         if attempt > 0 {
             tokio::time::sleep(Duration::from_millis(100 * u64::from(attempt))).await;
         }
-        let prepared = tokio::time::timeout(
-            self.timeout,
-            crate::context::compactor::prepare(&input, &mut self),
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("Context compaction timed out"))
-        .and_then(std::convert::identity)
-        .map_err(context_failure)?;
+        let prepared =
+            tokio::time::timeout(self.timeout, crate::compactor::prepare(&input, &mut self))
+                .await
+                .map_err(|_| anyhow::anyhow!("Context compaction timed out"))
+                .and_then(std::convert::identity)
+                .map_err(context_failure)?;
         let (reply, receive) = tokio::sync::oneshot::channel();
         self.target.send(ProviderEvent::ContextPrepared {
             update: prepared.update,
@@ -119,7 +120,7 @@ impl ProviderTask {
             .map_err(|_| Failure::new(FailureKind::Worker, "Context commit timed out"))?
             .map_err(|_| Failure::new(FailureKind::Worker, "Context commit was cancelled"))??;
         match input.mode {
-            crate::context::RequestMode::Compact => self.target.send(ProviderEvent::Compacted),
+            clients::response::RequestMode::Compact => self.target.send(ProviderEvent::Compacted),
             mode => self.stream(prepared.request, mode).await,
         }
     }
@@ -127,15 +128,18 @@ impl ProviderTask {
     async fn stream(
         &mut self,
         request: clients::llm::ClientRequest,
-        mode: crate::context::RequestMode,
+        mode: clients::response::RequestMode,
     ) -> Result<(), Failure> {
         if let Some(budget) = &self.budget {
             budget
-                .reserve(&request)
+                .reserve(
+                    crate::worker_registry::accounting::reservation(&request)
+                        .map_err(|error| Failure::new(FailureKind::Worker, error.to_string()))?,
+                )
                 .map_err(|error| Failure::new(FailureKind::Worker, error.to_string()))?;
         }
         let limit_mib = match mode {
-            crate::context::RequestMode::SingleResponse => 16,
+            clients::response::RequestMode::SingleResponse => 16,
             _ => 64,
         };
         let mut stream = tokio::time::timeout(self.timeout, self.client.chat_stream(request))
@@ -148,9 +152,11 @@ impl ProviderTask {
             state = match tokio::time::timeout(self.timeout, stream.next()).await {
                 Ok(Some(Ok(event))) => {
                     if let Some(budget) = &self.budget {
-                        budget.observe(&event).map_err(|error| {
-                            Failure::new(FailureKind::Worker, error.to_string())
-                        })?;
+                        budget
+                            .observe(crate::worker_registry::accounting::usage_update(&event))
+                            .map_err(|error| {
+                                Failure::new(FailureKind::Worker, error.to_string())
+                            })?;
                     }
                     bytes = bytes.saturating_add(
                         serde_json::to_vec(&event)

@@ -1,16 +1,12 @@
-use crate::{
-    actor::{ActorContext, ActorInfo},
-    worker_registry::{
-        report::WorkerView,
-        request::{WorkerRequest, WorkerRequestInput},
-    },
-};
+use crate::actor::{ActorContext, ActorInfo};
 use analysis::contexts::rust_context::RustContext;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tools::tool_defs::{ToolDefTrait, ToolId, ToolTrait, ToolType};
 use turbo_code_macros::ToolDef;
 use utils::utils::FnvHashMap;
+use worker_registry::report::WorkerView;
+use worker_registry::request::{WorkerRequest, WorkerRequestInput};
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize, ToolDef)]
 #[tool(
@@ -52,7 +48,7 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for StartWorker {
         let request = WorkerRequest::new(input, |name| {
             info.services.tool(name).map(|tool| tool.effect())
         })?;
-        info.runtime.workers.start(info, context, request)
+        crate::worker_registry::launch::start(&info.runtime.workers, info, context, request)
     }
 
     fn display_input(input: &Self::Input) -> String {
@@ -70,10 +66,10 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for StartWorker {
     fn output_to_content(_: &Self::Input, output: &Self::Output) -> anyhow::Result<String> {
         Ok(serde_json::to_string(output)?)
     }
-    fn effect() -> tools::tool_defs::ToolEffect {
-        tools::tool_defs::ToolEffect::DelegateRead
-    }
     fn tool_type() -> ToolType {
         ToolType::Client
+    }
+    fn effect() -> tools::tool_defs::ToolEffect {
+        tools::tool_defs::ToolEffect::DelegateRead
     }
 }

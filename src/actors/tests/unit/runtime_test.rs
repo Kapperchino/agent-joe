@@ -1,8 +1,6 @@
 use crate::states::actor_state::ActorState;
 use crate::states::provider_task::ProviderEvent;
 use crate::states::runtime::Runtime;
-use crate::states::scheduler::ToolEvent;
-use crate::states::turn::Tag;
 use crate::{
     actor::{ActorContext, Dependency, Message},
     stream_replay_test::TestContext,
@@ -28,6 +26,8 @@ use tokio::sync::oneshot;
 use tools::tool_defs::{
     CancellationMode, ErasedToolRef, ErasedToolTrait, ToolDefinition, ToolEffect, ToolId,
 };
+use turn_engine::ToolEvent;
+use turn_engine::turn::Tag;
 use utils::utils::FnvHashMap;
 
 pub fn runtime_snapshot(messages: &[llm::Message]) -> clients::runtime_update::RuntimeSnapshot {
@@ -1183,7 +1183,7 @@ async fn late_tool_completion_after_cancellation_does_not_modify_a_new_turn() {
             tag,
             event: ToolEvent::Completed {
                 operation: common_models::runtime_ids::OperationId::new(),
-                result: crate::tool_call::ToolCall {
+                result: clients::response::ToolCall {
                     id: tool_id,
                     name,
                     input,
@@ -1950,7 +1950,7 @@ async fn cargo_cancellation_keeps_output_before_turn_cleanup() {
                 _ => None,
             })
             .unwrap();
-        assert_eq!(result.status, utils::process::ProcessStatus::Cancelled);
+        assert_eq!(result.status, sandbox::process::ProcessStatus::Cancelled);
         assert!(result.stdout.content.contains("cancellation evidence"));
         assert!(h.runtime.scope.resources().is_empty());
         h.stop().await;

@@ -3,6 +3,7 @@ use clients::llm::{
     ClientRequest, Message, MessageDeltaContent, Role, StopReason, StreamEvent, StreamMessage,
     StreamUsage, UsageDelta,
 };
+use worker_registry::budget::{BudgetState, BudgetUsage, WorkerBudget};
 
 fn usage(input_tokens: u32, output_tokens: u32, stop_reason: Option<StopReason>) -> StreamEvent {
     StreamEvent::MessageDelta {
@@ -21,8 +22,8 @@ fn worker_reservations_preserve_inherited_response_limits() {
         let budget = WorkerBudget::default();
         let request = ClientRequest::new(vec![Message::new("Inspect the files".into())])
             .with_output_limit(output_limit);
-        let input = crate::context::estimated_tokens(&request).unwrap();
-        budget.reserve(&request).unwrap();
+        let input = conversation::context::estimated_tokens(&request).unwrap();
+        budget.reserve(reservation(&request).unwrap()).unwrap();
         assert_eq!(request.max_output_tokens, Some(output_limit));
         assert_eq!(
             budget.usage().reserved_tokens,
@@ -37,9 +38,9 @@ fn completed_requests_release_unused_tokens_for_later_tool_rounds() {
     for round in 1..=5 {
         let request = ClientRequest::new(vec![Message::new("Inspect the files".into())])
             .with_output_limit(16_000);
-        budget.reserve(&request).unwrap();
+        budget.reserve(reservation(&request).unwrap()).unwrap();
         budget
-            .observe(&usage(600, 100, Some(StopReason::ToolUse)))
+            .observe(usage_update(&usage(600, 100, Some(StopReason::ToolUse))))
             .unwrap();
         assert_eq!(budget.usage().reserved_tokens, round * 700);
         assert_eq!(budget.usage().reported_input_tokens, round * 600);
@@ -54,9 +55,9 @@ fn completed_requests_release_unused_tokens_for_later_tool_rounds() {
 fn cumulative_usage_counts_cached_input_and_output_once_per_request() {
     let budget = WorkerBudget::default();
     let request = ClientRequest::new(vec![Message::new("Inspect the files".into())]);
-    budget.reserve(&request).unwrap();
+    budget.reserve(reservation(&request).unwrap()).unwrap();
     budget
-        .observe(&StreamEvent::MessageStart {
+        .observe(usage_update(&StreamEvent::MessageStart {
             message: StreamMessage {
                 id: "response".into(),
                 model: "fixture".into(),
@@ -68,14 +69,16 @@ fn cumulative_usage_counts_cached_input_and_output_once_per_request() {
                     output_tokens: 1,
                 },
             },
-        })
+        }))
         .unwrap();
-    budget.observe(&usage(0, 50, None)).unwrap();
-    budget.observe(&usage(0, 100, None)).unwrap();
+    budget.observe(usage_update(&usage(0, 50, None))).unwrap();
+    budget.observe(usage_update(&usage(0, 100, None))).unwrap();
     budget
-        .observe(&usage(0, 100, Some(StopReason::EndTurn)))
+        .observe(usage_update(&usage(0, 100, Some(StopReason::EndTurn))))
         .unwrap();
-    budget.observe(&StreamEvent::MessageStop).unwrap();
+    budget
+        .observe(usage_update(&StreamEvent::MessageStop))
+        .unwrap();
     assert_eq!(budget.usage().reported_input_tokens, 600);
     assert_eq!(budget.usage().reported_output_tokens, 100);
     assert_eq!(budget.usage().reserved_tokens, 700);
@@ -85,12 +88,15 @@ fn cumulative_usage_counts_cached_input_and_output_once_per_request() {
 fn openai_usage_subtotals_are_already_included_in_reported_totals() {
     let budget = WorkerBudget::default();
     budget
-        .reserve(&ClientRequest::new(vec![Message::new(
-            "Inspect files".into(),
-        )]))
+        .reserve(
+            reservation(&ClientRequest::new(vec![Message::new(
+                "Inspect files".into(),
+            )]))
+            .unwrap(),
+        )
         .unwrap();
     budget
-        .observe(&StreamEvent::MessageDelta {
+        .observe(usage_update(&StreamEvent::MessageDelta {
             delta: clients::llm::MessageDeltaContent {
                 stop_reason: Some(StopReason::EndTurn),
             },
@@ -100,7 +106,7 @@ fn openai_usage_subtotals_are_already_included_in_reported_totals() {
                 cached_input_tokens: 550,
                 reasoning_tokens: 80,
             },
-        })
+        }))
         .unwrap();
     assert_eq!(budget.usage().reported_input_tokens, 600);
     assert_eq!(budget.usage().reported_output_tokens, 100);
@@ -116,11 +122,11 @@ fn incomplete_or_unreported_requests_keep_their_reservations() {
         let budget = WorkerBudget::default();
         let request = ClientRequest::new(vec![Message::new("Inspect the files".into())])
             .with_output_limit(16_000);
-        budget.reserve(&request).unwrap();
+        budget.reserve(reservation(&request).unwrap()).unwrap();
         let reserved = budget.usage().reserved_tokens;
-        budget.observe(&event).unwrap();
+        budget.observe(usage_update(&event)).unwrap();
         assert_eq!(budget.usage().reserved_tokens, reserved);
-        budget.reserve(&request).unwrap();
+        budget.reserve(reservation(&request).unwrap()).unwrap();
         assert_eq!(budget.usage().reserved_tokens, reserved * 2);
         assert_eq!(budget.usage().state, BudgetState::Available);
     }
@@ -131,11 +137,11 @@ fn output_only_usage_preserves_the_input_estimate_and_explicit_output_limit() {
     let budget = WorkerBudget::default();
     let request =
         ClientRequest::new(vec![Message::new("Inspect the files".into())]).with_output_limit(512);
-    let input = crate::context::estimated_tokens(&request).unwrap();
-    budget.reserve(&request).unwrap();
+    let input = conversation::context::estimated_tokens(&request).unwrap();
+    budget.reserve(reservation(&request).unwrap()).unwrap();
     assert_eq!(request.max_output_tokens, Some(512));
     budget
-        .observe(&usage(0, 100, Some(StopReason::EndTurn)))
+        .observe(usage_update(&usage(0, 100, Some(StopReason::EndTurn))))
         .unwrap();
     assert_eq!(budget.usage().reserved_tokens, input + 100);
 }
@@ -146,9 +152,13 @@ fn reported_tokens_are_tracked_without_limiting_later_requests() {
     let request =
         ClientRequest::new(vec![Message::new("Inspect the files".into())]).with_output_limit(512);
     for round in 1..=5 {
-        budget.reserve(&request).unwrap();
+        budget.reserve(reservation(&request).unwrap()).unwrap();
         budget
-            .observe(&usage(750_000, 100, Some(StopReason::EndTurn)))
+            .observe(usage_update(&usage(
+                750_000,
+                100,
+                Some(StopReason::EndTurn),
+            )))
             .unwrap();
         budget.tool_call().unwrap();
         assert_eq!(budget.usage().reserved_tokens, round * 750_100);
@@ -164,9 +174,9 @@ fn request_counts_are_tracked_without_a_limit() {
     let request =
         ClientRequest::new(vec![Message::new("Inspect the files".into())]).with_output_limit(512);
     for round in 1..=256 {
-        budget.reserve(&request).unwrap();
+        budget.reserve(reservation(&request).unwrap()).unwrap();
         budget
-            .observe(&usage(600, 100, Some(StopReason::EndTurn)))
+            .observe(usage_update(&usage(600, 100, Some(StopReason::EndTurn))))
             .unwrap();
         assert_eq!(budget.usage().requests, round);
         assert_eq!(budget.usage().reserved_tokens, round * 700);
@@ -181,7 +191,7 @@ fn request_counts_are_tracked_without_a_limit() {
 fn exhausted_tool_budgets_reject_further_requests_events_and_tools() {
     let budget = WorkerBudget::default();
     let request = ClientRequest::new(vec![Message::new("Inspect the files".into())]);
-    budget.reserve(&request).unwrap();
+    budget.reserve(reservation(&request).unwrap()).unwrap();
     for _ in 0..128 {
         budget.tool_call().unwrap();
     }
@@ -192,9 +202,9 @@ fn exhausted_tool_budgets_reject_further_requests_events_and_tools() {
             .to_string()
             .contains("Worker tool-call budget exhausted (128 calls)")
     );
-    assert!(budget.reserve(&request).is_err());
+    assert!(budget.reserve(reservation(&request).unwrap()).is_err());
     assert!(budget.tool_call().is_err());
-    assert!(budget.observe(&StreamEvent::Ping).is_err());
+    assert!(budget.observe(usage_update(&StreamEvent::Ping)).is_err());
     assert_eq!(budget.usage().requests, 1);
     assert_eq!(budget.usage().tool_calls, 128);
     assert_eq!(budget.usage().state, BudgetState::Exhausted);

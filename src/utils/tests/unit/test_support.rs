@@ -124,7 +124,7 @@ fn probe_guest(directory: &std::path::Path) -> anyhow::Result<SandboxAvailabilit
             scope.finish().await;
             result
                 .and_then(|output| match output.status {
-                    crate::process::ProcessStatus::Exited => {
+                    sandbox::process::ProcessStatus::Exited => {
                         use std::os::unix::process::ExitStatusExt;
                         SandboxAvailability::from_output(Output {
                             status: std::process::ExitStatus::from_raw(

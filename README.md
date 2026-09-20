@@ -309,9 +309,9 @@ own internal isolation.
 
 ## Tests
 
-Each crate keeps its tests and fixtures in its own `tests/` directory. Unit tests
-live under `tests/unit/`, organized by module. For example,
-`src/actors/src/states/batch.rs` has its tests in `src/actors/tests/unit/batch/tests.rs`.
+Tests live with their owning crate. Many unit tests live under `tests/unit/`,
+organized by module. For example, `src/worker-registry/src/budget.rs` has its tests
+in `src/worker-registry/tests/unit/budget/tests.rs`.
 They are connected with `#[cfg(test)]` and `#[path]` so they retain access to
 private module items. Integration tests live directly under the crate's `tests/`
 directory, such as `src/sandbox/tests/launcher.rs`, where Cargo discovers them
