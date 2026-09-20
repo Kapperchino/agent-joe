@@ -3,8 +3,8 @@ use common_models::tui_models::{Lifecycle, SessionSummary, TokenCount};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tools::{
-    tool_defs::{ToolEffect, ToolResult},
-    tool_error::{ToolEffects, ToolFailure},
+    tool_defs::{ToolOpKind, ToolResult},
+    tool_error::{FailureImpact, ToolFailure},
 };
 use utils::workspace::WorkspacePolicy;
 
@@ -239,7 +239,7 @@ pub struct Operation {
 #[derive(Clone, Serialize, Deserialize)]
 pub enum OperationState {
     Queued,
-    Intended { effect: ToolEffect },
+    Intended { effect: ToolOpKind },
     Completed(ToolResult),
 }
 
@@ -272,7 +272,7 @@ pub enum Event {
     Prepared(PendingBatch),
     Intent {
         operation: String,
-        effect: ToolEffect,
+        effect: ToolOpKind,
     },
     Completed {
         operation: String,
@@ -766,7 +766,7 @@ impl Operation {
         }
     }
 
-    fn intend(&mut self, effect: ToolEffect) -> anyhow::Result<()> {
+    fn intend(&mut self, effect: ToolOpKind) -> anyhow::Result<()> {
         self.state = match self.state {
             OperationState::Queued => Ok(OperationState::Intended { effect }),
             _ => Err(anyhow::anyhow!(
@@ -793,7 +793,7 @@ impl Operation {
                 if !matches!(
                     &result.outcome,
                     Err(ToolFailure {
-                        effects: ToolEffects::NotStarted,
+                        impact: FailureImpact::NotStarted,
                         ..
                     })
                 ) =>

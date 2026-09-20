@@ -1,4 +1,4 @@
-use crate::tool_defs::{NonEmptyString, ToolDefTrait, ToolEffect, ToolId, ToolTrait, ToolType};
+use crate::tool_defs::{NonEmptyString, ToolDefTrait, ToolOpKind, ToolId, ToolTrait, ToolType};
 use analysis::contexts::context::Context;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -150,12 +150,12 @@ impl<C: Context, A> ToolTrait<C, A> for Worktree {
         ToolType::Client
     }
 
-    fn effect_from_input(input: &Self::Input) -> ToolEffect {
+    fn effect_from_input(input: &Self::Input) -> ToolOpKind {
         match input {
-            WorktreeInput::List => ToolEffect::Read,
+            WorktreeInput::List => ToolOpKind::Read,
             WorktreeInput::Create { .. }
             | WorktreeInput::Integrate { .. }
-            | WorktreeInput::Remove { .. } => ToolEffect::Write,
+            | WorktreeInput::Remove { .. } => ToolOpKind::Write,
         }
     }
 }

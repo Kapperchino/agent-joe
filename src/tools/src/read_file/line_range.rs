@@ -1,5 +1,5 @@
 use crate::tool_defs::Range;
-use crate::tool_error::{ToolEffects, ToolFailure, ToolFailureKind};
+use crate::tool_error::{FailureImpact, ToolFailure, ToolFailureKind};
 
 pub(super) struct LineRange {
     requested: Range,
@@ -35,7 +35,7 @@ impl LineRange {
 }
 
 fn range_error(code: &str, range: &Range, line_count: Option<usize>) -> anyhow::Error {
-    ToolFailure::new(ToolFailureKind::InvalidInput, ToolEffects::NoWorkspaceChange,
-        serde_json::json!({ "code": code, "requested": range, "line_count": line_count,
+    ToolFailure::new(ToolFailureKind::InvalidInput, FailureImpact::NoWorkspaceChange,
+                     serde_json::json!({ "code": code, "requested": range, "line_count": line_count,
             "message": "Lines are one-based, start is inclusive and end is exclusive. Start must exist and end must exceed start; end is clamped to EOF." }).to_string()).into()
 }

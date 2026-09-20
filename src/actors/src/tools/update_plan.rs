@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use common_models::interaction::PlanUpdate;
 use serde_json::{Value, json};
 use tools::tool_defs::{
-    LenientDeserialize, ToolDefTrait, ToolEffect, ToolId, ToolProperty, ToolTrait, ToolType,
+    LenientDeserialize, ToolDefTrait, ToolOpKind, ToolId, ToolProperty, ToolTrait, ToolType,
 };
 use utils::utils::FnvHashMap;
 
@@ -99,8 +99,8 @@ impl<C: Context> ToolTrait<C, ActorContext<C>> for UpdatePlan {
     fn output_to_content(_: &Self::Input, output: &String) -> anyhow::Result<String> {
         Ok(output.clone())
     }
-    fn effect() -> ToolEffect {
-        ToolEffect::Interaction
+    fn effect() -> ToolOpKind {
+        ToolOpKind::Interaction
     }
     fn tool_type() -> ToolType {
         ToolType::Client

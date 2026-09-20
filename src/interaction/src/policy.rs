@@ -1,8 +1,8 @@
 use common_models::interaction::{PlanReview, Planning, QuestionGate, Questions, WorkMode};
 use std::sync::RwLock;
 use tools::{
-    tool_defs::ToolEffect,
-    tool_error::{ToolEffects, ToolFailure, ToolFailureKind},
+    tool_defs::ToolOpKind,
+    tool_error::{FailureImpact, ToolFailure, ToolFailureKind},
 };
 
 #[derive(Default)]
@@ -32,13 +32,13 @@ impl InteractionPolicy {
         };
     }
 
-    pub fn authorize(&self, effect: ToolEffect) -> Result<(), ToolFailure> {
+    pub fn authorize(&self, effect: ToolOpKind) -> Result<(), ToolFailure> {
         let policy = self.policy.read().unwrap();
         let denied = match (&policy.questions, policy.mode, effect, &policy.plan) {
             (QuestionGate::Required, _, _, _) => {
                 Some("A required question is pending; answer it before continuing tools")
             }
-            (_, _, ToolEffect::Read | ToolEffect::DelegateRead | ToolEffect::Interaction, _) => {
+            (_, _, ToolOpKind::Read | ToolOpKind::DelegateRead | ToolOpKind::Interaction, _) => {
                 None
             }
             (_, WorkMode::Plan, _, _) => Some(
@@ -52,7 +52,7 @@ impl InteractionPolicy {
         match denied {
             Some(message) => Err(ToolFailure::new(
                 ToolFailureKind::InvalidInput,
-                ToolEffects::NotStarted,
+                FailureImpact::NotStarted,
                 message,
             )),
             None => Ok(()),

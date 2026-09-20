@@ -1094,16 +1094,16 @@ fn worker_contracts_reject_invalid_deadlines_and_widened_permissions() {
         input["seconds"] = json!(seconds);
         assert!(
             WorkerRequest::new(serde_json::from_value(input).unwrap(), |_| Some(
-                ToolEffect::Read
+                ToolOpKind::Read
             ))
             .is_err()
         );
     }
-    assert!(WorkerRequest::new(valid(), |_| Some(ToolEffect::DelegateRead)).is_err());
+    assert!(WorkerRequest::new(valid(), |_| Some(ToolOpKind::DelegateRead)).is_err());
     assert!(WorkerRequest::new(valid(), |_| None).is_err());
     let mut input = valid();
     input.allowed_paths = "../outside".into();
-    assert!(WorkerRequest::new(input, |_| Some(ToolEffect::Read)).is_err());
+    assert!(WorkerRequest::new(input, |_| Some(ToolOpKind::Read)).is_err());
 }
 
 #[tokio::test]

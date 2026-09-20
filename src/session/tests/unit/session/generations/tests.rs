@@ -372,7 +372,7 @@ fn rotation_process_fixture() {
 #[test]
 fn map_full_preserves_the_tool_completion_and_archives_its_output_once() {
     use crate::tests::{batch, success};
-    use tools::tool_defs::{ToolEffect, ToolResult};
+    use tools::tool_defs::{ToolOpKind, ToolResult};
     let workspace = Workspace::new();
     let store = store(&workspace);
     let session = create(&store);
@@ -382,7 +382,7 @@ fn map_full_preserves_the_tool_completion_and_archives_its_output_once() {
     session
         .record(Event::Intent {
             operation: operation.id.clone(),
-            effect: ToolEffect::Write,
+            effect: ToolOpKind::Write,
         })
         .unwrap();
     fill(&store, 1600 * 1024);

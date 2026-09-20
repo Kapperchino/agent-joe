@@ -2,7 +2,7 @@ use crate::{
     apply_patch::{ApplyPatch, ApplyPatchInput},
     read_file::{ReadFile, ReadFileInput},
     tool_defs::{LenientDeserialize, Range, ToolId, ToolTrait},
-    tool_error::{ToolEffects, ToolFailure, ToolFailureKind},
+    tool_error::{FailureImpact, ToolFailure, ToolFailureKind},
 };
 use analysis::contexts::{
     context::{Context, LineIndexCreator},
@@ -57,7 +57,7 @@ async fn exercise<C: Context>(context: &C) {
         .unwrap_err();
     let failure = error.downcast_ref::<ToolFailure>().unwrap();
     assert_eq!(failure.kind, ToolFailureKind::InvalidInput);
-    assert_eq!(failure.effects, ToolEffects::NotStarted);
+    assert_eq!(failure.impact, FailureImpact::NotStarted);
     assert!(!context.get_root().join("docs/new.md").exists());
     let instructions = context.effective_instructions().unwrap();
     assert!(instructions.contains("Markdown rule"));

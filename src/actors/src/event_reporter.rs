@@ -55,7 +55,7 @@ impl EventReporter {
         {
             let state = match &result.outcome {
                 Ok(_) => ValidationState::Passed,
-                Err(failure) if failure.effects == tools::tool_error::ToolEffects::NotStarted => {
+                Err(failure) if failure.impact == tools::tool_error::FailureImpact::NotStarted => {
                     ValidationState::NotRun
                 }
                 Err(_) => ValidationState::Failed,

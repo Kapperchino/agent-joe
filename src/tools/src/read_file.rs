@@ -50,8 +50,8 @@ impl<C: Context, A> ToolTrait<C, A> for ReadFile {
         Ok(output.res.clone())
     }
 
-    fn effect() -> crate::tool_defs::ToolEffect {
-        crate::tool_defs::ToolEffect::Read
+    fn effect() -> crate::tool_defs::ToolOpKind {
+        crate::tool_defs::ToolOpKind::Read
     }
 
     fn tool_type() -> ToolType {

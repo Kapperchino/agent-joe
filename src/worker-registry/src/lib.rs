@@ -62,7 +62,7 @@ pub struct WorkerExecution {
 impl WorkerExecution {
     pub fn record(
         &self,
-        effect: tools::tool_defs::ToolEffect,
+        effect: tools::tool_defs::ToolOpKind,
         result: &tools::tool_defs::ToolResult,
     ) {
         self.evidence.lock().unwrap().record(effect, result);

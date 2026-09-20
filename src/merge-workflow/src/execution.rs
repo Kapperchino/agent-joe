@@ -9,7 +9,7 @@ use common_models::{
 use interaction::access::InteractionRole;
 use interaction::control::{InteractionControl, InteractionPersistence};
 use std::sync::Arc;
-use tools::tool_defs::ToolEffect;
+use tools::tool_defs::ToolOpKind;
 use turn_engine::turn::FollowUp;
 use utils::{
     git::worktrees::session::{CommitMessage, MergeConflict, MergeOutcome, SessionWorktree},
@@ -78,7 +78,7 @@ impl MergeWorkspace {
                 MergeReadiness::Ready,
                 InteractionRole::Root,
                 Some(project),
-            ) => match interaction.policy.authorize(ToolEffect::Write) {
+            ) => match interaction.policy.authorize(ToolOpKind::Write) {
                 Ok(()) => Ok(match interaction.persistence.worktree()? {
                     MergeWorktree::Isolated(worktree) => Some(Self {
                         project: project.clone(),
@@ -100,7 +100,7 @@ impl MergeWorkspace {
             .persistence
             .ready()
             .map_err(|_| anyhow::anyhow!("Session storage failed; merge cannot continue"))?;
-        interaction.policy.authorize(ToolEffect::Write)?;
+        interaction.policy.authorize(ToolOpKind::Write)?;
         let project = environment
             .project
             .cloned()
@@ -197,7 +197,7 @@ impl<P: MergePersistence> SessionMerge<'_, P> {
                 let runtime = &self.environment;
                 let lease = runtime
                     .workspace
-                    .acquire(ToolEffect::Write, runtime.scope)
+                    .acquire(ToolOpKind::Write, runtime.scope)
                     .await?;
                 let approval = self.approval.clone();
                 let commit = self
@@ -312,7 +312,7 @@ impl<P: MergePersistence> SessionMerge<'_, P> {
             let runtime = &self.environment;
             let lease = runtime
                 .workspace
-                .acquire(ToolEffect::Write, runtime.scope)
+                .acquire(ToolOpKind::Write, runtime.scope)
                 .await?;
             let outcome = tokio::task::spawn_blocking(move || workspace.merge(&approved)).await?;
             drop(lease);
@@ -359,7 +359,7 @@ impl<P: MergePersistence> SessionMerge<'_, P> {
         let runtime = &self.environment;
         let lease = runtime
             .workspace
-            .acquire(ToolEffect::Write, runtime.scope)
+            .acquire(ToolOpKind::Write, runtime.scope)
             .await?;
         tokio::task::spawn_blocking(move || {
             workspace

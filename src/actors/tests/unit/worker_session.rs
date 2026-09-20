@@ -27,7 +27,7 @@ fn archive(session: &Session, id: &str) {
     session
         .record(Event::Intent {
             operation: id.into(),
-            effect: tools::tool_defs::ToolEffect::Read,
+            effect: tools::tool_defs::ToolOpKind::Read,
         })
         .unwrap();
     session

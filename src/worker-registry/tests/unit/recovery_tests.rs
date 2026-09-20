@@ -10,7 +10,7 @@ fn recovery_exposes_uncertain_work_and_preserves_limits_across_forks() {
             completion_criteria: "Report evidence".into(),
             ..Default::default()
         },
-        |_| Some(tools::tool_defs::ToolEffect::Read),
+        |_| Some(tools::tool_defs::ToolOpKind::Read),
     )
     .unwrap();
     let mut view = WorkerView {

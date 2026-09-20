@@ -5,7 +5,7 @@ fn workspace_scope() -> utils::execution::ExecutionScope {
 }
 
 use super::*;
-use crate::tool_error::{ToolEffects, ToolFailure, ToolFailureKind};
+use crate::tool_error::{FailureImpact, ToolFailure, ToolFailureKind};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -91,7 +91,7 @@ async fn patch_content_and_destinations_are_preflighted_before_any_write() {
                 let error = patch.apply_patch().await.unwrap_err();
                 let failure = error.downcast_ref::<ToolFailure>().unwrap();
                 assert_eq!(failure.kind, ToolFailureKind::InvalidInput);
-                assert_eq!(failure.effects, ToolEffects::NoWorkspaceChange);
+                assert_eq!(failure.impact, FailureImpact::NoWorkspaceChange);
                 assert!(!failure.stops_turn());
                 assert!(failure.message.contains("Read the current file contents"));
                 assert_eq!(std::fs::read_to_string(root.join("one")).unwrap(), "one\n");

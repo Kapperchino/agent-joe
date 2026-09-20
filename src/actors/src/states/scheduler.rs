@@ -8,8 +8,8 @@ use ractor::ActorRef;
 use sandbox::process::ProcessStatus;
 use std::{collections::VecDeque, panic::AssertUnwindSafe};
 use tools::{
-    tool_defs::{CancellationMode, ErasedToolRef, ToolEffect, ToolInvocation, ToolResult},
-    tool_error::{ToolEffects, ToolFailure, ToolFailureKind},
+    tool_defs::{CancellationMode, ErasedToolRef, ToolOpKind, ToolInvocation, ToolResult},
+    tool_error::{FailureImpact, ToolFailure, ToolFailureKind},
 };
 use turn_engine::turn::{Tag, ToolJob};
 use utils::cargo::{CargoResult, ProcessAction};
@@ -29,7 +29,7 @@ struct PreparedTool<C: Context> {
     implementation: ErasedToolRef<C, ActorContext<C>>,
     job: ToolJob,
     display: String,
-    effect: ToolEffect,
+    effect: ToolOpKind,
     execution_budget: std::time::Duration,
 }
 
@@ -55,7 +55,7 @@ enum Interruption {
 }
 
 impl Interruption {
-    fn failure(self, effect: ToolEffect) -> ToolFailure {
+    fn failure(self, effect: ToolOpKind) -> ToolFailure {
         match self {
             Self::Cancelled => ToolFailure::new(
                 ToolFailureKind::Cancelled,
@@ -93,7 +93,7 @@ impl<C: Context + Clone + 'static> PreparedTool<C> {
             .map_err(|error| {
                 ToolFailure::new(
                     ToolFailureKind::InvalidInput,
-                    ToolEffects::NotStarted,
+                    FailureImpact::NotStarted,
                     error.to_string(),
                 )
             })
@@ -136,7 +136,7 @@ impl<C: Context + Clone + 'static> PreparedTool<C> {
                 };
                 Err(ToolFailure::new(
                     kind,
-                    ToolEffects::NoWorkspaceChange,
+                    FailureImpact::NoWorkspaceChange,
                     content,
                 ))
             }
@@ -151,13 +151,13 @@ impl<C: Context + Clone + 'static> Executor<C> {
                 true => execution.budget.tool_call().map_err(|error| {
                     ToolFailure::new(
                         ToolFailureKind::Worker,
-                        ToolEffects::NotStarted,
+                        FailureImpact::NotStarted,
                         error.to_string(),
                     )
                 }),
                 false => Err(ToolFailure::new(
                     ToolFailureKind::InvalidInput,
-                    ToolEffects::NotStarted,
+                    FailureImpact::NotStarted,
                     "Tool is outside the worker's allowed tools",
                 )),
             }?;
@@ -168,7 +168,7 @@ impl<C: Context + Clone + 'static> Executor<C> {
             .ok_or_else(|| {
                 ToolFailure::new(
                     ToolFailureKind::InvalidInput,
-                    ToolEffects::NotStarted,
+                    FailureImpact::NotStarted,
                     format!("unknown tool `{}`", job.call.name),
                 )
             })
@@ -184,7 +184,7 @@ impl<C: Context + Clone + 'static> Executor<C> {
             .unwrap_or_else(|_| {
                 Err(ToolFailure::new(
                     ToolFailureKind::Panicked,
-                    ToolEffects::NotStarted,
+                    FailureImpact::NotStarted,
                     "Tool preparation panicked",
                 ))
             });
@@ -207,7 +207,7 @@ impl<C: Context + Clone + 'static> Executor<C> {
                 .services
                 .tool(job.call.name.as_ref())
                 .and_then(|tool| tool.effect_from_input_erased(&job.call.input_value()).ok())
-                .unwrap_or(ToolEffect::Read);
+                .unwrap_or(ToolOpKind::Read);
             execution.record(effect, &result);
         }
         self.emit(
@@ -229,7 +229,7 @@ impl<C: Context + Clone + 'static> Executor<C> {
         self.runtime.interaction.authorize(prepared.effect)?;
         let _registration = scope.register(ResourceKind::Tool, prepared.job.call.name.to_string());
         let _writer = match (prepared.effect, &self.runtime.role) {
-            (ToolEffect::Write | ToolEffect::Validate, ExecutionRole::Root | ExecutionRole::Helper) => Some(self.runtime.workspace.writer.clone().try_lock_owned().map_err(|_| ToolFailure::new(ToolFailureKind::InvalidInput, ToolEffects::NotStarted, "A worker owns workspace writes; wait for it to finish before editing or validating"))?),
+            (ToolOpKind::Write | ToolOpKind::Validate, ExecutionRole::Root | ExecutionRole::Helper) => Some(self.runtime.workspace.writer.clone().try_lock_owned().map_err(|_| ToolFailure::new(ToolFailureKind::InvalidInput, FailureImpact::NotStarted, "A worker owns workspace writes; wait for it to finish before editing or validating"))?),
             _ => None,
         };
         let lease = self
@@ -262,7 +262,7 @@ impl<C: Context + Clone + 'static> Executor<C> {
                 .map_err(|error| {
                     ToolFailure::new(
                         ToolFailureKind::Persistence,
-                        ToolEffects::NotStarted,
+                        FailureImpact::NotStarted,
                         error.to_string(),
                     )
                 }),
@@ -281,7 +281,7 @@ impl<C: Context + Clone + 'static> Executor<C> {
                 .map_err(|error| {
                     ToolFailure::new(
                         ToolFailureKind::Persistence,
-                        ToolEffects::MayHaveChanged,
+                        FailureImpact::MayHaveChanged,
                         format!("Could not record tool completion: {error}"),
                     )
                 }),
@@ -422,7 +422,7 @@ impl<C: Context + Clone + 'static> Executor<C> {
                     let result = result.map(|_| ()).map_err(|_| {
                         ToolFailure::new(
                             ToolFailureKind::Panicked,
-                            ToolEffects::MayHaveChanged,
+                            FailureImpact::MayHaveChanged,
                             "Tool scheduler panicked",
                         )
                     });
@@ -512,15 +512,15 @@ impl<C: Context + Clone + 'static> Executor<C> {
     }
 }
 
-fn effects(effect: ToolEffect) -> ToolEffects {
+fn effects(effect: ToolOpKind) -> FailureImpact {
     match effect {
-        ToolEffect::Write | ToolEffect::ProcessControl | ToolEffect::DelegateWrite => {
-            ToolEffects::MayHaveChanged
+        ToolOpKind::Write | ToolOpKind::ProcessControl | ToolOpKind::DelegateWrite => {
+            FailureImpact::MayHaveChanged
         }
-        _ => ToolEffects::NoWorkspaceChange,
+        _ => FailureImpact::NoWorkspaceChange,
     }
 }
-fn execution_error(error: anyhow::Error, effect: ToolEffect) -> ToolFailure {
+fn execution_error(error: anyhow::Error, effect: ToolOpKind) -> ToolFailure {
     error
         .downcast_ref::<ToolFailure>()
         .cloned()

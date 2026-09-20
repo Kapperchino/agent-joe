@@ -424,7 +424,7 @@ fn pending_plan_steps_complete_together_with_evidence_and_unchanged_requirements
 
 #[tokio::test]
 async fn required_question_pauses_and_prevents_later_batch_writes_until_typed_answer() {
-    let (write, entered) = gate("write", ToolEffect::Write);
+    let (write, entered) = gate("write", ToolOpKind::Write);
     let h = Harness::new(vec![write], Duration::from_secs(2)).await;
     h.start("Implement the selected target");
     answer(
@@ -469,7 +469,7 @@ async fn answers_during_tools_preserve_complete_exchanges_and_durable_order() {
         let workspace = session::test_support::Workspace::new();
         let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
         let store = runtime.sessions.clone().unwrap();
-        let (read, entered) = gate("read", ToolEffect::Read);
+        let (read, entered) = gate("read", ToolOpKind::Read);
         let h = Harness::with_runtime(vec![read], runtime).await;
         h.start("Investigate the target");
         answer(
@@ -709,7 +709,7 @@ async fn stale_plan_completion_recovers_and_persists_the_reconciled_plan() {
 
 #[tokio::test]
 async fn steering_cancels_active_tools_and_queue_then_reconciles_plan() {
-    let (write, entered) = gate("write", ToolEffect::Write);
+    let (write, entered) = gate("write", ToolOpKind::Write);
     let active = write.active.clone();
     let h = Harness::new(vec![write], Duration::from_secs(2)).await;
     h.start("Implement the binary");
@@ -792,7 +792,7 @@ async fn tracked_plan_uses_observed_evidence_and_survives_compaction_and_fork() 
     let workspace = session::test_support::Workspace::new();
     let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
     let store = runtime.sessions.clone().unwrap();
-    let (read, entered) = gate("read", ToolEffect::Read);
+    let (read, entered) = gate("read", ToolOpKind::Read);
     let h = Harness::with_runtime(vec![read], runtime).await;
     h.start("Inspect and document the target");
     let mut update = PlanUpdate {
@@ -884,7 +884,7 @@ async fn questions_do_not_wait_for_an_independent_workspace_writer() {
     let runtime = Runtime::default();
     let lease = runtime
         .workspace
-        .acquire(ToolEffect::Write, &runtime.scope)
+        .acquire(ToolOpKind::Write, &runtime.scope)
         .await
         .unwrap();
     let h = Harness::with_runtime(vec![], runtime.clone()).await;

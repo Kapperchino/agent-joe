@@ -81,8 +81,8 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for GatherContext {
     fn output_to_content(_: &Self::Input, output: &Self::Output) -> anyhow::Result<String> {
         Ok(serde_json::to_string(output)?)
     }
-    fn effect() -> tools::tool_defs::ToolEffect {
-        tools::tool_defs::ToolEffect::DelegateRead
+    fn effect() -> tools::tool_defs::ToolOpKind {
+        tools::tool_defs::ToolOpKind::DelegateRead
     }
     fn tool_type() -> ToolType {
         ToolType::Client

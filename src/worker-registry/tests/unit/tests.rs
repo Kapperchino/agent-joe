@@ -11,7 +11,7 @@ fn request() -> WorkerRequest {
             completion_criteria: "Report evidence".into(),
             ..Default::default()
         },
-        |_| Some(tools::tool_defs::ToolEffect::Read),
+        |_| Some(tools::tool_defs::ToolOpKind::Read),
     )
     .unwrap()
 }
@@ -188,12 +188,12 @@ async fn registry_retains_immediate_completions_and_enforces_owner_and_worker_co
 
 #[test]
 fn reports_combine_observed_changes_with_supplied_evidence() {
-    use tools::tool_defs::{ToolEffect, ToolId, ToolInvocation, ToolResult};
+    use tools::tool_defs::{ToolOpKind, ToolId, ToolInvocation, ToolResult};
     let registry = WorkerRegistry::default();
     let worker = registry
         .register("parent", CancellationToken::new(), request())
         .unwrap();
-    worker.record(ToolEffect::Write, &ToolResult {
+    worker.record(ToolOpKind::Write, &ToolResult {
         id: ToolId { call_id: None, id: "edit".to_owned().try_into().unwrap() },
         invocation: ToolInvocation {
             name: "apply_patch".to_owned().try_into().unwrap(),

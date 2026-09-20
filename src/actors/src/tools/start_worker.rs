@@ -69,7 +69,7 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for StartWorker {
     fn tool_type() -> ToolType {
         ToolType::Client
     }
-    fn effect() -> tools::tool_defs::ToolEffect {
-        tools::tool_defs::ToolEffect::DelegateRead
+    fn effect() -> tools::tool_defs::ToolOpKind {
+        tools::tool_defs::ToolOpKind::DelegateRead
     }
 }

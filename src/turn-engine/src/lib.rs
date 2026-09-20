@@ -2,7 +2,7 @@ pub mod machine;
 pub mod turn;
 use common_models::runtime_ids::{OperationId, WorkspaceRevision};
 use tools::{
-    tool_defs::{ToolEffect, ToolResult},
+    tool_defs::{ToolOpKind, ToolResult},
     tool_error::ToolFailure,
 };
 
@@ -10,7 +10,7 @@ use tools::{
 pub enum ToolEvent {
     Started {
         operation: OperationId,
-        effect: ToolEffect,
+        effect: ToolOpKind,
         revision: Option<WorkspaceRevision>,
         display: String,
     },
@@ -40,10 +40,10 @@ pub enum WorkerFailure {
 }
 impl WorkerFailure {
     pub fn into_tool_failure(self) -> tools::tool_error::ToolFailure {
-        use tools::tool_error::{ToolEffects, ToolFailure, ToolFailureKind};
+        use tools::tool_error::{FailureImpact, ToolFailure, ToolFailureKind};
         let effects = match self {
-            Self::Startup(_) | Self::AlreadyRunning => ToolEffects::NotStarted,
-            _ => ToolEffects::MayHaveChanged,
+            Self::Startup(_) | Self::AlreadyRunning => FailureImpact::NotStarted,
+            _ => FailureImpact::MayHaveChanged,
         };
         ToolFailure::new(ToolFailureKind::Worker, effects, self.to_string())
     }

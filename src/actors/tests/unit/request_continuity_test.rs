@@ -6,7 +6,7 @@ async fn tool_cycles_resume_and_forks_keep_runtime_history_and_isolate_cache_key
     let workspace = session::test_support::Workspace::new();
     let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
     let store = runtime.sessions.clone().unwrap();
-    let (read, entered) = gate("read", ToolEffect::Read);
+    let (read, entered) = gate("read", ToolOpKind::Read);
     let h = Harness::with_runtime(vec![read], runtime).await;
     h.start("Keep the public API unchanged");
     let (mut previous, mut reply) = h.request().await;

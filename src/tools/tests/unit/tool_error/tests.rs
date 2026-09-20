@@ -6,7 +6,7 @@ fn diagnostics_do_not_determine_whether_a_tool_stops_the_turn() {
     assert!(
         !ToolFailure::new(
             ToolFailureKind::Execution,
-            ToolEffects::NoWorkspaceChange,
+            FailureImpact::NoWorkspaceChange,
             misleading
         )
         .stops_turn()
@@ -14,7 +14,7 @@ fn diagnostics_do_not_determine_whether_a_tool_stops_the_turn() {
     assert!(
         ToolFailure::new(
             ToolFailureKind::Timeout,
-            ToolEffects::NoWorkspaceChange,
+            FailureImpact::NoWorkspaceChange,
             "plain diagnostic"
         )
         .stops_turn()
@@ -22,7 +22,7 @@ fn diagnostics_do_not_determine_whether_a_tool_stops_the_turn() {
     assert!(
         ToolFailure::new(
             ToolFailureKind::Execution,
-            ToolEffects::MayHaveChanged,
+            FailureImpact::MayHaveChanged,
             "plain diagnostic"
         )
         .stops_turn()

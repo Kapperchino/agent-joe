@@ -23,7 +23,7 @@ impl<C: Context, A> ToolTrait<C, A> for InsertAfterLine {
             .map_err(|error| {
                 crate::tool_error::ToolFailure::new(
                     crate::tool_error::ToolFailureKind::InvalidInput,
-                    crate::tool_error::ToolEffects::NotStarted,
+                    crate::tool_error::FailureImpact::NotStarted,
                     error.to_string(),
                 )
             })?;
@@ -113,7 +113,7 @@ impl InsertAfterLine {
             true => Ok(()),
             false => Err(crate::tool_error::ToolFailure::new(
                 crate::tool_error::ToolFailureKind::InvalidInput,
-                crate::tool_error::ToolEffects::NoWorkspaceChange,
+                crate::tool_error::FailureImpact::NoWorkspaceChange,
                 serde_json::json!({"code": "invalid_line", "line": line, "line_count": lines.len(), "message": "Insert after an existing one-based line"}).to_string())),
         }?;
         lines.splice(line..line, self.input.content.lines());

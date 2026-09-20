@@ -13,7 +13,7 @@ pub enum ToolFailureKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum ToolEffects {
+pub enum FailureImpact {
     NotStarted,
     NoWorkspaceChange,
     MayHaveChanged,
@@ -22,20 +22,20 @@ pub enum ToolEffects {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ToolFailure {
     pub kind: ToolFailureKind,
-    pub effects: ToolEffects,
+    pub impact: FailureImpact,
     pub message: String,
 }
 impl ToolFailure {
-    pub fn new(kind: ToolFailureKind, effects: ToolEffects, message: impl Into<String>) -> Self {
+    pub fn new(kind: ToolFailureKind, impact: FailureImpact, message: impl Into<String>) -> Self {
         Self {
             kind,
-            effects,
+            impact,
             message: message.into(),
         }
     }
 
     pub fn stops_turn(&self) -> bool {
-        self.effects == ToolEffects::MayHaveChanged
+        self.impact == FailureImpact::MayHaveChanged
             || matches!(
                 self.kind,
                 ToolFailureKind::Worker
@@ -48,8 +48,8 @@ impl ToolFailure {
 }
 impl fmt::Display for ToolFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let effects = match self.effects {
-            ToolEffects::MayHaveChanged => {
+        let effects = match self.impact {
+            FailureImpact::MayHaveChanged => {
                 ". Effects may be partial; inspect the workspace before retrying"
             }
             _ => "",

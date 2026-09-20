@@ -23,7 +23,7 @@ impl<C: Context, A> ToolTrait<C, A> for StringReplace {
             .map_err(|error| {
                 crate::tool_error::ToolFailure::new(
                     crate::tool_error::ToolFailureKind::InvalidInput,
-                    crate::tool_error::ToolEffects::NotStarted,
+                    crate::tool_error::FailureImpact::NotStarted,
                     error.to_string(),
                 )
             })?;

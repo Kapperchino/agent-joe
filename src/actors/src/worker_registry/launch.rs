@@ -30,8 +30,8 @@ impl PreparedWorker {
         request: &WorkerRequest,
     ) -> anyhow::Result<Self> {
         let effect = match request.role() {
-            WorkerRole::Read => tools::tool_defs::ToolEffect::DelegateRead,
-            WorkerRole::Write => tools::tool_defs::ToolEffect::DelegateWrite,
+            WorkerRole::Read => tools::tool_defs::ToolOpKind::DelegateRead,
+            WorkerRole::Write => tools::tool_defs::ToolOpKind::DelegateWrite,
         };
         info.runtime.interaction.authorize(effect)?;
         let parent_scope = match &info.runtime.role {
@@ -65,7 +65,7 @@ impl PreparedWorker {
                 let access = match name.as_str() {
                     "cargo" | "worktree" => Some(utils::workspace::Access::Write),
                     "inspect_context" | "git" | "review_changes" => Some(utils::workspace::Access::Read),
-                    _ if tool.effect() == tools::tool_defs::ToolEffect::Validate => Some(utils::workspace::Access::Write),
+                    _ if tool.effect() == tools::tool_defs::ToolOpKind::Validate => Some(utils::workspace::Access::Write),
                     _ => None,
                 };
                 match access.is_none_or(|access| workspace.permits_workspace_access(access)) {

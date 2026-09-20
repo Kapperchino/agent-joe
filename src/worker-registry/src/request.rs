@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use tools::tool_defs::ToolEffect;
+use tools::tool_defs::ToolOpKind;
 use turbo_code_macros::ToolInput;
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize, ToolInput)]
@@ -92,7 +92,7 @@ impl BudgetLimits {
 impl WorkerRequest {
     pub fn new(
         input: WorkerRequestInput,
-        available: impl Fn(&str) -> Option<ToolEffect>,
+        available: impl Fn(&str) -> Option<ToolOpKind>,
     ) -> anyhow::Result<Self> {
         let encoded = serde_json::to_vec(&input)?;
         let tools = input
@@ -138,7 +138,7 @@ impl WorkerRequest {
             .collect::<anyhow::Result<Vec<_>>>()?;
         let role = match effects
             .iter()
-            .any(|effect| matches!(effect, ToolEffect::Write | ToolEffect::Validate))
+            .any(|effect| matches!(effect, ToolOpKind::Write | ToolOpKind::Validate))
         {
             true => WorkerRole::Write,
             false => WorkerRole::Read,
@@ -193,7 +193,7 @@ impl WorkerRequest {
         &self,
         objective: String,
         context: String,
-        available: impl Fn(&str) -> Option<ToolEffect>,
+        available: impl Fn(&str) -> Option<ToolOpKind>,
     ) -> anyhow::Result<Self> {
         Self::new(
             WorkerRequestInput {

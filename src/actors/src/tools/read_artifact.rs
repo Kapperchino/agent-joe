@@ -3,7 +3,7 @@ use analysis::contexts::context::Context;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use session::artifacts::{ArtifactPage, ArtifactRange};
-use tools::tool_defs::{ToolDefTrait, ToolEffect, ToolId, ToolTrait, ToolType};
+use tools::tool_defs::{ToolDefTrait, ToolOpKind, ToolId, ToolTrait, ToolType};
 use turbo_code_macros::{ToolDef, ToolInput};
 use utils::utils::FnvHashMap;
 
@@ -78,8 +78,8 @@ impl<C: Context> ToolTrait<C, ActorContext<C>> for ReadArtifact {
         ))
     }
 
-    fn effect() -> ToolEffect {
-        ToolEffect::Read
+    fn effect() -> ToolOpKind {
+        ToolOpKind::Read
     }
 
     fn tool_type() -> ToolType {

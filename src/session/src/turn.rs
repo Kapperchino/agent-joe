@@ -11,7 +11,7 @@ use interaction::access::InteractionReadiness;
 use interaction::control::{InteractionAction, InteractionControl};
 use merge_workflow::MergeEvent;
 use merge_workflow::execution::{MergeActivity, MergeCompletion, MergeEnvironment, SessionMerge};
-use tools::tool_error::{ToolEffects, ToolFailure, ToolFailureKind};
+use tools::tool_error::{FailureImpact, ToolFailure, ToolFailureKind};
 use turn_engine::machine::{Event, SessionEvent, TurnMachine};
 use turn_engine::turn::{FollowUp, ToolJob};
 
@@ -138,7 +138,7 @@ impl SessionTurn<'_> {
         self.state.persistence.committed(jobs).map_err(|failure| {
             ToolFailure::new(
                 ToolFailureKind::Persistence,
-                ToolEffects::NotStarted,
+                FailureImpact::NotStarted,
                 failure.to_string(),
             )
         })

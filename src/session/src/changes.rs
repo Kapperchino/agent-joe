@@ -1,7 +1,7 @@
 use crate::runtime::SessionRuntime;
 use clients::response::RequestMode;
 use commands::command::Command;
-use tools::tool_defs::ToolEffect;
+use tools::tool_defs::ToolOpKind;
 use turn_engine::machine::TurnMachine;
 
 pub struct SessionChanges<'a> {
@@ -25,10 +25,10 @@ impl ChangeOperation {
         }
     }
 
-    fn effect(&self) -> ToolEffect {
+    fn effect(&self) -> ToolOpKind {
         match self {
-            Self::Diff => ToolEffect::Read,
-            Self::Undo(_) => ToolEffect::Write,
+            Self::Diff => ToolOpKind::Read,
+            Self::Undo(_) => ToolOpKind::Write,
         }
     }
 }

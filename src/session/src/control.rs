@@ -136,7 +136,7 @@ impl<C: Context + Clone> SessionCommands<'_, C> {
                 let runtime = self.runtime;
                 runtime
                     .interaction
-                    .authorize(tools::tool_defs::ToolEffect::Write)?;
+                    .authorize(tools::tool_defs::ToolOpKind::Write)?;
                 let project = runtime
                     .project
                     .clone()

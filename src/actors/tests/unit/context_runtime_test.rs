@@ -360,7 +360,7 @@ async fn failed_or_malformed_summaries_leave_history_intact_and_can_be_retried()
     let runtime = configured_runtime(&workspace);
     let store = runtime.sessions.clone().unwrap();
     let id = saved_history(&store);
-    let (write, entered) = gate("write", ToolEffect::Write);
+    let (write, entered) = gate("write", ToolOpKind::Write);
     let h = Harness::with_runtime(vec![write], runtime).await;
     resume(&h, &id).await;
     let before = serde_json::to_value(h.history().await).unwrap();
@@ -521,7 +521,7 @@ async fn giant_validation_output_is_bounded_and_retrievable_in_simple_and_worker
         let workspace = session::test_support::Workspace::new();
         let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
         let store = runtime.sessions.clone().unwrap();
-        let (mut validation, entered) = gate("cargo", ToolEffect::Validate);
+        let (mut validation, entered) = gate("cargo", ToolOpKind::Validate);
         Arc::get_mut(&mut validation).unwrap().outcome = GateOutcome::LargeValidation;
         let (delegate, child_requests) = delegate(vec![validation.clone()], false);
         let h = Harness::with_runtime(
@@ -883,7 +883,7 @@ async fn delegated_workers_compact_between_complete_tool_exchanges() {
     let workspace = session::test_support::Workspace::new();
     let runtime = configured_runtime(&workspace);
     let store = runtime.sessions.clone().unwrap();
-    let (read, entered) = gate("read", ToolEffect::Read);
+    let (read, entered) = gate("read", ToolOpKind::Read);
     let (delegate, child_requests) = delegate(vec![read], false);
     let h = Harness::with_runtime(vec![delegate], runtime).await;
     h.start("Investigate the bug");

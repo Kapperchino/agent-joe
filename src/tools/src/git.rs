@@ -1,4 +1,4 @@
-use crate::tool_defs::{ToolDefTrait, ToolEffect, ToolId, ToolTrait, ToolType};
+use crate::tool_defs::{ToolDefTrait, ToolOpKind, ToolId, ToolTrait, ToolType};
 use analysis::contexts::context::Context;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -122,8 +122,8 @@ impl<C: Context, A> ToolTrait<C, A> for Git {
     fn output_to_content(_: &Self::Input, output: &Self::Output) -> anyhow::Result<String> {
         Ok(serde_json::to_string(output)?)
     }
-    fn effect() -> ToolEffect {
-        ToolEffect::Read
+    fn effect() -> ToolOpKind {
+        ToolOpKind::Read
     }
     fn tool_type() -> ToolType {
         ToolType::Client

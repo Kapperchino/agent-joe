@@ -13,7 +13,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
-use tools::tool_defs::{ErasedToolTrait, ToolDefinition, ToolEffect, ToolId};
+use tools::tool_defs::{ErasedToolTrait, ToolDefinition, ToolOpKind, ToolId};
 use utils::utils::FnvHashMap;
 
 fn build_request<C: Context + Clone + 'static>(
@@ -86,8 +86,8 @@ impl Actor for IdleActor {
 struct EchoTool(Arc<AtomicUsize>);
 #[async_trait]
 impl ErasedToolTrait<TestContext, ActorContext<TestContext>> for EchoTool {
-    fn effect(&self) -> ToolEffect {
-        ToolEffect::Read
+    fn effect(&self) -> ToolOpKind {
+        ToolOpKind::Read
     }
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::Client {

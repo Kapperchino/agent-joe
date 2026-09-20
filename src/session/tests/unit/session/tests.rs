@@ -166,7 +166,7 @@ fn save_named_output(session: &Session, name: &str, content: &str) -> ToolResult
     session
         .record(Event::Intent {
             operation: operation.id.clone(),
-            effect: ToolEffect::Read,
+            effect: ToolOpKind::Read,
         })
         .unwrap();
     let result = session
@@ -274,7 +274,7 @@ fn large_artifact_pages_stay_inline_across_session_resume() {
     session
         .record(Event::Intent {
             operation: operation.id.clone(),
-            effect: ToolEffect::Read,
+            effect: ToolOpKind::Read,
         })
         .unwrap();
     let result = session
@@ -374,7 +374,7 @@ fn artifact_and_completion_abort_together() {
     session
         .record(Event::Intent {
             operation: operation.id.clone(),
-            effect: ToolEffect::Write,
+            effect: ToolOpKind::Write,
         })
         .unwrap();
     let before = serde_json::to_value(session.snapshot().unwrap()).unwrap();
@@ -421,7 +421,7 @@ fn original_session_snapshots_resume_and_archive_legacy_inline_outputs() {
     session
         .record(Event::Intent {
             operation: operation.id.clone(),
-            effect: ToolEffect::Read,
+            effect: ToolOpKind::Read,
         })
         .unwrap();
     session
@@ -1033,7 +1033,7 @@ fn recovery_pairs_all_calls_and_never_reexecutes_uncertain_operations() {
         session
             .record(Event::Intent {
                 operation: operation.into(),
-                effect: ToolEffect::Write,
+                effect: ToolOpKind::Write,
             })
             .unwrap();
     }
@@ -1112,7 +1112,7 @@ fn invalid_operation_transitions_and_failed_transactions_preserve_the_committed_
     session
         .record(Event::Intent {
             operation: "done".into(),
-            effect: ToolEffect::Write,
+            effect: ToolOpKind::Write,
         })
         .unwrap();
     let sequence = session.snapshot().unwrap().sequence;
@@ -1120,7 +1120,7 @@ fn invalid_operation_transitions_and_failed_transactions_preserve_the_committed_
         session
             .record(Event::Intent {
                 operation: "done".into(),
-                effect: ToolEffect::Write
+                effect: ToolOpKind::Write
             })
             .is_err()
     );
@@ -1613,7 +1613,7 @@ fn crash_fixture() {
         session
             .record(Event::Intent {
                 operation: "done".into(),
-                effect: ToolEffect::Write,
+                effect: ToolOpKind::Write,
             })
             .unwrap();
         std::fs::write(path.join("written.txt"), "one write").unwrap();

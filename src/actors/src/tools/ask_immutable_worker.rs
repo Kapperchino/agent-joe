@@ -5,7 +5,7 @@ use crate::{
 use analysis::contexts::context::Context;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use tools::tool_defs::{ToolDefTrait, ToolEffect, ToolId, ToolTrait, ToolType};
+use tools::tool_defs::{ToolDefTrait, ToolOpKind, ToolId, ToolTrait, ToolType};
 use turbo_code_macros::{ToolDef, ToolInput};
 use utils::utils::FnvHashMap;
 
@@ -137,8 +137,8 @@ impl<C: Context> ToolTrait<C, ActorContext<C>> for AskImmutableWorker {
         Ok(serde_json::to_string(output)?)
     }
 
-    fn effect() -> ToolEffect {
-        ToolEffect::DelegateRead
+    fn effect() -> ToolOpKind {
+        ToolOpKind::DelegateRead
     }
 
     fn tool_type() -> ToolType {

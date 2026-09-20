@@ -4,7 +4,7 @@ use clients::failure::FailureKind;
 use clients::response::ProcessedItem;
 use clients::response::ToolCall;
 use common_models::runtime_ids::OperationId;
-use tools::tool_defs::{ToolEffect, ToolId, ToolInvocation};
+use tools::tool_defs::{ToolOpKind, ToolId, ToolInvocation};
 
 fn machine() -> TurnMachine {
     TurnMachine::new(
@@ -414,7 +414,7 @@ fn stopping_accepts_matching_tool_results_once_and_preserves_uncertain_work() {
             batch,
             ToolEvent::Started {
                 operation: job.operation,
-                effect: ToolEffect::Read,
+                effect: ToolOpKind::Read,
                 revision: None,
                 display: "read".into(),
             },

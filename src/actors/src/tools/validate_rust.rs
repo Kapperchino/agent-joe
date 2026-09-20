@@ -75,8 +75,8 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for ValidateRust {
     fn output_to_content(_: &Self::Input, output: &Self::Output) -> anyhow::Result<String> {
         Ok(serde_json::to_string(output)?)
     }
-    fn effect() -> tools::tool_defs::ToolEffect {
-        tools::tool_defs::ToolEffect::DelegateValidate
+    fn effect() -> tools::tool_defs::ToolOpKind {
+        tools::tool_defs::ToolOpKind::DelegateValidate
     }
     fn tool_type() -> ToolType {
         ToolType::Client

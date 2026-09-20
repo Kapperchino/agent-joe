@@ -15,7 +15,7 @@ fn qualified_worker_tools_use_registered_names() {
                 ..Default::default()
             },
             |name| match name {
-                "find_files" | "read_file" => Some(ToolEffect::Read),
+                "find_files" | "read_file" => Some(ToolOpKind::Read),
                 _ => None,
             },
         )
@@ -49,9 +49,9 @@ fn qualified_worker_tools_cannot_bypass_availability_or_delegation_checks() {
                 ..Default::default()
             },
             |name| match name {
-                "read_file" => Some(ToolEffect::Read),
-                "start_worker" => Some(ToolEffect::DelegateRead),
-                "make_changes" => Some(ToolEffect::DelegateWrite),
+                "read_file" => Some(ToolOpKind::Read),
+                "start_worker" => Some(ToolOpKind::DelegateRead),
+                "make_changes" => Some(ToolOpKind::DelegateWrite),
                 _ => None,
             },
         );
@@ -82,12 +82,12 @@ fn followups_recheck_handoff_bounds_and_preserve_the_original_constraints() {
             completion_criteria: "Report evidence".into(),
             ..Default::default()
         },
-        |name| (name == "read_file").then_some(ToolEffect::Read),
+        |name| (name == "read_file").then_some(ToolOpKind::Read),
     )
     .unwrap();
     let followup = request
         .follow_up("Confirm finding".into(), "Selected report".into(), |name| {
-            (name == "read_file").then_some(ToolEffect::Read)
+            (name == "read_file").then_some(ToolOpKind::Read)
         })
         .unwrap();
     assert_eq!(followup.constraints, request.constraints);
@@ -102,13 +102,13 @@ fn followups_recheck_handoff_bounds_and_preserve_the_original_constraints() {
     assert!(
         request
             .follow_up("Confirm finding".into(), "x".repeat(64 * 1024), |_| Some(
-                ToolEffect::Read
+                ToolOpKind::Read
             ))
             .is_err()
     );
     assert!(
         request
-            .follow_up(String::new(), String::new(), |_| Some(ToolEffect::Read))
+            .follow_up(String::new(), String::new(), |_| Some(ToolOpKind::Read))
             .is_err()
     );
     assert!(
@@ -167,13 +167,13 @@ fn legacy_request_limits_are_discarded_from_inputs_and_followups() {
                 .get("requests")
                 .is_none()
         );
-        let request = WorkerRequest::new(input, |_| Some(ToolEffect::Read)).unwrap();
+        let request = WorkerRequest::new(input, |_| Some(ToolOpKind::Read)).unwrap();
         let mut legacy = serde_json::to_value(&request).unwrap();
         legacy["budget"]["requests"] = serde_json::json!(requests);
         let restored: WorkerRequest = serde_json::from_value(legacy).unwrap();
         let followup = restored
             .follow_up("Confirm finding".into(), "Selected report".into(), |_| {
-                Some(ToolEffect::Read)
+                Some(ToolOpKind::Read)
             })
             .unwrap();
         for request in [request, restored, followup] {

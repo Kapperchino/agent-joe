@@ -5,7 +5,7 @@ use super::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use tools::tool_defs::{ToolEffect, ToolResult};
+use tools::tool_defs::{ToolOpKind, ToolResult};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -104,7 +104,7 @@ pub(super) struct Evidence {
 }
 
 impl Evidence {
-    pub fn record(&mut self, effect: ToolEffect, result: &ToolResult) {
+    pub fn record(&mut self, effect: ToolOpKind, result: &ToolResult) {
         let edit = result
             .outcome
             .as_ref()
@@ -126,12 +126,12 @@ impl Evidence {
             self.edits.push(edit);
         }
         match (effect, result.invocation.name.as_ref()) {
-            (ToolEffect::Validate | ToolEffect::ProcessControl, _) | (_, "cargo") => {
+            (ToolOpKind::Validate | ToolOpKind::ProcessControl, _) | (_, "cargo") => {
                 self.validation.push(result.clone())
             }
             _ => {}
         }
-        if let (ToolEffect::Write, "cargo" | "worktree") = (effect, result.invocation.name.as_ref())
+        if let (ToolOpKind::Write, "cargo" | "worktree") = (effect, result.invocation.name.as_ref())
         {
             self.unresolved.push(format!(
                 "{} may modify workspace files; its changed paths are not enumerated in this report and require review",
@@ -143,7 +143,7 @@ impl Evidence {
                 .push(format!("{}: {failure}", result.invocation.name));
         }
         let patches = match effect {
-            ToolEffect::Write => result
+            ToolOpKind::Write => result
                 .invocation
                 .input
                 .get("patch")
@@ -164,7 +164,7 @@ impl Evidence {
             match &result.outcome {
                 Ok(_) => self.changed_files.extend(paths),
                 Err(failure)
-                    if failure.effects == tools::tool_error::ToolEffects::MayHaveChanged =>
+                    if failure.impact == tools::tool_error::FailureImpact::MayHaveChanged =>
                 {
                     self.possibly_changed_files.extend(paths)
                 }

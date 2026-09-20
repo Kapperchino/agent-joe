@@ -4,8 +4,8 @@ use std::sync::{
 };
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard, Semaphore, SemaphorePermit};
 use tools::{
-    tool_defs::ToolEffect,
-    tool_error::{ToolEffects, ToolFailure, ToolFailureKind},
+    tool_defs::ToolOpKind,
+    tool_error::{FailureImpact, ToolFailure, ToolFailureKind},
 };
 use utils::execution::ExecutionScope;
 
@@ -38,22 +38,22 @@ impl Workspace {
 
     pub async fn acquire(
         &self,
-        effect: ToolEffect,
+        effect: ToolOpKind,
         scope: &ExecutionScope,
     ) -> Result<WorkspaceLease<'_>, ToolFailure> {
         tokio::select! {
             biased;
-            _ = scope.cancel.cancelled() => Err(ToolFailure::new(ToolFailureKind::Cancelled, ToolEffects::NotStarted, "Cancelled while waiting for the workspace")),
+            _ = scope.cancel.cancelled() => Err(ToolFailure::new(ToolFailureKind::Cancelled, FailureImpact::NotStarted, "Cancelled while waiting for the workspace")),
             lease = self.lease(effect) => match effect {
-                ToolEffect::Write | ToolEffect::Validate if scope.resources().iter().any(|resource| resource.kind == utils::execution::ResourceKind::Process) => Err(ToolFailure::new(ToolFailureKind::Validation, ToolEffects::NotStarted, "Stop the managed target with cargo operation stop before editing or running another Cargo command")),
+                ToolOpKind::Write | ToolOpKind::Validate if scope.resources().iter().any(|resource| resource.kind == utils::execution::ResourceKind::Process) => Err(ToolFailure::new(ToolFailureKind::Validation, FailureImpact::NotStarted, "Stop the managed target with cargo operation stop before editing or running another Cargo command")),
                 _ => Ok(lease),
             },
         }
     }
 
-    async fn lease(&self, effect: ToolEffect) -> WorkspaceLease<'_> {
+    async fn lease(&self, effect: ToolOpKind) -> WorkspaceLease<'_> {
         match effect {
-            ToolEffect::Read => WorkspaceLease::Read {
+            ToolOpKind::Read => WorkspaceLease::Read {
                 _slot: self
                     .readers
                     .acquire()
@@ -62,19 +62,19 @@ impl Workspace {
                 _lock: self.lock.read().await,
                 revision: self.revision(),
             },
-            ToolEffect::Write => WorkspaceLease::Write {
+            ToolOpKind::Write => WorkspaceLease::Write {
                 _lock: self.lock.write().await,
                 revision: &self.revision,
             },
-            ToolEffect::Validate => WorkspaceLease::Validate {
+            ToolOpKind::Validate => WorkspaceLease::Validate {
                 _lock: self.lock.write().await,
                 revision: self.revision(),
             },
-            ToolEffect::Interaction
-            | ToolEffect::ProcessControl
-            | ToolEffect::DelegateRead
-            | ToolEffect::DelegateWrite
-            | ToolEffect::DelegateValidate => WorkspaceLease::Delegated,
+            ToolOpKind::Interaction
+            | ToolOpKind::ProcessControl
+            | ToolOpKind::DelegateRead
+            | ToolOpKind::DelegateWrite
+            | ToolOpKind::DelegateValidate => WorkspaceLease::Delegated,
         }
     }
 

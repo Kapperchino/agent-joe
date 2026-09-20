@@ -27,7 +27,7 @@ pub trait ToolInputSchema {
 pub trait ToolUse {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ToolEffect {
+pub enum ToolOpKind {
     Interaction,
     Read,
     Write,
@@ -37,7 +37,7 @@ pub enum ToolEffect {
     DelegateWrite,
     DelegateValidate,
 }
-impl ToolEffect {
+impl ToolOpKind {
     pub fn concurrent(self) -> bool {
         matches!(self, Self::Read | Self::DelegateRead | Self::Interaction)
     }
@@ -99,11 +99,11 @@ pub trait ToolTrait<C: Context, A>: ToolDefTrait + Display {
 
     fn tool_type() -> ToolType;
 
-    fn effect() -> ToolEffect {
-        ToolEffect::Write
+    fn effect() -> ToolOpKind {
+        ToolOpKind::Write
     }
 
-    fn effect_from_input(_input: &Self::Input) -> ToolEffect {
+    fn effect_from_input(_input: &Self::Input) -> ToolOpKind {
         Self::effect()
     }
 }
@@ -128,11 +128,11 @@ pub enum ToolType {
 pub trait ErasedToolTrait<C: Context, A>: Send + Sync {
     fn definition(&self) -> ToolDefinition;
 
-    fn effect(&self) -> ToolEffect {
-        ToolEffect::Write
+    fn effect(&self) -> ToolOpKind {
+        ToolOpKind::Write
     }
 
-    fn effect_from_input_erased(&self, _input: &Value) -> anyhow::Result<ToolEffect> {
+    fn effect_from_input_erased(&self, _input: &Value) -> anyhow::Result<ToolOpKind> {
         Ok(self.effect())
     }
 
@@ -211,11 +211,11 @@ where
         }
     }
 
-    fn effect(&self) -> ToolEffect {
+    fn effect(&self) -> ToolOpKind {
         T::effect()
     }
 
-    fn effect_from_input_erased(&self, input: &Value) -> anyhow::Result<ToolEffect> {
+    fn effect_from_input_erased(&self, input: &Value) -> anyhow::Result<ToolOpKind> {
         let input = T::Input::deserialize_lenient(input.clone())?;
         Ok(T::effect_from_input(&input))
     }

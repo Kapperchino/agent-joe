@@ -24,7 +24,7 @@ use std::{
 };
 use tokio::sync::oneshot;
 use tools::tool_defs::{
-    CancellationMode, ErasedToolRef, ErasedToolTrait, ToolDefinition, ToolEffect, ToolId,
+    CancellationMode, ErasedToolRef, ErasedToolTrait, ToolDefinition, ToolOpKind, ToolId,
 };
 use turn_engine::ToolEvent;
 use turn_engine::turn::Tag;
@@ -290,7 +290,7 @@ fn call(name: &str, id: &str) -> ContentBlock {
 
 struct GateTool {
     name: &'static str,
-    effect: ToolEffect,
+    effect: ToolOpKind,
     entered: flume::Sender<(String, oneshot::Sender<()>)>,
     active: Arc<AtomicUsize>,
     outcome: GateOutcome,
@@ -325,7 +325,7 @@ impl ErasedToolTrait<TestContext, ActorContext<TestContext>> for GateTool {
             required: vec![],
         }
     }
-    fn effect(&self) -> ToolEffect {
+    fn effect(&self) -> ToolOpKind {
         self.effect
     }
     fn cancellation_mode(&self) -> CancellationMode {
@@ -408,7 +408,7 @@ mod context_tests;
 mod interaction_tests;
 fn gate(
     name: &'static str,
-    effect: ToolEffect,
+    effect: ToolOpKind,
 ) -> (
     Arc<GateTool>,
     flume::Receiver<(String, oneshot::Sender<()>)>,
@@ -492,7 +492,7 @@ async fn cancel_during_request_and_ignore_obsolete_events() {
 
 #[tokio::test]
 async fn followups_queue_without_overlapping_streams_or_duplicate_tools() {
-    let (tool, entered) = gate("read", ToolEffect::Read);
+    let (tool, entered) = gate("read", ToolOpKind::Read);
     let h = Harness::new(vec![tool], Duration::from_secs(10)).await;
     h.start("first");
     let (_, reply) = h.request().await;
@@ -526,9 +526,9 @@ async fn followups_queue_without_overlapping_streams_or_duplicate_tools() {
 
 #[tokio::test]
 async fn reads_overlap_writes_are_ordered_and_validation_uses_latest_revision() {
-    let (read, reads) = gate("read", ToolEffect::Read);
-    let (write, writes) = gate("write", ToolEffect::Write);
-    let (validate, validations) = gate("validate", ToolEffect::Validate);
+    let (read, reads) = gate("read", ToolOpKind::Read);
+    let (write, writes) = gate("write", ToolOpKind::Write);
+    let (validate, validations) = gate("validate", ToolOpKind::Validate);
     let h = Harness::new(vec![read.clone(), write, validate], Duration::from_secs(10)).await;
     h.start("work");
     answer(
@@ -566,7 +566,7 @@ async fn reads_overlap_writes_are_ordered_and_validation_uses_latest_revision() 
 
 #[tokio::test]
 async fn cancel_tools_retains_success_and_marks_unexecuted_calls() {
-    let (write, entered) = gate("write", ToolEffect::Write);
+    let (write, entered) = gate("write", ToolOpKind::Write);
     let h = Harness::new(vec![write.clone()], Duration::from_secs(10)).await;
     h.start("work");
     answer(
@@ -606,7 +606,7 @@ async fn cancel_tools_retains_success_and_marks_unexecuted_calls() {
 
 #[tokio::test]
 async fn execution_budget_allows_work_past_the_preparation_deadline() {
-    let (mut tool, entered) = gate("build", ToolEffect::Validate);
+    let (mut tool, entered) = gate("build", ToolOpKind::Validate);
     Arc::get_mut(&mut tool).unwrap().outcome = GateOutcome::Budgeted;
     let h = Harness::new(vec![tool], Duration::from_millis(30)).await;
     h.start("work");
@@ -624,7 +624,7 @@ async fn execution_budget_allows_work_past_the_preparation_deadline() {
 
 #[tokio::test]
 async fn execution_budget_still_has_a_deadline() {
-    let (mut tool, entered) = gate("build", ToolEffect::Validate);
+    let (mut tool, entered) = gate("build", ToolOpKind::Validate);
     Arc::get_mut(&mut tool).unwrap().outcome = GateOutcome::Budgeted;
     let h = Harness::new(vec![tool], Duration::from_millis(30)).await;
     h.start("work");
@@ -640,7 +640,7 @@ async fn execution_budget_still_has_a_deadline() {
 
 #[tokio::test]
 async fn timeout_stops_uncertain_write_and_next_write_is_never_run() {
-    let (tool, entered) = gate("write", ToolEffect::Write);
+    let (tool, entered) = gate("write", ToolOpKind::Write);
     let h = Harness::new(vec![tool.clone()], Duration::from_millis(30)).await;
     h.start("work");
     answer(
@@ -658,8 +658,8 @@ async fn timeout_stops_uncertain_write_and_next_write_is_never_run() {
 
 #[tokio::test]
 async fn read_timeout_stops_the_batch_before_a_write_starts() {
-    let (read, reads) = gate("read", ToolEffect::Read);
-    let (write, writes) = gate("write", ToolEffect::Write);
+    let (read, reads) = gate("read", ToolOpKind::Read);
+    let (write, writes) = gate("write", ToolOpKind::Write);
     let h = Harness::new(vec![read.clone(), write], Duration::from_millis(30)).await;
     h.start("work");
     answer(
@@ -690,10 +690,10 @@ async fn tool_panics_preserve_other_reads_and_stop_subsequent_writes() {
         GateOutcome::RunPanic,
         GateOutcome::RenderPanic,
     ] {
-        let (mut panicking, entered) = gate("panicking", ToolEffect::Read);
+        let (mut panicking, entered) = gate("panicking", ToolOpKind::Read);
         Arc::get_mut(&mut panicking).unwrap().outcome = outcome;
-        let (read, reads) = gate("read", ToolEffect::Read);
-        let (write, writes) = gate("write", ToolEffect::Write);
+        let (read, reads) = gate("read", ToolOpKind::Read);
+        let (write, writes) = gate("write", ToolOpKind::Write);
         let h = Harness::new(
             vec![panicking, read.clone(), write],
             Duration::from_secs(10),
@@ -747,7 +747,7 @@ async fn tool_panics_preserve_other_reads_and_stop_subsequent_writes() {
 
 #[tokio::test]
 async fn tool_context_updates_reach_the_next_execution() {
-    let (mut tool, entered) = gate("context_revision", ToolEffect::Read);
+    let (mut tool, entered) = gate("context_revision", ToolOpKind::Read);
     Arc::get_mut(&mut tool).unwrap().outcome = GateOutcome::ContextRevision;
     let h = Harness::new(vec![tool], Duration::from_secs(10)).await;
     h.start("Update context across tool batches");
@@ -789,7 +789,7 @@ async fn tool_context_updates_reach_the_next_execution() {
 #[tokio::test]
 async fn context_update_feedback_stops_before_the_next_provider_request() {
     for outcome in [GateOutcome::ContextFailure, GateOutcome::ContextPanic] {
-        let (mut read, entered) = gate("read", ToolEffect::Read);
+        let (mut read, entered) = gate("read", ToolOpKind::Read);
         Arc::get_mut(&mut read).unwrap().outcome = outcome;
         let h = Harness::new(vec![read], Duration::from_secs(10)).await;
         h.start("work");
@@ -852,8 +852,8 @@ impl ErasedToolTrait<TestContext, ActorContext<TestContext>> for DelegateTool {
             required: vec![],
         }
     }
-    fn effect(&self) -> ToolEffect {
-        ToolEffect::DelegateWrite
+    fn effect(&self) -> ToolOpKind {
+        ToolOpKind::DelegateWrite
     }
     fn display_erased(&self, _: &Value) -> anyhow::Result<String> {
         Ok("delegate".into())
@@ -1032,7 +1032,7 @@ async fn parent_and_delegated_file_tools_share_workspace_roots_and_denials() {
 
 #[tokio::test]
 async fn delegated_write_cancels_child_and_resolves_parent_after_cleanup() {
-    let (write, entered) = gate("write", ToolEffect::Write);
+    let (write, entered) = gate("write", ToolOpKind::Write);
     let (delegate, child_requests) = delegate(vec![write.clone()], false);
     let h = Harness::new(vec![delegate], Duration::from_secs(10)).await;
     h.start("delegate work");
@@ -1095,7 +1095,7 @@ async fn immediately_completed_worker_registers_reply_before_starting() {
 
 #[tokio::test]
 async fn repeated_identical_read_failures_stop_after_three_attempts() {
-    let (mut tool, entered) = gate("read", ToolEffect::Read);
+    let (mut tool, entered) = gate("read", ToolOpKind::Read);
     Arc::get_mut(&mut tool).unwrap().outcome = GateOutcome::Failure;
     let h = Harness::new(vec![tool], Duration::from_secs(10)).await;
     h.start("work");
@@ -1115,7 +1115,7 @@ async fn repeated_identical_read_failures_stop_after_three_attempts() {
 
 #[tokio::test]
 async fn clear_during_tools_cancels_before_rebuilding_context() {
-    let (write, entered) = gate("write", ToolEffect::Write);
+    let (write, entered) = gate("write", ToolOpKind::Write);
     let h = Harness::new(vec![write], Duration::from_secs(10)).await;
     h.start("old work");
     answer(h.request().await.1, response(vec![call("write", "active")]));
@@ -1138,7 +1138,7 @@ async fn clear_during_tools_cancels_before_rebuilding_context() {
 
 #[tokio::test]
 async fn late_tool_completion_after_cancellation_does_not_modify_a_new_turn() {
-    let (write, entered) = gate("write", ToolEffect::Write);
+    let (write, entered) = gate("write", ToolOpKind::Write);
     let h = Harness::new(vec![write], Duration::from_secs(10)).await;
     h.start("old work");
     answer(h.request().await.1, response(vec![call("write", "old")]));
@@ -1190,7 +1190,7 @@ async fn late_tool_completion_after_cancellation_does_not_modify_a_new_turn() {
                 }
                 .failed(tools::tool_error::ToolFailure::new(
                     tools::tool_error::ToolFailureKind::Execution,
-                    tools::tool_error::ToolEffects::NoWorkspaceChange,
+                    tools::tool_error::FailureImpact::NoWorkspaceChange,
                     "obsolete result",
                 )),
             },
@@ -1242,7 +1242,7 @@ async fn child_provider_failure_after_start_resolves_parent() {
 
 #[tokio::test]
 async fn read_concurrency_remains_bounded() {
-    let (read, entered) = gate("read", ToolEffect::Read);
+    let (read, entered) = gate("read", ToolOpKind::Read);
     let h = Harness::new(vec![read.clone()], Duration::from_secs(10)).await;
     h.start("read");
     answer(
@@ -1284,8 +1284,8 @@ impl ErasedToolTrait<TestContext, ActorContext<TestContext>> for ProcessTool {
             required: vec![],
         }
     }
-    fn effect(&self) -> ToolEffect {
-        ToolEffect::Validate
+    fn effect(&self) -> ToolOpKind {
+        ToolOpKind::Validate
     }
     fn display_erased(&self, _: &Value) -> anyhow::Result<String> {
         Ok("test_process".into())
@@ -1400,8 +1400,8 @@ async fn failed_validation_is_an_error_with_diagnostics_in_history() {
                 required: vec![],
             }
         }
-        fn effect(&self) -> ToolEffect {
-            ToolEffect::Validate
+        fn effect(&self) -> ToolOpKind {
+            ToolOpKind::Validate
         }
         fn display_erased(&self, _: &Value) -> anyhow::Result<String> {
             Ok("validate".into())
@@ -1478,7 +1478,7 @@ async fn durable_session_resumes_after_actor_restart_and_clear_keeps_the_archive
     let workspace = session::test_support::Workspace::new();
     let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
     let store = runtime.sessions.clone().unwrap();
-    let (write, entered) = gate("write", ToolEffect::Write);
+    let (write, entered) = gate("write", ToolOpKind::Write);
     let h = Harness::with_runtime(vec![write.clone()], runtime).await;
     let id = store.list().unwrap()[0].id.clone();
     h.start("Keep existing changes; fix this bug");
@@ -1575,7 +1575,7 @@ async fn durable_worker_sessions_link_to_the_parent_and_commit_intent_before_exe
     let workspace = session::test_support::Workspace::new();
     let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
     let store = runtime.sessions.clone().unwrap();
-    let (write, entered) = gate("write", ToolEffect::Write);
+    let (write, entered) = gate("write", ToolOpKind::Write);
     let (delegate, child_requests) = delegate(vec![write], false);
     let h = Harness::with_runtime(vec![delegate], runtime).await;
     let parent = store.list().unwrap()[0].id.clone();
@@ -1626,7 +1626,7 @@ async fn persistence_failure_prevents_tool_execution_and_further_provider_reques
     let workspace = session::test_support::Workspace::new();
     let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
     let store = runtime.sessions.clone().unwrap();
-    let (write, entered) = gate("write", ToolEffect::Write);
+    let (write, entered) = gate("write", ToolOpKind::Write);
     let h = Harness::with_runtime(vec![write], runtime).await;
     let id = store.list().unwrap()[0].id.clone();
     h.start("make changes");
@@ -1726,7 +1726,7 @@ async fn shutdown_preserves_durable_results_even_when_the_actor_cannot_receive_t
     let workspace = session::test_support::Workspace::new();
     let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
     let store = runtime.sessions.clone().unwrap();
-    let (write, entered) = gate("write", ToolEffect::Write);
+    let (write, entered) = gate("write", ToolOpKind::Write);
     let h = Harness::with_runtime(vec![write.clone()], runtime).await;
     h.start("work");
     answer(h.request().await.1, response(vec![call("write", "active")]));
@@ -1754,7 +1754,7 @@ async fn graceful_actor_stop_drains_turn_events_and_rejects_followups() {
     let workspace = session::test_support::Workspace::new();
     let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
     let store = runtime.sessions.clone().unwrap();
-    let (mut write, entered) = gate("write", ToolEffect::Write);
+    let (mut write, entered) = gate("write", ToolOpKind::Write);
     Arc::get_mut(&mut write).unwrap().outcome = GateOutcome::AwaitCompletion;
     let mut h = Harness::with_runtime(vec![write.clone()], runtime).await;
     h.start("work");

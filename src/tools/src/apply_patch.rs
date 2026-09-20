@@ -1,6 +1,6 @@
 use crate::{
     tool_defs::{ToolDefTrait, ToolId, ToolTrait, ToolType},
-    tool_error::{ToolEffects, ToolFailure, ToolFailureKind},
+    tool_error::{FailureImpact, ToolFailure, ToolFailureKind},
 };
 use analysis::contexts::context::Context;
 use async_trait::async_trait;
@@ -37,7 +37,7 @@ impl<C: Context, A> ToolTrait<C, A> for ApplyPatch {
         cur_context.prepare_edit(&paths).map_err(|error| {
             crate::tool_error::ToolFailure::new(
                 crate::tool_error::ToolFailureKind::InvalidInput,
-                crate::tool_error::ToolEffects::NotStarted,
+                crate::tool_error::FailureImpact::NotStarted,
                 error.to_string(),
             )
         })?;
@@ -365,7 +365,7 @@ impl ApplyPatch {
                 .map_err(|error| {
                     ToolFailure::new(
                         ToolFailureKind::InvalidInput,
-                        ToolEffects::NoWorkspaceChange,
+                        FailureImpact::NoWorkspaceChange,
                         format!(
                             "{error:#}. No files were changed. Read the current file contents and retry with a corrected patch."
                         ),

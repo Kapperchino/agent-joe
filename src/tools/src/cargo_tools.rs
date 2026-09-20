@@ -1,5 +1,5 @@
 use crate::tool_defs::{
-    CancellationMode, LenientDeserialize, NonEmptyString, ToolDefTrait, ToolEffect, ToolId,
+    CancellationMode, LenientDeserialize, NonEmptyString, ToolDefTrait, ToolOpKind, ToolId,
     ToolProperty, ToolTrait, ToolType,
 };
 use analysis::contexts::context::Context;
@@ -51,11 +51,11 @@ impl CargoRequest {
         }
     }
 
-    fn effect(&self) -> ToolEffect {
+    fn effect(&self) -> ToolOpKind {
         match self {
-            Self::Fmt(_) | Self::Run(_) | Self::Start(_) => ToolEffect::Write,
-            Self::Poll(_) | Self::Stop(_) => ToolEffect::ProcessControl,
-            _ => ToolEffect::Validate,
+            Self::Fmt(_) | Self::Run(_) | Self::Start(_) => ToolOpKind::Write,
+            Self::Poll(_) | Self::Stop(_) => ToolOpKind::ProcessControl,
+            _ => ToolOpKind::Validate,
         }
     }
 }
@@ -257,7 +257,7 @@ impl<C: Context, A, P: CargoPolicy> ToolTrait<C, A> for Cargo<P> {
     fn tool_type() -> ToolType {
         ToolType::Client
     }
-    fn effect_from_input(input: &Self::Input) -> ToolEffect {
+    fn effect_from_input(input: &Self::Input) -> ToolOpKind {
         input.effect()
     }
 }

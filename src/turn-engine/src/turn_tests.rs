@@ -1,5 +1,5 @@
 use super::*;
-use tools::{tool_defs::ToolId, tool_error::ToolEffects};
+use tools::{tool_defs::ToolId, tool_error::FailureImpact};
 
 fn call(id: &str) -> ToolCall {
     ToolCall {
@@ -15,7 +15,7 @@ fn call(id: &str) -> ToolCall {
 fn failure(call: &ToolCall) -> ToolResult {
     call.failed(ToolFailure::new(
         ToolFailureKind::Execution,
-        ToolEffects::NoWorkspaceChange,
+        FailureImpact::NoWorkspaceChange,
         "file unavailable",
     ))
 }
