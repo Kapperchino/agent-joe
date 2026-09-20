@@ -1,10 +1,11 @@
-use crate::actor::{self, ActorContext, Dependency, Message};
+use crate::actor::{self, ActorContext, Dependency};
 use crate::background_actors::file_actor;
 use crate::event_reporter::EventReporter;
 use crate::states::actor_mode::ActorMode;
+use crate::states::effects;
 use crate::states::provider_context::ProviderContext;
 use crate::states::provider_session::ProviderSession;
-use crate::states::provider_task::{ProviderEvent, ProviderTarget};
+use crate::states::provider_task::ProviderEvent;
 use crate::states::runtime::{ExecutionRole, Runtime};
 use crate::states::services::ActorServices;
 use crate::states::stream_processor::ProviderStream;
@@ -25,9 +26,7 @@ use session::state::SessionState;
 use session::transition::SessionRelocation;
 use session::turn::SessionTurn;
 use std::{collections::VecDeque, sync::Arc};
-use turn_engine::machine::{
-    Effect, EffectOutcome, Event, SessionEvent, ShutdownScope, TurnMachine,
-};
+use turn_engine::machine::{Event, SessionEvent, TurnMachine};
 use turn_engine::turn::{HistoryDisposition, Tag};
 use utils::execution::ExecutionScope;
 
@@ -173,7 +172,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         .await;
     }
 
-    async fn offer_merge(&mut self, turn: TurnId) -> anyhow::Result<()> {
+    pub(super) async fn offer_merge(&mut self, turn: TurnId) -> anyhow::Result<()> {
         let client = self.llm.clone();
         let mode = self.request_mode;
         if let Some(completion) = self.session_turn().offer_merge(turn, mode, &client).await? {
@@ -292,133 +291,10 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         self.session_turn().observe(&event);
         let mut effects = VecDeque::from(self.turn.transition(event));
         while let Some(effect) = effects.pop_front() {
-            let outcome = self.execute(effect).await;
+            let outcome = effects::execute(self, effect).await;
             let next = self.turn.feedback(outcome);
             for effect in next.into_iter().rev() {
                 effects.push_front(effect);
-            }
-        }
-    }
-
-    async fn execute(&mut self, effect: Effect) -> EffectOutcome {
-        match effect {
-            Effect::QueueInput(input) => {
-                self.session_control().queue_input(&input);
-                EffectOutcome::Applied
-            }
-            Effect::BeginTurn(input) => {
-                self.llm.begin_turn();
-                let mode = self.request_mode;
-                self.session_turn().begin(input, mode).await;
-                EffectOutcome::Applied
-            }
-            Effect::AppendHistory(messages) => {
-                self.session_control().append_history(messages);
-                EffectOutcome::Applied
-            }
-            Effect::ClearHistory => {
-                match self.clear_history().await {
-                    Ok(()) => {
-                        self.reporter
-                            .send(ActorToTuiPacket::TokensUpdated(Default::default()));
-                        self.reporter.send(ActorToTuiPacket::CommandResult(
-                            Command::Clear,
-                            "Started a new session. Previous history remains available through /sessions.".into(),
-                        ));
-                    }
-                    Err(error) => self.session_control().persistence.fail(error),
-                }
-                EffectOutcome::Applied
-            }
-            Effect::ClearStream => {
-                self.stream.clear();
-                EffectOutcome::Applied
-            }
-            Effect::PreserveCompletedContent => {
-                if let Some(message) = self.stream.take_completed() {
-                    self.session_control().append_history(vec![message]);
-                }
-                EffectOutcome::Applied
-            }
-            Effect::ChangeState(state) => {
-                self.stream.change_state(state);
-                EffectOutcome::Applied
-            }
-            Effect::Report(packet) => {
-                let completed = self.session_control().persistence.report(packet);
-                let merge = match completed {
-                    Some(turn) => self.offer_merge(turn).await,
-                    None => Ok(()),
-                };
-                if let Err(error) = merge {
-                    self.reporter.send(ActorToTuiPacket::SessionError(format!(
-                        "Session merge could not continue: {error:#}"
-                    )));
-                }
-                EffectOutcome::Applied
-            }
-            Effect::LaunchProvider {
-                run,
-                owner,
-                previous,
-            } => {
-                if let Some(previous) = &previous {
-                    previous.cancel.cancel();
-                }
-                let usage = self.stream.usage();
-                self.session_control()
-                    .persistence
-                    .record(session::Event::Usage(usage));
-                self.provider_context().spawn(
-                    &self.llm,
-                    ProviderTarget {
-                        actor: self.actor_ref.clone(),
-                        tag: run.tag,
-                    },
-                    &run,
-                    &owner,
-                    previous,
-                );
-                EffectOutcome::Applied
-            }
-            Effect::LaunchTools { jobs, tag, scope } => {
-                let jobs = self.session_turn().prepare_tools(jobs);
-                self.executor(scope).spawn(jobs, tag);
-                EffectOutcome::Applied
-            }
-            Effect::UpdateContext { tag, result } => {
-                self.reporter.validation(&result);
-                self.interaction_control().record_plan_evidence(&result);
-                match self.services.update_context(&mut self.context, &result) {
-                    Ok(()) => EffectOutcome::Applied,
-                    Err(failure) => EffectOutcome::ContextFailed { tag, failure },
-                }
-            }
-            Effect::Cleanup { turn, scope } => {
-                scope.cancel.cancel();
-                let actor = self.actor_ref.clone();
-                self.runtime.scope.tasks.spawn(async move {
-                    scope.finish().await;
-                    let _ = actor.send_message(Message::CleanupFinished { turn });
-                });
-                EffectOutcome::Applied
-            }
-            Effect::Shutdown(scope) => {
-                match scope {
-                    ShutdownScope::Session => {}
-                    ShutdownScope::Turn(scope) => scope.finish().await,
-                }
-                self.runtime.scope.finish().await;
-                EffectOutcome::ShutdownFinished
-            }
-            Effect::ReplyWorker { request, outcome } => {
-                self.worker_replies
-                    .complete(request, self.session.worker_result(outcome));
-                EffectOutcome::Applied
-            }
-            Effect::StopActor => {
-                self.actor_ref.stop(None);
-                EffectOutcome::Applied
             }
         }
     }
