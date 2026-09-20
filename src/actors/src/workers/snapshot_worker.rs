@@ -1,7 +1,7 @@
 use crate::worker::Worker;
 use anyhow::Context as _;
 use async_trait::async_trait;
-use clients::llm::{ClientRequest, LLmClient, Message, StreamEvent};
+use clients::llm::{self, ClientRequest, LLmClient, Message, StreamEvent};
 use clients::response::StreamNextStep;
 use common_models::runtime_ids::TurnId;
 use conversation::context::{CompleteHistory, ContextLimits, estimated_tokens};
@@ -34,6 +34,38 @@ impl std::fmt::Debug for Snapshot {
 }
 
 impl Snapshot {
+    pub fn from_input(
+        input: conversation::context::ContextInput,
+        client: &LLmClient,
+        timeout: Duration,
+    ) -> anyhow::Result<Self> {
+        let memory = input
+            .checkpoint
+            .memory
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?
+            .map(|memory| llm::Message::new(format!("Frozen compaction memory:\n{memory}")));
+        let runtime = input.runtime.map(|runtime| llm::Message {
+            role: llm::Role::User,
+            content: vec![llm::ContentBlock::RuntimeUpdate(
+                clients::runtime_update::RuntimeUpdate::Snapshot(runtime),
+            )],
+        });
+        let request = llm::ClientRequest::new(
+            input
+                .history
+                .into_iter()
+                .chain(memory)
+                .chain(runtime)
+                .collect(),
+        )
+        .with_system(input.instructions)
+        .with_tools(input.tools)
+        .with_thinking();
+        Snapshot::new(request, client, input.limits, timeout)
+    }
+
     pub fn new(
         request: ClientRequest,
         client: &LLmClient,

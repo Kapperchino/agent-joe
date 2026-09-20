@@ -1,6 +1,6 @@
-use crate::control::SessionControl;
-use crate::persistence::{Persistence, SessionPersistence};
+use crate::persistence::Persistence;
 use crate::runtime::SessionRuntime;
+use crate::state::{SessionAccess, SessionState};
 use crate::{Event, test_support::Workspace};
 use clients::llm::{Message, SessionProvider};
 use commands::command::Command;
@@ -10,9 +10,8 @@ use common_models::tui_models::ActorToTuiPacket;
 use conversation::Conversation;
 use interaction::InteractionState;
 use interaction::access::{InteractionReadiness, InteractionRole};
-use interaction::control::InteractionControl;
 use interaction::policy::InteractionPolicy;
-use merge_workflow::execution::{MergeActivity, MergeEnvironment, SessionMerge};
+use merge_workflow::execution::{MergeActivity, MergeEnvironment};
 use merge_workflow::{MergeApproval, MergeEvent};
 use turn_engine::turn::FollowUp;
 
@@ -23,23 +22,22 @@ fn interaction_publishes_only_committed_changes_without_an_actor() {
     let session = store
         .create(SessionProvider::Injected, None, vec![])
         .unwrap();
-    let mut state = InteractionState::default();
-    let mut persistence = Persistence::Ready;
+    let mut state = SessionState::new(
+        Conversation::new(vec![], None),
+        InteractionState::default(),
+        MergeApproval::None,
+    );
     let policy = InteractionPolicy::default();
     let (tui_tx, events) = flume::unbounded();
     let reporter = |packet| {
         tui_tx.send(packet).unwrap();
     };
-    let mut control = InteractionControl {
-        state: &mut state,
-        persistence: SessionPersistence {
-            state: &mut persistence,
-            session: Some(&session),
-            reporter: &reporter,
-        },
+    let mut control = state.interaction_control(SessionAccess {
+        session: Some(&session),
+        reporter: &reporter,
         policy: &policy,
         role: InteractionRole::Root,
-    };
+    });
     control
         .command(&Command::Plan, InteractionReadiness::Idle)
         .unwrap();
@@ -78,39 +76,37 @@ fn merge_recovery_and_new_tasks_keep_questions_and_storage_in_sync_without_an_ac
         .unwrap()
         .create(SessionProvider::Injected, None, vec![])
         .unwrap();
-    let mut approval = MergeApproval::Approved {
+    let approval = MergeApproval::Approved {
         commit: "approved-commit".into(),
     };
     session
         .record(Event::MergeApproval(approval.clone()))
         .unwrap();
     runtime.session = Some(session.clone());
-    let mut state = InteractionState::default();
-    let mut persistence = Persistence::Ready;
+    let mut state = SessionState::new(
+        Conversation::new(vec![], None),
+        InteractionState::default(),
+        approval,
+    );
     let (tui_tx, _events) = flume::unbounded();
     let reporter = |packet| {
         tui_tx.send(packet).unwrap();
     };
-    let mut merge = SessionMerge {
-        approval: &mut approval,
-        interaction: InteractionControl {
-            state: &mut state,
-            persistence: SessionPersistence {
-                state: &mut persistence,
-                session: Some(&session),
-                reporter: &reporter,
-            },
+    let mut merge = state.merge(
+        SessionAccess {
+            session: Some(&session),
+            reporter: &reporter,
             policy: &runtime.interaction,
             role: InteractionRole::Root,
         },
-        environment: MergeEnvironment {
+        MergeEnvironment {
             project: runtime.project.as_ref(),
             workspace: &runtime.workspace,
             scope: &runtime.scope,
             request_timeout: std::time::Duration::from_secs(30),
         },
-        activity: MergeActivity::Idle,
-    };
+        MergeActivity::Idle,
+    );
     merge.restore_merge_question().unwrap();
     let snapshot = session.snapshot().unwrap();
     let question = snapshot.merge_approval.question().unwrap();
@@ -153,20 +149,22 @@ fn session_control_keeps_queued_input_and_live_history_in_sync_without_an_actor(
         .store()
         .create(SessionProvider::Injected, None, history.clone())
         .unwrap();
-    let mut conversation = Conversation::new(history, Some(session.id.clone()));
-    let mut persistence = Persistence::Ready;
+    let mut state = SessionState::new(
+        Conversation::new(history, Some(session.id.clone())),
+        InteractionState::default(),
+        MergeApproval::None,
+    );
+    let policy = InteractionPolicy::default();
     let (tui_tx, _events) = flume::unbounded();
     let reporter = |packet| {
         tui_tx.send(packet).unwrap();
     };
-    let mut control = SessionControl {
-        conversation: &mut conversation,
-        persistence: SessionPersistence {
-            state: &mut persistence,
-            session: Some(&session),
-            reporter: &reporter,
-        },
-    };
+    let mut control = state.control(SessionAccess {
+        session: Some(&session),
+        reporter: &reporter,
+        policy: &policy,
+        role: InteractionRole::Root,
+    });
     let input = FollowUp::new(Some("Inspect the source".into()));
     control.queue_input(&input);
     assert_eq!(session.snapshot().unwrap().queued.len(), 1);

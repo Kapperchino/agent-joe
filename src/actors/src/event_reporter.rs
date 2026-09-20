@@ -10,6 +10,30 @@ pub enum EventReporter {
 }
 
 impl EventReporter {
+    pub fn validation(&self, result: &tools::tool_defs::ToolResult) {
+        use common_models::tui_models::{ValidationProgress, ValidationState};
+        let operation = result
+            .invocation
+            .input
+            .get("operation")
+            .and_then(serde_json::Value::as_str);
+        if let ("cargo", Some(operation @ ("check" | "test" | "clippy" | "fmt_check"))) =
+            (result.invocation.name.as_ref(), operation)
+        {
+            let state = match &result.outcome {
+                Ok(_) => ValidationState::Passed,
+                Err(failure) if failure.effects == tools::tool_error::ToolEffects::NotStarted => {
+                    ValidationState::NotRun
+                }
+                Err(_) => ValidationState::Failed,
+            };
+            self.send(ActorToTuiPacket::ValidationUpdated(ValidationProgress {
+                operation: operation.into(),
+                state,
+            }));
+        }
+    }
+
     pub fn state_changed(&self, new_state: State) {
         self.send(ActorToTuiPacket::StateChanged(new_state));
     }

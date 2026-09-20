@@ -1,6 +1,7 @@
 use crate::actor::{ActorContext, Dependency, IntoActorErr, Message};
 use crate::event_reporter::EventReporter;
-use crate::states::actor_state::{ActorMode, ActorState};
+use crate::states::actor_mode::ActorMode;
+use crate::states::actor_state::ActorState;
 use crate::states::provider_task::ProviderTask;
 use crate::states::runtime::{ExecutionRole, Runtime};
 use crate::worker::{ContextWorker, run_worker};

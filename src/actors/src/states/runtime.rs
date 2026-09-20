@@ -81,6 +81,27 @@ impl Default for Runtime {
     }
 }
 impl Runtime {
+    pub fn session_access<'a>(
+        &'a self,
+        reporter: &'a dyn common_models::tui_models::EventSink,
+    ) -> session::state::SessionAccess<'a> {
+        session::state::SessionAccess {
+            session: self.session.as_deref(),
+            reporter,
+            policy: &self.interaction,
+            role: self.role.interaction_role(),
+        }
+    }
+
+    pub fn merge_environment(&self) -> merge_workflow::execution::MergeEnvironment<'_> {
+        merge_workflow::execution::MergeEnvironment {
+            project: self.project.as_ref(),
+            workspace: &self.workspace,
+            scope: &self.scope,
+            request_timeout: self.request_timeout,
+        }
+    }
+
     pub fn worker_owner(&self, actor_id: u64) -> String {
         self.session
             .as_ref()

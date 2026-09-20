@@ -138,9 +138,10 @@ async fn harness() -> Harness {
 async fn runtime_state_is_excluded_from_inherited_worker_constraints() {
     let mut h = harness().await;
     h.state
+        .session
         .conversation
         .push(llm::Message::new("Preserve this user constraint".into()));
-    h.state.conversation.push(llm::Message {
+    h.state.session.conversation.push(llm::Message {
         role: llm::Role::User,
         content: vec![llm::ContentBlock::RuntimeUpdate(
             clients::runtime_update::RuntimeUpdate::Snapshot(
@@ -219,7 +220,8 @@ async fn helpers_preserve_parent_interaction_without_root_tools_or_plan_context(
     assert!(h.state.services.tool("update_plan").is_none());
     let mut planning = Planning::default();
     planning.record_evidence("helper".into(), "Helper evidence".into());
-    h.state.interaction = interaction::InteractionState::restored(planning, Default::default());
+    h.state.session.interaction =
+        interaction::InteractionState::restored(planning, Default::default());
     h.state.refresh_interaction();
     assert_eq!(interaction.mode(), WorkMode::Plan);
     let input = h
@@ -235,7 +237,7 @@ async fn helpers_preserve_parent_interaction_without_root_tools_or_plan_context(
     let scope = h.state.runtime.scope.clone();
     assert!(
         interaction::access::Interaction::new(
-            &h.state.interaction,
+            &h.state.session.interaction,
             h.state.runtime.role.interaction_role(),
             &scope,
         )
@@ -263,7 +265,7 @@ async fn context_budget_follows_the_active_model_and_preserves_overrides() {
         })))
         .unwrap()
     };
-    h.state.conversation.append((0..6).flat_map(|_| {
+    h.state.session.conversation.append((0..6).flat_map(|_| {
         [
             llm::Message::new_assistant("detail ".repeat(35_000)),
             llm::Message::new("Continue".into()),
@@ -301,23 +303,19 @@ async fn consume(
     event: llm::StreamEvent,
 ) -> anyhow::Result<()> {
     let event = serde_json::from_value(serde_json::to_value(event)?)?;
-    match state
-        .stream_output
-        .process(&mut state.stream_processor, event)
-        .await?
-    {
+    match state.stream.process(event).await? {
         StreamNextStep::ToolUse => {
-            let items = state.stream_processor.extract_and_pre_process()?;
+            let items = state.stream.processor.extract_and_pre_process()?;
             let batch =
                 turn_engine::turn::ToolBatch::new(common_models::runtime_ids::TurnId::new(), items);
             let batch = state
                 .executor(state.runtime.scope.clone())
                 .replay(batch)
                 .await;
-            state.conversation.append(batch.messages());
+            state.session.conversation.append(batch.messages());
         }
         StreamNextStep::Done => {
-            let items = state.stream_processor.extract_and_pre_process()?;
+            let items = state.stream.processor.extract_and_pre_process()?;
             let content = items
                 .into_iter()
                 .map(|item| match item {
@@ -327,7 +325,7 @@ async fn consume(
                     }
                 })
                 .collect::<anyhow::Result<Vec<_>>>()?;
-            state.conversation.push(llm::Message {
+            state.session.conversation.push(llm::Message {
                 role: llm::Role::Assistant,
                 content,
             });
@@ -354,9 +352,9 @@ async fn replay_preserves_reasoning_phase_arguments_and_results_across_turns() {
             .unwrap();
     }
     assert_eq!(h.calls.load(Ordering::SeqCst), 2);
-    assert_eq!(h.state.conversation.history().len(), 4);
-    assert_eq!(h.state.conversation.history()[2].content.len(), 4);
-    assert_eq!(h.state.conversation.history()[3].content.len(), 2);
+    assert_eq!(h.state.session.conversation.history().len(), 4);
+    assert_eq!(h.state.session.conversation.history()[2].content.len(), 4);
+    assert_eq!(h.state.session.conversation.history()[3].content.len(), 2);
     let request = openai::ClientRequest::try_from(h.state.build_request()).unwrap();
     assert_eq!(
         request.instructions.as_deref(),
@@ -387,7 +385,7 @@ async fn replay_preserves_reasoning_phase_arguments_and_results_across_turns() {
     assert_eq!(input[6]["call_id"], "call_1");
     assert_eq!(input[7]["output"], "Execution: synthetic tool failure");
     assert!(matches!(
-        &h.state.conversation.history()[3].content[1],
+        &h.state.session.conversation.history()[3].content[1],
         llm::ContentBlock::ToolResult {
             is_error: Some(true),
             ..
@@ -424,11 +422,17 @@ async fn replay_preserves_reasoning_phase_arguments_and_results_across_turns() {
     assert_eq!(reasoning[1]["encrypted_content"], "next-state");
     assert_eq!(items.last().unwrap()["phase"], "final_answer");
     assert_eq!(
-        h.state.conversation.history().last().unwrap().text(),
+        h.state
+            .session
+            .conversation
+            .history()
+            .last()
+            .unwrap()
+            .text(),
         "Finished."
     );
     assert!(
-        !h.state.conversation.history()[2]
+        !h.state.session.conversation.history()[2]
             .to_string()
             .contains("opaque-state")
     );
@@ -495,18 +499,18 @@ async fn failed_evidence_persistence_preserves_the_live_plan() {
     h.state
         .interaction_control()
         .record_plan_evidence(&result("before"));
-    let before = serde_json::to_value(h.state.interaction.planning()).unwrap();
+    let before = serde_json::to_value(h.state.session.interaction.planning()).unwrap();
     let session = h.state.runtime.session.as_ref().unwrap();
     session::test_support::invalidate(&store, &session.id);
     h.state
         .interaction_control()
         .record_plan_evidence(&result("after"));
     assert_eq!(
-        serde_json::to_value(h.state.interaction.planning()).unwrap(),
+        serde_json::to_value(h.state.session.interaction.planning()).unwrap(),
         before
     );
     assert!(matches!(
-        h.state.persistence,
+        h.state.session.persistence,
         session::persistence::Persistence::Failed(_)
     ));
 }
@@ -514,8 +518,8 @@ async fn failed_evidence_persistence_preserves_the_live_plan() {
 #[tokio::test]
 async fn rejected_workspace_relocation_preserves_context_and_conversation() {
     let mut h = harness().await;
-    let before = serde_json::to_value(h.state.conversation.history()).unwrap();
-    let cache_key = h.state.conversation.cache_key().to_owned();
+    let before = serde_json::to_value(h.state.session.conversation.history()).unwrap();
+    let cache_key = h.state.session.conversation.cache_key().to_owned();
     let directory = session::test_support::Workspace::new();
     let runtime = crate::states::runtime::Runtime::for_workspace(directory.path.clone()).unwrap();
     assert!(h.state.relocate_session_workspace(runtime).await.is_err());
@@ -525,16 +529,17 @@ async fn rejected_workspace_relocation_preserves_context_and_conversation() {
         Some("Inspect the fixture.")
     );
     assert_eq!(
-        serde_json::to_value(h.state.conversation.history()).unwrap(),
+        serde_json::to_value(h.state.session.conversation.history()).unwrap(),
         before
     );
-    assert_eq!(h.state.conversation.cache_key(), cache_key);
+    assert_eq!(h.state.session.conversation.cache_key(), cache_key);
 }
 
 #[tokio::test]
 async fn clear_reloads_workspace_and_keeps_instructions_without_the_old_task() {
     let mut h = harness().await;
     h.state
+        .session
         .conversation
         .push(llm::Message::new_assistant("Old result.".into()));
     h.state.context.revision = 2;
@@ -682,7 +687,7 @@ async fn invalid_tool_identity_is_rejected_at_the_provider_boundary() {
                 .is_err()
             );
             assert_eq!(h.calls.load(Ordering::SeqCst), 0);
-            assert_eq!(h.state.conversation.history().len(), 2);
+            assert_eq!(h.state.session.conversation.history().len(), 2);
         }
     }
     for field in ["id", "name"] {

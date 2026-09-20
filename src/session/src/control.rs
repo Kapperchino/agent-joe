@@ -165,7 +165,7 @@ impl<C: Context + Clone> SessionCommands<'_, C> {
                 let activation =
                     SessionActivation::resume(self.context, self.runtime, session, None).await?;
                 let packet = ActorToTuiPacket::SessionResumed(Ok(session_transcript(
-                    &activation.conversation,
+                    &activation.state.conversation,
                     id,
                 )));
                 SessionCommand::Activate {

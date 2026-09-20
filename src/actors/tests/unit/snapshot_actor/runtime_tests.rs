@@ -420,24 +420,24 @@ async fn capture_preserves_full_transcript_and_existing_compaction_memory() {
     )
     .await
     .unwrap();
-    state.conversation.append([
+    state.session.conversation.append([
         llm::Message::new("Old exact requirement not included in the summary".into()),
         llm::Message::new_assistant("Old detailed evidence".into()),
         llm::Message::new("Recent question".into()),
         llm::Message::new_assistant("Recent answer".into()),
     ]);
-    state.conversation.commit_checkpoint(
+    state.session.conversation.commit_checkpoint(
         conversation::context::Checkpoint::new(
-            state.conversation.history(),
+            state.session.conversation.history(),
             3,
             1,
             conversation::context::Memory::Summary("Existing summary".into()),
         )
         .unwrap(),
     );
-    let expected = serde_json::to_value(state.conversation.history()).unwrap();
+    let expected = serde_json::to_value(state.session.conversation.history()).unwrap();
     let snapshot = state.capture_snapshot().unwrap();
-    state.conversation = conversation::Conversation::new(Vec::new(), None);
+    state.session.conversation = conversation::Conversation::new(Vec::new(), None);
     state.context.revision = 99;
     let snapshot = SnapshotHarness::spawn(snapshot, requests).await;
     let result = snapshot.ask("Recall the old exact requirement");

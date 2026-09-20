@@ -11,6 +11,7 @@ use utils::workspace::WorkspacePolicy;
 pub mod activation;
 mod artifact_index;
 pub mod artifacts;
+pub mod changes;
 pub mod control;
 #[cfg(test)]
 #[path = "../tests/unit/session_control_test.rs"]
@@ -20,6 +21,7 @@ mod ownership;
 pub mod persistence;
 mod prune;
 pub mod runtime;
+pub mod state;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 pub mod transition;

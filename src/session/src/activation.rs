@@ -1,12 +1,12 @@
 use super::Session;
 use super::transition::SessionTransition;
 use crate::runtime::SessionRuntime;
+use crate::state::SessionState;
 use analysis::contexts::context::Context;
 use clients::llm::{LLmClient, Message};
 use common_models::tui_models::TokenCount;
 use conversation::{Conversation, SavedConversation};
 use interaction::InteractionState;
-use merge_workflow::MergeApproval;
 use std::{collections::BTreeMap, sync::Arc};
 use utils::git::worktrees::session::SessionWorktree;
 use worker_registry::WorkerRegistry;
@@ -15,9 +15,7 @@ use worker_registry::report::WorkerView;
 pub struct SessionActivation<C: Context> {
     pub context: C,
     pub runtime: SessionRuntime,
-    pub conversation: Conversation,
-    pub interaction: InteractionState,
-    pub merge_approval: MergeApproval,
+    pub state: SessionState,
     pub usage: TokenCount,
     pub workers: WorkerRecovery,
 }
@@ -72,14 +70,16 @@ impl<C: Context + Clone> SessionActivation<C> {
         let context = Self::relocate(context, &runtime)?;
         let history = initial_history(&context).await;
         Ok(Self {
-            conversation: Conversation::new(
-                history,
-                runtime.session.as_ref().map(|session| session.id.clone()),
+            state: SessionState::new(
+                Conversation::new(
+                    history,
+                    runtime.session.as_ref().map(|session| session.id.clone()),
+                ),
+                interaction,
+                Default::default(),
             ),
             context,
             runtime,
-            interaction,
-            merge_approval: Default::default(),
             usage: Default::default(),
             workers: WorkerRecovery::Fresh,
         })
@@ -101,19 +101,21 @@ impl<C: Context + Clone> SessionActivation<C> {
         let context = Self::relocate(context, &runtime)?;
         let fresh = Message::new(context.get_ctx().await);
         Ok(Self {
-            conversation: Conversation::restored(
-                SavedConversation {
-                    cache_key: snapshot.id,
-                    history: snapshot.history,
-                    deferred_input: snapshot.deferred_input,
-                    checkpoint: snapshot.context,
-                },
-                fresh,
+            state: SessionState::new(
+                Conversation::restored(
+                    SavedConversation {
+                        cache_key: snapshot.id,
+                        history: snapshot.history,
+                        deferred_input: snapshot.deferred_input,
+                        checkpoint: snapshot.context,
+                    },
+                    fresh,
+                ),
+                InteractionState::restored(snapshot.planning, snapshot.questions),
+                snapshot.merge_approval,
             ),
-            interaction: InteractionState::restored(snapshot.planning, snapshot.questions),
             context,
             runtime,
-            merge_approval: snapshot.merge_approval,
             usage: snapshot.usage,
             workers: WorkerRecovery::Saved {
                 workers: snapshot.workers,

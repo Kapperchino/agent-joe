@@ -4,6 +4,23 @@
 file watchers, RPC replies, and UI delivery. `ActorState` assembles these adapters
 with independently compiled state components.
 
+`ActorState` coordinates turn effects and actor lifecycle. Its components own
+the following responsibilities:
+
+| Type | Responsibility |
+| --- | --- |
+| `session::state::SessionState` | Owns conversation, interaction, persistence, and merge state; lends them to the existing domain controllers |
+| `session::changes::SessionChanges` | Starts change tracking and executes authorized diff and undo commands |
+| `ProviderContext` | Builds request context, captures immutable snapshots, and reviews completion against plans and pending workers |
+| `ProviderStream` | Owns stream accumulation, logging, usage, notifications, and provider event translation |
+| `ContextCommit` | Persists compaction before installing checkpoints and registers immutable context workers |
+| `ActorServices` | Resolves tools and applies tool context updates with failure handling |
+| `ActorMode` | Configures startup tools, request mode, and event reporting |
+
+Session activation replaces `SessionState` as a unit and resets the provider
+stream with the restored usage. Stream actions request persistence or context
+commits from the actor before the turn machine advances.
+
 | Crate | Owns | Boundary |
 | --- | --- | --- |
 | `conversation` | Transcript, deferred input, checkpoints, context budgeting | Restores from `SavedConversation`; produces provider request data |
