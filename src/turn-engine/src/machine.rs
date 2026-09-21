@@ -6,7 +6,10 @@ use crate::turn::{
 };
 use clients::response::RequestMode;
 use clients::response::StreamNextStep;
-use clients::{failure::Failure, llm};
+use clients::{
+    failure::{Failure, FailureKind},
+    llm,
+};
 use common_models::runtime_ids::WorkspaceRevision;
 use common_models::{
     interaction::QuestionGate,
@@ -895,10 +898,13 @@ enum ProviderRetry {
 
 impl ProviderRetry {
     fn new(mode: RequestMode, failure: &Failure, attempt: u8) -> Self {
-        match (mode, failure.retryable(), attempt) {
-            (RequestMode::Continue | RequestMode::Compact, true, 0..=1) => Self::Retry {
-                attempt: attempt + 1,
-            },
+        match (mode, failure.kind, attempt) {
+            (RequestMode::Continue | RequestMode::Compact, FailureKind::Transport, 0..=4)
+            | (RequestMode::Continue | RequestMode::Compact, FailureKind::RateLimit, 0..=1) => {
+                Self::Retry {
+                    attempt: attempt + 1,
+                }
+            }
             _ => Self::Stop,
         }
     }

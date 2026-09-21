@@ -9,6 +9,7 @@ use common_models::{
     tui_models::Lifecycle,
 };
 use std::collections::HashMap;
+use std::time::Duration;
 use tools::{
     tool_defs::ToolResult,
     tool_error::{ToolFailure, ToolFailureKind},
@@ -192,6 +193,14 @@ impl ProviderRun {
             scope,
             attempt,
             response: ResponseState::Awaiting,
+        }
+    }
+
+    pub fn retry_delay(&self) -> Duration {
+        match self.attempt {
+            0 => Duration::ZERO,
+            1..=6 => Duration::from_millis(100 << (self.attempt - 1)),
+            _ => Duration::from_secs(5),
         }
     }
 }

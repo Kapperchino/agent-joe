@@ -1,6 +1,19 @@
 use super::*;
 use tools::{tool_defs::ToolId, tool_error::FailureImpact};
 
+#[test]
+fn provider_retry_delay_is_exponential_and_capped() {
+    let mut run = ProviderRun::new(TurnId::new(), ExecutionScope::default(), 0);
+    for (attempt, millis) in [0, 100, 200, 400, 800, 1600, 3200].into_iter().enumerate() {
+        run.attempt = attempt as u8;
+        assert_eq!(run.retry_delay(), Duration::from_millis(millis));
+    }
+    for attempt in 7..=u8::MAX {
+        run.attempt = attempt;
+        assert_eq!(run.retry_delay(), Duration::from_secs(5));
+    }
+}
+
 fn call(id: &str) -> ToolCall {
     ToolCall {
         id: ToolId {

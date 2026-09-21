@@ -817,7 +817,7 @@ async fn interrupted_provider_retries_only_unaccepted_response_and_bounds_failur
     h.start("work");
     let mut previous = None;
     let mut cache_key = None;
-    for _ in 0..3 {
+    for _ in 0..6 {
         let (request, reply) = h.request().await;
         assert_eq!(transcript(&request.messages).len(), 2);
         let input = serde_json::to_value(&request.messages).unwrap();
@@ -834,6 +834,34 @@ async fn interrupted_provider_retries_only_unaccepted_response_and_bounds_failur
     h.terminal(Lifecycle::Failed).await;
     assert!(h.requests.is_empty());
     assert_eq!(h.history().await.last().unwrap().text(), "partial");
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn connection_reset_retries_back_off_and_preserve_the_request_until_recovery() {
+    let h = Harness::new(vec![], Duration::from_secs(10)).await;
+    h.start("work");
+    let (initial, mut reply) = h.request().await;
+    let messages = serde_json::to_value(&initial.messages).unwrap();
+    for millis in [100, 200, 400, 800, 1600] {
+        let failed_at = tokio::time::Instant::now();
+        let error = anyhow::Error::new(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "connection reset",
+        ))
+        .context("client error (SendRequest): connection error");
+        assert!(reply.send(Err(error)).is_ok());
+        let (request, next_reply) = h.request().await;
+        assert!(failed_at.elapsed() >= Duration::from_millis(millis));
+        assert_eq!(serde_json::to_value(&request.messages).unwrap(), messages);
+        assert_eq!(request.system, initial.system);
+        assert_eq!(request.prompt_cache_key, initial.prompt_cache_key);
+        reply = next_reply;
+    }
+    answer(reply, response(vec![text("recovered")]));
+    h.terminal(Lifecycle::Completed).await;
+    assert!(h.requests.is_empty());
+    assert_eq!(h.history().await.last().unwrap().text(), "recovered");
     h.stop().await;
 }
 

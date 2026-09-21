@@ -248,7 +248,7 @@ fn retries_replace_only_the_request_and_stop_at_the_budget() {
     let mut machine = machine();
     let initial = start(&mut machine);
     let mut tag = initial;
-    for attempt in 1..=2 {
+    for attempt in 1..=5 {
         let previous_scope = provider(&machine).scope.clone();
         let effects = response(
             &mut machine,
@@ -314,6 +314,81 @@ fn retries_replace_only_the_request_and_stop_at_the_budget() {
 }
 
 #[test]
+fn provider_retry_budgets_preserve_failure_and_request_modes() {
+    for mode in [
+        RequestMode::Continue,
+        RequestMode::Compact,
+        RequestMode::SingleResponse,
+    ] {
+        for kind in [
+            FailureKind::Transport,
+            FailureKind::RateLimit,
+            FailureKind::Authentication,
+            FailureKind::UsageLimit,
+            FailureKind::Truncation,
+            FailureKind::ContextOverflow,
+            FailureKind::InvalidInput,
+            FailureKind::Tool,
+            FailureKind::Worker,
+        ] {
+            let limit = match (mode, kind) {
+                (RequestMode::SingleResponse, _) => 0,
+                (_, FailureKind::Transport) => 5,
+                (_, FailureKind::RateLimit) => 2,
+                _ => 0,
+            };
+            let failure = Failure::new(kind, "provider failure");
+            for attempt in 0..=u8::MAX {
+                match ProviderRetry::new(mode, &failure, attempt) {
+                    ProviderRetry::Retry { attempt: next } => {
+                        assert!(attempt < limit);
+                        assert_eq!(next, attempt + 1);
+                    }
+                    ProviderRetry::Stop => assert!(attempt >= limit),
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn connection_resets_can_recover_on_the_fifth_retry() {
+    let failure = Failure::from_error(
+        anyhow::Error::new(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "connection reset",
+        ))
+        .context("client error (SendRequest): connection error"),
+    );
+    for mode in [RequestMode::Continue, RequestMode::Compact] {
+        let mut machine = TurnMachine::new(ExecutionScope::default(), mode);
+        let initial = start(&mut machine);
+        for attempt in 1..=5 {
+            let tag = provider(&machine).tag;
+            let effects = response(&mut machine, tag, Err(failure.clone()));
+            assert!(launches_provider(&effects));
+            assert_eq!(provider(&machine).attempt, attempt);
+            assert_eq!(provider(&machine).tag.turn, initial.turn);
+        }
+        let tag = provider(&machine).tag;
+        let completed = match mode {
+            RequestMode::Compact => AcceptedResponse::Compacted,
+            _ => complete_response(),
+        };
+        let effects = response(&mut machine, tag, Ok(completed));
+        assert!(!launches_provider(&effects));
+        let effects = machine.transition(SessionEvent::CleanupFinished(initial.turn));
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::Report(ActorToTuiPacket::TurnChanged {
+                state: Lifecycle::Completed,
+                ..
+            })
+        )));
+    }
+}
+
+#[test]
 fn accepted_tools_are_committed_before_continuing_and_are_not_retried() {
     let mut machine = machine();
     let initial = start(&mut machine);
@@ -331,19 +406,22 @@ fn accepted_tools_are_committed_before_continuing_and_are_not_retried() {
         .position(|effect| matches!(effect, Effect::LaunchProvider { .. }))
         .unwrap();
     assert!(history < request);
-    let tag = provider(&machine).tag;
-    assert_eq!(tag.turn, initial.turn);
+    assert_eq!(provider(&machine).tag.turn, initial.turn);
     assert_eq!(provider(&machine).attempt, 0);
-    let effects = response(
-        &mut machine,
-        tag,
-        Err(Failure::new(FailureKind::Transport, "lost response")),
-    );
-    assert!(launches_provider(&effects));
-    assert!(!effects.iter().any(|effect| matches!(
-        effect,
-        Effect::LaunchTools { .. } | Effect::AppendHistory(_)
-    )));
+    for attempt in 1..=5 {
+        let tag = provider(&machine).tag;
+        let effects = response(
+            &mut machine,
+            tag,
+            Err(Failure::new(FailureKind::Transport, "lost response")),
+        );
+        assert!(launches_provider(&effects));
+        assert_eq!(provider(&machine).attempt, attempt);
+        assert!(!effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LaunchTools { .. } | Effect::AppendHistory(_)
+        )));
+    }
     assert!(tool(&mut machine, batch, ToolEvent::Finished(Ok(()))).is_empty());
     assert!(complete_tool(&mut machine, batch, &jobs[0]).is_empty());
 }

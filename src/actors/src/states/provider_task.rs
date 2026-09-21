@@ -55,7 +55,7 @@ impl ProviderTask {
         previous: Option<ExecutionScope>,
     ) {
         let scope = run.scope.clone();
-        let attempt = run.attempt;
+        let retry_delay = run.retry_delay();
         let task = scope.tasks.clone().spawn(async move {
             let _registration = scope.register(
                 ResourceKind::Provider,
@@ -68,7 +68,7 @@ impl ProviderTask {
             tokio::select! {
                 biased;
                 _ = scope.cancel.cancelled() => {},
-                result = AssertUnwindSafe(scope.enter(self.pump(input, attempt))).catch_unwind() => {
+                result = AssertUnwindSafe(scope.enter(self.pump(input, retry_delay))).catch_unwind() => {
                     let result = result.unwrap_or_else(|_| Err(Failure::new(FailureKind::Transport, "Provider task panicked")));
                     let _ = target.send(ProviderEvent::Finished(result));
                 }
@@ -82,11 +82,11 @@ impl ProviderTask {
     async fn pump(
         mut self,
         input: Result<conversation::context::ContextInput, Failure>,
-        attempt: u8,
+        retry_delay: Duration,
     ) -> Result<(), Failure> {
         let input = input?;
-        if attempt > 0 {
-            tokio::time::sleep(Duration::from_millis(100 * u64::from(attempt))).await;
+        if !retry_delay.is_zero() {
+            tokio::time::sleep(retry_delay).await;
         }
         let prepared =
             tokio::time::timeout(self.timeout, crate::compactor::prepare(&input, &mut self))
