@@ -1,7 +1,7 @@
 mod plan;
 mod question;
 
-pub use plan::{Plan, PlanEvidence, PlanStep, PlanUpdate, StepState};
+pub use plan::{Plan, PlanEvidence, PlanStep, PlanUpdate, StepState, ValidationRequirement};
 pub use question::{
     Answer, AnsweredQuestion, Choice, Question, QuestionGate, QuestionInput, QuestionPurpose,
     Questions,

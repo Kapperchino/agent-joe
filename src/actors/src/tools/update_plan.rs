@@ -34,7 +34,7 @@ impl ToolDefTrait for UpdatePlan {
         "update_plan"
     }
     fn tool_description() -> &'static str {
-        "Track substantial work with 1–16 stable steps, dependencies and acceptance criteria; skip simple tasks. Batch progress into one update at meaningful milestones. Use current revisions from runtime context. Existing pending steps may complete directly with successful evidence source IDs and explanations; dependencies must be completed. New steps start pending or in_progress; at most one is in_progress. Reopen completed steps after requirements change and changed or blocked steps before completion. Does not change work mode."
+        "Track substantial work with 1–16 stable steps, dependencies and acceptance criteria; skip simple tasks unless specific validation was requested. Record each requested Cargo check in a step's validation field using its exact Cargo tool parameters. Completion requires those checks to succeed on the current workspace. Batch progress into one update at meaningful milestones. Use current revisions from runtime context. Existing pending steps may complete directly with successful evidence source IDs and explanations; dependencies must be completed. New steps start pending or in_progress; at most one is in_progress. Reopen completed steps after requirements change and changed or blocked steps before completion. Does not change work mode."
     }
     fn field_properties() -> FnvHashMap<String, ToolProperty> {
         json!({
@@ -44,7 +44,8 @@ impl ToolDefTrait for UpdatePlan {
                 "id":{"type":"string"},"description":{"type":"string"},"dependencies":{"type":"array","items":{"type":"string"}},
                 "acceptance":{"type":"string"},"state":{"type":"string","enum":["pending","in_progress","completed","blocked"]},
                 "evidence":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{"source":{"type":"string"},"explanation":{"type":"string"}},"required":["source","explanation"]}},
-                "blocked_reason":{"type":["string","null"]}
+                "blocked_reason":{"type":["string","null"]},
+                "validation":{"type":["object","null"],"description":"Exact Cargo tool input for a requested finite check (check, test, fmt_check, clippy or run); null for other work","properties":crate::tools::update_plan::validation_properties(),"required":["operation"]}
             },"required":["id","description","dependencies","acceptance","state","evidence","blocked_reason"]}}
 }).as_object().unwrap().iter()
             .map(|(name, schema)| (name.clone(), ToolProperty::Schema(schema.clone()))).collect()
@@ -71,6 +72,9 @@ impl<C: Context> ToolTrait<C, ActorContext<C>> for UpdatePlan {
         _: &C,
         actor: &ActorContext<C>,
     ) -> anyhow::Result<String> {
+        for validation in input.update.steps.iter().filter_map(|step| step.validation.as_ref()) {
+            serde_json::from_value::<tools::cargo_tools::CargoRequest>(serde_json::Value::Object(validation.cargo.clone()))?.validation_command()?;
+        }
         let info = match actor {
             ActorContext::ActorInfo(info) if matches!(info.runtime.role, ExecutionRole::Root) => {
                 Ok(info)
@@ -105,4 +109,11 @@ impl<C: Context> ToolTrait<C, ActorContext<C>> for UpdatePlan {
     fn tool_type() -> ToolType {
         ToolType::Client
     }
+}
+
+fn validation_properties() -> serde_json::Map<String, Value> {
+    tools::cargo_tools::Cargo::<tools::cargo_tools::AllOperations>::field_properties()
+        .into_iter()
+        .map(|(name, property)| (name, property.into_schema()))
+        .collect()
 }

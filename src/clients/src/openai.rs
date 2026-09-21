@@ -515,7 +515,7 @@ pub enum StreamEvent {
         #[serde(default)]
         sequence_number: u64,
     },
-    #[serde(rename = "response.keepalive")]
+    #[serde(rename = "response.keepalive", alias = "keepalive")]
     KeepAlive {
         #[serde(default)]
         sequence_number: u64,

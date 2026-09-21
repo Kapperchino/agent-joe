@@ -97,7 +97,7 @@ fn followups_recheck_handoff_bounds_and_preserve_the_original_constraints() {
     assert_eq!(followup.budget.seconds(), request.budget.seconds());
     assert_eq!(
         serde_json::to_value(followup.budget).unwrap(),
-        serde_json::json!({"seconds": 180})
+        serde_json::json!({"seconds": 1800})
     );
     assert!(
         request
@@ -122,11 +122,11 @@ fn followups_recheck_handoff_bounds_and_preserve_the_original_constraints() {
 fn deserialized_budgets_cannot_bypass_constructor_limits() {
     for input in [
         serde_json::json!({"seconds": 0}),
-        serde_json::json!({"seconds": 301}),
+        serde_json::json!({"seconds": 3601}),
     ] {
         assert!(serde_json::from_value::<BudgetLimits>(input).is_err());
     }
-    let limits = BudgetLimits::new(300).unwrap();
+    let limits = BudgetLimits::new(3600).unwrap();
     let restored: BudgetLimits =
         serde_json::from_value(serde_json::to_value(limits).unwrap()).unwrap();
     assert_eq!(restored.seconds(), limits.seconds());

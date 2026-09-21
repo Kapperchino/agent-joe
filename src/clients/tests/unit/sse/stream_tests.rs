@@ -46,3 +46,30 @@ async fn openai_terminal_failure_is_not_swallowed_by_keepalives() {
         matches!(result.as_slice(), [Ok(crate::openai::StreamEvent::Error { code, .. })] if code == "rate_limit_exceeded")
     );
 }
+
+#[tokio::test]
+async fn openai_keepalive_spellings_preserve_the_stream() {
+    for heartbeat in ["keepalive", "response.keepalive"] {
+        let input = format!(
+            "data: {{\"type\":\"{heartbeat}\"}}\n\ndata: {{\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}}\n\ndata: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"response\",\"status\":\"completed\",\"output\":[]}}}}\n\n"
+        );
+        let stream = futures::stream::iter(
+            input.bytes().map(|byte| Ok::<_, std::io::Error>(vec![byte])),
+        );
+        let result = decode(stream, |event: &crate::openai::StreamEvent| {
+            matches!(event, crate::openai::StreamEvent::ResponseCompleted { .. })
+        })
+        .collect::<Vec<_>>()
+        .await;
+        assert!(matches!(
+            result.as_slice(),
+            [
+                Ok(crate::openai::StreamEvent::KeepAlive { sequence_number: 0 }),
+                Ok(crate::openai::StreamEvent::OutputTextDelta { delta, .. }),
+                Ok(crate::openai::StreamEvent::ResponseCompleted { .. })
+            ] if delta == "hello"
+        ));
+        let mapped: Option<crate::llm::StreamEvent> = result.into_iter().next().unwrap().unwrap().into();
+        assert!(matches!(mapped, Some(crate::llm::StreamEvent::Accum)));
+    }
+}

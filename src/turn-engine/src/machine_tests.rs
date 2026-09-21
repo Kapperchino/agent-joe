@@ -164,10 +164,10 @@ fn single_response_preserves_transport_failures_without_retrying() {
 }
 
 #[test]
-fn plan_reconciliation_preserves_the_turn_and_is_bounded_across_tool_batches() {
+fn completion_recovery_preserves_the_turn_and_resets_after_tool_batches() {
     let mut machine = machine();
     let initial = start(&mut machine);
-    for _ in 0..2 {
+    for _ in 0..3 {
         let tag = provider(&machine).tag;
         let effects = machine.transition(SessionEvent::Provider {
             tag,
@@ -210,6 +210,17 @@ fn plan_reconciliation_preserves_the_turn_and_is_bounded_across_tool_batches() {
             complete_tool(&mut machine, batch.tag, job);
         }
         tool(&mut machine, batch.tag, ToolEvent::Finished(Ok(())));
+    }
+    for _ in 0..2 {
+        let tag = provider(&machine).tag;
+        let effects = machine.transition(SessionEvent::Provider {
+            tag,
+            update: ProviderUpdate::ReconcilePlan {
+                message: llm::Message::new_assistant("Still incomplete".into()),
+                instruction: "Resolve completion obligations".into(),
+            },
+        });
+        assert!(launches_provider(&effects));
     }
     let tag = provider(&machine).tag;
     let effects = machine.transition(SessionEvent::Provider {

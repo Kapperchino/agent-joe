@@ -8,7 +8,7 @@ use analysis::contexts::context::Context;
 use clients::failure::{Failure, FailureKind};
 use clients::llm::LLmClient;
 use clients::response::RequestMode;
-use common_models::interaction::PlanReview;
+use common_models::interaction::{PlanReview, StepState, WorkMode};
 use common_models::runtime_ids::TurnId;
 use conversation::context::ContextInput;
 use session::state::SessionState;
@@ -142,44 +142,63 @@ impl<C: Context> ProviderContext<'_, C> {
         }
     }
 
-    pub fn review(&self, action: ProviderAction) -> ProviderAction {
-        let pending = self
-            .runtime
-            .workers
-            .pending(&self.runtime.worker_owner(self.context.get_id()));
-        let review = match (self.request_mode, &self.runtime.role) {
-            (RequestMode::Continue, ExecutionRole::Root) => {
-                self.session.interaction.planning().review()
-            }
-            _ => PlanReview::Current,
-        };
-        match (action, review, pending.as_slice()) {
+    pub async fn review(&self, action: ProviderAction) -> ProviderAction {
+        match (action, self.request_mode, &self.runtime.role) {
             (
                 ProviderAction::Update(ProviderUpdate::Finished(Ok(AcceptedResponse::Complete(
                     message,
                 )))),
-                PlanReview::Required,
-                _,
-            ) => ProviderAction::Update(ProviderUpdate::ReconcilePlan {
-                message,
-                instruction: format!(
-                    "Runtime plan review: this turn is still active. Requirements changed; reconcile the saved plan with update_plan using revision={} and requirements_revision={} from the current planning state. Reopen completed steps for review, then continue the user's request before completing the turn.",
-                    self.session.interaction.planning().plan.revision,
-                    self.session.interaction.planning().requirements_revision,
-                ),
-            }),
-            (
-                ProviderAction::Update(ProviderUpdate::Finished(Ok(AcceptedResponse::Complete(_)))),
-                PlanReview::Current,
-                [_, ..],
-            ) => ProviderAction::Update(ProviderUpdate::Finished(Err(Failure::new(
-                FailureKind::Worker,
-                format!(
-                    "Worker reports have not been collected: {}",
-                    pending.join("; ")
-                ),
-            )))),
+                RequestMode::Continue,
+                ExecutionRole::Root,
+            ) => {
+                let obligations = self.completion_obligations().await.unwrap_or_else(|error| {
+                    vec![format!("Could not verify completion: {error}. Resolve the blocker before completing.")]
+                });
+                match obligations.as_slice() {
+                    [] => ProviderAction::Update(ProviderUpdate::Finished(Ok(AcceptedResponse::Complete(message)))),
+                    _ => ProviderAction::Update(ProviderUpdate::ReconcilePlan {
+                        message,
+                        instruction: format!("Runtime completion review: this turn is still active.\n{}", obligations.join("\n")),
+                    }),
+                }
+            }
             (action, _, _) => action,
         }
+    }
+
+    async fn completion_obligations(&self) -> anyhow::Result<Vec<String>> {
+        let planning = self.session.interaction.planning();
+        let pending = self.runtime.workers.pending(&self.runtime.worker_owner(self.context.get_id()));
+        let mut obligations = Vec::new();
+        if planning.review() == PlanReview::Required {
+            obligations.push(format!(
+                "Requirements changed; reconcile the saved plan with update_plan using revision={} and requirements_revision={}. Reopen completed steps for review, then continue the user's request.",
+                planning.plan.revision, planning.requirements_revision,
+            ));
+        }
+        if !pending.is_empty() {
+            obligations.push(format!("Collect and assess worker reports with worker_status (wait for running workers): {}", pending.join("; ")));
+        }
+        if planning.mode == WorkMode::Implement {
+            obligations.extend(planning.plan.steps.iter().filter(|step| step.state != StepState::Completed).map(|step| {
+                format!("Unfinished plan step {} ({:?}): {}. Continue the work and update_plan with observed evidence, or use request_user_input for an unresolved blocker.", step.id, step.state, step.description)
+            }));
+        }
+        match (planning.mode, pending.is_empty(), self.runtime.scope.workspace()) {
+            (WorkMode::Implement, true, Ok(_)) => {
+                let commands = planning.plan.steps.iter().filter_map(|step| step.validation.as_ref()).map(|validation| {
+                    serde_json::from_value::<tools::cargo_tools::CargoRequest>(serde_json::Value::Object(validation.cargo.clone()))?.validation_command()
+                }).collect::<anyhow::Result<Vec<_>>>()?;
+                let changes = self.runtime.scope.changes.clone();
+                obligations.extend(self.runtime.scope.enter(utils::files::operation(move |workspace| {
+                    changes.completion_obligations(workspace, &commands)
+                })).await?);
+            }
+            (WorkMode::Implement, true, Err(_)) if planning.plan.steps.iter().any(|step| step.validation.is_some()) => {
+                obligations.push("Requested validation cannot be verified without a workspace; report the blocker and ask the user how to proceed.".into());
+            }
+            _ => {}
+        }
+        Ok(obligations)
     }
 }

@@ -520,7 +520,7 @@ impl Session {
 
     fn accept_response(
         &mut self,
-        turn: Turn<ProviderRun>,
+        mut turn: Turn<ProviderRun>,
         response: AcceptedResponse,
         effects: &mut Vec<Effect>,
     ) {
@@ -539,6 +539,7 @@ impl Session {
                 );
             }
             AcceptedResponse::Tools(batch) => {
+                turn.plan_reconciliations = 0;
                 effects.extend([
                     Effect::turn(turn.id, Lifecycle::WaitingForTools, None),
                     Effect::operation(batch.tag, Lifecycle::WaitingForTools, "Tool batch"),
@@ -580,7 +581,7 @@ impl Session {
                 effects.push(Effect::operation(
                     turn.phase.tag,
                     Lifecycle::Completed,
-                    "Continuing to reconcile the saved plan",
+                    "Continuing to satisfy completion obligations",
                 ));
                 let previous = turn.phase.scope.clone();
                 self.launch_provider(turn.provider(), Some(previous), effects);
@@ -589,7 +590,7 @@ impl Session {
                 turn,
                 Failure::new(
                     clients::failure::FailureKind::InvalidInput,
-                    "The saved plan still needs reconciliation after automatic recovery; use update_plan before completing the turn",
+                    "Completion obligations remain unresolved after automatic recovery; address the runtime feedback before completing the turn",
                 ),
                 effects,
             ),

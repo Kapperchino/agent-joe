@@ -38,6 +38,7 @@ fn answering_a_question_atomically_marks_the_saved_plan_for_reconciliation() {
                     state: StepState::Pending,
                     evidence: vec![],
                     blocked_reason: None,
+                    validation: None,
                 }],
             },
             0,
@@ -101,6 +102,7 @@ fn merge_answers_preserve_the_plan_and_record_durable_evidence() {
         state: StepState::Completed,
         evidence: Vec::new(),
         blocked_reason: None,
+        validation: None,
     });
     session.record(Event::Planning(planning.clone())).unwrap();
     let approval = merge_workflow::MergeApproval::Awaiting {

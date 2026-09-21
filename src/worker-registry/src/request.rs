@@ -32,7 +32,7 @@ pub struct WorkerRequestInput {
         required
     )]
     pub completion_criteria: String,
-    #[tool(description = "Wall-clock budget in seconds, 1 to 300; default 180")]
+    #[tool(description = "Wall-clock budget including model calls, compaction and tools, in seconds, 1 to 3600; default 1800")]
     pub seconds: Option<u64>,
 }
 
@@ -75,11 +75,15 @@ impl TryFrom<BudgetLimitsInput> for BudgetLimits {
 }
 
 impl BudgetLimits {
+    pub const DEFAULT_SECONDS: u64 = 1800;
+    pub const MAX_SECONDS: u64 = 3600;
+
     pub fn new(seconds: u64) -> anyhow::Result<Self> {
-        match (1..=300).contains(&seconds) {
+        match (1..=Self::MAX_SECONDS).contains(&seconds) {
             true => Ok(Self { seconds }),
             false => Err(anyhow::anyhow!(
-                "Invalid worker budget: seconds must be 1 to 300"
+                "Invalid worker budget: seconds must be 1 to {}",
+                Self::MAX_SECONDS
             )),
         }
     }
@@ -125,7 +129,7 @@ impl WorkerRequest {
                 }
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
-        let budget = BudgetLimits::new(input.seconds.unwrap_or(180))?;
+        let budget = BudgetLimits::new(input.seconds.unwrap_or(BudgetLimits::DEFAULT_SECONDS))?;
         let effects = tools
             .iter()
             .map(|tool| match available(tool) {

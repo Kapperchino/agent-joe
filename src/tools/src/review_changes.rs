@@ -32,7 +32,7 @@ impl<C: Context, A> ToolTrait<C, A> for ReviewChanges {
     type Output = utils::changes::Review;
     async fn run(_: Self::Input, _: ToolId, _: &C, _: &A) -> anyhow::Result<Self::Output> {
         let changes = utils::execution::ExecutionScope::current().changes;
-        utils::files::operation(move |workspace| changes.review(workspace)).await
+        utils::files::operation(move |workspace| changes.record_review(workspace)).await
     }
     fn display_input(_: &Self::Input) -> String {
         "- review task changes".into()

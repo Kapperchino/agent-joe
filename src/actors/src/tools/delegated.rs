@@ -3,6 +3,10 @@ use analysis::contexts::rust_context::RustContext;
 use worker_registry::report::WorkerReport;
 use worker_registry::request::{WorkerRequest, WorkerRequestInput};
 
+pub(super) fn execution_budget() -> std::time::Duration {
+    std::time::Duration::from_secs(worker_registry::request::BudgetLimits::DEFAULT_SECONDS)
+}
+
 pub(super) async fn run(
     objective: String,
     tools: &str,

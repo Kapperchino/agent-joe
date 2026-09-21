@@ -85,17 +85,6 @@ impl ProviderTask {
         attempt: u8,
     ) -> Result<(), Failure> {
         let input = input?;
-        if self.budget.is_some()
-            && matches!(
-                input.plan(),
-                Ok(conversation::context::BudgetPlan::Compact(_))
-            )
-        {
-            Err(Failure::new(
-                FailureKind::ContextOverflow,
-                "Worker context budget exceeded; narrow the task or retrieve its saved evidence",
-            ))?;
-        }
         if attempt > 0 {
             tokio::time::sleep(Duration::from_millis(100 * u64::from(attempt))).await;
         }

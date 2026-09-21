@@ -78,6 +78,9 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for ValidateRust {
     fn effect() -> tools::tool_defs::ToolOpKind {
         tools::tool_defs::ToolOpKind::DelegateValidate
     }
+    fn execution_budget(_: &Self::Input) -> anyhow::Result<std::time::Duration> {
+        Ok(super::delegated::execution_budget())
+    }
     fn tool_type() -> ToolType {
         ToolType::Client
     }

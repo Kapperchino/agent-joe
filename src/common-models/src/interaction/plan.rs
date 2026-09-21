@@ -31,6 +31,14 @@ pub struct PlanStep {
     #[serde(default)]
     pub evidence: Vec<PlanEvidence>,
     pub blocked_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation: Option<ValidationRequirement>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ValidationRequirement {
+    pub cargo: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,6 +81,10 @@ impl PlanStep {
                 .iter()
                 .all(|id| graph.by_id.contains_key(id.as_str()) && *id != self.id)
             && self.evidence.len() <= 8
+            && self.validation.as_ref().is_none_or(|validation| {
+                matches!(validation.cargo.get("operation").and_then(serde_json::Value::as_str), Some("check" | "test" | "fmt_check" | "clippy" | "run"))
+                    && serde_json::to_vec(validation).is_ok_and(|encoded| encoded.len() <= 8192)
+            })
             && self.evidence.iter().all(|item| {
                 evidence.contains_key(&item.source) && bounded_text(&item.explanation, 512)
             })
@@ -84,6 +96,7 @@ impl PlanStep {
             previous.description == self.description
                 && previous.acceptance == self.acceptance
                 && previous.dependencies == self.dependencies
+                && previous.validation == self.validation
         });
         match (previous.map(|step| step.state), self.state, review) {
             (_, StepState::Completed, PlanReview::Required) => Err(anyhow::anyhow!(

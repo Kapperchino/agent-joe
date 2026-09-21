@@ -302,7 +302,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     pub async fn provider_event(&mut self, tag: Tag, event: ProviderEvent) {
         if let Some(response) = self.turn.provider_response(tag) {
             let action = self.stream.event(response, tag, event).await;
-            let action = self.provider_context().review(action);
+            let action = self.provider_context().review(action).await;
             let update = ProviderSession {
                 session: &mut self.session,
                 runtime: &self.runtime,

@@ -37,6 +37,13 @@ impl LenientDeserialize for CargoRequest {
 }
 
 impl CargoRequest {
+    pub fn validation_command(&self) -> anyhow::Result<utils::cargo::CargoCommand> {
+        match CargoInvocation::new(self.clone(), &["check", "test", "fmt_check", "clippy", "run"])? {
+            CargoInvocation::Execute(operation) => Ok(operation.details().clone()),
+            _ => Err(anyhow::anyhow!("Validation requires a finite Cargo operation")),
+        }
+    }
+
     fn operation(&self) -> &'static str {
         match self {
             Self::Check(_) => "check",
@@ -223,7 +230,19 @@ impl<C: Context, A, P: CargoPolicy> ToolTrait<C, A> for Cargo<P> {
         _cur_context: &C,
         _actor_context: &A,
     ) -> anyhow::Result<Self::Output> {
-        CargoInvocation::new(input, P::OPERATIONS)?.execute().await
+        let validation = input.validation_command().ok();
+        let invocation = CargoInvocation::new(input, P::OPERATIONS)?;
+        let before = match validation {
+            Some(_) => Some(utils::files::operation(utils::changes::ChangeTracker::workspace_fingerprint).await?),
+            None => None,
+        };
+        let result = invocation.execute().await?;
+        if let Some(before) = before {
+            let changes = utils::execution::ExecutionScope::current().changes;
+            let recorded = result.clone();
+            utils::files::operation(move |workspace| changes.record_validation(workspace, &before, &recorded)).await?;
+        }
+        Ok(result)
     }
     fn display_input(input: &Self::Input) -> String {
         <Self as ToolTrait<C, A>>::prepare_input(input)

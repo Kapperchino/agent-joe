@@ -45,6 +45,7 @@ fn step(id: &str) -> PlanStep {
         state: StepState::Pending,
         evidence: vec![],
         blocked_reason: None,
+        validation: None,
     }
 }
 
@@ -631,6 +632,7 @@ async fn stale_plan_completion_recovers_and_persists_the_reconciled_plan() {
     let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
     let store = runtime.sessions.clone().unwrap();
     let h = Harness::with_runtime(vec![], runtime).await;
+    command(&h, Command::Plan).await;
     h.start("Investigate the binary");
     answer(
         h.request().await.1,
@@ -781,8 +783,11 @@ async fn steering_cancels_active_tools_and_queue_then_reconciles_plan() {
         )]),
     );
     let (_, reply) = h.request().await;
-    answer(reply, response(vec![text("Revised task prepared")]));
-    h.terminal(Lifecycle::Completed).await;
+    answer(reply, response(vec![text("Premature completion with a pending step")]));
+    let (request, reply) = h.request().await;
+    assert!(request.messages.last().unwrap().text().contains("Unfinished plan step inspect"));
+    answer(reply, response(vec![question(true)]));
+    h.event(|packet| matches!(packet, ActorToTuiPacket::TurnChanged { state: Lifecycle::WaitingForInput, .. })).await;
     h.stop().await;
 }
 
