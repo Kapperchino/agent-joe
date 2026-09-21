@@ -82,8 +82,13 @@ impl PlanStep {
                 .all(|id| graph.by_id.contains_key(id.as_str()) && *id != self.id)
             && self.evidence.len() <= 8
             && self.validation.as_ref().is_none_or(|validation| {
-                matches!(validation.cargo.get("operation").and_then(serde_json::Value::as_str), Some("check" | "test" | "fmt_check" | "clippy" | "run"))
-                    && serde_json::to_vec(validation).is_ok_and(|encoded| encoded.len() <= 8192)
+                matches!(
+                    validation
+                        .cargo
+                        .get("operation")
+                        .and_then(serde_json::Value::as_str),
+                    Some("check" | "test" | "fmt_check" | "clippy" | "run")
+                ) && serde_json::to_vec(validation).is_ok_and(|encoded| encoded.len() <= 8192)
             })
             && self.evidence.iter().all(|item| {
                 evidence.contains_key(&item.source) && bounded_text(&item.explanation, 512)

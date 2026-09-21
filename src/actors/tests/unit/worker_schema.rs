@@ -15,15 +15,27 @@ fn convenience_tools_allow_the_full_worker_deadline() {
 
     let expected = std::time::Duration::from_secs(1800);
     assert_eq!(
-        <crate::tools::gather_context::GatherContext as ToolTrait<RustContext, ActorContext<RustContext>>>::execution_budget(&Default::default()).unwrap(),
+        <crate::tools::gather_context::GatherContext as ToolTrait<
+            RustContext,
+            ActorContext<RustContext>,
+        >>::execution_budget(&Default::default())
+        .unwrap(),
         expected
     );
     assert_eq!(
-        <crate::tools::make_changes::MakeChanges as ToolTrait<RustContext, ActorContext<RustContext>>>::execution_budget(&Default::default()).unwrap(),
+        <crate::tools::make_changes::MakeChanges as ToolTrait<
+            RustContext,
+            ActorContext<RustContext>,
+        >>::execution_budget(&Default::default())
+        .unwrap(),
         expected
     );
     assert_eq!(
-        <crate::tools::validate_rust::ValidateRust as ToolTrait<RustContext, ActorContext<RustContext>>>::execution_budget(&Default::default()).unwrap(),
+        <crate::tools::validate_rust::ValidateRust as ToolTrait<
+            RustContext,
+            ActorContext<RustContext>,
+        >>::execution_budget(&Default::default())
+        .unwrap(),
         expected
     );
 }

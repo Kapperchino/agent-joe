@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use common_models::interaction::PlanUpdate;
 use serde_json::{Value, json};
 use tools::tool_defs::{
-    LenientDeserialize, ToolDefTrait, ToolOpKind, ToolId, ToolProperty, ToolTrait, ToolType,
+    LenientDeserialize, ToolDefTrait, ToolId, ToolOpKind, ToolProperty, ToolTrait, ToolType,
 };
 use utils::utils::FnvHashMap;
 
@@ -72,8 +72,16 @@ impl<C: Context> ToolTrait<C, ActorContext<C>> for UpdatePlan {
         _: &C,
         actor: &ActorContext<C>,
     ) -> anyhow::Result<String> {
-        for validation in input.update.steps.iter().filter_map(|step| step.validation.as_ref()) {
-            serde_json::from_value::<tools::cargo_tools::CargoRequest>(serde_json::Value::Object(validation.cargo.clone()))?.validation_command()?;
+        for validation in input
+            .update
+            .steps
+            .iter()
+            .filter_map(|step| step.validation.as_ref())
+        {
+            serde_json::from_value::<tools::cargo_tools::CargoRequest>(serde_json::Value::Object(
+                validation.cargo.clone(),
+            ))?
+            .validation_command()?;
         }
         let info = match actor {
             ActorContext::ActorInfo(info) if matches!(info.runtime.role, ExecutionRole::Root) => {

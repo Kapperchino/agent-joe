@@ -3,6 +3,30 @@ use crate::tool_defs::erased_tool;
 use analysis::contexts::rust_empty_context::RustEmptyContext;
 
 #[test]
+fn validation_requirements_accept_only_finite_read_only_or_run_commands() {
+    for input in [
+        json!({"operation":"check"}),
+        json!({"operation":"test","package":"selected","test_name":"regression"}),
+        json!({"operation":"fmt_check"}),
+        json!({"operation":"clippy","deny_warnings":true}),
+        json!({"operation":"run","target":{"kind":"example","name":"fixture"}}),
+    ] {
+        let request: CargoRequest = serde_json::from_value(input).unwrap();
+        assert!(request.validation_command().is_ok());
+    }
+    for input in [
+        json!({"operation":"fmt"}),
+        json!({"operation":"start","target":{"kind":"example","name":"fixture"}}),
+        json!({"operation":"poll","process_id":"id"}),
+        json!({"operation":"stop","process_id":"id"}),
+        json!({"operation":"check","test_name":"regression"}),
+    ] {
+        let request: CargoRequest = serde_json::from_value(input).unwrap();
+        assert!(request.validation_command().is_err());
+    }
+}
+
+#[test]
 fn cargo_execution_budgets_follow_validated_timeouts() {
     let cargo = erased_tool::<Cargo, RustEmptyContext, ()>();
     for operation in ["check", "test", "fmt", "fmt_check", "clippy"] {

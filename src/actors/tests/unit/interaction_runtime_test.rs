@@ -783,11 +783,100 @@ async fn steering_cancels_active_tools_and_queue_then_reconciles_plan() {
         )]),
     );
     let (_, reply) = h.request().await;
-    answer(reply, response(vec![text("Premature completion with a pending step")]));
+    answer(
+        reply,
+        response(vec![text("Premature completion with a pending step")]),
+    );
     let (request, reply) = h.request().await;
-    assert!(request.messages.last().unwrap().text().contains("Unfinished plan step inspect"));
+    assert!(
+        request
+            .messages
+            .last()
+            .unwrap()
+            .text()
+            .contains("Unfinished plan step inspect")
+    );
     answer(reply, response(vec![question(true)]));
-    h.event(|packet| matches!(packet, ActorToTuiPacket::TurnChanged { state: Lifecycle::WaitingForInput, .. })).await;
+    h.event(|packet| {
+        matches!(
+            packet,
+            ActorToTuiPacket::TurnChanged {
+                state: Lifecycle::WaitingForInput,
+                ..
+            }
+        )
+    })
+    .await;
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn completed_plan_with_read_evidence_still_requires_requested_validation() {
+    use common_models::interaction::{PlanEvidence, ValidationRequirement};
+    let workspace = session::test_support::Workspace::new();
+    let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
+    let (read, entered) = gate("read", ToolOpKind::Read);
+    let h = Harness::with_runtime(vec![read], runtime).await;
+    h.start("Inspect and run the requested tests");
+    let mut update = PlanUpdate {
+        revision: 0,
+        requirements_revision: 0,
+        steps: vec![PlanStep {
+            state: StepState::InProgress,
+            validation: Some(ValidationRequirement {
+                cargo: json!({"operation":"test","package":"requested"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            }),
+            ..step("validate")
+        }],
+    };
+    answer(
+        h.request().await.1,
+        response(vec![tool("update_plan", "plan", json!(update))]),
+    );
+    answer(
+        h.request().await.1,
+        response(vec![call("read", "evidence")]),
+    );
+    let (_, release) = within(entered.recv_async()).await.unwrap();
+    release.send(()).unwrap();
+    update.revision = 1;
+    update.steps[0].state = StepState::Completed;
+    update.steps[0].evidence = vec![PlanEvidence {
+        source: "tool:evidence".into(),
+        explanation: "Read evidence does not establish successful testing".into(),
+    }];
+    answer(
+        h.request().await.1,
+        response(vec![tool("update_plan", "finished", json!(update))]),
+    );
+    let (request, reply) = h.request().await;
+    assert_eq!(
+        runtime_snapshot(&request.messages).planning.plan.steps[0].state,
+        StepState::Completed
+    );
+    answer(
+        reply,
+        response(vec![text("Claiming completion without testing")]),
+    );
+    let (request, reply) = h.request().await;
+    assert!(request.messages.iter().any(|message| {
+        let text = message.text();
+        text.contains("Missing successful requested validation") && text.contains("requested")
+    }));
+    answer(reply, response(vec![question(true)]));
+    h.event(|packet| {
+        matches!(
+            packet,
+            ActorToTuiPacket::TurnChanged {
+                state: Lifecycle::WaitingForInput,
+                ..
+            }
+        )
+    })
+    .await;
     h.stop().await;
 }
 

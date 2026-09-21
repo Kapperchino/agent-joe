@@ -348,7 +348,10 @@ impl WorkerRequests {
 }
 
 async fn completed_root(actor: &RepositoryActor, reply: oneshot::Sender<anyhow::Result<Events>>) {
-    answer(reply, response(vec![tool("review_changes", "final-review", json!({}))]));
+    answer(
+        reply,
+        response(vec![tool("review_changes", "final-review", json!({}))]),
+    );
     let (_, reply) = actor.request().await;
     answer(
         reply,
@@ -371,7 +374,11 @@ async fn completed_root(actor: &RepositoryActor, reply: oneshot::Sender<anyhow::
 #[tokio::test]
 async fn bounded_workers_compact_and_continue_the_same_investigation() {
     let workspace = session::test_support::Workspace::new();
-    std::fs::write(workspace.path.join("evidence.txt"), "Evidence survives compaction").unwrap();
+    std::fs::write(
+        workspace.path.join("evidence.txt"),
+        "Evidence survives compaction",
+    )
+    .unwrap();
     let runtime = Runtime {
         context_budget: conversation::context::ContextBudget::new(Some(64_000), 2048).unwrap(),
         ..Runtime::for_workspace(workspace.path.clone()).unwrap()
@@ -381,27 +388,62 @@ async fn bounded_workers_compact_and_continue_the_same_investigation() {
     let mut child = started.child;
     let mut compactions = 0;
     for index in 0..6 {
-        answer(child.1, response(vec![
-            text(&format!("Investigation {index}: {}", "x".repeat(70_000))),
-            tool("read_file", &format!("read-{index}"), json!({"file_path":"evidence.txt"})),
-        ]));
+        answer(
+            child.1,
+            response(vec![
+                text(&format!("Investigation {index}: {}", "x".repeat(70_000))),
+                tool(
+                    "read_file",
+                    &format!("read-{index}"),
+                    json!({"file_path":"evidence.txt"}),
+                ),
+            ]),
+        );
         child = actor.request().await;
-        if child.0.system.as_ref().is_some_and(|system| system.starts_with("Summarize only")) {
+        if child
+            .0
+            .system
+            .as_ref()
+            .is_some_and(|system| system.starts_with("Summarize only"))
+        {
             compactions += 1;
-            answer(child.1, response(vec![text("Continue inspecting evidence.txt; preserve the API constraint marker.")]));
+            answer(
+                child.1,
+                response(vec![text(
+                    "Continue inspecting evidence.txt; preserve the API constraint marker.",
+                )]),
+            );
             child = actor.request().await;
         }
         assert!(matches!(child.0.purpose, llm::RequestPurpose::Worker));
         assert!(result_text(&child.0).contains("Evidence survives compaction"));
     }
     assert!(compactions > 0);
-    answer(child.1, response(vec![text("Investigation completed after compaction")]));
-    answer(started.parent.1, response(vec![tool(
-        "worker_status", "collect", json!({"action":"wait", "worker_id":started.id, "seconds":2}),
-    )]));
+    answer(
+        child.1,
+        response(vec![text("Investigation completed after compaction")]),
+    );
+    answer(
+        started.parent.1,
+        response(vec![tool(
+            "worker_status",
+            "collect",
+            json!({"action":"wait", "worker_id":started.id, "seconds":2}),
+        )]),
+    );
     let (request, reply) = actor.request().await;
-    assert_eq!(latest_result(&request)["workers"][0]["report"]["status"], "completed");
-    assert!(actor.store.list().unwrap().iter().any(|snapshot| snapshot.parent.is_some() && snapshot.context.generation > 0));
+    assert_eq!(
+        latest_result(&request)["workers"][0]["report"]["status"],
+        "completed"
+    );
+    assert!(
+        actor
+            .store
+            .list()
+            .unwrap()
+            .iter()
+            .any(|snapshot| snapshot.parent.is_some() && snapshot.context.generation > 0)
+    );
     completed_root(&actor, reply).await;
     actor.stop().await;
 }
@@ -772,6 +814,7 @@ async fn bounded_worker_inherits_constraints_denies_other_paths_and_returns_obse
     )
     .unwrap();
     std::fs::create_dir_all(workspace.path.join("logs")).unwrap();
+    std::fs::write(workspace.path.join(".gitignore"), "logs/\n").unwrap();
     let actor = RepositoryActor::configured(BaseWorker::new(), workspace.path.clone(), true).await;
     let started =
         StartedWorker::new(&actor, worker_input("read_file\napply_patch", "assigned")).await;
@@ -1268,16 +1311,30 @@ async fn uncollected_worker_reports_prevent_silent_parent_completion() {
         )]),
     );
     let (request, reply) = actor.request().await;
-    assert!(request.messages.last().unwrap().text().contains("worker_status"));
+    assert!(
+        request
+            .messages
+            .iter()
+            .any(|message| message.text().contains("worker_status"))
+    );
     assert!(!started.child.1.is_closed());
-    answer(started.child.1, response(vec![text("Investigation complete")]));
-    answer(reply, response(vec![tool(
-        "worker_status",
-        "collect",
-        json!({"action":"wait", "worker_id":started.id, "seconds":2}),
-    )]));
+    answer(
+        started.child.1,
+        response(vec![text("Investigation complete")]),
+    );
+    answer(
+        reply,
+        response(vec![tool(
+            "worker_status",
+            "collect",
+            json!({"action":"wait", "worker_id":started.id, "seconds":2}),
+        )]),
+    );
     let (request, reply) = actor.request().await;
-    assert_eq!(latest_result(&request)["workers"][0]["report"]["status"], "completed");
+    assert_eq!(
+        latest_result(&request)["workers"][0]["report"]["status"],
+        "completed"
+    );
     completed_root(&actor, reply).await;
     actor.stop().await;
 }

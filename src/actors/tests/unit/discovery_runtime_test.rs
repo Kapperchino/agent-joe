@@ -273,11 +273,32 @@ async fn patch_mismatch_continues_to_read_and_retry_in_both_worker_modes() {
             std::fs::read_to_string(workspace.path.join("added.txt")).unwrap(),
             "added"
         );
-        answer(reply, response(vec![text("Updated the files.")]));
-        if matches!(mode, Mode::Delegated) {
-            let (_, reply) = actor.request().await;
-            answer(reply, response(vec![text("Completed.")]));
-        }
+        let reply = match mode {
+            Mode::Simple => reply,
+            Mode::Delegated => {
+                answer(reply, response(vec![text("Updated the files.")]));
+                actor.request().await.1
+            }
+        };
+        answer(
+            reply,
+            response(vec![text("Premature completion without final review")]),
+        );
+        let (request, reply) = actor.request().await;
+        assert!(
+            request
+                .messages
+                .iter()
+                .any(|message| message.text().contains("unreviewed changes"))
+        );
+        answer(
+            reply,
+            response(vec![tool("review_changes", "review-final", json!({}))]),
+        );
+        answer(
+            actor.request().await.1,
+            response(vec![text("Completed after reviewing the diff.")]),
+        );
         let terminal = actor
             .event(|event| {
                 event.actor_id == 0
@@ -428,7 +449,11 @@ async fn simple_and_delegated_turns_receive_scoped_rules_before_editing_and_read
                     .count(),
                 1
             );
-            answer(reply, response(vec![text("Completed.")]));
+            answer(
+                reply,
+                response(vec![tool("review_changes", "review-parent", json!({}))]),
+            );
+            answer(actor.request().await.1, response(vec![text("Completed.")]));
         }
         actor
             .event(|event| {
@@ -525,7 +550,14 @@ async fn simple_and_delegated_turns_receive_scoped_rules_before_editing_and_read
                 .unwrap()
                 .contains("Repository guidance marker")
         );
-        answer(reply, response(vec![text("Current guidance received.")]));
+        answer(
+            reply,
+            response(vec![tool("review_changes", "review-resumed", json!({}))]),
+        );
+        answer(
+            actor.request().await.1,
+            response(vec![text("Current guidance received.")]),
+        );
         actor
             .event(|event| {
                 event.actor_id == 0

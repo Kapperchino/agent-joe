@@ -381,9 +381,14 @@ impl ChangeTracker {
         result: &crate::cargo::CargoResult,
     ) -> anyhow::Result<()> {
         let current = Self::workspace_fingerprint(workspace)?;
-        let mut state = self.state.lock().map_err(|_| anyhow::anyhow!("Change journal lock poisoned"))?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Change journal lock poisoned"))?;
         let mut snapshot = state.snapshot.clone();
-        snapshot.validation.retain(|evidence| evidence.command != result.command && evidence.workspace == current);
+        snapshot
+            .validation
+            .retain(|evidence| evidence.command != result.command && evidence.workspace == current);
         if result.status == sandbox::process::ProcessStatus::Exited
             && result.exit_code == Some(0)
             && result.error.is_none()
@@ -401,7 +406,10 @@ impl ChangeTracker {
     pub fn record_review(&self, workspace: &WorkspacePolicy) -> anyhow::Result<Review> {
         let review = self.review(workspace)?;
         let fingerprint = blake3::hash(&serde_json::to_vec(&review)?).to_string();
-        let mut state = self.state.lock().map_err(|_| anyhow::anyhow!("Change journal lock poisoned"))?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Change journal lock poisoned"))?;
         let mut snapshot = state.snapshot.clone();
         snapshot.reviewed = Some(fingerprint);
         state.commit(snapshot)?;
@@ -415,14 +423,17 @@ impl ChangeTracker {
     ) -> anyhow::Result<Vec<String>> {
         let snapshot = self.snapshot()?;
         let mut obligations = Vec::new();
-        if snapshot.baseline.is_some() {
-            let review = self.review(workspace)?;
-            let fingerprint = blake3::hash(&serde_json::to_vec(&review)?).to_string();
-            if (!review.changes.is_empty() || !review.index_changes.is_empty())
-                && snapshot.reviewed.as_ref() != Some(&fingerprint)
-            {
-                obligations.push("Call review_changes and inspect the complete final diff, including archived output; the workspace has unreviewed changes.".into());
+        let unreviewed = match snapshot.baseline {
+            Some(_) => {
+                let review = self.review(workspace)?;
+                let fingerprint = blake3::hash(&serde_json::to_vec(&review)?).to_string();
+                (!review.changes.is_empty() || !review.index_changes.is_empty())
+                    && snapshot.reviewed.as_ref() != Some(&fingerprint)
             }
+            None => false,
+        };
+        if unreviewed {
+            obligations.push("Call review_changes and inspect the complete final diff, including archived output; the workspace has unreviewed changes.".into());
         }
         if !commands.is_empty() {
             let current = Self::workspace_fingerprint(workspace)?;

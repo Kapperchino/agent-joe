@@ -24,7 +24,7 @@ use std::{
 };
 use tokio::sync::oneshot;
 use tools::tool_defs::{
-    CancellationMode, ErasedToolRef, ErasedToolTrait, ToolDefinition, ToolOpKind, ToolId,
+    CancellationMode, ErasedToolRef, ErasedToolTrait, ToolDefinition, ToolId, ToolOpKind,
 };
 use turn_engine::ToolEvent;
 use turn_engine::turn::Tag;
@@ -1597,7 +1597,7 @@ async fn durable_worker_sessions_link_to_the_parent_and_commit_intent_before_exe
     assert!(matches!(
         child.pending.as_ref().unwrap().operations[0].state,
         session::OperationState::Intended {
-            effect: ToolEffect::Write
+            effect: ToolOpKind::Write
         }
     ));
     pending.send(()).unwrap();

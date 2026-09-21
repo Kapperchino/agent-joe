@@ -32,7 +32,9 @@ pub struct WorkerRequestInput {
         required
     )]
     pub completion_criteria: String,
-    #[tool(description = "Wall-clock budget including model calls, compaction and tools, in seconds, 1 to 3600; default 1800")]
+    #[tool(
+        description = "Wall-clock budget including model calls, compaction and tools, in seconds, 1 to 3600; default 1800"
+    )]
     pub seconds: Option<u64>,
 }
 

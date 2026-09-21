@@ -155,10 +155,15 @@ impl<C: Context> ProviderContext<'_, C> {
                     vec![format!("Could not verify completion: {error}. Resolve the blocker before completing.")]
                 });
                 match obligations.as_slice() {
-                    [] => ProviderAction::Update(ProviderUpdate::Finished(Ok(AcceptedResponse::Complete(message)))),
+                    [] => ProviderAction::Update(ProviderUpdate::Finished(Ok(
+                        AcceptedResponse::Complete(message),
+                    ))),
                     _ => ProviderAction::Update(ProviderUpdate::ReconcilePlan {
                         message,
-                        instruction: format!("Runtime completion review: this turn is still active.\n{}", obligations.join("\n")),
+                        instruction: format!(
+                            "Runtime completion review: this turn is still active.\n{}",
+                            obligations.join("\n")
+                        ),
                     }),
                 }
             }
@@ -168,7 +173,10 @@ impl<C: Context> ProviderContext<'_, C> {
 
     async fn completion_obligations(&self) -> anyhow::Result<Vec<String>> {
         let planning = self.session.interaction.planning();
-        let pending = self.runtime.workers.pending(&self.runtime.worker_owner(self.context.get_id()));
+        let pending = self
+            .runtime
+            .workers
+            .pending(&self.runtime.worker_owner(self.context.get_id()));
         let mut obligations = Vec::new();
         if planning.review() == PlanReview::Required {
             obligations.push(format!(
@@ -184,17 +192,41 @@ impl<C: Context> ProviderContext<'_, C> {
                 format!("Unfinished plan step {} ({:?}): {}. Continue the work and update_plan with observed evidence, or use request_user_input for an unresolved blocker.", step.id, step.state, step.description)
             }));
         }
-        match (planning.mode, pending.is_empty(), self.runtime.scope.workspace()) {
+        match (
+            planning.mode,
+            pending.is_empty(),
+            self.runtime.scope.workspace(),
+        ) {
             (WorkMode::Implement, true, Ok(_)) => {
-                let commands = planning.plan.steps.iter().filter_map(|step| step.validation.as_ref()).map(|validation| {
-                    serde_json::from_value::<tools::cargo_tools::CargoRequest>(serde_json::Value::Object(validation.cargo.clone()))?.validation_command()
-                }).collect::<anyhow::Result<Vec<_>>>()?;
+                let commands = planning
+                    .plan
+                    .steps
+                    .iter()
+                    .filter_map(|step| step.validation.as_ref())
+                    .map(|validation| {
+                        serde_json::from_value::<tools::cargo_tools::CargoRequest>(
+                            serde_json::Value::Object(validation.cargo.clone()),
+                        )?
+                        .validation_command()
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?;
                 let changes = self.runtime.scope.changes.clone();
-                obligations.extend(self.runtime.scope.enter(utils::files::operation(move |workspace| {
-                    changes.completion_obligations(workspace, &commands)
-                })).await?);
+                obligations.extend(
+                    self.runtime
+                        .scope
+                        .enter(utils::files::operation(move |workspace| {
+                            changes.completion_obligations(workspace, &commands)
+                        }))
+                        .await?,
+                );
             }
-            (WorkMode::Implement, true, Err(_)) if planning.plan.steps.iter().any(|step| step.validation.is_some()) => {
+            (WorkMode::Implement, true, Err(_))
+                if planning
+                    .plan
+                    .steps
+                    .iter()
+                    .any(|step| step.validation.is_some()) =>
+            {
                 obligations.push("Requested validation cannot be verified without a workspace; report the blocker and ask the user how to proceed.".into());
             }
             _ => {}

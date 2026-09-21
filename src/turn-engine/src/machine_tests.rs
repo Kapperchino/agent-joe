@@ -4,7 +4,7 @@ use clients::failure::FailureKind;
 use clients::response::ProcessedItem;
 use clients::response::ToolCall;
 use common_models::runtime_ids::OperationId;
-use tools::tool_defs::{ToolOpKind, ToolId, ToolInvocation};
+use tools::tool_defs::{ToolId, ToolInvocation, ToolOpKind};
 
 fn machine() -> TurnMachine {
     TurnMachine::new(

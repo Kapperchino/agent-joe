@@ -83,6 +83,11 @@ impl GitHarness {
                         RustContext,
                         ActorContext<RustContext>,
                     >(),
+                    tools::tool_defs::erased_tool::<
+                        tools::review_changes::ReviewChanges,
+                        RustContext,
+                        ActorContext<RustContext>,
+                    >(),
                 ],
                 tui_tx,
                 debug_mode: false,
@@ -180,6 +185,11 @@ impl GitHarness {
             }
             None => reply,
         };
+        answer(
+            reply,
+            response(vec![call("review_changes", "review-final")]),
+        );
+        let (_, reply) = within(self.requests.recv_async()).await.unwrap();
         answer(reply, response(vec![text("Task completed")]));
         self.summarize(subject).await;
         let packet = self.event(|packet| matches!(packet, ActorToTuiPacket::InteractionUpdated(view) if view.questions.iter().any(|question| question.id.starts_with("merge-")))).await;
@@ -615,6 +625,11 @@ async fn approving_a_conflicted_merge_resolves_and_merges_without_another_questi
         "{:?}",
         request.messages
     );
+    answer(
+        reply,
+        response(vec![call("review_changes", "review-resolution")]),
+    );
+    let (_, reply) = within(h.requests.recv_async()).await.unwrap();
     answer(reply, response(vec![text("Conflicts resolved")]));
     let summary = h
         .summarize("Resolve conflicting return values by returning 5")
@@ -692,6 +707,11 @@ async fn incomplete_conflict_resolution_cannot_merge_even_after_model_completion
         h.answer_merge(&question, "merge")
             .await
             .contains("Resolving merge conflicts")
+    );
+    let (_, reply) = within(h.requests.recv_async()).await.unwrap();
+    answer(
+        reply,
+        response(vec![call("review_changes", "review-conflicts")]),
     );
     let (_, reply) = within(h.requests.recv_async()).await.unwrap();
     answer(reply, response(vec![text("Conflicts resolved")]));

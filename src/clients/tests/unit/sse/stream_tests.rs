@@ -54,7 +54,10 @@ async fn openai_keepalive_spellings_preserve_the_stream() {
             "data: {{\"type\":\"{heartbeat}\"}}\n\ndata: {{\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}}\n\ndata: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"response\",\"status\":\"completed\",\"output\":[]}}}}\n\n"
         );
         let stream = futures::stream::iter(
-            input.bytes().map(|byte| Ok::<_, std::io::Error>(vec![byte])),
+            input
+                .into_bytes()
+                .into_iter()
+                .map(|byte| Ok::<_, std::io::Error>(vec![byte])),
         );
         let result = decode(stream, |event: &crate::openai::StreamEvent| {
             matches!(event, crate::openai::StreamEvent::ResponseCompleted { .. })
@@ -69,7 +72,8 @@ async fn openai_keepalive_spellings_preserve_the_stream() {
                 Ok(crate::openai::StreamEvent::ResponseCompleted { .. })
             ] if delta == "hello"
         ));
-        let mapped: Option<crate::llm::StreamEvent> = result.into_iter().next().unwrap().unwrap().into();
+        let mapped: Option<crate::llm::StreamEvent> =
+            result.into_iter().next().unwrap().unwrap().into();
         assert!(matches!(mapped, Some(crate::llm::StreamEvent::Accum)));
     }
 }

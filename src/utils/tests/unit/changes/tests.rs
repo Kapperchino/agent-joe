@@ -1,6 +1,213 @@
 use super::*;
 use crate::git::tests::Fixture;
 
+fn successful_validation(fixture: &Fixture) -> crate::cargo::CargoResult {
+    use crate::cargo::{CargoAction, CargoInput, CargoOperation};
+    let command = CargoOperation::new(CargoAction::Test, CargoInput::default()).unwrap();
+    serde_json::from_value(serde_json::json!({
+        "command": command.details(),
+        "workspace": fixture.root,
+        "status": "exited",
+        "exit_code": 0,
+        "duration_ms": 1,
+        "diagnostics": [],
+        "stdout": {"content": "", "offset": 0, "next_offset": 0},
+        "stderr": {"content": "", "offset": 0, "next_offset": 0},
+        "reused": false
+    }))
+    .unwrap()
+}
+
+#[test]
+fn completion_requires_an_explicit_review_of_current_changes_and_index() {
+    let fixture = Fixture::new();
+    fixture.write("file", "committed\n");
+    fixture.stage("file");
+    fixture.commit();
+    fixture.write("file", "existing user edit\n");
+    let tracker = ChangeTracker::default();
+    tracker.start(&fixture.workspace).unwrap();
+    assert!(
+        tracker
+            .completion_obligations(&fixture.workspace, &[])
+            .unwrap()
+            .is_empty()
+    );
+    let before = fixture.workspace.file_version(Path::new("file")).unwrap();
+    let edit = FileEdit::new(
+        &fixture.workspace,
+        Path::new("file"),
+        before.clone(),
+        before.with_text("Joe edit\n".into()),
+    )
+    .unwrap();
+    tracker.apply(&fixture.workspace, vec![edit]).unwrap();
+    tracker.review(&fixture.workspace).unwrap();
+    assert_eq!(
+        tracker
+            .completion_obligations(&fixture.workspace, &[])
+            .unwrap()
+            .len(),
+        1
+    );
+    tracker.record_review(&fixture.workspace).unwrap();
+    assert!(
+        tracker
+            .completion_obligations(&fixture.workspace, &[])
+            .unwrap()
+            .is_empty()
+    );
+    let saved = serde_json::to_vec(&tracker.snapshot().unwrap()).unwrap();
+    let restored = ChangeTracker::restored(serde_json::from_slice(&saved).unwrap(), None);
+    assert!(
+        restored
+            .completion_obligations(&fixture.workspace, &[])
+            .unwrap()
+            .is_empty()
+    );
+    fixture.stage("file");
+    assert_eq!(
+        restored
+            .completion_obligations(&fixture.workspace, &[])
+            .unwrap()
+            .len(),
+        1
+    );
+    restored.record_review(&fixture.workspace).unwrap();
+    fixture.write("file", "concurrent user edit\n");
+    assert_eq!(
+        restored
+            .completion_obligations(&fixture.workspace, &[])
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn completion_validation_matches_the_command_environment_and_current_files() {
+    let fixture = Fixture::new();
+    fixture.write("file", "original\n");
+    let tracker = ChangeTracker::default();
+    let result = successful_validation(&fixture);
+    let commands = vec![result.command.clone()];
+    assert_eq!(
+        tracker
+            .completion_obligations(&fixture.workspace, &commands)
+            .unwrap()
+            .len(),
+        1
+    );
+    let before = ChangeTracker::workspace_fingerprint(&fixture.workspace).unwrap();
+    tracker
+        .record_validation(&fixture.workspace, &before, &result)
+        .unwrap();
+    assert!(
+        tracker
+            .completion_obligations(&fixture.workspace, &commands)
+            .unwrap()
+            .is_empty()
+    );
+    let mut other = result.command.clone();
+    other.args.push("different_test".into());
+    assert_eq!(
+        tracker
+            .completion_obligations(&fixture.workspace, &[other])
+            .unwrap()
+            .len(),
+        1
+    );
+    let mut other = result.command.clone();
+    other
+        .environment
+        .insert("RUST_BACKTRACE".into(), "1".into());
+    assert_eq!(
+        tracker
+            .completion_obligations(&fixture.workspace, &[other])
+            .unwrap()
+            .len(),
+        1
+    );
+    let saved = serde_json::to_vec(&tracker.snapshot().unwrap()).unwrap();
+    let restored = ChangeTracker::restored(serde_json::from_slice(&saved).unwrap(), None);
+    assert!(
+        restored
+            .completion_obligations(&fixture.workspace, &commands)
+            .unwrap()
+            .is_empty()
+    );
+    fixture.write("file", "changed after testing\n");
+    assert_eq!(
+        restored
+            .completion_obligations(&fixture.workspace, &commands)
+            .unwrap()
+            .len(),
+        1
+    );
+    restored
+        .record_validation(&fixture.workspace, &before, &result)
+        .unwrap();
+    assert_eq!(
+        restored
+            .completion_obligations(&fixture.workspace, &commands)
+            .unwrap()
+            .len(),
+        1
+    );
+    let current = ChangeTracker::workspace_fingerprint(&fixture.workspace).unwrap();
+    restored
+        .record_validation(&fixture.workspace, &current, &result)
+        .unwrap();
+    assert!(
+        restored
+            .completion_obligations(&fixture.workspace, &commands)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn unsuccessful_or_reused_validation_revokes_previous_success() {
+    use sandbox::process::ProcessStatus;
+    let fixture = Fixture::new();
+    fixture.write("file", "original\n");
+    let tracker = ChangeTracker::default();
+    let success = successful_validation(&fixture);
+    let commands = vec![success.command.clone()];
+    let before = ChangeTracker::workspace_fingerprint(&fixture.workspace).unwrap();
+    let mut failed = success.clone();
+    failed.exit_code = Some(101);
+    let mut reused = success.clone();
+    reused.reused = true;
+    let mut error = success.clone();
+    error.error = Some("execution failed".into());
+    let mut timed_out = success.clone();
+    timed_out.status = ProcessStatus::TimedOut;
+    let mut running = success.clone();
+    running.status = ProcessStatus::Running;
+    for result in [failed, reused, error, timed_out, running] {
+        tracker
+            .record_validation(&fixture.workspace, &before, &success)
+            .unwrap();
+        assert!(
+            tracker
+                .completion_obligations(&fixture.workspace, &commands)
+                .unwrap()
+                .is_empty()
+        );
+        tracker
+            .record_validation(&fixture.workspace, &before, &result)
+            .unwrap();
+        assert_eq!(
+            tracker
+                .completion_obligations(&fixture.workspace, &commands)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+}
+
 #[test]
 fn dirty_baseline_concurrent_edits_and_guarded_undo_survive_serialization() {
     let fixture = Fixture::new();

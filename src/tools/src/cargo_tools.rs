@@ -1,5 +1,5 @@
 use crate::tool_defs::{
-    CancellationMode, LenientDeserialize, NonEmptyString, ToolDefTrait, ToolOpKind, ToolId,
+    CancellationMode, LenientDeserialize, NonEmptyString, ToolDefTrait, ToolId, ToolOpKind,
     ToolProperty, ToolTrait, ToolType,
 };
 use analysis::contexts::context::Context;
@@ -38,9 +38,14 @@ impl LenientDeserialize for CargoRequest {
 
 impl CargoRequest {
     pub fn validation_command(&self) -> anyhow::Result<utils::cargo::CargoCommand> {
-        match CargoInvocation::new(self.clone(), &["check", "test", "fmt_check", "clippy", "run"])? {
+        match CargoInvocation::new(
+            self.clone(),
+            &["check", "test", "fmt_check", "clippy", "run"],
+        )? {
             CargoInvocation::Execute(operation) => Ok(operation.details().clone()),
-            _ => Err(anyhow::anyhow!("Validation requires a finite Cargo operation")),
+            _ => Err(anyhow::anyhow!(
+                "Validation requires a finite Cargo operation"
+            )),
         }
     }
 
@@ -233,14 +238,20 @@ impl<C: Context, A, P: CargoPolicy> ToolTrait<C, A> for Cargo<P> {
         let validation = input.validation_command().ok();
         let invocation = CargoInvocation::new(input, P::OPERATIONS)?;
         let before = match validation {
-            Some(_) => Some(utils::files::operation(utils::changes::ChangeTracker::workspace_fingerprint).await?),
+            Some(_) => Some(
+                utils::files::operation(utils::changes::ChangeTracker::workspace_fingerprint)
+                    .await?,
+            ),
             None => None,
         };
         let result = invocation.execute().await?;
         if let Some(before) = before {
             let changes = utils::execution::ExecutionScope::current().changes;
             let recorded = result.clone();
-            utils::files::operation(move |workspace| changes.record_validation(workspace, &before, &recorded)).await?;
+            utils::files::operation(move |workspace| {
+                changes.record_validation(workspace, &before, &recorded)
+            })
+            .await?;
         }
         Ok(result)
     }
