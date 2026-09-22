@@ -16,6 +16,15 @@ fn input() -> ContextInput {
     }
 }
 
+#[test]
+fn compaction_trigger_uses_ninety_percent_of_the_context_window() {
+    let astra = ContextLimits::new(272_000, 16_000).unwrap();
+    assert_eq!(astra.trigger(), 244_800);
+
+    let response_constrained = ContextLimits::new(12_000, 2048).unwrap();
+    assert_eq!(response_constrained.trigger(), response_constrained.input());
+}
+
 enum ExchangeOutcome {
     Succeeded,
     Failed,
@@ -190,7 +199,7 @@ fn requests_budget_optional_workspace_after_instructions_and_latest_user_input()
             .any(|message| message.text() == "Keep this exact constraint")
     );
     assert!(request.messages[0].text().contains("bytes omitted"));
-    input.instructions = "mandatory instruction ".repeat(4000);
+    input.instructions = "mandatory instruction ".repeat(10_000);
     assert!(input.plan().is_err());
 }
 

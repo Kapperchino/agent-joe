@@ -892,7 +892,7 @@ async fn delegated_workers_compact_between_complete_tool_exchanges() {
         response(vec![call("delegate", "child")]),
     );
     let mut compactions = 0;
-    for index in 0..8 {
+    for index in 0..12 {
         let (mut request, mut reply) = within(child_requests.recv_async()).await.unwrap();
         if request
             .system

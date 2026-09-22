@@ -34,7 +34,7 @@ impl ContextLimits {
         self.ceiling - self.response as usize
     }
     pub fn trigger(self) -> usize {
-        self.input() - self.input() / 5
+        (self.ceiling - self.ceiling.div_ceil(10)).min(self.input())
     }
     pub fn summary_bytes(self) -> usize {
         (self.input() / 8).min(8192)
@@ -340,7 +340,7 @@ impl ContextInput {
         let exchanges = CompleteHistory::new(&self.history)?;
         let request = self.request(&self.checkpoint)?;
         match self.mode {
-            RequestMode::Continue if estimated_tokens(&request)? <= self.limits.trigger() => {
+            RequestMode::Continue if estimated_tokens(&request)? < self.limits.trigger() => {
                 Ok(BudgetPlan::Ready(request))
             }
             _ => CompactionPlan::new(self, &exchanges).map(BudgetPlan::Compact),
