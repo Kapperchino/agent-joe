@@ -29,6 +29,224 @@ async fn interaction_command(
 }
 
 #[tokio::test]
+async fn plan_mode_requires_investigation_evidence_and_preserves_pending_implementation() {
+    use commands::command::Command;
+    for mode in [Mode::Simple, Mode::Delegated] {
+        let workspace = session::test_support::Workspace::new();
+        std::fs::write(
+            workspace.path.join("behavior.txt"),
+            "Existing behavior and test cases",
+        )
+        .unwrap();
+        let actor = match mode {
+            Mode::Simple => RepositoryActor::new(SimpleWorker::new(), workspace.path.clone()).await,
+            Mode::Delegated => {
+                RepositoryActor::new(BaseWorker::new(), workspace.path.clone()).await
+            }
+        };
+        interaction_command(&actor, Command::Plan).await;
+        actor
+            .actor
+            .send_message(Message::StartWork(Some("Plan the behavior change".into())))
+            .unwrap();
+        let (request, reply) = actor.request().await;
+        assert!(
+            request
+                .system
+                .as_deref()
+                .unwrap()
+                .contains("Plan mode: investigate, clarify, and design")
+        );
+        answer(
+            reply,
+            response(vec![text("Premature plan without investigation")]),
+        );
+        let (request, reply) = actor.request().await;
+        assert!(
+            request
+                .messages
+                .last()
+                .unwrap()
+                .text()
+                .contains("Plan mode requires a completed investigation")
+        );
+        let mut plan = json!({
+            "revision":0, "requirements_revision":0,
+            "steps":[
+                {"id":"inspect", "kind":"investigation", "description":"Understand behavior and its tests",
+                 "dependencies":[], "acceptance":"Identify affected behavior and test cases", "state":"in_progress",
+                 "evidence":[], "blocked_reason":null},
+                {"id":"implement", "kind":"implementation", "description":"Change the behavior and add regression coverage",
+                 "dependencies":["inspect"], "acceptance":"The specified behavior is covered", "state":"pending",
+                 "evidence":[], "blocked_reason":null}
+            ]
+        });
+        answer(
+            reply,
+            response(vec![tool(
+                "update_plan",
+                "start-investigation",
+                plan.clone(),
+            )]),
+        );
+        answer(
+            actor.request().await.1,
+            response(vec![text("Premature plan with unfinished investigation")]),
+        );
+        let (request, reply) = actor.request().await;
+        assert!(
+            request
+                .messages
+                .last()
+                .unwrap()
+                .text()
+                .contains("Unfinished investigation step inspect")
+        );
+        answer(
+            reply,
+            response(vec![tool(
+                "read_file",
+                "missing-read",
+                json!({"file_path":"missing.txt"}),
+            )]),
+        );
+        let (request, reply) = actor.request().await;
+        assert!(
+            !runtime_snapshot(&request.messages)
+                .evidence
+                .contains_key("tool:missing-read")
+        );
+        plan["revision"] = json!(1);
+        plan["steps"][0]["state"] = json!("completed");
+        plan["steps"][0]["evidence"] =
+            json!([{"source":"tool:missing-read","explanation":"Claimed investigation"}]);
+        answer(
+            reply,
+            response(vec![tool(
+                "update_plan",
+                "unsupported-completion",
+                plan.clone(),
+            )]),
+        );
+        let (request, reply) = actor.request().await;
+        assert!(matches!(
+            latest_tool_result(&request),
+            ContentBlock::ToolResult {
+                is_error: Some(true),
+                ..
+            }
+        ));
+        assert_eq!(
+            runtime_snapshot(&request.messages).planning.plan.steps[0].state,
+            common_models::interaction::StepState::InProgress
+        );
+        answer(
+            reply,
+            response(vec![tool(
+                "read_file",
+                "observed",
+                json!({"file_path":"behavior.txt"}),
+            )]),
+        );
+        let (request, reply) = actor.request().await;
+        assert!(
+            runtime_snapshot(&request.messages)
+                .evidence
+                .contains_key("tool:observed")
+        );
+        plan["steps"][0]["evidence"] = json!([{"source":"tool:observed","explanation":"Inspected current behavior and test cases"}]);
+        answer(
+            reply,
+            response(vec![tool("update_plan", "complete-investigation", plan)]),
+        );
+        let (request, reply) = actor.request().await;
+        let planning = runtime_snapshot(&request.messages).planning;
+        assert!(matches!(
+            planning.plan.investigation(),
+            common_models::interaction::Investigation::Complete
+        ));
+        assert_eq!(
+            planning.plan.steps[1].state,
+            common_models::interaction::StepState::Pending
+        );
+        answer(
+            reply,
+            response(vec![text(
+                "Grounded design with implementation and validation still proposed",
+            )]),
+        );
+        actor
+            .event(|event| {
+                event.actor_id == 0
+                    && matches!(
+                        event.packet,
+                        ActorToTuiPacket::TurnChanged {
+                            state: Lifecycle::Completed,
+                            ..
+                        }
+                    )
+            })
+            .await;
+        let saved = actor
+            .store
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|snapshot| snapshot.parent.is_none())
+            .unwrap();
+        assert_eq!(saved.planning.plan, planning.plan);
+        assert_eq!(
+            std::fs::read_to_string(workspace.path.join("behavior.txt")).unwrap(),
+            "Existing behavior and test cases"
+        );
+        interaction_command(&actor, Command::Implement).await;
+        actor.actor.send_message(Message::StartWork(None)).unwrap();
+        let (request, reply) = actor.request().await;
+        assert!(
+            !request
+                .system
+                .as_deref()
+                .unwrap()
+                .contains("Plan mode: investigate, clarify, and design")
+        );
+        answer(
+            reply,
+            response(vec![text("Implementation is not finished")]),
+        );
+        let (request, reply) = actor.request().await;
+        assert!(
+            request
+                .messages
+                .last()
+                .unwrap()
+                .text()
+                .contains("Unfinished plan step implement")
+        );
+        answer(
+            reply,
+            response(vec![tool(
+                "request_user_input",
+                "blocker",
+                json!({"id":"scope","prompt":"Which behavior should change?","required":true}),
+            )]),
+        );
+        actor
+            .event(|event| {
+                event.actor_id == 0
+                    && matches!(
+                        event.packet,
+                        ActorToTuiPacket::TurnChanged {
+                            state: Lifecycle::WaitingForInput,
+                            ..
+                        }
+                    )
+            })
+            .await;
+        actor.stop().await;
+    }
+}
+
+#[tokio::test]
 async fn plan_mode_denies_all_cargo_and_mutation_tools_in_both_root_modes() {
     use commands::command::Command;
     for mode in [Mode::Simple, Mode::Delegated] {
@@ -143,7 +361,9 @@ async fn plan_mode_denies_all_cargo_and_mutation_tools_in_both_root_modes() {
         );
         let (request, reply) = actor.request().await;
         assert!(result_text(&request).contains("user work"));
+        let reply = record_investigation(&actor, reply, "tool:inspect").await;
         completed_root(&actor, reply).await;
+        interaction_command(&actor, Command::Clear).await;
         interaction_command(&actor, Command::Implement).await;
         actor
             .actor
@@ -181,6 +401,15 @@ async fn plan_mode_is_inherited_by_read_workers_and_denies_dynamic_writer_launch
     assert!(!started.child.0.tools.iter().any(
         |tool| matches!(tool, ToolDefinition::Client { name, .. } if name == "request_user_input")
     ));
+    assert!(
+        !started
+            .child
+            .0
+            .system
+            .as_deref()
+            .unwrap()
+            .contains("Plan mode: investigate, clarify, and design")
+    );
     answer(
         started.parent.1,
         response(vec![tool(
@@ -211,6 +440,7 @@ async fn plan_mode_is_inherited_by_read_workers_and_denies_dynamic_writer_launch
     );
     let (request, reply) = actor.request().await;
     assert_eq!(latest_result(&request)["workers"][0]["status"], "completed");
+    let reply = record_investigation(&actor, reply, "tool:collect").await;
     completed_root(&actor, reply).await;
     actor.stop().await;
 }
@@ -345,6 +575,38 @@ impl WorkerRequests {
             },
         }
     }
+}
+
+async fn record_investigation(
+    actor: &RepositoryActor,
+    mut reply: oneshot::Sender<anyhow::Result<Events>>,
+    source: &str,
+) -> oneshot::Sender<anyhow::Result<Events>> {
+    for (revision, state) in ["pending", "completed"].into_iter().enumerate() {
+        answer(
+            reply,
+            response(vec![tool(
+                "update_plan",
+                &format!("investigation-{revision}"),
+                json!({
+                    "revision":revision, "requirements_revision":0,
+                    "steps":[{
+                        "id":"inspect", "kind":"investigation", "description":"Inspect requested context",
+                        "dependencies":[], "acceptance":"Relevant findings were inspected", "state":state,
+                        "evidence":[{"source":source,"explanation":"Observed the requested context"}],
+                        "blocked_reason":null
+                    }]
+                }),
+            )]),
+        );
+        let (request, next) = actor.request().await;
+        assert!(matches!(
+            latest_tool_result(&request),
+            ContentBlock::ToolResult { is_error: None, .. }
+        ));
+        reply = next;
+    }
+    reply
 }
 
 async fn completed_root(actor: &RepositoryActor, reply: oneshot::Sender<anyhow::Result<Events>>) {

@@ -167,8 +167,8 @@ impl<P: InteractionPersistence> InteractionControl<'_, P> {
             .iter()
             .map(|step| {
                 format!(
-                    "{} [{:?}] {} — {}",
-                    step.id, step.state, step.description, step.acceptance
+                    "{} [{:?}, {:?}] {} — {}",
+                    step.id, step.kind, step.state, step.description, step.acceptance
                 )
             })
             .collect::<Vec<_>>()

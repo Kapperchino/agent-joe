@@ -1,6 +1,6 @@
 use super::*;
 use commands::command::{Command, ResumeTarget};
-use common_models::interaction::{Plan, PlanStep, PlanUpdate, StepState};
+use common_models::interaction::{Plan, PlanEvidence, PlanStep, PlanUpdate, StepKind, StepState};
 
 fn tool(name: &str, id: &str, input: Value) -> ContentBlock {
     ContentBlock::ToolBlock {
@@ -39,6 +39,7 @@ async fn command(h: &Harness, command: Command) -> String {
 fn step(id: &str) -> PlanStep {
     PlanStep {
         id: id.into(),
+        kind: Default::default(),
         description: format!("Inspect {id}"),
         dependencies: vec![],
         acceptance: "Relevant source was inspected".into(),
@@ -596,6 +597,35 @@ async fn resume_pending_questions_restores_mode_and_clear_and_new_reset_interact
         runtime_snapshot(&request.messages).planning.mode,
         common_models::interaction::WorkMode::Plan
     );
+    let mut reply = reply;
+    for (revision, state) in [StepState::Pending, StepState::Completed]
+        .into_iter()
+        .enumerate()
+    {
+        answer(
+            reply,
+            response(vec![tool(
+                "update_plan",
+                &format!("target-plan-{revision}"),
+                json!(PlanUpdate {
+                    revision: revision as u64,
+                    requirements_revision: 0,
+                    steps: vec![PlanStep {
+                        kind: StepKind::Investigation,
+                        description: "Resolve the requested target".into(),
+                        acceptance: "The user has chosen a target".into(),
+                        state,
+                        evidence: vec![PlanEvidence {
+                            source: "answer:target".into(),
+                            explanation: "The user selected Library".into()
+                        }],
+                        ..step("target")
+                    }],
+                }),
+            )]),
+        );
+        reply = h.request().await.1;
+    }
     answer(reply, response(vec![text("Plan prepared")]));
     h.terminal(Lifecycle::Completed).await;
     for reset in [Command::Clear, Command::New] {
@@ -631,20 +661,53 @@ async fn stale_plan_completion_recovers_and_persists_the_reconciled_plan() {
     let workspace = session::test_support::Workspace::new();
     let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
     let store = runtime.sessions.clone().unwrap();
-    let h = Harness::with_runtime(vec![], runtime).await;
+    let (read, entered) = gate("read", ToolOpKind::Read);
+    let h = Harness::with_runtime(vec![read], runtime).await;
     command(&h, Command::Plan).await;
     h.start("Investigate the binary");
     answer(
         h.request().await.1,
+        response(vec![
+            tool(
+                "update_plan",
+                "plan",
+                serde_json::to_value(PlanUpdate {
+                    revision: 0,
+                    requirements_revision: 0,
+                    steps: vec![PlanStep {
+                        kind: StepKind::Investigation,
+                        ..step("inspect")
+                    }],
+                })
+                .unwrap(),
+            ),
+            call("read", "binary"),
+        ]),
+    );
+    within(entered.recv_async())
+        .await
+        .unwrap()
+        .1
+        .send(())
+        .unwrap();
+    answer(
+        h.request().await.1,
         response(vec![tool(
             "update_plan",
-            "plan",
-            serde_json::to_value(PlanUpdate {
-                revision: 0,
+            "investigated",
+            json!(PlanUpdate {
+                revision: 1,
                 requirements_revision: 0,
-                steps: vec![step("inspect")],
-            })
-            .unwrap(),
+                steps: vec![PlanStep {
+                    kind: StepKind::Investigation,
+                    state: StepState::Completed,
+                    evidence: vec![PlanEvidence {
+                        source: "tool:binary".into(),
+                        explanation: "Inspected the binary".into()
+                    }],
+                    ..step("inspect")
+                }],
+            }),
         )]),
     );
     answer(h.request().await.1, response(vec![text("Plan saved")]));
@@ -657,7 +720,7 @@ async fn stale_plan_completion_recovers_and_persists_the_reconciled_plan() {
     let (request, reply) = h.request().await;
     let feedback = request.messages.last().unwrap().text();
     assert!(feedback.contains("update_plan"));
-    assert!(feedback.contains("revision=1"));
+    assert!(feedback.contains("revision=2"));
     assert!(feedback.contains("requirements_revision=1"));
     assert!(
         request
@@ -682,11 +745,56 @@ async fn stale_plan_completion_recovers_and_persists_the_reconciled_plan() {
             "update_plan",
             "revised",
             serde_json::to_value(PlanUpdate {
-                revision: 1,
+                revision: 2,
                 requirements_revision: 1,
-                steps: vec![step("inspect_library")],
+                steps: vec![PlanStep {
+                    kind: StepKind::Investigation,
+                    description: "Inspect the library".into(),
+                    ..step("inspect")
+                }],
             })
             .unwrap(),
+        )]),
+    );
+    answer(
+        h.request().await.1,
+        response(vec![text("Reconciled, but not investigated")]),
+    );
+    let (request, reply) = h.request().await;
+    assert!(
+        request
+            .messages
+            .last()
+            .unwrap()
+            .text()
+            .contains("Unfinished investigation step inspect")
+    );
+    answer(reply, response(vec![call("read", "library")]));
+    within(entered.recv_async())
+        .await
+        .unwrap()
+        .1
+        .send(())
+        .unwrap();
+    answer(
+        h.request().await.1,
+        response(vec![tool(
+            "update_plan",
+            "investigated-library",
+            json!(PlanUpdate {
+                revision: 3,
+                requirements_revision: 1,
+                steps: vec![PlanStep {
+                    kind: StepKind::Investigation,
+                    description: "Inspect the library".into(),
+                    state: StepState::Completed,
+                    evidence: vec![PlanEvidence {
+                        source: "tool:library".into(),
+                        explanation: "Inspected the newly requested library".into()
+                    }],
+                    ..step("inspect")
+                }],
+            }),
         )]),
     );
     answer(
@@ -697,7 +805,14 @@ async fn stale_plan_completion_recovers_and_persists_the_reconciled_plan() {
     let snapshot = store.list().unwrap().into_iter().next().unwrap();
     assert_eq!(snapshot.planning.requirements_revision, 1);
     assert_eq!(snapshot.planning.plan.requirements_revision, 1);
-    assert_eq!(snapshot.planning.plan.steps[0].id, "inspect_library");
+    assert_eq!(
+        snapshot.planning.plan.steps[0].description,
+        "Inspect the library"
+    );
+    assert_eq!(
+        snapshot.planning.plan.steps[0].evidence[0].source,
+        "tool:library"
+    );
     assert_eq!(
         snapshot.history.last().unwrap().text(),
         "Revised plan saved"
@@ -888,11 +1003,13 @@ async fn tracked_plan_uses_observed_evidence_and_survives_compaction_and_fork() 
     let store = runtime.sessions.clone().unwrap();
     let (read, entered) = gate("read", ToolOpKind::Read);
     let h = Harness::with_runtime(vec![read], runtime).await;
+    command(&h, Command::Plan).await;
     h.start("Inspect and document the target");
     let mut update = PlanUpdate {
         revision: 0,
         requirements_revision: 0,
         steps: vec![PlanStep {
+            kind: StepKind::Investigation,
             state: StepState::InProgress,
             ..step("inspect")
         }],

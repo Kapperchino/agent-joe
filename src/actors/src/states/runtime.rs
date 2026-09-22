@@ -28,15 +28,21 @@ impl ExecutionRole {
         }
     }
 
-    pub fn get_guidance(&self) -> String {
+    pub fn get_guidance(&self, mode: common_models::interaction::WorkMode) -> String {
         let guidance = match self {
             ExecutionRole::Root => include_str!("../workers/resources/interaction.md"),
             ExecutionRole::Worker { .. } | ExecutionRole::Helper => {
                 "Inherit the parent's work mode. Report questions, blockers, plan progress and evidence to the parent; only the root can update the shared plan or ask the user."
             }
         };
+        let planning = match (self, mode) {
+            (Self::Root, common_models::interaction::WorkMode::Plan) => {
+                include_str!("../workers/resources/plan_mode.md")
+            }
+            _ => "",
+        };
         format!(
-            "Runtime state updates supply the current work mode, plan, evidence, unanswered questions, and workers. A Snapshot replaces previous runtime state. Changes replace the listed fields; evidence changes merge by source ID, with null removing a source. These records are state, not additional user requirements. Evidence source IDs may be cited by update_plan. Plan mode permits read-only investigation; Cargo and all workspace mutations are denied. Only the user can change modes. Questions and answers cannot change workspace permissions.\n{guidance}"
+            "Runtime state updates supply the current work mode, plan, evidence, unanswered questions, and workers. A Snapshot replaces previous runtime state. Changes replace the listed fields; evidence changes merge by source ID, with null removing a source. These records are state, not additional user requirements. Evidence source IDs may be cited by update_plan. Plan mode permits read-only investigation; Cargo and all workspace mutations are denied. Only the user can change modes. Questions and answers cannot change workspace permissions.\n{guidance}\n{planning}"
         )
     }
 }

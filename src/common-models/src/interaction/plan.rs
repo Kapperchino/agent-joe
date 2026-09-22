@@ -12,6 +12,20 @@ pub enum StepState {
     Blocked,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StepKind {
+    Investigation,
+    #[default]
+    Implementation,
+}
+
+pub enum Investigation<'a> {
+    Missing,
+    Unfinished(Vec<&'a PlanStep>),
+    Complete,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlanEvidence {
@@ -23,6 +37,8 @@ pub struct PlanEvidence {
 #[serde(deny_unknown_fields)]
 pub struct PlanStep {
     pub id: String,
+    #[serde(default)]
+    pub kind: StepKind,
     pub description: String,
     #[serde(default)]
     pub dependencies: Vec<String>,
@@ -82,13 +98,15 @@ impl PlanStep {
                 .all(|id| graph.by_id.contains_key(id.as_str()) && *id != self.id)
             && self.evidence.len() <= 8
             && self.validation.as_ref().is_none_or(|validation| {
-                matches!(
-                    validation
-                        .cargo
-                        .get("operation")
-                        .and_then(serde_json::Value::as_str),
-                    Some("check" | "test" | "fmt_check" | "clippy" | "run")
-                ) && serde_json::to_vec(validation).is_ok_and(|encoded| encoded.len() <= 8192)
+                self.kind == StepKind::Implementation
+                    && matches!(
+                        validation
+                            .cargo
+                            .get("operation")
+                            .and_then(serde_json::Value::as_str),
+                        Some("check" | "test" | "fmt_check" | "clippy" | "run")
+                    )
+                    && serde_json::to_vec(validation).is_ok_and(|encoded| encoded.len() <= 8192)
             })
             && self.evidence.iter().all(|item| {
                 evidence.contains_key(&item.source) && bounded_text(&item.explanation, 512)
@@ -98,7 +116,8 @@ impl PlanStep {
 
     fn transition(&self, previous: Option<&Self>, review: PlanReview) -> anyhow::Result<Self> {
         let definition_unchanged = previous.is_some_and(|previous| {
-            previous.description == self.description
+            previous.kind == self.kind
+                && previous.description == self.description
                 && previous.acceptance == self.acceptance
                 && previous.dependencies == self.dependencies
                 && previous.validation == self.validation
@@ -192,6 +211,26 @@ impl<'a> PlanGraph<'a> {
 }
 
 impl Plan {
+    pub fn investigation(&self) -> Investigation<'_> {
+        let steps = self
+            .steps
+            .iter()
+            .filter(|step| step.kind == StepKind::Investigation)
+            .collect::<Vec<_>>();
+        match steps.as_slice() {
+            [] => Investigation::Missing,
+            _ if steps.iter().all(|step| step.state == StepState::Completed) => {
+                Investigation::Complete
+            }
+            _ => Investigation::Unfinished(
+                steps
+                    .into_iter()
+                    .filter(|step| step.state != StepState::Completed)
+                    .collect(),
+            ),
+        }
+    }
+
     pub fn update(
         &self,
         update: PlanUpdate,
@@ -220,3 +259,7 @@ impl Plan {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/interaction_plan.rs"]
+mod tests;

@@ -135,6 +135,20 @@ and `Home`/`End` to jump to the first or latest calls. Press `Ctrl+o` or `Esc` t
 collapse the history and return to the conversation; message drafts are preserved.
 The `--debug` display continues to show individual tool calls with full details.
 
+## Plan mode
+
+Use `/plan` while idle to investigate and design a change before implementation.
+Joe traces relevant code and tests, clarifies consequential choices, and prepares
+a plan covering the design, affected components, edge cases and validation.
+Workspace mutations and all Cargo operations remain disabled until `/implement`.
+
+Tracked plans distinguish investigation from implementation. A planning turn can
+finish only after at least one investigation step exists and all investigation
+steps are completed with recorded evidence. Future implementation and validation
+steps may remain pending. Changed requirements require reconciliation and renewed
+investigation. Existing saved steps default to implementation; Joe must add or
+reclassify investigation steps when continuing an older plan in plan mode.
+
 ## Answering questions
 
 Pending questions have a TUI picker that opens automatically when the message

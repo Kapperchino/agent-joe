@@ -8,7 +8,7 @@ use analysis::contexts::context::Context;
 use clients::failure::{Failure, FailureKind};
 use clients::llm::LLmClient;
 use clients::response::RequestMode;
-use common_models::interaction::{PlanReview, StepState, WorkMode};
+use common_models::interaction::{Investigation, PlanReview, StepState, WorkMode};
 use common_models::runtime_ids::TurnId;
 use conversation::context::ContextInput;
 use session::state::SessionState;
@@ -71,7 +71,11 @@ impl<C: Context> ProviderContext<'_, C> {
     pub fn input(&self, turn: TurnId, client: &LLmClient) -> anyhow::Result<ContextInput> {
         let interaction = match self.request_mode {
             RequestMode::SingleResponse => None,
-            RequestMode::Continue | RequestMode::Compact => Some(self.runtime.role.get_guidance()),
+            RequestMode::Continue | RequestMode::Compact => Some(
+                self.runtime
+                    .role
+                    .get_guidance(self.runtime.interaction.mode()),
+            ),
         };
         let instructions = std::iter::once(self.context.effective_instructions()?)
             .chain(interaction)
@@ -187,10 +191,19 @@ impl<C: Context> ProviderContext<'_, C> {
         if !pending.is_empty() {
             obligations.push(format!("Collect and assess worker reports with worker_status (wait for running workers): {}", pending.join("; ")));
         }
-        if planning.mode == WorkMode::Implement {
-            obligations.extend(planning.plan.steps.iter().filter(|step| step.state != StepState::Completed).map(|step| {
+        match planning.mode {
+            WorkMode::Plan => match planning.plan.investigation() {
+                Investigation::Missing => obligations.push(
+                    "Plan mode requires a completed investigation before presenting a final plan. Use update_plan to add kind=investigation steps, inspect the relevant sources and resolve consequential unknowns, then complete those steps with observed evidence. Keep future implementation steps pending.".into(),
+                ),
+                Investigation::Unfinished(steps) => obligations.extend(steps.into_iter().map(|step| {
+                    format!("Unfinished investigation step {} ({:?}): {}. Continue the investigation and update_plan with observed evidence, or use request_user_input for an unresolved blocker. Future implementation steps may remain pending.", step.id, step.state, step.description)
+                })),
+                Investigation::Complete => {}
+            },
+            WorkMode::Implement => obligations.extend(planning.plan.steps.iter().filter(|step| step.state != StepState::Completed).map(|step| {
                 format!("Unfinished plan step {} ({:?}): {}. Continue the work and update_plan with observed evidence, or use request_user_input for an unresolved blocker.", step.id, step.state, step.description)
-            }));
+            })),
         }
         match (
             planning.mode,

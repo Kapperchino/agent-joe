@@ -32,6 +32,7 @@ fn answering_a_question_atomically_marks_the_saved_plan_for_reconciliation() {
                 requirements_revision: 0,
                 steps: vec![PlanStep {
                     id: "target".into(),
+                    kind: Default::default(),
                     description: "Inspect target".into(),
                     dependencies: vec![],
                     acceptance: "Target inspected".into(),
@@ -96,6 +97,7 @@ fn merge_answers_preserve_the_plan_and_record_durable_evidence() {
     let mut planning = Planning::default();
     planning.plan.steps.push(PlanStep {
         id: "edit".into(),
+        kind: Default::default(),
         description: "Update the function".into(),
         dependencies: Vec::new(),
         acceptance: "Tests pass".into(),
