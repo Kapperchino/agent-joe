@@ -406,6 +406,9 @@ impl ErasedToolTrait<TestContext, ActorContext<TestContext>> for GateTool {
 mod context_tests;
 #[path = "interaction_runtime_test.rs"]
 mod interaction_tests;
+#[cfg(target_os = "macos")]
+#[path = "idle_sleep_test.rs"]
+mod idle_sleep_tests;
 fn gate(
     name: &'static str,
     effect: ToolOpKind,

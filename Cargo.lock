@@ -6174,6 +6174,7 @@ dependencies = [
  "anyhow",
  "blake3",
  "cargo_metadata",
+ "core-foundation 0.9.4",
  "dirs",
  "fnv",
  "futures",

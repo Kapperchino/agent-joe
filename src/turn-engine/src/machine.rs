@@ -19,6 +19,7 @@ use common_models::{
 use std::collections::VecDeque;
 use tools::tool_defs::ToolResult;
 use utils::execution::ExecutionScope;
+use utils::power::IdleSleep;
 
 pub enum Event {
     Session(SessionEvent),
@@ -287,6 +288,19 @@ impl TurnMachine {
                 ..
             })
         )
+    }
+
+    pub fn idle_sleep(&self) -> IdleSleep {
+        match &self.state {
+            SessionState::Running(Session {
+                state: TurnState::Idle | TurnState::Waiting(_),
+                ..
+            })
+            | SessionState::Stopped => IdleSleep::Allowed,
+            SessionState::Running(_) | SessionState::Closing(_) | SessionState::ShuttingDown(_) => {
+                IdleSleep::Prevented
+            }
+        }
     }
 
     pub fn needs_workspace(&self, event: &Event) -> bool {

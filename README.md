@@ -87,6 +87,11 @@ package. Keep both executables in the same directory when installing Joe. Other
 applications using the sandbox crate can set `JOE_SANDBOX_LAUNCHER` to the launcher
 path. Workspace checks and tests include the launcher.
 
+On macOS, Joe prevents idle system sleep while a turn is working, including
+provider retries, tool execution, and cleanup. The display can still turn off.
+The sleep hold is released when work finishes or waits for a required answer.
+Closing the lid or explicitly putting the Mac to sleep still suspends work.
+
 All session worktrees in a Joe project share one running sandbox VM. Switching,
 restoring, or merging sessions does not restart it. Each command mounts only its
 selected worktree at `/workspace`, hides the project export, and gets private

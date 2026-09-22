@@ -29,6 +29,7 @@ use std::{collections::VecDeque, sync::Arc};
 use turn_engine::machine::{Event, SessionEvent, TurnMachine};
 use turn_engine::turn::{HistoryDisposition, Tag};
 use utils::execution::ExecutionScope;
+use utils::power::SleepInhibitor;
 
 pub struct ActorState<C: Context> {
     pub session: SessionState,
@@ -43,6 +44,7 @@ pub struct ActorState<C: Context> {
     pub services: Arc<ActorServices<C, ActorContext<C>>>,
     pub context: C,
     pub runtime: Runtime,
+    sleep_inhibitor: SleepInhibitor,
 }
 
 impl<C: Context + Clone + 'static> ActorState<C> {
@@ -89,6 +91,10 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         });
         let stream = ProviderStream::new(&services, &runtime, reporter.clone(), activation.usage)?;
         Ok(Self {
+            sleep_inhibitor: SleepInhibitor::new(format!(
+                "Joe actor {} is working",
+                actor_ref.get_id()
+            )),
             session: activation.state,
             request_mode,
             llm: client,
@@ -130,6 +136,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             .clear(&self.runtime.worker_owner(self.context.get_id()))
             .await;
         self.turn = TurnMachine::new(activation.runtime.scope.clone(), self.request_mode);
+        self.sync_idle_sleep();
         self.worker_replies = Default::default();
         self.context = activation.context;
         self.runtime = self.runtime.clone().with_session(activation.runtime);
@@ -290,12 +297,20 @@ impl<C: Context + Clone + 'static> ActorState<C> {
         }
         self.session_turn().observe(&event);
         let mut effects = VecDeque::from(self.turn.transition(event));
+        self.sync_idle_sleep();
         while let Some(effect) = effects.pop_front() {
             let outcome = effects::execute(self, effect).await;
             let next = self.turn.feedback(outcome);
+            self.sync_idle_sleep();
             for effect in next.into_iter().rev() {
                 effects.push_front(effect);
             }
+        }
+    }
+
+    fn sync_idle_sleep(&mut self) {
+        if let Err(error) = self.sleep_inhibitor.update(self.turn.idle_sleep()) {
+            tracing::warn!(%error, "Could not keep Joe awake during active work");
         }
     }
 
