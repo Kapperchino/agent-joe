@@ -813,7 +813,8 @@ async fn rejected_provider_input_drains_the_previous_request_before_reporting_fa
             tag: run.tag,
         },
         client: LLmClient::Injected(Arc::new(UnusedProvider)),
-        timeout: Duration::from_secs(5),
+        request_timeout: Duration::from_secs(5),
+        compaction_timeout: Duration::from_secs(5),
     }
     .spawn(
         Err(Failure::new(FailureKind::Tool, "Session storage failed")),

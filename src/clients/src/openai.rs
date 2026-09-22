@@ -951,7 +951,7 @@ impl OpenAIClient {
         let retry_policy = ExponentialBackoff::builder().build_with_max_retries(HTTP_MAX_RETRIES);
         let inner_client = Client::builder()
             .connect_timeout(Duration::from_secs(60))
-            .read_timeout(Duration::from_secs(300))
+            .read_timeout(Duration::from_secs(600))
             .default_headers(headers)
             .build()?;
 
