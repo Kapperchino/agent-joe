@@ -69,16 +69,14 @@ fn oversized_context_is_rejected_without_truncation() {
 }
 
 #[test]
-fn compaction_snapshot_uses_the_model_window_and_a_smaller_response_reserve() {
+fn compaction_snapshot_uses_the_parent_window_and_a_smaller_response_reserve() {
     let request = ClientRequest::new(vec![Message::new("full context ".repeat(20_000))]);
     let limits = ContextLimits::new(24_000, 2048).unwrap();
     assert!(Snapshot::new(request.clone(), &client(), limits, Duration::from_secs(1)).is_err());
+    assert!(Snapshot::for_compaction(request, &client(), limits, Duration::from_secs(1)).is_err());
     let snapshot =
-        Snapshot::for_compaction(request, &client(), limits, Duration::from_secs(1)).unwrap();
-    assert_eq!(
-        snapshot.limits.ceiling(),
-        clients::models::FALLBACK_CONTEXT_WINDOW
-    );
+        Snapshot::for_compaction(context(), &client(), limits, Duration::from_secs(1)).unwrap();
+    assert_eq!(snapshot.limits.ceiling(), limits.ceiling());
     assert_eq!(snapshot.limits.response(), 2048);
 
     let snapshot = Snapshot::for_compaction(
@@ -93,6 +91,21 @@ fn compaction_snapshot_uses_the_model_window_and_a_smaller_response_reserve() {
         snapshot.request.max_output_tokens,
         Some(COMPACTION_RESPONSE_TOKENS)
     );
+}
+
+#[test]
+fn compaction_snapshot_inherits_a_parent_context_override() {
+    let limits = ContextLimits::new(256_000, 16_000).unwrap();
+    let request = ClientRequest::new(vec![Message::new("full context ".repeat(70_000))]);
+    let snapshot =
+        Snapshot::for_compaction(request, &client(), limits, Duration::from_secs(1)).unwrap();
+    let request = snapshot
+        .question_request("What was captured?".into())
+        .unwrap();
+    assert!(estimated_tokens(&request).unwrap() > client().context_window());
+    assert!(estimated_tokens(&request).unwrap() <= snapshot.limits.input());
+    assert_eq!(snapshot.limits.ceiling(), limits.ceiling());
+    assert_eq!(snapshot.limits.response(), COMPACTION_RESPONSE_TOKENS);
 }
 
 #[test]

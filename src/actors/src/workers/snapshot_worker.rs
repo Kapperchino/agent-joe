@@ -41,10 +41,11 @@ impl Snapshot {
         limits: ContextLimits,
         timeout: Duration,
     ) -> anyhow::Result<Self> {
-        let ceiling = Self::model_context_window(client, request.model.as_deref());
-        let limits =
-            ContextLimits::new(ceiling, limits.response().min(COMPACTION_RESPONSE_TOKENS))?;
-        Self::new(request, client, limits, timeout)
+        let limits = ContextLimits::new(
+            limits.ceiling(),
+            limits.response().min(COMPACTION_RESPONSE_TOKENS),
+        )?;
+        Self::capture(request, client, limits, timeout)
     }
 
     pub fn from_input(
@@ -85,6 +86,17 @@ impl Snapshot {
         limits: ContextLimits,
         timeout: Duration,
     ) -> anyhow::Result<Self> {
+        let context_window = Self::model_context_window(client, request.model.as_deref());
+        let limits = ContextLimits::new(limits.ceiling().min(context_window), limits.response())?;
+        Self::capture(request, client, limits, timeout)
+    }
+
+    fn capture(
+        request: ClientRequest,
+        client: &LLmClient,
+        limits: ContextLimits,
+        timeout: Duration,
+    ) -> anyhow::Result<Self> {
         match (request.messages.is_empty(), timeout.is_zero()) {
             (true, _) => Err(anyhow::anyhow!("A snapshot requires captured context")),
             (_, true) => Err(anyhow::anyhow!(
@@ -113,9 +125,8 @@ impl Snapshot {
             ..request
         };
         let client = client.snapshot();
-        let context_window = Self::model_context_window(&client, request.model.as_deref());
-        let limits = ContextLimits::new(limits.ceiling().min(context_window), limits.response())?;
-        match estimated_tokens(&request)? <= limits.input() {
+        let required = estimated_tokens(&request)?;
+        match required <= limits.input() {
             true => Ok(Self {
                 request,
                 client,
@@ -123,7 +134,8 @@ impl Snapshot {
                 timeout,
             }),
             false => Err(anyhow::anyhow!(
-                "Snapshot context exceeds its input budget; context was not truncated or compacted"
+                "Snapshot context requires {required} tokens but its input budget is {}; context was not truncated or compacted",
+                limits.input()
             )),
         }
     }

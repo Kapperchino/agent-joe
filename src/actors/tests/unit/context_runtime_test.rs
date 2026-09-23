@@ -74,12 +74,15 @@ fn saved_history_with_output(store: &Arc<SessionStore>, output: &str) -> String 
 }
 
 #[tokio::test]
-async fn compaction_snapshot_can_use_more_context_than_the_conversation_limit() {
+async fn compaction_snapshot_uses_the_parent_context_override() {
     let workspace = session::test_support::Workspace::new();
-    let limits = configured_limits();
-    let runtime = configured_runtime(&workspace);
+    let limits = ContextLimits::new(256_000, 2048).unwrap();
+    let runtime = Runtime {
+        context_budget: ContextBudget::Fixed(limits),
+        ..configured_runtime(&workspace)
+    };
     let store = runtime.sessions.clone().unwrap();
-    let id = saved_history_with_output(&store, &r#"{"path":"src\\lib.rs"}"#.repeat(450));
+    let id = saved_history_with_output(&store, &r#"{"path":"src\\lib.rs"}"#.repeat(3500));
     let (normal, requests) = flume::unbounded();
     let (compactions, native_requests) = flume::unbounded();
     let client = llm::LLmClient::Injected(Arc::new(NativeProvider {
