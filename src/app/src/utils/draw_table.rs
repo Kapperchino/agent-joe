@@ -30,10 +30,7 @@ impl TableHeader {
 }
 
 impl DrawTable {
-    pub fn mark_table_header_as_continuation(
-        line: &str,
-        width_hint: Option<&[usize]>,
-    ) -> String {
+    pub fn mark_table_header_as_continuation(line: &str, width_hint: Option<&[usize]>) -> String {
         match Self::parse_table_row(line) {
             Some(mut cells) => {
                 if let Some(first_cell) = cells.first_mut() {
@@ -398,10 +395,7 @@ impl DrawTable {
             Some(alignments)
         }
     }
-    pub fn mark_table_header_with_width_hint(
-        line: &str,
-        width_hint: Option<&[usize]>,
-    ) -> String {
+    pub fn mark_table_header_with_width_hint(line: &str, width_hint: Option<&[usize]>) -> String {
         match Self::parse_table_row(line) {
             Some(mut cells) => {
                 if let Some(first_cell) = cells.first_mut()

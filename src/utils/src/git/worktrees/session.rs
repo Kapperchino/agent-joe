@@ -288,7 +288,8 @@ impl<'repo> SessionCleanup<'repo> {
         let approved_id = Oid::from_str(approved)?;
         let target = git.repo.refname_to_id(&target_reference)?;
         let expected = WorktreeSnapshot::base(git, approved)?;
-        let actual = WorktreeSnapshot::for_session_cleanup(&workspace, &child, &expected)?;
+        let actual =
+            WorktreeSnapshot::for_session_cleanup(&workspace, &child, &expected)?.with_git_modes();
         if let Some(entry) = child.status(&workspace)?.entries.first() {
             Err(anyhow::anyhow!(
                 "Cleanup conflict: uncommitted change: {}. Preserve or restore this local change before retrying",
@@ -548,7 +549,7 @@ impl SessionWorktree {
         let mut transaction = git.repo.transaction()?;
         transaction.lock_ref(&reference)?;
         let parent = git.repo.find_commit(git.repo.refname_to_id(&reference)?)?;
-        let snapshot = WorktreeSnapshot::current(&workspace, &git)?;
+        let snapshot = WorktreeSnapshot::current(&workspace, &git)?.with_git_modes();
         let target = resolution
             .map(|conflict| {
                 ResolutionState::new(conflict, &parent, state, &merge_heads)?.target(&git.repo)
@@ -638,7 +639,7 @@ impl SessionWorktree {
         let incoming = WorktreeSnapshot::base(&git, &conflict.target)?;
         for path in super::snapshot::changed_paths(&before.files, &incoming.files) {
             workspace.check(&path, crate::workspace::Access::Write)?;
-            match workspace.file_version(&path)?
+            match workspace.file_version(&path)?.with_git_mode()
                 == *before
                     .files
                     .get(&path)
@@ -727,7 +728,9 @@ impl SessionWorktree {
             && target != expected
             && !git.repo.graph_descendant_of(target, expected)?
             && git.repo.state() == RepositoryState::Clean
-            && WorktreeSnapshot::current(&workspace, &git)?.files
+            && WorktreeSnapshot::current(&workspace, &git)?
+                .with_git_modes()
+                .files
                 == WorktreeSnapshot::base(&git, commit)?.files
         {
             true => Ok(()),

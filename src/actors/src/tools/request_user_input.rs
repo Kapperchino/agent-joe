@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use common_models::interaction::Question;
 use serde_json::{Value, json};
 use tools::tool_defs::{
-    LenientDeserialize, ToolDefTrait, ToolOpKind, ToolId, ToolProperty, ToolTrait, ToolType,
+    LenientDeserialize, ToolDefTrait, ToolId, ToolOpKind, ToolProperty, ToolTrait, ToolType,
 };
 use utils::utils::FnvHashMap;
 

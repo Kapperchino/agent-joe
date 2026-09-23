@@ -5,7 +5,7 @@ use crate::{
 use analysis::contexts::context::Context;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use tools::tool_defs::{ToolDefTrait, ToolOpKind, ToolId, ToolTrait, ToolType};
+use tools::tool_defs::{ToolDefTrait, ToolId, ToolOpKind, ToolTrait, ToolType};
 use turbo_code_macros::{ToolDef, ToolInput};
 use utils::utils::FnvHashMap;
 
@@ -106,16 +106,41 @@ impl<C: Context> ToolTrait<C, ActorContext<C>> for AskImmutableWorker {
         let owner = info.owner.clone();
         match action {
             Action::List => Ok(Self::Output::List {
-                workers: registry.list(&owner),
+                workers: registry
+                    .list(&owner)
+                    .into_iter()
+                    .filter(|worker| {
+                        worker.description.kind != "knowledge"
+                            || crate::tools::knowledge::access(actor).is_ok()
+                    })
+                    .collect(),
             }),
             Action::Ask {
                 worker_id,
                 question,
-            } => Ok(Self::Output::Ask {
-                result: registry
-                    .ask(&owner, &worker_id, question, info.runtime.request_timeout)
-                    .await?,
-            }),
+            } => {
+                if registry.list(&owner).iter().any(|worker| {
+                    worker.worker_id == worker_id && worker.description.kind == "knowledge"
+                }) {
+                    crate::tools::knowledge::access(actor)?;
+                    let workspace = info.runtime.scope.workspace()?;
+                    registry
+                        .knowledge(&owner)?
+                        .check(
+                            &workspace,
+                            crate::knowledge::budget(
+                                &info.services.client,
+                                info.runtime.context_budget,
+                            )?,
+                        )
+                        .await?;
+                }
+                Ok(Self::Output::Ask {
+                    result: registry
+                        .ask(&owner, &worker_id, question, info.runtime.request_timeout)
+                        .await?,
+                })
+            }
         }
     }
 

@@ -40,6 +40,19 @@ impl FileVersion {
         }
     }
 
+    pub(crate) fn with_git_mode(self) -> Self {
+        match self {
+            Self::Missing => Self::Missing,
+            Self::File { content, mode } => Self::File {
+                content,
+                mode: match mode & 0o100 {
+                    0 => 0o644,
+                    _ => 0o755,
+                },
+            },
+        }
+    }
+
     pub fn bytes(&self) -> &[u8] {
         match self {
             Self::Missing => &[],

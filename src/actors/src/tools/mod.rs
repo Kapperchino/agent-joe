@@ -1,6 +1,7 @@
 pub mod ask_immutable_worker;
 mod delegated;
 pub mod gather_context;
+pub mod knowledge;
 pub mod make_changes;
 pub mod read_artifact;
 pub mod request_user_input;

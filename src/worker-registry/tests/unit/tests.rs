@@ -188,7 +188,7 @@ async fn registry_retains_immediate_completions_and_enforces_owner_and_worker_co
 
 #[test]
 fn reports_combine_observed_changes_with_supplied_evidence() {
-    use tools::tool_defs::{ToolOpKind, ToolId, ToolInvocation, ToolResult};
+    use tools::tool_defs::{ToolId, ToolInvocation, ToolOpKind, ToolResult};
     let registry = WorkerRegistry::default();
     let worker = registry
         .register("parent", CancellationToken::new(), request())

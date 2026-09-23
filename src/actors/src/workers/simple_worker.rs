@@ -47,6 +47,7 @@ impl ContextWorker for SimpleWorker<RustContext> {
                 Self::C,
                 ActorContext<Self::C>,
             >(),
+            erased_tool::<crate::tools::knowledge::Knowledge, Self::C, ActorContext<Self::C>>(),
             erased_tool::<tools::worktree::Worktree, Self::C, ActorContext<Self::C>>(),
             erased_tool::<tools::undo_changes::UndoChanges, Self::C, ActorContext<Self::C>>(),
             erased_tool::<tools::git::Git, Self::C, ActorContext<Self::C>>(),

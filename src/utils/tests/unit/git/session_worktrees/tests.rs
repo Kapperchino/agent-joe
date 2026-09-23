@@ -62,6 +62,125 @@ impl Drop for Fixture {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn session_merge_normalizes_file_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    struct ModeCase {
+        permissions: u32,
+        git_mode: i32,
+    }
+
+    for case in [
+        ModeCase {
+            permissions: 0o600,
+            git_mode: 0o100644,
+        },
+        ModeCase {
+            permissions: 0o664,
+            git_mode: 0o100644,
+        },
+        ModeCase {
+            permissions: 0o641,
+            git_mode: 0o100644,
+        },
+        ModeCase {
+            permissions: 0o700,
+            git_mode: 0o100755,
+        },
+        ModeCase {
+            permissions: 0o775,
+            git_mode: 0o100755,
+        },
+    ] {
+        let fixture = Fixture::new();
+        let session = fixture.session();
+        let path = session.path.join("file.txt");
+        for file in [&path, &session.path.join("new.txt")] {
+            std::fs::write(file, "session\n").unwrap();
+            std::fs::set_permissions(file, std::fs::Permissions::from_mode(case.permissions))
+                .unwrap();
+        }
+        let proposed = session.proposal(&fixture.workspace).unwrap().unwrap();
+        let approved = session
+            .describe_proposal(
+                &fixture.workspace,
+                &proposed,
+                &CommitMessage::new("Update session file").unwrap(),
+            )
+            .unwrap();
+        let tree = fixture
+            .repo
+            .find_commit(Oid::from_str(&approved).unwrap())
+            .unwrap()
+            .tree()
+            .unwrap();
+        for file in ["file.txt", "new.txt"] {
+            assert_eq!(
+                tree.get_path(Path::new(file)).unwrap().filemode(),
+                case.git_mode
+            );
+        }
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            case.permissions
+        );
+        assert_eq!(
+            session.proposal(&fixture.workspace).unwrap().unwrap(),
+            approved
+        );
+        assert!(matches!(
+            session.merge(&fixture.workspace, &approved).unwrap(),
+            MergeOutcome::Merged { .. }
+        ));
+        assert_eq!(
+            std::fs::read_to_string(fixture.root.join("file.txt")).unwrap(),
+            "session\n"
+        );
+        std::fs::set_permissions(
+            &path,
+            std::fs::Permissions::from_mode(case.permissions ^ 0o100),
+        )
+        .unwrap();
+        assert!(session.cleanup(&fixture.workspace, &approved).is_err());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(case.permissions)).unwrap();
+        session.cleanup(&fixture.workspace, &approved).unwrap();
+        assert!(!session.path.exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn conflict_resolution_normalizes_private_file_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new();
+    let session = fixture.session();
+    let path = session.path.join("file.txt");
+    std::fs::write(&path, "session\n").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+    fixture.commit("file.txt", "main\n");
+    let error = session.merge(&fixture.workspace, &approved).err().unwrap();
+    let conflict = error.downcast_ref::<MergeConflict>().unwrap();
+    session
+        .prepare_resolution(&fixture.workspace, conflict)
+        .unwrap();
+    std::fs::write(&path, "combined\n").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let resolved = session
+        .finish_resolution(&fixture.workspace, conflict)
+        .unwrap();
+    session.merge(&fixture.workspace, &resolved).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(fixture.root.join("file.txt")).unwrap(),
+        "combined\n"
+    );
+    session.cleanup(&fixture.workspace, &resolved).unwrap();
+    assert!(!session.path.exists());
+}
+
 #[test]
 fn merge_ignores_missing_unrelated_worktrees() {
     let fixture = Fixture::new();

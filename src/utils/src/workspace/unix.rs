@@ -253,11 +253,7 @@ impl Parent {
 }
 
 impl WorkspacePolicy {
-    pub fn link_process_cache(
-        &self,
-        source: &Path,
-        destination: &Path,
-    ) -> anyhow::Result<()> {
+    pub fn link_process_cache(&self, source: &Path, destination: &Path) -> anyhow::Result<()> {
         let parent = self
             .resolve(destination, Access::Write)?
             .parent(Parents::Create)?;

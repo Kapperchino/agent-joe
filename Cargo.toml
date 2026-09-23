@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "src/actors", "src/analysis", "src/app", "src/clients", "src/commands", "src/common-models", "src/tools", "src/turbo-code-macros", "src/utils", "src/sandbox", "src/conversation", "src/interaction", "src/response-stream", "src/turn-engine", "src/worker-registry", "src/workspace-access", "src/merge-workflow", "src/session"]
+members = [".", "src/actors", "src/analysis", "src/app", "src/clients", "src/commands", "src/common-models", "src/tools", "src/turbo-code-macros", "src/utils", "src/sandbox", "src/conversation", "src/interaction", "src/response-stream", "src/turn-engine", "src/worker-registry", "src/workspace-access", "src/merge-workflow", "src/session", "src/knowledge-indexer"]
 default-members = [".", "src/sandbox"]
 
 [package]

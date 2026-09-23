@@ -3,13 +3,18 @@ use crate::worker::{Worker, WorkerAdapter};
 use anyhow::Context as _;
 use ractor::{Actor, ActorRef, RpcReplyPort};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, sync::Mutex, time::Duration};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 #[derive(Debug)]
 pub enum ImmutableMessage {
     Ask {
         question: String,
         reply: RpcReplyPort<anyhow::Result<String>>,
+        admission: Option<tokio::sync::OwnedSemaphorePermit>,
     },
 }
 
@@ -44,6 +49,10 @@ pub struct ImmutableWorker {
 }
 
 impl ImmutableWorker {
+    pub(crate) fn view(&self) -> ImmutableWorkerView {
+        self.endpoint.view.clone()
+    }
+
     pub async fn spawn<W: Worker<Msg = ImmutableMessage>>(
         worker: W,
         arguments: W::Arguments,
@@ -81,17 +90,35 @@ impl Drop for ImmutableWorker {
     }
 }
 
-#[derive(Default)]
 pub struct ImmutableWorkerRegistry {
-    workers: Mutex<BTreeMap<String, Vec<ImmutableWorker>>>,
+    pub(crate) state: Mutex<RegistryState>,
+    pub(crate) knowledge_gate: Arc<tokio::sync::Semaphore>,
+    pub(crate) knowledge_queue: Arc<tokio::sync::Semaphore>,
+}
+
+#[derive(Default)]
+pub(crate) struct RegistryState {
+    pub(crate) workers: BTreeMap<String, Vec<ImmutableWorker>>,
+    pub(crate) knowledge: BTreeMap<String, crate::knowledge::Slot>,
+}
+
+impl Default for ImmutableWorkerRegistry {
+    fn default() -> Self {
+        Self {
+            state: Mutex::default(),
+            knowledge_gate: Arc::new(tokio::sync::Semaphore::new(1)),
+            knowledge_queue: Arc::new(tokio::sync::Semaphore::new(16)),
+        }
+    }
 }
 
 impl ImmutableWorkerRegistry {
     pub fn insert(&self, owner: &str, worker: ImmutableWorker) -> ImmutableWorkerView {
         let view = worker.endpoint.view.clone();
-        self.workers
+        self.state
             .lock()
             .unwrap_or_else(|error| error.into_inner())
+            .workers
             .entry(owner.to_owned())
             .or_default()
             .push(worker);
@@ -99,9 +126,10 @@ impl ImmutableWorkerRegistry {
     }
 
     pub fn list(&self, owner: &str) -> Vec<ImmutableWorkerView> {
-        self.workers
+        self.state
             .lock()
             .unwrap_or_else(|error| error.into_inner())
+            .workers
             .get(owner)
             .into_iter()
             .flatten()
@@ -117,9 +145,10 @@ impl ImmutableWorkerRegistry {
         timeout: Duration,
     ) -> anyhow::Result<ImmutableAnswer> {
         let endpoint = self
-            .workers
+            .state
             .lock()
             .unwrap_or_else(|error| error.into_inner())
+            .workers
             .get(owner)
             .into_iter()
             .flatten()
@@ -128,10 +157,28 @@ impl ImmutableWorkerRegistry {
             .ok_or_else(|| {
                 anyhow::anyhow!("Unknown immutable worker {worker_id} in this conversation")
             })?;
+        let admission = match endpoint.view.description.kind.as_str() {
+            "knowledge" => {
+                match question.len() <= 16384 {
+                    true => Ok(()),
+                    false => Err(anyhow::anyhow!(
+                        "Knowledge questions are limited to 16384 bytes"
+                    )),
+                }?;
+                Some(
+                    self.knowledge_queue
+                        .clone()
+                        .try_acquire_owned()
+                        .context("At most sixteen knowledge questions may be queued")?,
+                )
+            }
+            _ => None,
+        };
         let (reply, receive) = tokio::sync::oneshot::channel();
         endpoint.actor.send_message(ImmutableMessage::Ask {
             question,
             reply: reply.into(),
+            admission,
         })?;
         let answer = tokio::time::timeout(timeout, receive)
             .await
@@ -144,14 +191,25 @@ impl ImmutableWorkerRegistry {
     }
 
     pub async fn clear(&self, owner: &str) {
-        let workers = self
-            .workers
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .remove(owner)
-            .unwrap_or_default();
+        let workers = {
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            if let Some(slot) = state.knowledge.remove(owner) {
+                slot.invalidate("Conversation cleared or closed");
+            }
+            state.workers.remove(owner).unwrap_or_default()
+        };
         for worker in workers {
             worker.stop().await;
+        }
+    }
+
+    pub fn clear_knowledge(&self, owner: &str) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(slot) = state.knowledge.remove(owner) {
+            slot.invalidate("Knowledge generation retired");
+        }
+        if let Some(workers) = state.workers.get_mut(owner) {
+            workers.retain(|worker| worker.endpoint.view.description.kind != "knowledge");
         }
     }
 }

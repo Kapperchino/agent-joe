@@ -8,6 +8,8 @@ test-support = []
 
 [dependencies]
 sandbox = { path = "../sandbox" }
+common-models = { path = "../common-models" }
+knowledge-indexer = { path = "../knowledge-indexer" }
 grep = "0.4.1"
 cargo_metadata = "0.23.1"
 anyhow = "1.0.99"

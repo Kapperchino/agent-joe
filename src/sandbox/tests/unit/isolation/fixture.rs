@@ -1,9 +1,6 @@
 use super::*;
 
-pub fn command(
-    command: Command,
-    workspace: &dyn Workspace,
-) -> anyhow::Result<IsolatedCommand> {
+pub fn command(command: Command, workspace: &dyn Workspace) -> anyhow::Result<IsolatedCommand> {
     let path = workspace.root().to_path_buf();
     Ok(IsolatedCommand {
         command,

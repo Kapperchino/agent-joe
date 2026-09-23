@@ -83,3 +83,37 @@ Callers import domain types from their owning crates. Actor modules contain the
 adapters that coordinate those types. Component unit tests live in their owning
 crates; actor integration tests exercise storage, streaming, worker execution,
 and session switching together.
+
+## Repository knowledge integration
+
+`common-models::knowledge` owns the validated semantic graph protocol.
+`knowledge-indexer` is a library using pinned rust-analyzer crates directly. It
+constructs a semantic database from captured Cargo manifests, source, and local
+path dependencies without running Cargo, build scripts, or proc macros. There is
+no executable or guest provisioning. `utils::knowledge` snapshots approved inputs,
+owns cooperative preparation/cancellation, checks exact source coverage, and
+fingerprints live inputs. `analysis::knowledge` assigns exact source ownership,
+cuts a deterministic SCC/DFS forest to rendered request budgets, and builds bounded
+symbol/path/relationship routing indexes.
+
+`actors::knowledge` owns generation state (`Preparing`/`Ready`, with a separately
+invalidatable freshness state). A preparation ticket atomically replaces graph
+and worker registry entries only after all shards fit and the inputs remain current.
+Failure restores the previous generation; concurrent clear prevents late publication.
+All shard states reuse the frozen tool-free request executor without turning their
+source into instructions. The estimator and executor build the same request.
+Read-only questions never append conversation history or acquire tools.
+
+The immutable registry retains compaction snapshots when replacing or clearing
+knowledge. Knowledge admissions stay attached to queued messages until handled or
+dropped, and a shared semaphore serializes provider requests across shards. Caller
+cancellation and generation retirement drop in-flight requests. Workspace/model
+fingerprints are checked at query and answer boundaries. Runtime activation and
+shutdown clear the owner registry; relocation clears only repository knowledge.
+
+The root main/simple worker exposes `knowledge` plus `ask_immutable_worker`.
+Preparation is classified as `Validate` from its parsed input; search, inspection,
+status, repartitioning, and clear are `Read`. Delegated/restricted contexts cannot
+query whole-repository knowledge. No preparation occurs on startup. See the root
+README for profiles, ceilings, generation IDs, freshness behavior, direct-library
+tests, and unavailable sysroot/external/generated-code coverage.

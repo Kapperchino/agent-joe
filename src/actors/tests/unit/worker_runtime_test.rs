@@ -898,7 +898,11 @@ impl crate::worker::Worker for ReferenceWorker {
         message: Self::Msg,
         reference: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
-        let crate::immutable_workers::ImmutableMessage::Ask { question, reply } = message;
+        let crate::immutable_workers::ImmutableMessage::Ask {
+            question,
+            reply,
+            admission: _admission,
+        } = message;
         let _ = reply.send(Ok(format!("{reference}: {question}")));
         Ok(())
     }

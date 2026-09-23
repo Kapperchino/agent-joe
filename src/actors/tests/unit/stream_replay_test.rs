@@ -13,7 +13,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
-use tools::tool_defs::{ErasedToolTrait, ToolDefinition, ToolOpKind, ToolId};
+use tools::tool_defs::{ErasedToolTrait, ToolDefinition, ToolId, ToolOpKind};
 use utils::utils::FnvHashMap;
 
 fn build_request<C: Context + Clone + 'static>(

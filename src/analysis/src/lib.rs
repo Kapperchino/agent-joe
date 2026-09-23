@@ -7,3 +7,4 @@ pub mod symbol_info;
 pub mod utils;
 
 pub mod instructions;
+pub mod knowledge;

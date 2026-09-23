@@ -99,6 +99,21 @@ impl Snapshot {
             purpose: clients::llm::RequestPurpose::Worker,
             ..request
         };
+        Self::from_frozen(request, client, limits, timeout)
+    }
+
+    pub(crate) fn from_frozen(
+        request: ClientRequest,
+        client: &LLmClient,
+        limits: ContextLimits,
+        timeout: Duration,
+    ) -> anyhow::Result<Self> {
+        match request.tools.is_empty() && !request.messages.is_empty() && !timeout.is_zero() {
+            true => Ok(()),
+            false => Err(anyhow::anyhow!(
+                "Frozen workers require context, no tools, and a nonzero timeout"
+            )),
+        }?;
         let client = client.snapshot();
         let context_window = match (&client, request.model.as_ref()) {
             (LLmClient::Claude { config, .. } | LLmClient::OpenApi { config, .. }, Some(model)) => {
@@ -123,7 +138,7 @@ impl Snapshot {
         }
     }
 
-    fn question_request(&self, question: String) -> anyhow::Result<ClientRequest> {
+    pub(crate) fn question_request(&self, question: String) -> anyhow::Result<ClientRequest> {
         match question.trim().is_empty() {
             true => Err(anyhow::anyhow!("A snapshot question must not be empty")),
             false => Ok(()),
@@ -138,7 +153,7 @@ impl Snapshot {
         }
     }
 
-    async fn answer(&self, question: String) -> anyhow::Result<String> {
+    pub(crate) async fn answer(&self, question: String) -> anyhow::Result<String> {
         let request = self.question_request(question)?;
         let mut client = self.client.snapshot();
         client.begin_turn();
@@ -178,7 +193,11 @@ impl Worker for SnapshotWorker {
         snapshot: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
-            SnapshotMessage::Ask { question, reply } => {
+            SnapshotMessage::Ask {
+                question,
+                reply,
+                admission: _admission,
+            } => {
                 let _ = reply.send(snapshot.answer(question).await);
             }
         }

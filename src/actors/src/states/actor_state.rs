@@ -219,6 +219,9 @@ impl<C: Context + Clone + 'static> ActorState<C> {
 
     fn relocate_session(&mut self, relocation: SessionRelocation<C>) -> anyhow::Result<()> {
         self.turn.relocate(relocation.runtime.scope.clone())?;
+        self.runtime
+            .immutable_workers
+            .clear_knowledge(&self.runtime.worker_owner(self.context.get_id()));
         self.context = relocation.context;
         self.runtime = self.runtime.clone().with_session(relocation.runtime);
         self.session.conversation.relocate(relocation.message);

@@ -130,6 +130,7 @@ pub fn prepare(
             .chain_update(include_bytes!("../../guest.sh"))
             .chain_update(include_bytes!("../../guest.py"))
             .chain_update(super::compiler_cache::VERSION)
+            .chain_update(include_bytes!("image.rs"))
             .finalize()
     );
     installation.prepare(&format!("guest-{}-{guest_version}", architecture.manifest()), |staging| {

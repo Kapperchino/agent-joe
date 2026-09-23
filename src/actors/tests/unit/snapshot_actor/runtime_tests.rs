@@ -40,6 +40,7 @@ impl SnapshotHarness {
             .send_message(SnapshotMessage::Ask {
                 question: question.into(),
                 reply: reply.into(),
+                admission: None,
             })
             .unwrap();
         receive

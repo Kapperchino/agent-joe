@@ -8,7 +8,7 @@ use ractor::ActorRef;
 use sandbox::process::ProcessStatus;
 use std::{collections::VecDeque, panic::AssertUnwindSafe};
 use tools::{
-    tool_defs::{CancellationMode, ErasedToolRef, ToolOpKind, ToolInvocation, ToolResult},
+    tool_defs::{CancellationMode, ErasedToolRef, ToolInvocation, ToolOpKind, ToolResult},
     tool_error::{FailureImpact, ToolFailure, ToolFailureKind},
 };
 use turn_engine::turn::{Tag, ToolJob};

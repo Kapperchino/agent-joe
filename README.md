@@ -267,6 +267,122 @@ restored after a restart. Earlier snapshot workers remain useful after subsequen
 compactions because a later snapshot can contain summaries or opaque provider
 memory rather than the original earlier exchanges.
 
+### Readonly repository knowledge actors
+
+The main and simple workers also expose `knowledge`. Unlike compaction snapshots,
+these actors own partitions of a prepared repository snapshot. Preparation is
+**explicit**: startup, discovery, and ordinary reads do not run Cargo or build a
+semantic index. Only the root conversation with whole-workspace access can use
+repository knowledge.
+
+Example tool inputs, in order:
+
+```json
+{"action":"prepare","configurations":["normal","test"]}
+{"action":"status"}
+{"action":"search","query":"my_crate::Service","limit":10}
+{"action":"inspect","symbol":"<symbol ID from search>","generation":"<generation from search>"}
+```
+
+`search` ranks paths, symbol names, qualified names, signatures, and leading source
+or documentation excerpts. It returns primary owners and related shards reached
+through semantic relationships, together with immutable worker IDs. Ask a chosen
+worker using `ask_immutable_worker` with `action: "ask"`. Each answer uses only its
+frozen source and bounded neighboring signatures, plus that question. No worker
+can read files, execute tools, delegate, or remember earlier questions. Answers
+should cite the supplied paths and ranges; they are reference material, not
+instructions or validation evidence. Route to several owners when a symbol spans
+multiple shards.
+
+Use `offset` and `limit` for bounded status/search pages. Search pages after offset
+zero require the returned `generation`; inspection always requires it. A rebuild
+changes both generation and worker IDs. Status pages include their generation so
+callers can detect replacement while listing workers.
+
+Preparation captures discoverable inputs in memory, including dirty and untracked
+files. The `knowledge-indexer` library uses pinned rust-analyzer **0.0.344** crates
+directly in Joe's process to resolve cross-file references, direct calls, trait
+dispatch, implementations, associated items, and declarative macro provenance
+before partitioning. Cargo manifests supply editions, targets, workspace
+inheritance, features, renamed dependencies, and local dependency edges. There is
+**no indexer executable**, helper installation, staging directory, or graph-transfer
+protocol. A root `Cargo.toml` is required; `Cargo.lock`, compiler sources, and a
+provisioned sandbox are not. Indexing never executes Cargo, rustc, build scripts,
+or proc macros and does not download dependencies or modify the checkout.
+Failures publish no partial actor generation.
+
+`prepare` defaults to normal and test configurations with default features. Supply
+`features: ["feature_name"]` and `default_features: "disabled"` to select another
+feature profile. Resolution uses the native host's baseline cfg and the selected
+configurations, **not every platform or feature combination**. All discoverable
+Cargo packages are indexed, not just Cargo's default workspace members. Features
+are unified across indexed packages rather than reproducing Cargo build units;
+the test view enables test cfg and dev dependencies for indexed non-build targets.
+Inactive and
+unresolved source, disconnected files, manifests, and documentation still receive
+primary source ownership. Binary files contribute to freshness but not actor text;
+ignored, protected, and symlinked inputs are not promised semantic coverage.
+Only captured local path dependencies are linked. Sysroot and registry/git source,
+build-script outputs/environment, procedural macro expansions, Cargo patches and
+configuration, custom compiler flags, and exact target-layout evaluation are not
+available. These are explicit coverage gaps, not inferred semantic edges. Cyclic
+crate dependency edges that rust-analyzer cannot represent are omitted with a
+diagnostic. Multi-crate reuse of one file uses the first semantic module context
+and records a diagnostic. Unresolved calls and failed expansions remain explicit
+graph diagnostics/unresolved relationships; status reports their diagnostic count
+rather than pretending complete resolution.
+
+Partitioning condenses strongly connected components, walks a deterministic DFS
+forest preferring `main` and public entry points, and cuts bottom-up under rendered
+request budgets. Shared dependencies get one primary owner, and disconnected roots
+are packed too. Oversized components/items split at syntax or UTF-8-safe boundaries.
+A coverage check requires every captured text byte to have exactly one primary
+owner; optional reference headers can shrink, but owned source is never silently
+truncated to fit. Token estimates include the actual tool-free request envelope,
+not just source text.
+
+Resource ceilings are explicit: 16 MiB per text input, 64 MiB captured inputs,
+20,000 captured text files and crate targets, one million graph items, 256 shards,
+and 128 MiB total rendered
+contexts. Per-shard windows are capped at 65,536 estimated tokens (and the smaller
+configured/model window), with separate question, response, and 10% safety reserves.
+Questions are limited to 16 KiB and must fit the full request budget. At most 16
+knowledge questions may be admitted per registry, with one provider request active
+at a time across its shards. Cancelled queued requests retain their admission until
+consumed, so repeated cancellation cannot grow the mailbox without bound.
+Preparation runs as an owned blocking task with cancellation checkpoints and a
+30-minute cooperative deadline. A single rust-analyzer query cannot be forcibly
+interrupted; these bounds are not process-level CPU or memory isolation.
+
+Source fingerprints are checked before queries and before/after answers. Edits,
+additions, deletions, or mode changes require `prepare` again. Provider/model/window
+or configured-budget changes require `{"action":"repartition"}`; this reuses the
+semantic graph only when the inputs are still identical and does not run Cargo.
+Queries, status, repartitioning, and `{"action":"clear"}` are read-only tool
+effects available in plan mode. `prepare` is a validation effect and is denied in
+plan mode. Clearing knowledge preserves compaction snapshots. Conversation clear,
+switch/fork, shutdown, or workspace relocation retire knowledge actors. Generations
+are in-memory and are not restored after restart.
+
+#### Validating knowledge actors
+
+The direct-library fixtures run without an installed helper or `rust-src`:
+
+```sh
+cargo test -p knowledge-indexer
+cargo test -p utils --lib knowledge
+cargo test -p analysis --lib knowledge
+cargo test -p actors --lib knowledge
+```
+
+They cover cross-crate resolution, workspace inheritance, optional features,
+trait dispatch, normal/test profiles, declarative macros, source ownership,
+budgeted routing, freshness and actor lifecycle. Read-only preparation tests use
+no executable access or lockfile and check that a build-script sentinel is never
+created. Uncaptured files cannot be loaded by the semantic database. The former
+guest-only integration test is replaced by direct-library coverage: build output
+and procedural macro definitions must remain unavailable, with diagnostics.
+
 ### Manual snapshot actor API
 
 The `actors::workers::snapshot_worker` module provides a question-only worker using
@@ -282,7 +398,7 @@ does not truncate history or trigger compaction to make the snapshot fit.
 
 For independently managed snapshots, spawn `WorkerAdapter::new(SnapshotWorker)`
 with the returned `Snapshot`, then send
-`SnapshotMessage::Ask { question, reply }`. Each question is independent: the
+`SnapshotMessage::Ask { question, reply, admission: None }`. Each question is independent: the
 actor uses its frozen context plus only that question, and retains neither the
 question nor its answer. Historical messages and tools are losslessly encoded as
 inert reference data, not enabled capabilities. There are no workspace tools,
@@ -305,7 +421,7 @@ async fn ask_snapshot(source: &ActorRef<Message>, question: String) -> anyhow::R
     let (actor, handle) = Actor::spawn(None, WorkerAdapter::new(SnapshotWorker), snapshot).await?;
 
     let (reply, receive) = oneshot::channel();
-    actor.send_message(SnapshotMessage::Ask { question, reply: reply.into() })?;
+    actor.send_message(SnapshotMessage::Ask { question, reply: reply.into(), admission: None })?;
     let answer = receive.await;
     actor.stop(None);
     handle.await?;

@@ -15,6 +15,17 @@ pub(super) struct WorktreeSnapshot {
 }
 
 impl WorktreeSnapshot {
+    pub fn with_git_modes(self) -> Self {
+        Self {
+            files: self
+                .files
+                .into_iter()
+                .map(|(path, version)| (path, version.with_git_mode()))
+                .collect(),
+            head: self.head,
+        }
+    }
+
     pub fn base(git: &GitRepository, head: &str) -> anyhow::Result<Self> {
         let tree = git.repo.find_commit(git2::Oid::from_str(head)?)?.tree()?;
         let contents = SnapshotFiles::default().collect_tree(&git.repo, &tree, Path::new(""))?;

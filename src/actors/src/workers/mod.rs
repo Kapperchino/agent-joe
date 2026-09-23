@@ -1,5 +1,6 @@
 pub mod base_worker;
 pub mod compaction_worker;
+pub mod knowledge_worker;
 pub mod read_worker;
 pub mod simple_worker;
 pub mod snapshot_worker;

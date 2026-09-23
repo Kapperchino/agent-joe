@@ -1,4 +1,4 @@
-use crate::tool_defs::{NonEmptyString, ToolDefTrait, ToolOpKind, ToolId, ToolTrait, ToolType};
+use crate::tool_defs::{NonEmptyString, ToolDefTrait, ToolId, ToolOpKind, ToolTrait, ToolType};
 use analysis::contexts::context::Context;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
