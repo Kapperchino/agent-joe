@@ -242,8 +242,10 @@ Successful automatic or manual compaction creates an immutable snapshot worker
 for the older context being compacted, including earlier compaction memory,
 effective instructions, historical tool definitions/results, and runtime state.
 Each compaction adds a worker instead of replacing previous snapshots. Failed or
-cancelled compaction does not publish a worker. Snapshot capture must fit the
-configured context budget; it never silently truncates history to make it fit.
+cancelled compaction does not publish a worker. Snapshots created during compaction
+use the selected model's full context window, even with a smaller `--context-tokens`
+limit, and reserve at most 4096 tokens for each answer. Snapshot capture never
+silently truncates history to make it fit.
 
 Both the main worker and simple worker expose `ask_immutable_worker`:
 

@@ -69,6 +69,33 @@ fn oversized_context_is_rejected_without_truncation() {
 }
 
 #[test]
+fn compaction_snapshot_uses_the_model_window_and_a_smaller_response_reserve() {
+    let request = ClientRequest::new(vec![Message::new("full context ".repeat(20_000))]);
+    let limits = ContextLimits::new(24_000, 2048).unwrap();
+    assert!(Snapshot::new(request.clone(), &client(), limits, Duration::from_secs(1)).is_err());
+    let snapshot =
+        Snapshot::for_compaction(request, &client(), limits, Duration::from_secs(1)).unwrap();
+    assert_eq!(
+        snapshot.limits.ceiling(),
+        clients::models::FALLBACK_CONTEXT_WINDOW
+    );
+    assert_eq!(snapshot.limits.response(), 2048);
+
+    let snapshot = Snapshot::for_compaction(
+        context(),
+        &client(),
+        ContextLimits::new(64_000, 16_000).unwrap(),
+        Duration::from_secs(1),
+    )
+    .unwrap();
+    assert_eq!(snapshot.limits.response(), COMPACTION_RESPONSE_TOKENS);
+    assert_eq!(
+        snapshot.request.max_output_tokens,
+        Some(COMPACTION_RESPONSE_TOKENS)
+    );
+}
+
+#[test]
 fn empty_context_and_zero_timeout_are_rejected() {
     for (request, timeout) in [
         (ClientRequest::new(Vec::new()), Duration::from_secs(1)),

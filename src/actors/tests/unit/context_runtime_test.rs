@@ -1,4 +1,5 @@
 use super::*;
+use crate::workers::snapshot_worker::Snapshot;
 use commands::command::{Command, ResumeTarget};
 use conversation::context::{ContextBudget, ContextLimits, estimated_tokens};
 use session::SessionStore;
@@ -50,6 +51,10 @@ fn configured_limits() -> ContextLimits {
 }
 
 fn saved_history(store: &Arc<SessionStore>) -> String {
+    saved_history_with_output(store, &"inspected source ".repeat(2000))
+}
+
+fn saved_history_with_output(store: &Arc<SessionStore>, output: &str) -> String {
     let mut messages = vec![
         llm::Message::new("obsolete workspace context".into()),
         llm::Message::new(
@@ -58,8 +63,7 @@ fn saved_history(store: &Arc<SessionStore>) -> String {
     ];
     for index in 0..5 {
         messages.push(llm::Message::new_assistant(format!(
-            "Investigation {index}: {}",
-            "inspected source ".repeat(2000)
+            "Investigation {index}: {output}"
         )));
         messages.push(llm::Message::new(format!("Continue requirement {index}")));
     }
@@ -67,6 +71,41 @@ fn saved_history(store: &Arc<SessionStore>) -> String {
         .create(llm::SessionProvider::Injected, None, messages)
         .unwrap();
     session.id.clone()
+}
+
+#[tokio::test]
+async fn compaction_snapshot_can_use_more_context_than_the_conversation_limit() {
+    let workspace = session::test_support::Workspace::new();
+    let limits = configured_limits();
+    let runtime = configured_runtime(&workspace);
+    let store = runtime.sessions.clone().unwrap();
+    let id = saved_history_with_output(&store, &r#"{"path":"src\\lib.rs"}"#.repeat(450));
+    let (normal, requests) = flume::unbounded();
+    let (compactions, native_requests) = flume::unbounded();
+    let client = llm::LLmClient::Injected(Arc::new(NativeProvider {
+        normal: Provider(normal),
+        compactions,
+    }));
+    let h = Harness::with_client(vec![], runtime, client.clone(), requests).await;
+    resume(&h, &id).await;
+    h.actor
+        .send_message(Message::Command(Command::Compact))
+        .unwrap();
+    let compact = within(native_requests.recv_async()).await.unwrap();
+    assert!(estimated_tokens(&compact.request).unwrap() <= limits.input());
+    assert!(Snapshot::new(compact.request, &client, limits, Duration::from_secs(1)).is_err());
+    assert!(
+        compact
+            .reply
+            .send(Ok(serde_json::from_value(json!({
+                "output": [{"type": "compaction", "encrypted_content": "preserved history"}]
+            }))
+            .unwrap()))
+            .is_ok()
+    );
+    h.terminal(Lifecycle::Completed).await;
+    assert_eq!(h.runtime.immutable_workers.list(&id).len(), 1);
+    h.stop().await;
 }
 
 async fn resume(h: &Harness, id: &str) {
