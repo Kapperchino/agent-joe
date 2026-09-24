@@ -195,6 +195,9 @@ fn direct_library_checks_cancellation_and_rejects_unsupported_profiles() {
     );
     let mut unsupported = profile();
     unsupported.target = "unsupported".into();
+    assert!(load_sources(files.clone(), unsupported, &|| Ok(())).is_err());
+    let mut unsupported = profile();
+    unsupported.analyzer_version = "unsupported".into();
     assert!(load_sources(files, unsupported, &|| Ok(())).is_err());
 }
 
@@ -277,5 +280,148 @@ fn direct_library_expands_declarative_macros_but_cannot_read_uncaptured_files() 
             .iter()
             .any(|symbol| symbol.name == "made"
                 && matches!(symbol.origin, SymbolOrigin::Expansion { .. }))
+    );
+}
+
+#[test]
+fn weak_features_propagate_only_after_dependency_activation_reaches_a_fixed_point() {
+    let files = sources(&[
+        (
+            "Cargo.toml",
+            "[package]\nname='app'\nversion='0.1.0'\nedition='2024'\n[features]\nweak=['middle?/selected']\nactivate=['dep:middle']\ncycle-a=['cycle-b']\ncycle-b=['cycle-a','activate']\n[dependencies]\nmiddle={path='middle',optional=true,default-features=false}",
+        ),
+        (
+            "src/lib.rs",
+            "pub fn caller() { middle::chosen(); } #[cfg(feature=\"middle\")] pub fn implicit_feature() {}",
+        ),
+        (
+            "middle/Cargo.toml",
+            "[package]\nname='middle'\nversion='0.1.0'\nedition='2024'\n[features]\nselected=['leaf/selected']\n[dependencies]\nleaf={path='../leaf',optional=true,default-features=false}",
+        ),
+        (
+            "middle/src/lib.rs",
+            "#[cfg(feature=\"selected\")] pub fn chosen() { leaf::leaf_target(); }",
+        ),
+        (
+            "leaf/Cargo.toml",
+            "[package]\nname='leaf'\nversion='0.1.0'\nedition='2024'\n[features]\nselected=[]",
+        ),
+        (
+            "leaf/src/lib.rs",
+            "#[cfg(feature=\"selected\")] pub fn leaf_target() {}",
+        ),
+    ]);
+    let mut selected = profile();
+    selected.configurations = [Configuration::Normal].into();
+    selected.features = Features::Named {
+        names: ["app/weak".into()].into(),
+        defaults: DefaultFeatures::Disabled,
+    };
+    let weak = load_sources(files.clone(), selected.clone(), &|| Ok(())).unwrap();
+    assert!(targets(&weak, "caller", RelationKind::Calls).is_empty());
+    assert!(targets(&weak, "chosen", RelationKind::Calls).is_empty());
+    selected.features = Features::Named {
+        names: ["app/weak".into(), "app/cycle-a".into()].into(),
+        defaults: DefaultFeatures::Disabled,
+    };
+    let active = load_sources(files, selected, &|| Ok(())).unwrap();
+    assert_eq!(targets(&active, "caller", RelationKind::Calls), ["chosen"]);
+    assert_eq!(
+        targets(&active, "chosen", RelationKind::Calls),
+        ["leaf_target"]
+    );
+    assert!(
+        !active
+            .data()
+            .symbols
+            .iter()
+            .any(|symbol| symbol.name == "implicit_feature")
+    );
+}
+
+#[test]
+fn required_features_distinguish_excluded_missing_and_captured_targets() {
+    let files = sources(&[
+        (
+            "Cargo.toml",
+            "[package]\nname='app'\nversion='0.1.0'\nedition='2024'\nautobins=false\n[features]\ncli=[]\n[[bin]]\nname='captured'\npath='src/cli.rs'\nrequired-features=['cli']\n[[bin]]\nname='missing'\npath='src/missing.rs'\nrequired-features=['cli']",
+        ),
+        ("src/lib.rs", "pub fn serve() {}"),
+        ("src/cli.rs", "fn main() { app::serve(); }"),
+    ]);
+    let mut selected = profile();
+    selected.configurations = [Configuration::Normal].into();
+    let excluded = load_sources(files.clone(), selected.clone(), &|| Ok(())).unwrap();
+    assert!(targets(&excluded, "main", RelationKind::Calls).is_empty());
+    assert!(excluded.data().diagnostics.iter().any(|diagnostic| {
+        diagnostic.message == "Cargo.toml: Target excluded by required-features"
+    }));
+    assert!(
+        !excluded
+            .data()
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("Target source"))
+    );
+    selected.features = Features::Named {
+        names: ["app/cli".into()].into(),
+        defaults: DefaultFeatures::Disabled,
+    };
+    let active = load_sources(files, selected, &|| Ok(())).unwrap();
+    assert_eq!(targets(&active, "main", RelationKind::Calls), ["serve"]);
+    assert!(active.data().diagnostics.iter().any(|diagnostic| {
+        diagnostic.message == "Cargo.toml: Target source src/missing.rs was not captured"
+    }));
+    assert!(
+        !active
+            .data()
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("excluded by required-features"))
+    );
+}
+
+#[test]
+fn test_configuration_keeps_build_targets_outside_the_test_cfg() {
+    let graph = load_sources(
+        sources(&[
+            (
+                "Cargo.toml",
+                "[package]\nname='app'\nversion='0.1.0'\nedition='2024'\n[build-dependencies]\nbuilder={path='builder'}\n[dev-dependencies]\ntesting={path='testing'}",
+            ),
+            (
+                "src/lib.rs",
+                "#[cfg(test)] pub fn test_only() { testing::helper(); }",
+            ),
+            (
+                "build.rs",
+                "fn main() { builder::run(); } #[cfg(test)] fn not_for_build() {}",
+            ),
+            (
+                "builder/Cargo.toml",
+                "[package]\nname='builder'\nversion='0.1.0'\nedition='2024'",
+            ),
+            ("builder/src/lib.rs", "pub fn run() {}"),
+            (
+                "testing/Cargo.toml",
+                "[package]\nname='testing'\nversion='0.1.0'\nedition='2024'",
+            ),
+            ("testing/src/lib.rs", "pub fn helper() {}"),
+        ]),
+        profile(),
+        &|| Ok(()),
+    )
+    .unwrap();
+    assert_eq!(targets(&graph, "main", RelationKind::Calls), ["run", "run"]);
+    assert_eq!(
+        targets(&graph, "test_only", RelationKind::Calls),
+        ["helper"]
+    );
+    assert!(
+        !graph
+            .data()
+            .symbols
+            .iter()
+            .any(|symbol| symbol.name == "not_for_build")
     );
 }

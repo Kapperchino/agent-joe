@@ -59,6 +59,22 @@ enum Validity {
     Stale(String),
 }
 
+impl Validity {
+    fn invalidate(&mut self, reason: &str) {
+        match self {
+            Self::Current => *self = Self::Stale(reason.into()),
+            Self::Stale(_) => {}
+        }
+    }
+
+    fn current(&self) -> anyhow::Result<()> {
+        match self {
+            Self::Current => Ok(()),
+            Self::Stale(reason) => Err(anyhow::anyhow!("Knowledge generation is stale: {reason}")),
+        }
+    }
+}
+
 pub(crate) struct Freshness {
     fingerprint: Fingerprint,
     workspace: Arc<WorkspacePolicy>,
@@ -81,27 +97,18 @@ impl Freshness {
     }
 
     fn invalidate(&self, reason: &str) {
-        let mut validity = self
-            .validity
+        self.validity
             .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        if matches!(*validity, Validity::Current) {
-            *validity = Validity::Stale(reason.into());
-        }
+            .unwrap_or_else(|error| error.into_inner())
+            .invalidate(reason);
         self.cancel.cancel();
     }
 
     fn current(&self) -> anyhow::Result<()> {
-        match &*self
-            .validity
+        self.validity
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-        {
-            Validity::Current => Ok(()),
-            Validity::Stale(reason) => {
-                Err(anyhow::anyhow!("Knowledge generation is stale: {reason}"))
-            }
-        }
+            .current()
     }
 
     pub(crate) async fn check(self: &Arc<Self>) -> anyhow::Result<()> {
@@ -120,10 +127,7 @@ impl Freshness {
             )),
             (Err(error), _) => Err(error.context("Cannot verify current knowledge inputs")),
         };
-        if let Err(error) = &result {
-            self.invalidate(&error.to_string());
-        }
-        result
+        result.inspect_err(|error| self.invalidate(&error.to_string()))
     }
 }
 
@@ -215,7 +219,7 @@ impl Generation {
             .collect()
     }
 
-    fn summary(&self, offset: usize, limit: usize) -> GenerationSummary {
+    fn summary(&self, page: WorkerPage) -> GenerationSummary {
         GenerationSummary {
             generation: self.index.generation.clone(),
             profile: self.index.graph.data().profile.clone(),
@@ -230,8 +234,8 @@ impl Generation {
                 .index
                 .shards
                 .iter()
-                .skip(offset)
-                .take(limit)
+                .skip(page.offset)
+                .take(page.limit)
                 .map(|shard| ShardView {
                     route: ShardWorker {
                         index: shard.summary.index,
@@ -244,8 +248,41 @@ impl Generation {
                     symbols: shard.summary.symbol_count,
                 })
                 .collect(),
-            next_offset: (offset.saturating_add(limit) < self.index.shards.len())
-                .then_some(offset.saturating_add(limit)),
+            next_offset: (page.offset.saturating_add(page.limit) < self.index.shards.len())
+                .then_some(page.offset.saturating_add(page.limit)),
+        }
+    }
+
+    async fn status(
+        &self,
+        workspace: &WorkspacePolicy,
+        budget: KnowledgeBudget,
+        page: WorkerPage,
+    ) -> anyhow::Result<Status> {
+        self.scope(workspace)?;
+        let summary = self.summary(page);
+        Ok(match self.check(workspace, budget).await {
+            Ok(()) => Status::Ready { summary },
+            Err(error) => Status::Stale {
+                summary,
+                reason: error.to_string(),
+            },
+        })
+    }
+}
+
+struct WorkerPage {
+    offset: usize,
+    limit: usize,
+}
+
+impl WorkerPage {
+    fn new(offset: usize, limit: usize) -> anyhow::Result<Self> {
+        match (offset, limit) {
+            (0..=analysis::knowledge::MAX_SHARDS, 1..=32) => Ok(Self { offset, limit }),
+            _ => Err(anyhow::anyhow!(
+                "Knowledge status requires a limit of 1–32 and an offset up to 256"
+            )),
         }
     }
 }
@@ -309,6 +346,7 @@ pub enum Status {
     },
 }
 
+#[derive(Clone)]
 pub(crate) enum Slot {
     Preparing {
         ticket: String,
@@ -325,11 +363,20 @@ impl Slot {
                 cancel, previous, ..
             } => {
                 cancel.cancel();
-                if let Some(previous) = previous {
-                    previous.freshness.invalidate(reason);
-                }
+                previous
+                    .iter()
+                    .for_each(|generation| generation.freshness.invalidate(reason));
             }
             Self::Ready(generation) => generation.freshness.invalidate(reason),
+        }
+    }
+
+    fn rollback(self, expected: &str) -> Option<Self> {
+        match self {
+            Self::Preparing {
+                ticket, previous, ..
+            } if ticket == expected => previous.map(Self::Ready),
+            other => Some(other),
         }
     }
 }
@@ -382,15 +429,19 @@ impl Preparation {
             .state
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        match state.knowledge.get(&self.owner) {
+        match state
+            .knowledge
+            .get(&self.owner)
+            .filter(|_| !self.cancel.is_cancelled())
+        {
             Some(Slot::Preparing {
                 ticket, previous, ..
-            }) if ticket == &self.ticket && !self.cancel.is_cancelled() => {
-                if let Some(previous) = previous {
-                    previous
+            }) if ticket == &self.ticket => {
+                previous.iter().for_each(|generation| {
+                    generation
                         .freshness
                         .invalidate("Replaced by a new knowledge generation");
-                }
+                });
                 let registered = state.workers.entry(self.owner.clone()).or_default();
                 registered.retain(|worker| worker.view().description.kind != "knowledge");
                 registered.extend(workers);
@@ -414,15 +465,15 @@ impl Drop for Preparation {
             .state
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        if matches!(state.knowledge.get(&self.owner), Some(Slot::Preparing { ticket, .. }) if ticket == &self.ticket)
-            && let Some(Slot::Preparing {
-                previous: Some(previous),
-                ..
-            }) = state.knowledge.remove(&self.owner)
-        {
-            state
-                .knowledge
-                .insert(self.owner.clone(), Slot::Ready(previous));
+        let restored = state
+            .knowledge
+            .remove(&self.owner)
+            .and_then(|slot| slot.rollback(&self.ticket));
+        match restored {
+            Some(slot) => {
+                state.knowledge.insert(self.owner.clone(), slot);
+            }
+            None => {}
         }
     }
 }
@@ -452,36 +503,18 @@ impl ImmutableWorkerRegistry {
         offset: usize,
         limit: usize,
     ) -> anyhow::Result<Status> {
-        match (1..=32).contains(&limit) && offset <= analysis::knowledge::MAX_SHARDS {
-            true => Ok(()),
-            false => Err(anyhow::anyhow!(
-                "Knowledge status requires a limit of 1–32 and an offset up to 256"
-            )),
-        }?;
-        let preparing = {
-            let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-            match state.knowledge.get(owner) {
-                Some(Slot::Preparing { ticket, .. }) => Some(ticket.clone()),
-                _ => None,
-            }
-        };
-        match preparing {
-            Some(ticket) => Ok(Status::Preparing { ticket }),
-            None => match self.knowledge(owner) {
-                Ok(generation) => {
-                    generation.scope(workspace)?;
-                    match generation.check(workspace, budget).await {
-                        Ok(()) => Ok(Status::Ready {
-                            summary: generation.summary(offset, limit),
-                        }),
-                        Err(error) => Ok(Status::Stale {
-                            summary: generation.summary(offset, limit),
-                            reason: error.to_string(),
-                        }),
-                    }
-                }
-                Err(_) => Ok(Status::Absent),
-            },
+        let page = WorkerPage::new(offset, limit)?;
+        let slot = self
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .knowledge
+            .get(owner)
+            .cloned();
+        match slot {
+            Some(Slot::Preparing { ticket, .. }) => Ok(Status::Preparing { ticket }),
+            Some(Slot::Ready(generation)) => generation.status(workspace, budget, page).await,
+            None => Ok(Status::Absent),
         }
     }
 
@@ -575,7 +608,7 @@ impl ImmutableWorkerRegistry {
             freshness,
             workers: workers.iter().map(ImmutableWorker::view).collect(),
         });
-        let summary = generation.summary(0, 32);
+        let summary = generation.summary(WorkerPage::new(0, 32)?);
         preparation.publish(generation, workers)?;
         Ok(summary)
     }

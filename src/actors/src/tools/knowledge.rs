@@ -87,40 +87,74 @@ impl LenientDeserialize for Input {
     }
 }
 
-fn profile(
-    features: Option<Vec<String>>,
-    defaults: Option<DefaultFeatures>,
-    configurations: Option<Vec<Configuration>>,
-) -> anyhow::Result<SemanticProfile> {
-    let names: BTreeSet<_> = features.unwrap_or_default().into_iter().collect();
-    let defaults = defaults.unwrap_or(DefaultFeatures::Enabled);
-    let configurations: BTreeSet<_> = configurations
-        .unwrap_or_else(|| vec![Configuration::Normal, Configuration::Test])
-        .into_iter()
-        .collect();
-    match names.len() <= 128
-        && names.iter().all(|name| {
-            !name.is_empty() && name.len() <= 256 && !name.chars().any(char::is_whitespace)
+struct PreparationProfile {
+    semantic: SemanticProfile,
+}
+
+impl PreparationProfile {
+    fn new(
+        features: Option<Vec<String>>,
+        defaults: Option<DefaultFeatures>,
+        configurations: Option<Vec<Configuration>>,
+    ) -> anyhow::Result<Self> {
+        let names: BTreeSet<_> = features.unwrap_or_default().into_iter().collect();
+        let defaults = defaults.unwrap_or(DefaultFeatures::Enabled);
+        let configurations: BTreeSet<_> = configurations
+            .unwrap_or_else(|| vec![Configuration::Normal, Configuration::Test])
+            .into_iter()
+            .collect();
+        match names.len() <= 128
+            && names.iter().all(|name| {
+                !name.is_empty() && name.len() <= 256 && !name.chars().any(char::is_whitespace)
+            })
+            && !configurations.is_empty()
+        {
+            true => Ok(()),
+            false => Err(anyhow::anyhow!(
+                "Select at least one configuration and at most 128 nonempty feature names without whitespace"
+            )),
+        }?;
+        let features = match (names.is_empty(), defaults) {
+            (true, DefaultFeatures::Enabled) => Features::Default,
+            (true, DefaultFeatures::Disabled) => Features::None,
+            (false, defaults) => Features::Named { names, defaults },
+        };
+        Ok(Self {
+            semantic: SemanticProfile {
+                manifest: SourcePath::try_from("Cargo.toml".to_owned())?,
+                target: utils::knowledge::native_target(),
+                features,
+                configurations,
+                analyzer_version: ANALYZER_VERSION.into(),
+            },
         })
-        && !configurations.is_empty()
-    {
-        true => Ok(()),
-        false => Err(anyhow::anyhow!(
-            "Select at least one configuration and at most 128 nonempty feature names without whitespace"
-        )),
-    }?;
-    let features = match (names.is_empty(), defaults) {
-        (true, DefaultFeatures::Enabled) => Features::Default,
-        (true, DefaultFeatures::Disabled) => Features::None,
-        (false, defaults) => Features::Named { names, defaults },
-    };
-    Ok(SemanticProfile {
-        manifest: SourcePath::try_from("Cargo.toml".to_owned())?,
-        target: utils::knowledge::native_target(),
-        features,
-        configurations,
-        analyzer_version: ANALYZER_VERSION.into(),
-    })
+    }
+}
+
+struct SearchRequest {
+    query: String,
+    generation: Option<String>,
+    offset: usize,
+    limit: usize,
+}
+
+impl SearchRequest {
+    fn new(
+        query: String,
+        generation: Option<String>,
+        offset: Option<usize>,
+        limit: Option<usize>,
+    ) -> anyhow::Result<Self> {
+        match limit.unwrap_or(10) {
+            limit @ 1..=32 => Ok(Self {
+                query,
+                generation,
+                offset: offset.unwrap_or(0),
+                limit,
+            }),
+            _ => Err(anyhow::anyhow!("Knowledge search requires a limit of 1–32")),
+        }
+    }
 }
 
 pub(crate) fn access<C: Context>(actor: &ActorContext<C>) -> anyhow::Result<&ActorInfo<C>> {
@@ -170,10 +204,10 @@ impl<C: Context> ToolTrait<C, ActorContext<C>> for Knowledge {
                 configurations,
             } => {
                 budget(&info.services.client, info.runtime.context_budget)?;
-                let profile = profile(features, default_features, configurations)?;
+                let profile = PreparationProfile::new(features, default_features, configurations)?;
                 Ok(serde_json::to_value(
                     registry
-                        .prepare_knowledge(&info.owner, profile, context)
+                        .prepare_knowledge(&info.owner, profile.semantic, context)
                         .await?,
                 )?)
             }
@@ -202,15 +236,15 @@ impl<C: Context> ToolTrait<C, ActorContext<C>> for Knowledge {
                 limit,
             } => {
                 let budget = budget(&info.services.client, info.runtime.context_budget)?;
-                let limit = limit.unwrap_or(10);
-                match (1..=32).contains(&limit) {
-                    true => Ok(()),
-                    false => Err(anyhow::anyhow!("Knowledge search requires a limit of 1–32")),
-                }?;
+                let request = SearchRequest::new(query, generation, offset, limit)?;
                 let knowledge = registry.knowledge(&info.owner)?;
                 knowledge.check(workspace, budget).await?;
-                let result =
-                    knowledge.search(&query, generation.as_deref(), offset.unwrap_or(0), limit)?;
+                let result = knowledge.search(
+                    &request.query,
+                    request.generation.as_deref(),
+                    request.offset,
+                    request.limit,
+                )?;
                 knowledge.check(workspace, budget).await?;
                 Ok(serde_json::to_value(result)?)
             }
@@ -253,3 +287,6 @@ impl<C: Context> ToolTrait<C, ActorContext<C>> for Knowledge {
         })
     }
 }
+
+#[cfg(test)]
+mod tests;

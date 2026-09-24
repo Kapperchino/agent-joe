@@ -118,6 +118,41 @@ struct Frame {
     expansion_depth: usize,
 }
 
+impl Frame {
+    fn root(node: SyntaxNode, owner: SymbolId) -> Self {
+        Self {
+            node,
+            owner,
+            expansion_depth: 0,
+        }
+    }
+
+    fn expansion(&self, node: SyntaxNode, owner: &SymbolId) -> anyhow::Result<Self> {
+        match self.expansion_depth {
+            0..64 => Ok(Self {
+                node,
+                owner: owner.clone(),
+                expansion_depth: self.expansion_depth + 1,
+            }),
+            _ => Err(anyhow::anyhow!("Semantic macro expansion depth exceeds 64")),
+        }
+    }
+
+    fn children(&self, owner: &SymbolId) -> impl Iterator<Item = Self> {
+        let owner = owner.clone();
+        self.node.children().map(move |node| Self {
+            node,
+            owner: owner.clone(),
+            expansion_depth: self.expansion_depth,
+        })
+    }
+}
+
+enum ScopeTransition {
+    Inherit,
+    Enter(SymbolId),
+}
+
 struct Index<'db> {
     sema: Semantics<'db, RootDatabase>,
     paths: BTreeMap<FileId, SourcePath>,
@@ -365,107 +400,102 @@ impl<'db> Index<'db> {
     }
 
     fn walk(&mut self, node: SyntaxNode, owner: SymbolId) -> anyhow::Result<()> {
-        let mut pending = vec![Frame {
-            node,
-            owner,
-            expansion_depth: 0,
-        }];
+        let mut pending = vec![Frame::root(node, owner)];
         while let Some(frame) = pending.pop() {
             (self.checkpoint)()?;
             self.visited_nodes += 1;
             self.limits()?;
-            let node = frame.node;
-            let declaration = ast::Item::can_cast(node.kind())
-                || ast::RecordField::can_cast(node.kind())
-                || ast::Variant::can_cast(node.kind())
-                || ast::IdentPat::can_cast(node.kind())
-                || ast::SelfParam::can_cast(node.kind());
-            let definition = ast::Impl::cast(node.clone())
-                .and_then(|item| self.sema.to_def(&item))
-                .map(Definition::SelfType)
-                .or_else(|| {
-                    declaration
-                        .then(|| {
-                            node.children()
-                                .find_map(ast::Name::cast)
-                                .and_then(|name| NameClass::classify(&self.sema, &name))
-                                .and_then(NameClass::defined)
-                        })
-                        .flatten()
-                });
-            let owner = match definition {
-                Some(definition) => {
-                    let id = self.definition(definition)?;
-                    self.relate(
-                        &frame.owner,
-                        RelationKind::Contains,
-                        RelationTarget::Resolved(id.clone()),
-                        self.site(&node),
-                    );
-                    match definition_kind(definition) {
-                        SymbolKind::Local | SymbolKind::Other => frame.owner,
-                        _ => id,
-                    }
-                }
-                None => frame.owner,
+            let owner = match self.declaration(&frame.node, &frame.owner)? {
+                ScopeTransition::Inherit => frame.owner.clone(),
+                ScopeTransition::Enter(owner) => owner,
             };
-            if let Some(name) = ast::NameRef::cast(node.clone()) {
+            if let Some(name) = ast::NameRef::cast(frame.node.clone()) {
                 self.reference(&owner, &name)?;
             }
-            if let Some(call) = ast::CallableExpr::cast(node.clone()) {
+            if let Some(call) = ast::CallableExpr::cast(frame.node.clone()) {
                 self.call(&owner, call)?;
             }
-            let mut expansions = Vec::new();
-            if let Some(call) = ast::MacroCall::cast(node.clone()) {
-                match self.sema.expand_macro_call(&call) {
-                    Some(expansion) => expansions.push(expansion.value),
-                    None => self.diagnostics.push(IndexDiagnostic {
-                        message: "Macro expansion is unavailable".into(),
-                        location: self.site(&node),
-                    }),
-                }
+            for expansion in self.expansions(&frame.node) {
+                pending.push(frame.expansion(expansion, &owner)?);
             }
-            if let Some(expansion) =
-                ast::Item::cast(node.clone()).and_then(|item| self.sema.expand_attr_macro(&item))
-            {
-                if let Some(error) = expansion.err {
-                    self.diagnostics.push(IndexDiagnostic {
-                        message: format!("Attribute expansion: {error:?}"),
-                        location: self.site(&node),
-                    });
-                }
-                expansions.push(expansion.value.value);
-            }
-            if let Some(derived) =
-                ast::Meta::cast(node.clone()).and_then(|meta| self.sema.expand_derive_macro(&meta))
-            {
-                for expansion in derived.into_iter().flatten() {
-                    if let Some(error) = expansion.err {
-                        self.diagnostics.push(IndexDiagnostic {
-                            message: format!("Derive expansion: {error:?}"),
-                            location: self.site(&node),
-                        });
-                    }
-                    expansions.push(expansion.value);
-                }
-            }
-            for expansion in expansions {
-                match frame.expansion_depth < 64 {
-                    true => pending.push(Frame {
-                        node: expansion,
-                        owner: owner.clone(),
-                        expansion_depth: frame.expansion_depth + 1,
-                    }),
-                    false => Err(anyhow::anyhow!("Semantic macro expansion depth exceeds 64"))?,
-                }
-            }
-            pending.extend(node.children().map(|node| Frame {
-                node,
-                owner: owner.clone(),
-                expansion_depth: frame.expansion_depth,
-            }));
+            pending.extend(frame.children(&owner));
         }
         Ok(())
+    }
+
+    fn declaration(
+        &mut self,
+        node: &SyntaxNode,
+        owner: &SymbolId,
+    ) -> anyhow::Result<ScopeTransition> {
+        let declaration = ast::Item::can_cast(node.kind())
+            || ast::RecordField::can_cast(node.kind())
+            || ast::Variant::can_cast(node.kind())
+            || ast::IdentPat::can_cast(node.kind())
+            || ast::SelfParam::can_cast(node.kind());
+        let definition = ast::Impl::cast(node.clone())
+            .and_then(|item| self.sema.to_def(&item))
+            .map(Definition::SelfType)
+            .or_else(|| {
+                declaration
+                    .then(|| {
+                        node.children()
+                            .find_map(ast::Name::cast)
+                            .and_then(|name| NameClass::classify(&self.sema, &name))
+                            .and_then(NameClass::defined)
+                    })
+                    .flatten()
+            });
+        match definition {
+            Some(definition) => {
+                let id = self.definition(definition)?;
+                self.relate(
+                    owner,
+                    RelationKind::Contains,
+                    RelationTarget::Resolved(id.clone()),
+                    self.site(node),
+                );
+                Ok(match definition_kind(definition) {
+                    SymbolKind::Local | SymbolKind::Other => ScopeTransition::Inherit,
+                    _ => ScopeTransition::Enter(id),
+                })
+            }
+            None => Ok(ScopeTransition::Inherit),
+        }
+    }
+
+    fn expansions(&mut self, node: &SyntaxNode) -> Vec<SyntaxNode> {
+        let mut expansions = Vec::new();
+        if let Some(call) = ast::MacroCall::cast(node.clone()) {
+            match self.sema.expand_macro_call(&call) {
+                Some(expansion) => expansions.push(expansion.value),
+                None => self.diagnostics.push(IndexDiagnostic {
+                    message: "Macro expansion is unavailable".into(),
+                    location: self.site(node),
+                }),
+            }
+        }
+        if let Some(expansion) =
+            ast::Item::cast(node.clone()).and_then(|item| self.sema.expand_attr_macro(&item))
+        {
+            let diagnostic = expansion.err.map(|error| IndexDiagnostic {
+                message: format!("Attribute expansion: {error:?}"),
+                location: self.site(node),
+            });
+            self.diagnostics.extend(diagnostic);
+            expansions.push(expansion.value.value);
+        }
+        let derived =
+            ast::Meta::cast(node.clone()).and_then(|meta| self.sema.expand_derive_macro(&meta));
+        for expansion in derived.into_iter().flatten().flatten() {
+            let diagnostic = expansion.err.map(|error| IndexDiagnostic {
+                message: format!("Derive expansion: {error:?}"),
+                location: self.site(node),
+            });
+            self.diagnostics.extend(diagnostic);
+            expansions.push(expansion.value);
+        }
+        expansions
     }
 
     fn reference(&mut self, owner: &SymbolId, name: &ast::NameRef) -> anyhow::Result<()> {
@@ -585,4 +615,27 @@ fn definition_kind(definition: Definition<'_>) -> SymbolKind {
 fn identity(value: &serde_json::Value) -> anyhow::Result<SymbolId> {
     let serialized = serde_json::to_vec(value).context("Serialize semantic identity")?;
     Ok(SymbolId(blake3::hash(&serialized).to_hex().to_string()))
+}
+
+#[cfg(test)]
+mod traversal_tests {
+    use super::*;
+
+    #[test]
+    fn expansion_frames_enforce_depth_without_resetting_for_syntax_children() {
+        let node = ast::SourceFile::parse("fn item() {}", ra_ap_syntax::Edition::Edition2024)
+            .tree()
+            .syntax()
+            .clone();
+        let owner = SymbolId("owner".into());
+        let frame = (0..64)
+            .try_fold(Frame::root(node.clone(), owner.clone()), |frame, _| {
+                frame.expansion(node.clone(), &owner)
+            })
+            .unwrap();
+        let child = frame.children(&owner).next().unwrap();
+        assert_eq!(child.expansion_depth, 64);
+        assert_eq!(child.owner, owner);
+        assert!(child.expansion(node, &owner).is_err());
+    }
 }

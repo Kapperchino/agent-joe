@@ -531,3 +531,104 @@ fn knowledge_tool_classifies_preparation_as_validation_and_queries_as_read_only(
     );
     assert!(crate::tools::knowledge::access::<RustContext>(&ActorContext::Noop).is_err());
 }
+
+#[test]
+fn knowledge_validity_keeps_the_first_invalidation_reason() {
+    let mut validity = Validity::Current;
+    assert!(validity.current().is_ok());
+    validity.invalidate("first reason");
+    validity.invalidate("second reason");
+    assert_eq!(
+        validity.current().unwrap_err().to_string(),
+        "Knowledge generation is stale: first reason"
+    );
+}
+
+#[tokio::test]
+async fn knowledge_status_validates_pages_even_when_no_generation_exists() {
+    let fixture = Fixture::new().await;
+    let budget = KnowledgeBudget::new(8192, 8192, 1024).unwrap();
+    for limit in [0, 33, usize::MAX] {
+        assert!(
+            fixture
+                .registry
+                .knowledge_status("owner", &fixture.workspace, budget, 0, limit)
+                .await
+                .is_err()
+        );
+    }
+    assert!(
+        fixture
+            .registry
+            .knowledge_status("owner", &fixture.workspace, budget, 257, 10)
+            .await
+            .is_err()
+    );
+    assert!(matches!(
+        fixture
+            .registry
+            .knowledge_status("owner", &fixture.workspace, budget, 256, 32)
+            .await
+            .unwrap(),
+        Status::Absent
+    ));
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn knowledge_rollback_never_resurrects_cleared_or_superseded_preparations() {
+    let fixture = Fixture::new().await;
+    let summary = fixture.build(8192).await;
+    let abandoned = Preparation::begin(&fixture.registry, "owner").unwrap();
+    fixture.registry.clear_knowledge("owner");
+    assert!(abandoned.cancel.is_cancelled());
+    let replacement = Preparation::begin(&fixture.registry, "owner").unwrap();
+    drop(abandoned);
+    let status = fixture
+        .registry
+        .knowledge_status("owner", &fixture.workspace, summary.budget, 0, 10)
+        .await
+        .unwrap();
+    assert!(matches!(status, Status::Preparing { ticket } if ticket == replacement.ticket));
+    assert!(!replacement.cancel.is_cancelled());
+    drop(replacement);
+    assert!(matches!(
+        fixture
+            .registry
+            .knowledge_status("owner", &fixture.workspace, summary.budget, 0, 10)
+            .await
+            .unwrap(),
+        Status::Absent
+    ));
+    assert!(fixture.registry.list("owner").is_empty());
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn knowledge_cancelled_publication_rolls_back_without_retiring_previous_workers() {
+    let fixture = Fixture::new().await;
+    let summary = fixture.build(8192).await;
+    let previous = fixture.registry.knowledge("owner").unwrap();
+    let pending = Preparation::begin(&fixture.registry, "owner").unwrap();
+    pending.cancel.cancel();
+    assert!(pending.publish(previous.clone(), Vec::new()).is_err());
+    drop(pending);
+    assert!(!previous.freshness.cancel.is_cancelled());
+    assert!(Arc::ptr_eq(
+        &previous,
+        &fixture.registry.knowledge("owner").unwrap()
+    ));
+    assert_eq!(
+        fixture.registry.list("owner")[0].worker_id,
+        summary.workers[0].route.worker.worker_id
+    );
+    assert!(matches!(
+        fixture
+            .registry
+            .knowledge_status("owner", &fixture.workspace, summary.budget, 0, 1)
+            .await
+            .unwrap(),
+        Status::Ready { .. }
+    ));
+    fixture.stop().await;
+}

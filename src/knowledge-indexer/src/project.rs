@@ -9,8 +9,8 @@ use ra_ap_cfg::CfgOptions;
 use ra_ap_ide_db::{
     ChangeWithProcMacros, RootDatabase,
     base_db::{
-        CrateGraphBuilder, CrateName, CrateOrigin, CrateWorkspaceData, DependencyBuilder, Env,
-        SourceRoot,
+        CrateBuilderId, CrateGraphBuilder, CrateName, CrateOrigin, CrateWorkspaceData,
+        DependencyBuilder, Env, SourceRoot,
     },
     span::Edition,
 };
@@ -50,16 +50,9 @@ pub fn load_sources(
         diagnostics: Vec::new(),
     })?;
     let sources = GraphData::from(empty).sources;
-    match profile.target == native_target() && profile.analyzer_version == ANALYZER_VERSION {
-        true => {}
-        false => Err(anyhow::anyhow!(
-            "In-process indexing requires the native target {} and analyzer {ANALYZER_VERSION}",
-            native_target()
-        ))?,
-    }
+    let platform = NativeCfg::new(&profile)?;
     let files = CapturedFiles::new(sources)?;
     let packages = files.packages(&profile.manifest, checkpoint)?;
-    let platform = NativeCfg::new()?;
     let mut output = GraphData {
         version: KNOWLEDGE_PROTOCOL_VERSION,
         profile: profile.clone(),
@@ -92,116 +85,27 @@ pub fn load_sources(
             change.change_file(id, Some(source.text().to_owned()));
         }
         change.set_roots(vec![SourceRoot::new_local(file_set)]);
-        let mut graph = CrateGraphBuilder::default();
-        let mut roots = Vec::new();
-        let workspace = Arc::new(CrateWorkspaceData {
-            target: Err("No compiler target-layout query is executed".into()),
-            toolchain: None,
-        });
-        let cwd = Arc::new(
-            AbsPathBuf::try_from(if cfg!(windows) {
-                "C:/__joe_knowledge"
-            } else {
-                VIRTUAL_ROOT
-            })
-            .map_err(|_| anyhow::anyhow!("Invalid virtual directory"))?,
-        );
+        let mut graph = ProjectGraph::new()?;
         for (index, package) in packages.iter().enumerate() {
             for target in package.targets(*configuration) {
                 checkpoint()?;
-                match target
-                    .product
-                    .required_features
-                    .iter()
-                    .all(|feature| features[index].enabled.contains(feature))
-                {
-                    true => {
-                        let path = relative_path(
-                            &package.directory,
-                            target
-                                .product
-                                .path
-                                .as_deref()
-                                .context("Cargo target has no source path")?,
-                        )?;
-                        match ids.get(&path) {
-                            Some(file_id) => {
-                                let product = &target.product;
-                                let name = product
-                                    .name
-                                    .as_deref()
-                                    .unwrap_or(&package.name)
-                                    .replace('-', "_");
-                                let mut cfg = platform.options.clone();
-                                for feature in &features[index].enabled {
-                                    cfg.insert_key_value(
-                                        Symbol::intern("feature"),
-                                        Symbol::intern(feature),
-                                    );
-                                }
-                                if matches!(configuration, Configuration::Test)
-                                    && target.kind != TargetKind::Build
-                                {
-                                    cfg.insert_atom(Symbol::intern("test"));
-                                }
-                                if target.is_proc_macro() {
-                                    cfg.insert_atom(Symbol::intern("proc_macro"));
-                                }
-                                let edition = product
-                                    .edition
-                                    .unwrap_or(
-                                        package
-                                            .manifest
-                                            .package
-                                            .as_ref()
-                                            .context("Missing package")?
-                                            .edition(),
-                                    )
-                                    .to_string()
-                                    .parse::<Edition>()?;
-                                let id = graph.add_crate_root(
-                                    *file_id,
-                                    edition,
-                                    Some(
-                                        CrateName::new(&name)
-                                            .map_err(|error| {
-                                                anyhow::anyhow!("Invalid crate name: {error}")
-                                            })?
-                                            .into(),
-                                    ),
-                                    None,
-                                    cfg.clone(),
-                                    Some(cfg),
-                                    Env::default(),
-                                    CrateOrigin::Local {
-                                        repo: None,
-                                        name: Some(Symbol::intern(&package.name)),
-                                    },
-                                    Vec::new(),
-                                    target.is_proc_macro(),
-                                    cwd.clone(),
-                                    workspace.clone(),
-                                );
-                                roots.push(CrateRoot {
-                                    package: index,
-                                    name,
-                                    id,
-                                    kind: target.kind,
-                                });
-                            }
-                            None => output.diagnostics.push(package.diagnostic(format!(
-                                "Target source {} was not captured",
-                                path.as_str()
-                            ))),
-                        }
+                match target.source(package, &features[index], &ids)? {
+                    TargetSource::Captured(file_id) => graph.add_root(
+                        index,
+                        package,
+                        &target,
+                        file_id,
+                        target.cfg(&platform, *configuration, &features[index]),
+                    )?,
+                    TargetSource::Missing(path) => {
+                        output.diagnostics.push(package.diagnostic(format!(
+                            "Target source {} was not captured",
+                            path.as_str()
+                        )))
                     }
-                    false => output
+                    TargetSource::Excluded => output
                         .diagnostics
                         .push(package.diagnostic("Target excluded by required-features".into())),
-                }
-                match roots.len() <= MAX_PROJECT_ITEMS {
-                    true => {}
-                    false => Err(anyhow::anyhow!("Too many crate targets"))?,
                 }
             }
             if package.manifest.package.as_ref().is_some_and(|package| {
@@ -219,7 +123,7 @@ pub fn load_sources(
                 );
             }
         }
-        for root in &roots {
+        for root in &graph.roots {
             checkpoint()?;
             let mut linked = BTreeMap::new();
             for dependency in dependencies[root.package]
@@ -227,31 +131,27 @@ pub fn load_sources(
                 .filter(|dep| dep.applies(root.kind) && features[root.package].active(dep))
             {
                 checkpoint()?;
-                let destination = dependency.destination(&packages)?;
-                let target = destination.and_then(|index| {
-                    roots.iter().find(|candidate| {
-                        candidate.package == index && candidate.kind == TargetKind::Library
-                    })
-                });
-                match target {
-                    Some(target) => {
-                        let name = match dependency.dependency.package() {
-                            Some(_) => dependency.name.replace('-', "_"),
-                            None => target.name.clone(),
-                        };
-                        match linked.insert(name.clone(), target.id) {
-                            Some(previous) if previous != target.id => Err(anyhow::anyhow!("Ambiguous local dependency {name}"))?,
-                            Some(_) => {},
-                            None => match graph.add_dep(root.id, DependencyBuilder::new(CrateName::new(&name).map_err(|error| anyhow::anyhow!("Invalid dependency name: {error}"))?, target.id)) {
-                                Ok(()) => {},
-                                Err(_) => output.diagnostics.push(packages[root.package].diagnostic(format!("Cyclic dependency edge {} omitted; relationships through this edge are incomplete", dependency.name))),
-                            },
-                        }
-                    },
-                    None => output.diagnostics.push(packages[root.package].diagnostic(format!("Dependency {} has no captured library target; references through it may be unresolved", dependency.name))),
+                match dependency.link(&packages, &graph.roots, &mut linked)? {
+                    DependencyLink::Pending(edge) => {
+                        let diagnostic = graph.builder.add_dep(root.id, edge).err().map(|_| {
+                            packages[root.package].diagnostic(format!(
+                                "Cyclic dependency edge {} omitted; relationships through this edge are incomplete",
+                                dependency.name
+                            ))
+                        });
+                        output.diagnostics.extend(diagnostic);
+                    }
+                    DependencyLink::Duplicate => {}
+                    DependencyLink::Missing => output.diagnostics.push(
+                        packages[root.package].diagnostic(format!(
+                            "Dependency {} has no captured library target; references through it may be unresolved",
+                            dependency.name
+                        )),
+                    ),
                 }
             }
-            let library = roots
+            let library = graph
+                .roots
                 .iter()
                 .find(|candidate| {
                     candidate.package == root.package && candidate.kind == TargetKind::Library
@@ -259,6 +159,7 @@ pub fn load_sources(
                 .filter(|_| matches!(root.kind, TargetKind::Binary | TargetKind::Test));
             if let Some(library) = library {
                 graph
+                    .builder
                     .add_dep(
                         root.id,
                         DependencyBuilder::new(
@@ -273,7 +174,7 @@ pub fn load_sources(
                     })?;
             }
         }
-        change.source_change.set_crate_graph(graph);
+        change.source_change.set_crate_graph(graph.builder);
         let mut db = RootDatabase::default();
         change.apply(&mut db);
         checkpoint()?;
@@ -503,7 +404,64 @@ struct Target {
     kind: TargetKind,
 }
 
+enum TargetSource {
+    Captured(FileId),
+    Missing(SourcePath),
+    Excluded,
+}
+
 impl Target {
+    fn source(
+        &self,
+        package: &Package,
+        features: &EnabledFeatures,
+        files: &BTreeMap<SourcePath, FileId>,
+    ) -> anyhow::Result<TargetSource> {
+        match self
+            .product
+            .required_features
+            .iter()
+            .find(|feature| !features.enabled.contains(*feature))
+        {
+            Some(_) => Ok(TargetSource::Excluded),
+            None => {
+                let path = relative_path(
+                    &package.directory,
+                    self.product
+                        .path
+                        .as_deref()
+                        .context("Cargo target has no source path")?,
+                )?;
+                Ok(match files.get(&path) {
+                    Some(file_id) => TargetSource::Captured(*file_id),
+                    None => TargetSource::Missing(path),
+                })
+            }
+        }
+    }
+
+    fn cfg(
+        &self,
+        platform: &NativeCfg,
+        configuration: Configuration,
+        features: &EnabledFeatures,
+    ) -> CfgOptions {
+        let mut cfg = platform.options.clone();
+        for feature in &features.enabled {
+            cfg.insert_key_value(Symbol::intern("feature"), Symbol::intern(feature));
+        }
+        match (configuration, self.kind) {
+            (Configuration::Test, TargetKind::Library | TargetKind::Binary | TargetKind::Test) => {
+                cfg.insert_atom(Symbol::intern("test"));
+            }
+            _ => {}
+        }
+        if self.is_proc_macro() {
+            cfg.insert_atom(Symbol::intern("proc_macro"));
+        }
+        cfg
+    }
+
     fn is_proc_macro(&self) -> bool {
         self.product.proc_macro
             || self
@@ -517,11 +475,109 @@ impl Target {
 struct CrateRoot {
     package: usize,
     name: String,
-    id: ra_ap_ide_db::base_db::CrateBuilderId,
+    id: CrateBuilderId,
     kind: TargetKind,
 }
 
+struct ProjectGraph {
+    builder: CrateGraphBuilder,
+    roots: Vec<CrateRoot>,
+    cwd: Arc<AbsPathBuf>,
+    workspace: Arc<CrateWorkspaceData>,
+}
+
+impl ProjectGraph {
+    fn new() -> anyhow::Result<Self> {
+        let cwd = AbsPathBuf::try_from(if cfg!(windows) {
+            "C:/__joe_knowledge"
+        } else {
+            VIRTUAL_ROOT
+        })
+        .map_err(|_| anyhow::anyhow!("Invalid virtual directory"))?;
+        Ok(Self {
+            builder: CrateGraphBuilder::default(),
+            roots: Vec::new(),
+            cwd: Arc::new(cwd),
+            workspace: Arc::new(CrateWorkspaceData {
+                target: Err("No compiler target-layout query is executed".into()),
+                toolchain: None,
+            }),
+        })
+    }
+
+    fn add_root(
+        &mut self,
+        package_index: usize,
+        package: &Package,
+        target: &Target,
+        file_id: FileId,
+        cfg: CfgOptions,
+    ) -> anyhow::Result<()> {
+        let name = target
+            .product
+            .name
+            .as_deref()
+            .unwrap_or(&package.name)
+            .replace('-', "_");
+        let edition = target
+            .product
+            .edition
+            .unwrap_or(
+                package
+                    .manifest
+                    .package
+                    .as_ref()
+                    .context("Missing package")?
+                    .edition(),
+            )
+            .to_string()
+            .parse::<Edition>()?;
+        let id = self.builder.add_crate_root(
+            file_id,
+            edition,
+            Some(
+                CrateName::new(&name)
+                    .map_err(|error| anyhow::anyhow!("Invalid crate name: {error}"))?
+                    .into(),
+            ),
+            None,
+            cfg.clone(),
+            Some(cfg),
+            Env::default(),
+            CrateOrigin::Local {
+                repo: None,
+                name: Some(Symbol::intern(&package.name)),
+            },
+            Vec::new(),
+            target.is_proc_macro(),
+            self.cwd.clone(),
+            self.workspace.clone(),
+        );
+        self.roots.push(CrateRoot {
+            package: package_index,
+            name,
+            id,
+            kind: target.kind,
+        });
+        match self.roots.len() {
+            0..=MAX_PROJECT_ITEMS => Ok(()),
+            _ => Err(anyhow::anyhow!("Too many crate targets")),
+        }
+    }
+}
+
 impl Package {
+    fn default_feature(&self, defaults: &DefaultFeatures) -> Option<String> {
+        match defaults {
+            DefaultFeatures::Enabled => self
+                .manifest
+                .features
+                .get("default")
+                .map(|_| "default".to_owned()),
+            DefaultFeatures::Disabled => None,
+        }
+    }
+
     fn diagnostic(&self, message: String) -> IndexDiagnostic {
         IndexDiagnostic {
             message: format!("{}: {message}", self.path.as_str()),
@@ -637,7 +693,46 @@ struct LocalDependency {
     path: Option<SourcePath>,
 }
 
+enum DependencyLink {
+    Pending(DependencyBuilder),
+    Duplicate,
+    Missing,
+}
+
 impl LocalDependency {
+    fn link(
+        &self,
+        packages: &[Package],
+        roots: &[CrateRoot],
+        linked: &mut BTreeMap<String, CrateBuilderId>,
+    ) -> anyhow::Result<DependencyLink> {
+        let target = self.destination(packages)?.and_then(|index| {
+            roots.iter().find(|candidate| {
+                candidate.package == index && candidate.kind == TargetKind::Library
+            })
+        });
+        match target {
+            Some(target) => {
+                let name = match self.dependency.package() {
+                    Some(_) => self.name.replace('-', "_"),
+                    None => target.name.clone(),
+                };
+                match linked.insert(name.clone(), target.id) {
+                    Some(previous) if previous != target.id => {
+                        Err(anyhow::anyhow!("Ambiguous local dependency {name}"))
+                    }
+                    Some(_) => Ok(DependencyLink::Duplicate),
+                    None => Ok(DependencyLink::Pending(DependencyBuilder::new(
+                        CrateName::new(&name)
+                            .map_err(|error| anyhow::anyhow!("Invalid dependency name: {error}"))?,
+                        target.id,
+                    ))),
+                }
+            }
+            None => Ok(DependencyLink::Missing),
+        }
+    }
+
     fn applies(&self, target: TargetKind) -> bool {
         matches!(
             (self.kind, target),
@@ -667,6 +762,41 @@ impl LocalDependency {
     }
 }
 
+enum DependencyActivation {
+    Enable,
+    IfEnabled,
+}
+
+enum FeatureRequest<'a> {
+    Named(&'a str),
+    Dependency(&'a str),
+    DependencyFeature {
+        dependency: &'a str,
+        feature: &'a str,
+        activation: DependencyActivation,
+    },
+}
+
+impl<'a> FeatureRequest<'a> {
+    fn new(value: &'a str) -> Self {
+        match value.split_once('/') {
+            Some((dependency, feature)) => Self::DependencyFeature {
+                dependency: dependency.trim_end_matches('?'),
+                feature,
+                activation: if dependency.ends_with('?') {
+                    DependencyActivation::IfEnabled
+                } else {
+                    DependencyActivation::Enable
+                },
+            },
+            None => match value.strip_prefix("dep:") {
+                Some(dependency) => Self::Dependency(dependency),
+                None => Self::Named(value),
+            },
+        }
+    }
+}
+
 #[derive(Default)]
 struct EnabledFeatures {
     enabled: BTreeSet<String>,
@@ -691,45 +821,82 @@ impl EnabledFeatures {
         while let Some(feature) = pending.pop() {
             checkpoint()?;
             if seen.insert(feature.clone()) {
-                match seen.len() <= MAX_PROJECT_ITEMS {
-                    true => {}
-                    false => Err(anyhow::anyhow!("Feature expansion exceeds limit"))?,
+                match seen.len() {
+                    0..=MAX_PROJECT_ITEMS => {}
+                    _ => Err(anyhow::anyhow!("Feature expansion exceeds limit"))?,
                 }
-                match feature.split_once('/') {
-                    Some((dependency, feature)) => {
-                        let name = dependency.trim_end_matches('?').to_owned();
-                        if !dependency.ends_with('?') {
-                            state.dependencies.insert(name.clone());
-                            if Self::implicit_dependency(package, dependencies, &name) {
-                                pending.push(name.clone());
-                            }
-                        }
-                        state
-                            .requested
-                            .entry(name)
-                            .or_default()
-                            .insert(feature.to_owned());
-                    }
-                    None if feature.starts_with("dep:") => {
-                        state.dependencies.insert(feature[4..].to_owned());
-                    }
-                    None => {
-                        state.enabled.insert(feature.clone());
-                        match package.manifest.features.get(&feature) {
-                            Some(children) => pending.extend(children.iter().cloned()),
-                            None if Self::implicit_dependency(package, dependencies, &feature) => {
-                                state.dependencies.insert(feature);
-                            }
-                            None => Err(anyhow::anyhow!(
-                                "Unknown feature {feature} for {}",
-                                package.name
-                            ))?,
-                        }
-                    }
-                }
+                state.expand(
+                    FeatureRequest::new(&feature),
+                    package,
+                    dependencies,
+                    &mut pending,
+                )?;
             }
         }
         Ok(state)
+    }
+
+    fn expand(
+        &mut self,
+        request: FeatureRequest<'_>,
+        package: &Package,
+        dependencies: &[LocalDependency],
+        pending: &mut Vec<String>,
+    ) -> anyhow::Result<()> {
+        match request {
+            FeatureRequest::Named(feature) => {
+                self.enabled.insert(feature.to_owned());
+                match package.manifest.features.get(feature) {
+                    Some(children) => pending.extend(children.iter().cloned()),
+                    None if Self::implicit_dependency(package, dependencies, feature) => {
+                        self.dependencies.insert(feature.to_owned());
+                    }
+                    None => Err(anyhow::anyhow!(
+                        "Unknown feature {feature} for {}",
+                        package.name
+                    ))?,
+                }
+            }
+            FeatureRequest::Dependency(dependency) => {
+                self.dependencies.insert(dependency.to_owned());
+            }
+            FeatureRequest::DependencyFeature {
+                dependency,
+                feature,
+                activation,
+            } => {
+                match activation {
+                    DependencyActivation::Enable => {
+                        self.dependencies.insert(dependency.to_owned());
+                        pending.extend(
+                            Self::implicit_dependency(package, dependencies, dependency)
+                                .then(|| dependency.to_owned()),
+                        );
+                    }
+                    DependencyActivation::IfEnabled => {}
+                }
+                self.requested
+                    .entry(dependency.to_owned())
+                    .or_default()
+                    .insert(feature.to_owned());
+            }
+        }
+        Ok(())
+    }
+
+    fn requests(&self, dependency: &LocalDependency, destination: &Package) -> BTreeSet<String> {
+        let defaults = match dependency.dependency.detail() {
+            Some(detail) if !detail.default_features => DefaultFeatures::Disabled,
+            _ => DefaultFeatures::Enabled,
+        };
+        dependency
+            .dependency
+            .req_features()
+            .iter()
+            .chain(self.requested.get(&dependency.name).into_iter().flatten())
+            .cloned()
+            .chain(destination.default_feature(&defaults))
+            .collect()
     }
 
     fn implicit_dependency(
@@ -754,109 +921,128 @@ enum FeatureProgress {
     Complete,
 }
 
+struct FeatureSeeds {
+    packages: Vec<BTreeSet<String>>,
+}
+
+struct FeatureSeed<'a> {
+    package: usize,
+    feature: &'a str,
+}
+
+impl FeatureSeeds {
+    fn new(
+        packages: &[Package],
+        dependencies: &[Vec<LocalDependency>],
+        selection: &Features,
+    ) -> anyhow::Result<Self> {
+        let defaults = match selection {
+            Features::Default
+            | Features::Named {
+                defaults: DefaultFeatures::Enabled,
+                ..
+            } => &DefaultFeatures::Enabled,
+            _ => &DefaultFeatures::Disabled,
+        };
+        let mut seeds = Self {
+            packages: packages
+                .iter()
+                .map(|package| package.default_feature(defaults).into_iter().collect())
+                .collect(),
+        };
+        if let Features::Named { names, .. } = selection {
+            for name in names {
+                let mut selected = packages
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, package)| {
+                        let feature = match name.split_once('/') {
+                            Some((owner, feature)) if owner == package.name => Some(feature),
+                            None if package.manifest.features.contains_key(name)
+                                || dependencies[index]
+                                    .iter()
+                                    .any(|dep| dep.name == *name && dep.dependency.optional()) =>
+                            {
+                                Some(name.as_str())
+                            }
+                            _ => None,
+                        };
+                        feature.map(|feature| FeatureSeed {
+                            package: index,
+                            feature,
+                        })
+                    })
+                    .peekable();
+                selected
+                    .peek()
+                    .with_context(|| format!("No captured package provides feature {name}"))?;
+                for seed in selected {
+                    seeds.packages[seed.package].insert(seed.feature.to_owned());
+                }
+            }
+        }
+        Ok(seeds)
+    }
+
+    fn count(&self) -> usize {
+        self.packages.iter().map(BTreeSet::len).sum()
+    }
+
+    fn propagate(
+        &mut self,
+        packages: &[Package],
+        dependencies: &[Vec<LocalDependency>],
+        enabled: &[EnabledFeatures],
+        checkpoint: &dyn Fn() -> anyhow::Result<()>,
+    ) -> anyhow::Result<FeatureProgress> {
+        let previous_count = self.count();
+        for (features, dependencies) in enabled.iter().zip(dependencies) {
+            for dependency in dependencies.iter().filter(|dep| features.active(dep)) {
+                checkpoint()?;
+                if let Some(destination) = dependency.destination(packages)? {
+                    self.packages[destination]
+                        .extend(features.requests(dependency, &packages[destination]));
+                }
+            }
+        }
+        Ok(if self.count() == previous_count {
+            FeatureProgress::Complete
+        } else {
+            FeatureProgress::Expanding
+        })
+    }
+}
+
 fn resolved_features(
     packages: &[Package],
     dependencies: &[Vec<LocalDependency>],
     selection: &Features,
     checkpoint: &dyn Fn() -> anyhow::Result<()>,
 ) -> anyhow::Result<Vec<EnabledFeatures>> {
-    let mut seeds = vec![BTreeSet::new(); packages.len()];
-    let defaults = matches!(
-        selection,
-        Features::Default
-            | Features::Named {
-                defaults: DefaultFeatures::Enabled,
-                ..
-            }
-    );
-    for (index, package) in packages.iter().enumerate() {
-        if defaults && package.manifest.features.contains_key("default") {
-            seeds[index].insert("default".into());
-        }
-    }
-    if let Features::Named { names, .. } = selection {
-        for name in names {
-            let mut matched = 0;
-            for (index, package) in packages.iter().enumerate() {
-                let selected = match name.split_once('/') {
-                    Some((owner, feature)) if owner == package.name => Some(feature),
-                    None if package.manifest.features.contains_key(name)
-                        || dependencies[index]
-                            .iter()
-                            .any(|dep| dep.name == *name && dep.dependency.optional()) =>
-                    {
-                        Some(name.as_str())
-                    }
-                    _ => None,
-                };
-                if let Some(feature) = selected {
-                    seeds[index].insert(feature.into());
-                    matched += 1;
-                }
-            }
-            match matched > 0 {
-                true => {}
-                false => Err(anyhow::anyhow!(
-                    "No captured package provides feature {name}"
-                ))?,
-            }
-        }
-    }
+    let mut seeds = FeatureSeeds::new(packages, dependencies, selection)?;
     let mut progress = FeatureProgress::Expanding;
     let mut result = Vec::new();
     let mut iterations = 0;
     while let FeatureProgress::Expanding = progress {
         checkpoint()?;
         iterations += 1;
-        match iterations <= MAX_PROJECT_ITEMS {
-            true => {}
-            false => Err(anyhow::anyhow!("Feature resolution exceeds limit"))?,
+        match iterations {
+            0..=MAX_PROJECT_ITEMS => {}
+            _ => Err(anyhow::anyhow!("Feature resolution exceeds limit"))?,
         }
-        progress = FeatureProgress::Complete;
         result = packages
             .iter()
             .enumerate()
             .map(|(index, package)| {
-                EnabledFeatures::new(package, &dependencies[index], &seeds[index], checkpoint)
+                EnabledFeatures::new(
+                    package,
+                    &dependencies[index],
+                    &seeds.packages[index],
+                    checkpoint,
+                )
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
-        for (index, deps) in dependencies.iter().enumerate() {
-            for dependency in deps.iter().filter(|dep| result[index].active(dep)) {
-                checkpoint()?;
-                if let Some(destination) = dependency.destination(packages)? {
-                    let mut requested = dependency
-                        .dependency
-                        .req_features()
-                        .iter()
-                        .cloned()
-                        .collect::<BTreeSet<_>>();
-                    requested.extend(
-                        result[index]
-                            .requested
-                            .get(&dependency.name)
-                            .into_iter()
-                            .flatten()
-                            .cloned(),
-                    );
-                    if dependency
-                        .dependency
-                        .detail()
-                        .is_none_or(|detail| detail.default_features)
-                        && packages[destination]
-                            .manifest
-                            .features
-                            .contains_key("default")
-                    {
-                        requested.insert("default".into());
-                    }
-                    for feature in requested {
-                        if seeds[destination].insert(feature) {
-                            progress = FeatureProgress::Expanding;
-                        }
-                    }
-                }
-            }
-        }
+        progress = seeds.propagate(packages, dependencies, &result, checkpoint)?;
     }
     Ok(result)
 }
@@ -867,7 +1053,16 @@ struct NativeCfg {
 }
 
 impl NativeCfg {
-    fn new() -> anyhow::Result<Self> {
+    fn new(profile: &SemanticProfile) -> anyhow::Result<Self> {
+        match profile {
+            profile
+                if profile.target == native_target()
+                    && profile.analyzer_version == ANALYZER_VERSION => {}
+            _ => Err(anyhow::anyhow!(
+                "In-process indexing requires the native target {} and analyzer {ANALYZER_VERSION}",
+                native_target()
+            ))?,
+        }
         let mut options = CfgOptions::default();
         let mut cargo = Vec::new();
         for (enabled, flag) in [

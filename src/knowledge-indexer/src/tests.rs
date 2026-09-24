@@ -217,3 +217,62 @@ fn main() { second(); }
         "first"
     );
 }
+
+#[test]
+fn traversal_inherits_local_scopes_and_restores_sibling_owners() {
+    let graph = graph(
+        r#"
+fn leaf() {}
+fn outer(argument: usize) {
+    let local = leaf();
+    fn nested() { leaf(); }
+    let callback = || leaf();
+    nested();
+}
+fn sibling() { leaf(); }
+"#,
+    );
+    let mut calls = edges(&graph, "outer", RelationKind::Calls)
+        .into_iter()
+        .map(|symbol| symbol.name.as_str())
+        .collect::<Vec<_>>();
+    calls.sort();
+    assert_eq!(calls, ["leaf", "leaf", "nested"]);
+    assert_eq!(edges(&graph, "nested", RelationKind::Calls)[0].name, "leaf");
+    assert_eq!(
+        edges(&graph, "sibling", RelationKind::Calls)[0].name,
+        "leaf"
+    );
+    for local in ["argument", "local", "callback"] {
+        assert!(edges(&graph, local, RelationKind::Calls).is_empty());
+        assert!(
+            edges(&graph, "outer", RelationKind::Contains)
+                .iter()
+                .any(|symbol| symbol.name == local)
+        );
+    }
+}
+
+#[test]
+fn nested_macro_expansions_keep_their_generated_call_owner() {
+    let graph = graph(
+        r#"
+macro_rules! inner { () => { fn generated() { leaf(); } } }
+macro_rules! outer { () => { inner!(); } }
+outer!();
+fn leaf() {}
+fn caller() { generated(); }
+"#,
+    );
+    assert_eq!(
+        edges(&graph, "caller", RelationKind::Calls)[0].name,
+        "generated"
+    );
+    assert_eq!(
+        edges(&graph, "generated", RelationKind::Calls)[0].name,
+        "leaf"
+    );
+    assert!(graph.data().symbols.iter().any(|symbol| {
+        symbol.name == "generated" && matches!(symbol.origin, SymbolOrigin::Expansion { .. })
+    }));
+}
