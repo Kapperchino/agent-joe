@@ -18,7 +18,23 @@ pub struct ReviewChanges {
 }
 
 #[derive(Default, Serialize, Deserialize, Debug, Clone, ToolInput)]
-pub struct ReviewChangesInput {}
+pub struct ReviewChangesInput {
+    #[tool(
+        description = "For the final review, supply a concise imperative Git commit subject from your existing task context and reviewed changes. Describe behavior, not file counts; use one plain-text line of at most 72 characters. Update it after further edits. Omit or use null for an intermediate review."
+    )]
+    pub commit_message: Option<String>,
+}
+
+impl ReviewChangesInput {
+    fn commit_message(
+        &self,
+    ) -> anyhow::Result<Option<utils::git::worktrees::session::CommitMessage>> {
+        self.commit_message
+            .as_deref()
+            .map(utils::git::worktrees::session::CommitMessage::new)
+            .transpose()
+    }
+}
 
 impl Display for ReviewChanges {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -30,9 +46,11 @@ impl Display for ReviewChanges {
 impl<C: Context, A> ToolTrait<C, A> for ReviewChanges {
     type Input = ReviewChangesInput;
     type Output = utils::changes::Review;
-    async fn run(_: Self::Input, _: ToolId, _: &C, _: &A) -> anyhow::Result<Self::Output> {
+    async fn run(input: Self::Input, _: ToolId, _: &C, _: &A) -> anyhow::Result<Self::Output> {
+        let message = input.commit_message()?;
         let changes = utils::execution::ExecutionScope::current().changes;
-        utils::files::operation(move |workspace| changes.record_review(workspace)).await
+        utils::files::operation(move |workspace| changes.record_commit_review(workspace, message))
+            .await
     }
     fn display_input(_: &Self::Input) -> String {
         "- review task changes".into()

@@ -291,7 +291,15 @@ pub struct ChangeSnapshot {
     #[serde(default)]
     pub reviewed: Option<String>,
     #[serde(default)]
+    pub commit_message: Option<String>,
+    #[serde(default)]
     pub validation: Vec<ValidationEvidence>,
+}
+
+pub enum CommitReview {
+    Unchanged,
+    Missing,
+    Described(crate::git::worktrees::session::CommitMessage),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -417,6 +425,14 @@ impl ChangeTracker {
     }
 
     pub fn record_review(&self, workspace: &WorkspacePolicy) -> anyhow::Result<Review> {
+        self.record_commit_review(workspace, None)
+    }
+
+    pub fn record_commit_review(
+        &self,
+        workspace: &WorkspacePolicy,
+        message: Option<crate::git::worktrees::session::CommitMessage>,
+    ) -> anyhow::Result<Review> {
         let review = self.review(workspace)?;
         let fingerprint = blake3::hash(&serde_json::to_vec(&review)?).to_string();
         let mut state = self
@@ -424,9 +440,32 @@ impl ChangeTracker {
             .lock()
             .map_err(|_| anyhow::anyhow!("Change journal lock poisoned"))?;
         let mut snapshot = state.snapshot.clone();
+        snapshot.commit_message = match message {
+            Some(message) => Some(message.as_str().to_owned()),
+            None if snapshot.reviewed.as_ref() == Some(&fingerprint) => snapshot.commit_message,
+            None => None,
+        };
         snapshot.reviewed = Some(fingerprint);
         state.commit(snapshot)?;
         Ok(review)
+    }
+
+    pub fn commit_review(&self, workspace: &WorkspacePolicy) -> anyhow::Result<CommitReview> {
+        let snapshot = self.snapshot()?;
+        let review = self.review(workspace)?;
+        let fingerprint = blake3::hash(&serde_json::to_vec(&review)?).to_string();
+        match (
+            review.changes.is_empty() && review.index_changes.is_empty(),
+            snapshot.reviewed,
+            snapshot.commit_message,
+        ) {
+            (true, _, _) => Ok(CommitReview::Unchanged),
+            (false, Some(reviewed), Some(message)) if reviewed == fingerprint => {
+                crate::git::worktrees::session::CommitMessage::new(&message)
+                    .map(CommitReview::Described)
+            }
+            _ => Ok(CommitReview::Missing),
+        }
     }
 
     pub fn completion_obligations(

@@ -1,5 +1,6 @@
 use super::*;
 use common_models::interaction::{Planning, WorkMode};
+use common_models::tui_models::ActorToTuiPacket;
 use interaction::{InteractionEvent, InteractionState, policy::InteractionPolicy};
 use std::cell::Cell;
 
@@ -53,7 +54,6 @@ fn unavailable_offers_skip_snapshot_access_but_eligible_offers_propagate_errors(
         project: Some(&project),
         workspace: &workspace,
         scope: &scope,
-        request_timeout: std::time::Duration::from_secs(30),
     };
     for readiness in [MergeReadiness::TaskActive, MergeReadiness::StorageFailed] {
         assert!(

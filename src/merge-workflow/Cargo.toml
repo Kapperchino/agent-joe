@@ -10,15 +10,11 @@ serde = { version = "1.0", features = ["derive"] }
 utils = { path = "../utils" }
 
 clients = { path = "../clients" }
-conversation = { path = "../conversation" }
 interaction = { path = "../interaction" }
-response-stream = { path = "../response-stream" }
 tools = { path = "../tools" }
 turn-engine = { path = "../turn-engine" }
 workspace-access = { path = "../workspace-access" }
-futures = "0.3"
-serde_json = "1.0"
-tokio = { version = "1", features = ["rt", "time"] }
+tokio = { version = "1", features = ["rt"] }
 
 [dev-dependencies]
 serde_json = "1.0"

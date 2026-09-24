@@ -1,6 +1,77 @@
 use super::*;
 use crate::git::tests::Fixture;
 
+#[test]
+fn commit_subjects_are_bound_to_current_reviews_and_survive_restore() {
+    use crate::git::worktrees::session::CommitMessage;
+
+    let fixture = Fixture::new();
+    fixture.write("file", "original\n");
+    fixture.stage("file");
+    fixture.commit();
+    let tracker = ChangeTracker::default();
+    tracker.start(&fixture.workspace).unwrap();
+    assert!(matches!(
+        tracker.commit_review(&fixture.workspace).unwrap(),
+        CommitReview::Unchanged
+    ));
+    fixture.write("file", "updated\n");
+    assert!(matches!(
+        tracker.commit_review(&fixture.workspace).unwrap(),
+        CommitReview::Missing
+    ));
+    tracker
+        .record_commit_review(
+            &fixture.workspace,
+            Some(CommitMessage::new("Update the fixture").unwrap()),
+        )
+        .unwrap();
+    tracker.record_review(&fixture.workspace).unwrap();
+    let saved = serde_json::to_vec(&tracker.snapshot().unwrap()).unwrap();
+    let restored = ChangeTracker::restored(serde_json::from_slice(&saved).unwrap(), None);
+    assert!(
+        matches!(restored.commit_review(&fixture.workspace).unwrap(), CommitReview::Described(message) if message.as_str() == "Update the fixture")
+    );
+    fixture.stage("file");
+    assert!(matches!(
+        restored.commit_review(&fixture.workspace).unwrap(),
+        CommitReview::Missing
+    ));
+    restored.record_review(&fixture.workspace).unwrap();
+    assert!(matches!(
+        restored.commit_review(&fixture.workspace).unwrap(),
+        CommitReview::Missing
+    ));
+    restored
+        .record_commit_review(
+            &fixture.workspace,
+            Some(CommitMessage::new("Update the staged fixture").unwrap()),
+        )
+        .unwrap();
+    fixture.write("file", "concurrent edit\n");
+    assert!(matches!(
+        restored.commit_review(&fixture.workspace).unwrap(),
+        CommitReview::Missing
+    ));
+}
+
+#[test]
+fn legacy_reviews_do_not_invent_a_commit_subject() {
+    let fixture = Fixture::new();
+    fixture.write("file", "original\n");
+    let tracker = ChangeTracker::default();
+    tracker.start(&fixture.workspace).unwrap();
+    fixture.write("file", "updated\n");
+    tracker.record_review(&fixture.workspace).unwrap();
+    let mut saved = serde_json::to_value(tracker.snapshot().unwrap()).unwrap();
+    saved.as_object_mut().unwrap().remove("commit_message");
+    let restored = ChangeTracker::restored(serde_json::from_value(saved).unwrap(), None);
+    assert!(matches!(
+        restored.commit_review(&fixture.workspace).unwrap(),
+        CommitReview::Missing
+    ));
+}
+
 fn successful_validation(fixture: &Fixture) -> crate::cargo::CargoResult {
     use crate::cargo::{CargoAction, CargoInput, CargoOperation};
     let command = CargoOperation::new(CargoAction::Test, CargoInput::default()).unwrap();

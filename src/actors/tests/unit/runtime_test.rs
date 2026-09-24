@@ -68,8 +68,6 @@ fn latest_tool_result(request: &llm::ClientRequest) -> &ContentBlock {
 }
 
 type Events = BoxStream<'static, anyhow::Result<StreamEvent>>;
-#[path = "commit_message/tests.rs"]
-mod commit_message;
 #[path = "request_continuity_test.rs"]
 mod request_continuity;
 #[path = "session_worktrees/tests.rs"]

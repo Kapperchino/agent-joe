@@ -233,6 +233,28 @@ impl<C: Context> ProviderContext<'_, C> {
                         }))
                         .await?,
                 );
+                let worktree = self
+                    .runtime
+                    .session
+                    .as_ref()
+                    .map(|session| session.snapshot())
+                    .transpose()?
+                    .and_then(|snapshot| snapshot.worktree);
+                if worktree.is_some() {
+                    let changes = self.runtime.scope.changes.clone();
+                    let review = self
+                        .runtime
+                        .scope
+                        .enter(utils::files::operation(move |workspace| {
+                            changes.commit_review(workspace)
+                        }))
+                        .await?;
+                    obligations.extend(match review {
+                        utils::changes::CommitReview::Missing => Some("Call review_changes with commit_message: a concise imperative subject of at most 72 characters describing the session changes from your existing context. The subject must describe the current reviewed changes before offering a merge.".into()),
+                        utils::changes::CommitReview::Unchanged
+                        | utils::changes::CommitReview::Described(_) => None,
+                    });
+                }
             }
             (WorkMode::Implement, true, Err(_))
                 if planning

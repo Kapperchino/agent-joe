@@ -103,7 +103,6 @@ fn merge_recovery_and_new_tasks_keep_questions_and_storage_in_sync_without_an_ac
             project: runtime.project.as_ref(),
             workspace: &runtime.workspace,
             scope: &runtime.scope,
-            request_timeout: std::time::Duration::from_secs(30),
         },
         MergeActivity::Idle,
     );

@@ -1,10 +1,8 @@
 use crate::{MergeApproval, MergeDecision, MergeEvent, MergeProposal, MergeReadiness};
-use clients::llm::LLmClient;
 use clients::response::RequestMode;
 use common_models::{
     interaction::{Answer, QuestionPurpose},
     runtime_ids::TurnId,
-    tui_models::ActorToTuiPacket,
 };
 use interaction::access::InteractionRole;
 use interaction::control::{InteractionControl, InteractionPersistence};
@@ -12,7 +10,8 @@ use std::sync::Arc;
 use tools::tool_defs::ToolOpKind;
 use turn_engine::turn::FollowUp;
 use utils::{
-    git::worktrees::session::{CommitMessage, MergeConflict, MergeOutcome, SessionWorktree},
+    changes::CommitReview,
+    git::worktrees::session::{MergeConflict, MergeOutcome, SessionWorktree},
     workspace::WorkspacePolicy,
 };
 
@@ -39,17 +38,11 @@ pub struct MergeEnvironment<'a> {
     pub project: Option<&'a Arc<WorkspacePolicy>>,
     pub workspace: &'a workspace_access::Workspace,
     pub scope: &'a utils::execution::ExecutionScope,
-    pub request_timeout: std::time::Duration,
 }
 
 struct MergeWorkspace {
     project: Arc<WorkspacePolicy>,
     worktree: SessionWorktree,
-}
-
-struct ProposedCommit {
-    workspace: MergeWorkspace,
-    commit: String,
 }
 
 enum MergeResult {
@@ -183,8 +176,6 @@ impl<P: MergePersistence> SessionMerge<'_, P> {
         &mut self,
         turn: TurnId,
         mode: RequestMode,
-        client: &LLmClient,
-        cache_key: &str,
     ) -> anyhow::Result<Option<MergeCompletion>> {
         match MergeWorkspace::for_offer(
             &self.environment,
@@ -200,9 +191,7 @@ impl<P: MergePersistence> SessionMerge<'_, P> {
                     .acquire(ToolOpKind::Write, runtime.scope)
                     .await?;
                 let approval = self.approval.clone();
-                let commit = self
-                    .describe_merge(workspace, approval, client, cache_key)
-                    .await?;
+                let commit = self.describe_merge(workspace, approval).await?;
                 drop(lease);
                 let proposal = MergeProposal::new(self.approval, turn, commit);
                 self.record_merge(proposal.event())?;
@@ -221,56 +210,30 @@ impl<P: MergePersistence> SessionMerge<'_, P> {
         &self,
         workspace: MergeWorkspace,
         approval: MergeApproval,
-        client: &LLmClient,
-        cache_key: &str,
     ) -> anyhow::Result<Option<String>> {
-        let proposal = tokio::task::spawn_blocking(move || {
-            let commit = workspace.proposal(&approval)?;
-            Ok::<_, anyhow::Error>(commit.map(|commit| ProposedCommit { workspace, commit }))
-        })
-        .await??;
-        match proposal {
-            None => Ok(None),
-            Some(ProposedCommit { workspace, commit }) => {
-                let described = workspace.worktree.clone();
-                let project = workspace.project.clone();
-                let expected = commit.clone();
-                let diff = tokio::task::spawn_blocking(move || {
-                    described.proposal_diff(&project, &expected)
-                })
-                .await?;
-                let message = match diff {
-                    Ok(diff) if diff.is_empty() => {
-                        CommitMessage::new("Merge session changes already present in main")
-                    }
-                    Ok(diff) => {
-                        crate::commit_message::generate(
-                            client.snapshot(),
-                            diff,
-                            self.environment.request_timeout,
-                            Some(format!("{cache_key}:commit")),
-                        )
-                        .await
-                    }
-                    Err(error) => Err(error),
-                };
-                match message {
-                    Ok(message) => tokio::task::spawn_blocking(move || {
+        let changes = self.environment.scope.changes.clone();
+        tokio::task::spawn_blocking(move || {
+            let policy = workspace.worktree.workspace(&workspace.project)?;
+            let message = match changes.commit_review(&policy)? {
+                CommitReview::Described(message) => Ok(Some(message)),
+                CommitReview::Unchanged => Ok(None),
+                CommitReview::Missing => Err(anyhow::anyhow!(
+                    "Review the current changes with a commit_message before offering a merge"
+                )),
+            }?;
+            workspace
+                .proposal(&approval)?
+                .map(|commit| match &message {
+                    Some(message) => {
                         workspace
                             .worktree
-                            .describe_proposal(&workspace.project, &commit, &message)
-                    })
-                    .await?
-                    .map(Some),
-                    Err(error) => {
-                        self.interaction.persistence.report(ActorToTuiPacket::ContextNotice(format!(
-                            "Could not generate a descriptive commit message; keeping the existing commit message: {error:#}"
-                        )));
-                        Ok(Some(commit))
+                            .describe_proposal(&workspace.project, &commit, message)
                     }
-                }
-            }
-        }
+                    None => Ok(commit),
+                })
+                .transpose()
+        })
+        .await?
     }
 
     pub fn merge_decision(&self, id: &str, answer: &Answer) -> anyhow::Result<MergeDecision> {

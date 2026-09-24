@@ -2,7 +2,7 @@ use crate::changes::SessionChanges;
 use crate::control::SessionControl;
 use crate::persistence::SessionPersistence;
 use crate::state::{SessionAccess, SessionState};
-use clients::llm::{LLmClient, Message};
+use clients::llm::Message;
 use clients::response::RequestMode;
 use commands::command::{Command, QuestionAnswer};
 use common_models::interaction::QuestionPurpose;
@@ -123,13 +123,9 @@ impl SessionTurn<'_> {
         &mut self,
         turn: TurnId,
         mode: RequestMode,
-        client: &LLmClient,
     ) -> anyhow::Result<Option<MergeCompletion>> {
         let mode = self.state.conversation.request_mode(turn, mode);
-        let cache_key = self.state.conversation.cache_key().to_owned();
-        self.merge()
-            .offer_merge(turn, mode, client, &cache_key)
-            .await
+        self.merge().offer_merge(turn, mode).await
     }
 
     pub fn prepare_tools(&mut self, jobs: Vec<ToolJob>) -> Result<Vec<ToolJob>, ToolFailure> {

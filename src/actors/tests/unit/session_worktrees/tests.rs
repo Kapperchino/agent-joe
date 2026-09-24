@@ -143,15 +143,6 @@ impl GitHarness {
             .await
     }
 
-    async fn summarize(&self, subject: &str) -> llm::ClientRequest {
-        let (request, reply) = within(self.requests.recv_async()).await.unwrap();
-        assert!(request.tools.is_empty());
-        assert_eq!(request.messages.len(), 1);
-        assert!(request.messages[0].text().contains("diff --git"));
-        answer(reply, response(vec![text(subject)]));
-        request
-    }
-
     async fn complete_with_subject(
         &self,
         patch: Option<&str>,
@@ -185,14 +176,15 @@ impl GitHarness {
             }
             None => reply,
         };
-        answer(
-            reply,
-            response(vec![call("review_changes", "review-final")]),
-        );
+        answer(reply, response(vec![review_call(subject, "review-final")]));
         let (_, reply) = within(self.requests.recv_async()).await.unwrap();
         answer(reply, response(vec![text("Task completed")]));
-        self.summarize(subject).await;
+        self.merge_question().await
+    }
+
+    async fn merge_question(&self) -> common_models::interaction::Question {
         let packet = self.event(|packet| matches!(packet, ActorToTuiPacket::InteractionUpdated(view) if view.questions.iter().any(|question| question.id.starts_with("merge-")))).await;
+        assert!(self.requests.is_empty());
         match packet {
             ActorToTuiPacket::InteractionUpdated(view) => view
                 .questions
@@ -224,6 +216,17 @@ impl GitHarness {
 }
 
 const PATCH: &str = "*** Begin Patch\n*** Update File: lib.rs\n@@\n-pub fn value() -> u32 { 1 }\n+pub fn value() -> u32 { 2 }\n*** End Patch";
+
+fn review_call(subject: &str, id: &str) -> ContentBlock {
+    let mut block = call("review_changes", id);
+    if let ContentBlock::ToolBlock { input, .. } = &mut block {
+        *input = json!({ "commit_message": subject })
+            .as_object()
+            .unwrap()
+            .clone();
+    }
+    block
+}
 
 #[tokio::test]
 async fn prune_removes_inactive_merged_worktrees() {
@@ -509,10 +512,62 @@ async fn prune_rejects_plan_mode_and_active_turns() {
 }
 
 #[tokio::test]
-async fn invalid_commit_subjects_do_not_block_approved_merges() {
+async fn missing_and_invalid_commit_subjects_are_corrected_in_the_existing_agent_context() {
     let h = GitHarness::new().await;
+    let id = h.store.list().unwrap()[0].id.clone();
+    let worktree = h.snapshot(&id).worktree.unwrap();
     let base = h.repo.refname_to_id("HEAD").unwrap();
-    let question = h.complete_with_subject(Some(PATCH), "").await;
+    h.actor
+        .send_message(Message::StartWork(Some(
+            "Raise the return value to 2".into(),
+        )))
+        .unwrap();
+    let (_, reply) = within(h.requests.recv_async()).await.unwrap();
+    std::fs::write(
+        worktree.path.join("lib.rs"),
+        "pub fn value() -> u32 { 2 }\n",
+    )
+    .unwrap();
+    answer(
+        reply,
+        response(vec![call("review_changes", "review-missing-subject")]),
+    );
+    let (_, reply) = within(h.requests.recv_async()).await.unwrap();
+    answer(reply, response(vec![text("Task completed")]));
+    let (request, reply) = within(h.requests.recv_async()).await.unwrap();
+    assert!(matches!(request.purpose, llm::RequestPurpose::Conversation));
+    assert!(!request.tools.is_empty());
+    assert!(
+        request
+            .messages
+            .iter()
+            .any(|message| message.text().contains("Raise the return value to 2"))
+    );
+    assert!(request.messages.iter().any(|message| {
+        message
+            .text()
+            .contains("Call review_changes with commit_message")
+    }));
+    assert!(h.snapshot(&id).questions.pending().is_empty());
+    answer(reply, response(vec![review_call("", "invalid-subject")]));
+    let (request, reply) = within(h.requests.recv_async()).await.unwrap();
+    assert!(matches!(
+        latest_tool_result(&request),
+        ContentBlock::ToolResult {
+            is_error: Some(true),
+            ..
+        }
+    ));
+    answer(
+        reply,
+        response(vec![review_call(
+            "Make value return 2 instead of 1",
+            "valid-subject",
+        )]),
+    );
+    let (_, reply) = within(h.requests.recv_async()).await.unwrap();
+    answer(reply, response(vec![text("Task completed")]));
+    let question = h.merge_question().await;
     assert_eq!(h.repo.refname_to_id("HEAD").unwrap(), base);
     assert!(
         h.answer_merge(&question, "merge")
@@ -527,7 +582,43 @@ async fn invalid_commit_subjects_do_not_block_approved_merges() {
             .unwrap()
             .message()
             .unwrap(),
-        "Update lib.rs"
+        "Make value return 2 instead of 1"
+    );
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn large_diffs_use_the_agent_commit_subject_without_a_summary_request() {
+    let h = GitHarness::new().await;
+    let lines = (0..10_000)
+        .map(|index| format!("+Fixture note {index}\n"))
+        .collect::<String>();
+    let patch = format!("*** Begin Patch\n*** Add File: notes.txt\n{lines}*** End Patch");
+    assert!(patch.len() > 64 * 1024);
+    let question = h
+        .complete_with_subject(Some(&patch), "Add numbered fixture notes")
+        .await;
+    assert!(
+        h.answer_merge(&question, "merge")
+            .await
+            .contains("Cleaned up")
+    );
+    assert!(h.requests.is_empty());
+    assert_eq!(
+        h.repo
+            .head()
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .message()
+            .unwrap(),
+        "Add numbered fixture notes"
+    );
+    assert!(
+        std::fs::metadata(h.workspace.path.join("notes.txt"))
+            .unwrap()
+            .len()
+            > 64 * 1024
     );
     h.stop().await;
 }
@@ -627,23 +718,13 @@ async fn approving_a_conflicted_merge_resolves_and_merges_without_another_questi
     );
     answer(
         reply,
-        response(vec![call("review_changes", "review-resolution")]),
+        response(vec![review_call(
+            "Resolve conflicting return values by returning 5",
+            "review-resolution",
+        )]),
     );
     let (_, reply) = within(h.requests.recv_async()).await.unwrap();
     answer(reply, response(vec![text("Conflicts resolved")]));
-    let summary = h
-        .summarize("Resolve conflicting return values by returning 5")
-        .await;
-    assert!(
-        summary.messages[0]
-            .text()
-            .contains("-pub fn value() -> u32 { 3 }")
-    );
-    assert!(
-        summary.messages[0]
-            .text()
-            .contains("+pub fn value() -> u32 { 5 }")
-    );
     let packet = h
         .event(|packet| match packet {
             ActorToTuiPacket::ContextNotice(message) => {
@@ -657,6 +738,7 @@ async fn approving_a_conflicted_merge_resolves_and_merges_without_another_questi
         matches!(packet, ActorToTuiPacket::ContextNotice(_)),
         "{packet:?}"
     );
+    assert!(h.requests.is_empty());
     assert!(
         std::fs::read_to_string(h.workspace.path.join("lib.rs"))
             .unwrap()
@@ -711,7 +793,10 @@ async fn incomplete_conflict_resolution_cannot_merge_even_after_model_completion
     let (_, reply) = within(h.requests.recv_async()).await.unwrap();
     answer(
         reply,
-        response(vec![call("review_changes", "review-conflicts")]),
+        response(vec![review_call(
+            "Resolve conflicting return values",
+            "review-conflicts",
+        )]),
     );
     let (_, reply) = within(h.requests.recv_async()).await.unwrap();
     answer(reply, response(vec![text("Conflicts resolved")]));

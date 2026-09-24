@@ -1,4 +1,3 @@
-pub mod commit_message;
 pub mod execution;
 use common_models::{
     interaction::{Answer, Choice, Question, QuestionPurpose},

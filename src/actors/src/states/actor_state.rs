@@ -180,9 +180,8 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     }
 
     pub(super) async fn offer_merge(&mut self, turn: TurnId) -> anyhow::Result<()> {
-        let client = self.llm.clone();
         let mode = self.request_mode;
-        if let Some(completion) = self.session_turn().offer_merge(turn, mode, &client).await? {
+        if let Some(completion) = self.session_turn().offer_merge(turn, mode).await? {
             let message = self.complete_merge(completion).await?;
             self.reporter.send(ActorToTuiPacket::ContextNotice(message));
         }
