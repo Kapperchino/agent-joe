@@ -70,7 +70,12 @@ pub async fn prepare(
                         clients::runtime_update::RuntimeUpdate::Snapshot(runtime.clone()),
                     )],
                 }));
-            let snapshot = Snapshot::new(captured, &task.client, input.limits, task.timeout)?;
+            let snapshot = Snapshot::for_compaction(
+                captured,
+                &task.client,
+                input.limits,
+                task.request_timeout,
+            )?;
             task.target.send(ProviderEvent::ContextNotice(format!(
                 "Compacting older context using {}…",
                 method.description()

@@ -43,7 +43,8 @@ pub struct ProviderTask {
     pub budget: Option<std::sync::Arc<worker_registry::budget::WorkerBudget>>,
     pub target: ProviderTarget,
     pub client: LLmClient,
-    pub timeout: Duration,
+    pub request_timeout: Duration,
+    pub compaction_timeout: Duration,
 }
 
 impl ProviderTask {
@@ -88,18 +89,20 @@ impl ProviderTask {
         if !retry_delay.is_zero() {
             tokio::time::sleep(retry_delay).await;
         }
-        let prepared =
-            tokio::time::timeout(self.timeout, crate::compactor::prepare(&input, &mut self))
-                .await
-                .map_err(|_| anyhow::anyhow!("Context compaction timed out"))
-                .and_then(std::convert::identity)
-                .map_err(context_failure)?;
+        let prepared = tokio::time::timeout(
+            self.compaction_timeout,
+            crate::compactor::prepare(&input, &mut self),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("Context compaction timed out"))
+        .and_then(std::convert::identity)
+        .map_err(context_failure)?;
         let (reply, receive) = tokio::sync::oneshot::channel();
         self.target.send(ProviderEvent::ContextPrepared {
             update: prepared.update,
             reply,
         })?;
-        tokio::time::timeout(self.timeout, receive)
+        tokio::time::timeout(self.request_timeout, receive)
             .await
             .map_err(|_| Failure::new(FailureKind::Worker, "Context commit timed out"))?
             .map_err(|_| Failure::new(FailureKind::Worker, "Context commit was cancelled"))??;
@@ -126,14 +129,15 @@ impl ProviderTask {
             clients::response::RequestMode::SingleResponse => 16,
             _ => 64,
         };
-        let mut stream = tokio::time::timeout(self.timeout, self.client.chat_stream(request))
-            .await
-            .map_err(|_| Failure::new(FailureKind::Transport, "Provider request timed out"))?
-            .map_err(Failure::from_error)?;
+        let mut stream =
+            tokio::time::timeout(self.request_timeout, self.client.chat_stream(request))
+                .await
+                .map_err(|_| Failure::new(FailureKind::Transport, "Provider request timed out"))?
+                .map_err(Failure::from_error)?;
         let mut state = PumpState::Streaming;
         let mut bytes = 0usize;
         while matches!(state, PumpState::Streaming) {
-            state = match tokio::time::timeout(self.timeout, stream.next()).await {
+            state = match tokio::time::timeout(self.request_timeout, stream.next()).await {
                 Ok(Some(Ok(event))) => {
                     if let Some(budget) = &self.budget {
                         budget

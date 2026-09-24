@@ -649,7 +649,7 @@ async fn bounded_workers_compact_and_continue_the_same_investigation() {
     let started = StartedWorker::new(&actor, worker_input("read_file", ".")).await;
     let mut child = started.child;
     let mut compactions = 0;
-    for index in 0..6 {
+    for index in 0..8 {
         answer(
             child.1,
             response(vec![

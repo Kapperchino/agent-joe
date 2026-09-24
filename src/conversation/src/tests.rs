@@ -16,6 +16,15 @@ fn input() -> ContextInput {
     }
 }
 
+#[test]
+fn compaction_trigger_uses_ninety_percent_of_the_context_window() {
+    let astra = ContextLimits::new(272_000, 16_000).unwrap();
+    assert_eq!(astra.trigger(), 244_800);
+
+    let response_constrained = ContextLimits::new(12_000, 2048).unwrap();
+    assert_eq!(response_constrained.trigger(), response_constrained.input());
+}
+
 enum ExchangeOutcome {
     Succeeded,
     Failed,
@@ -70,6 +79,34 @@ fn token_budget_does_not_treat_text_or_json_bytes_as_tokens() {
         assert!(estimated_tokens(&request).unwrap() <= input.limits.trigger());
         assert_eq!(request.messages.last().unwrap().text(), text.repeat(300));
     }
+}
+
+#[test]
+fn text_prompt_rejects_tools_and_nontext_content() {
+    let mut request = ClientRequest::new(vec![Message::new("plain text".into())]);
+    assert!(TextPrompt::new(&request).is_ok());
+    request.tools.push(ToolDefinition::Search {
+        name: "web_search".into(),
+    });
+    assert!(TextPrompt::new(&request).is_err());
+    request.tools.clear();
+    exchange(
+        &mut request.messages,
+        "read",
+        "read_file",
+        "result",
+        ExchangeOutcome::Succeeded,
+    );
+    for message in request.messages.iter().skip(1) {
+        assert!(TextPrompt::new(&ClientRequest::new(vec![message.clone()])).is_err());
+    }
+    let request = ClientRequest::new(vec![Message {
+        role: Role::User,
+        content: vec![ContentBlock::RuntimeUpdate(
+            clients::runtime_update::RuntimeUpdate::Snapshot(Default::default()),
+        )],
+    }]);
+    assert!(TextPrompt::new(&request).is_err());
 }
 
 #[test]
@@ -190,7 +227,7 @@ fn requests_budget_optional_workspace_after_instructions_and_latest_user_input()
             .any(|message| message.text() == "Keep this exact constraint")
     );
     assert!(request.messages[0].text().contains("bytes omitted"));
-    input.instructions = "mandatory instruction ".repeat(4000);
+    input.instructions = "mandatory instruction ".repeat(10_000);
     assert!(input.plan().is_err());
 }
 

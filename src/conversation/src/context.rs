@@ -8,6 +8,49 @@ use tools::tool_defs::ToolDefinition;
 
 pub use clients::response::RequestMode;
 
+const REQUEST_TOKEN_RESERVE: usize = 1024;
+const MESSAGE_TOKEN_RESERVE: usize = 32;
+
+pub struct TextPrompt<'a> {
+    request: &'a ClientRequest,
+}
+
+impl<'a> TextPrompt<'a> {
+    pub fn new(request: &'a ClientRequest) -> anyhow::Result<Self> {
+        let text_only = request.tools.is_empty()
+            && request
+                .messages
+                .iter()
+                .flat_map(|message| &message.content)
+                .all(|block| matches!(block, ContentBlock::MessageBlock { .. }));
+        match text_only {
+            true => Ok(Self { request }),
+            false => Err(anyhow::anyhow!(
+                "A text prompt requires text messages without tools"
+            )),
+        }
+    }
+
+    pub fn estimated_tokens(&self) -> usize {
+        let tokenizer = tiktoken_rs::o200k_base_singleton();
+        let content = self
+            .request
+            .messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .filter_map(|block| match block {
+                ContentBlock::MessageBlock { text, .. } => Some(text),
+                _ => None,
+            })
+            .map(|text| tokenizer.count_ordinary(text) + MESSAGE_TOKEN_RESERVE)
+            .sum::<usize>();
+        REQUEST_TOKEN_RESERVE
+            + tokenizer.count_ordinary(self.request.system.as_deref().unwrap_or_default())
+            + self.request.messages.len() * MESSAGE_TOKEN_RESERVE
+            + content
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ContextLimits {
     ceiling: usize,
@@ -34,7 +77,7 @@ impl ContextLimits {
         self.ceiling - self.response as usize
     }
     pub fn trigger(self) -> usize {
-        self.input() - self.input() / 5
+        (self.ceiling - self.ceiling.div_ceil(10)).min(self.input())
     }
     pub fn summary_bytes(self) -> usize {
         (self.input() / 8).min(8192)
@@ -340,7 +383,7 @@ impl ContextInput {
         let exchanges = CompleteHistory::new(&self.history)?;
         let request = self.request(&self.checkpoint)?;
         match self.mode {
-            RequestMode::Continue if estimated_tokens(&request)? <= self.limits.trigger() => {
+            RequestMode::Continue if estimated_tokens(&request)? < self.limits.trigger() => {
                 Ok(BudgetPlan::Ready(request))
             }
             _ => CompactionPlan::new(self, &exchanges).map(BudgetPlan::Compact),
@@ -513,9 +556,9 @@ mod tests;
 
 pub fn estimated_tokens(request: &ClientRequest) -> anyhow::Result<usize> {
     let tokenizer = tiktoken_rs::o200k_base_singleton();
-    Ok(1024
+    Ok(REQUEST_TOKEN_RESERVE
         + tokenizer.count_ordinary(request.system.as_deref().unwrap_or_default())
         + tokenizer.count_ordinary(&serde_json::to_string(&request.messages)?)
         + tokenizer.count_ordinary(&serde_json::to_string(&request.tools)?)
-        + request.messages.len() * 32)
+        + request.messages.len() * MESSAGE_TOKEN_RESERVE)
 }

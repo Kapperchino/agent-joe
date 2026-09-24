@@ -70,7 +70,7 @@ impl CompactionWorker {
                     scope: ExecutionScope::current().child(),
                     context_budget: ContextBudget::Fixed(limits),
                     native_compaction: NativeCompaction::Disabled,
-                    request_timeout: task.timeout,
+                    request_timeout: task.compaction_timeout,
                     ..Runtime::default()
                 },
             },

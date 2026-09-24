@@ -1,5 +1,6 @@
 use super::*;
 use clients::llm::StreamProvider;
+use conversation::context::estimated_tokens;
 use futures::{future::BoxFuture, stream::BoxStream};
 use std::sync::Arc;
 
@@ -33,7 +34,8 @@ fn question_budget_reserves_output_and_accepts_exact_boundary() {
         Duration::from_secs(1),
     )
     .unwrap();
-    let required = estimated_tokens(&snapshot.question_request(question.clone()).unwrap()).unwrap();
+    let request = snapshot.question_request(question.clone()).unwrap();
+    let required = TextPrompt::new(&request).unwrap().estimated_tokens();
     for (ceiling, expected) in [(required + 1024, true), (required + 1023, false)] {
         let snapshot = Snapshot::new(
             context(),
@@ -48,6 +50,33 @@ fn question_budget_reserves_output_and_accepts_exact_boundary() {
         );
         assert_eq!(snapshot.request.messages.len(), 1);
     }
+}
+
+#[test]
+fn frozen_json_fits_without_counting_transport_escaping() {
+    let limits = ContextLimits::new(272_000, 4096).unwrap();
+    let request = ClientRequest::new(vec![Message::new(
+        r#"{"path":"src\\lib.rs","text":"println!(\"hello\");\n"}"#.repeat(7800),
+    )]);
+    let expected = serde_json::json!({"messages": request.messages, "tools": request.tools});
+    assert!(estimated_tokens(&request).unwrap() < limits.trigger());
+    let snapshot =
+        Snapshot::for_compaction(request, &client(), limits, Duration::from_secs(1)).unwrap();
+    let request = snapshot
+        .question_request("What does the source contain?".into())
+        .unwrap();
+    assert!(estimated_tokens(&request).unwrap() > limits.input());
+    assert!(TextPrompt::new(&request).unwrap().estimated_tokens() <= limits.input());
+    let captured: serde_json::Value = serde_json::from_str(
+        request.messages[0]
+            .text()
+            .strip_prefix("Frozen context:\n")
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(captured, expected);
+    assert_eq!(request.max_output_tokens, Some(4096));
+    assert!(request.tools.is_empty());
 }
 
 #[test]
@@ -66,6 +95,46 @@ fn oversized_context_is_rejected_without_truncation() {
             .to_string()
             .contains("not truncated or compacted")
     );
+}
+
+#[test]
+fn compaction_snapshot_uses_the_parent_window_and_a_smaller_response_reserve() {
+    let request = ClientRequest::new(vec![Message::new("full context ".repeat(20_000))]);
+    let limits = ContextLimits::new(24_000, 2048).unwrap();
+    assert!(Snapshot::new(request.clone(), &client(), limits, Duration::from_secs(1)).is_err());
+    assert!(Snapshot::for_compaction(request, &client(), limits, Duration::from_secs(1)).is_err());
+    let snapshot =
+        Snapshot::for_compaction(context(), &client(), limits, Duration::from_secs(1)).unwrap();
+    assert_eq!(snapshot.limits.ceiling(), limits.ceiling());
+    assert_eq!(snapshot.limits.response(), 2048);
+
+    let snapshot = Snapshot::for_compaction(
+        context(),
+        &client(),
+        ContextLimits::new(64_000, 16_000).unwrap(),
+        Duration::from_secs(1),
+    )
+    .unwrap();
+    assert_eq!(snapshot.limits.response(), COMPACTION_RESPONSE_TOKENS);
+    assert_eq!(
+        snapshot.request.max_output_tokens,
+        Some(COMPACTION_RESPONSE_TOKENS)
+    );
+}
+
+#[test]
+fn compaction_snapshot_inherits_a_parent_context_override() {
+    let limits = ContextLimits::new(256_000, 16_000).unwrap();
+    let request = ClientRequest::new(vec![Message::new("full context ".repeat(70_000))]);
+    let snapshot =
+        Snapshot::for_compaction(request, &client(), limits, Duration::from_secs(1)).unwrap();
+    let request = snapshot
+        .question_request("What was captured?".into())
+        .unwrap();
+    assert!(TextPrompt::new(&request).unwrap().estimated_tokens() > client().context_window());
+    assert!(TextPrompt::new(&request).unwrap().estimated_tokens() <= snapshot.limits.input());
+    assert_eq!(snapshot.limits.ceiling(), limits.ceiling());
+    assert_eq!(snapshot.limits.response(), COMPACTION_RESPONSE_TOKENS);
 }
 
 #[test]

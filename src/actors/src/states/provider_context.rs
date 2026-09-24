@@ -63,7 +63,8 @@ impl<C: Context> ProviderContext<'_, C> {
             },
             target,
             client,
-            timeout: self.runtime.request_timeout,
+            request_timeout: self.runtime.request_timeout,
+            compaction_timeout: self.runtime.compaction_timeout,
         }
         .spawn(input, run, owner, previous);
     }

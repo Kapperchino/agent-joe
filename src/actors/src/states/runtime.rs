@@ -64,6 +64,7 @@ pub struct Runtime {
     pub scope: ExecutionScope,
     pub tool_timeout: Duration,
     pub request_timeout: Duration,
+    pub compaction_timeout: Duration,
 }
 impl Default for Runtime {
     fn default() -> Self {
@@ -83,6 +84,7 @@ impl Default for Runtime {
             scope: ExecutionScope::default(),
             tool_timeout: Duration::from_secs(300),
             request_timeout: Duration::from_secs(180),
+            compaction_timeout: Duration::from_secs(600),
         }
     }
 }
