@@ -3,7 +3,7 @@ pub use commands::command::Answer;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, turbo_code_macros::ToolSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Choice {
     pub id: String,
@@ -36,14 +36,22 @@ fn allow_text() -> bool {
     true
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, turbo_code_macros::ToolSchema)]
 #[serde(try_from = "QuestionInput")]
 pub struct Question {
+    #[tool(skip)]
     pub purpose: QuestionPurpose,
+    #[tool(
+        description = "Unused literal question ID, up to 64 ASCII letters, digits, underscores or hyphens"
+    )]
     pub id: String,
+    #[tool(description = "Question for the user, up to 2048 bytes")]
     pub prompt: String,
+    #[tool(description = "True pauses work until explicitly answered")]
     pub required: bool,
+    #[tool(optional, max_items = 6)]
     pub choices: Vec<Choice>,
+    #[tool(optional, description = "Allow a typed text answer; default true")]
     pub allow_free_text: bool,
 }
 

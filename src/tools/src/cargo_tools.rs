@@ -1,23 +1,27 @@
 use crate::tool_defs::{
     CancellationMode, LenientDeserialize, NonEmptyString, ToolDefTrait, ToolId, ToolOpKind,
-    ToolProperty, ToolTrait, ToolType,
+    ToolTrait, ToolType,
 };
 use analysis::contexts::context::Context;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::{
     fmt::{Display, Formatter},
     marker::PhantomData,
     time::Duration,
 };
+use turbo_code_macros::{ToolDef, ToolSchema};
 use utils::{
     cargo::{CargoAction, CargoInput, CargoOperation, CargoResult, OutputOffsets, ProcessAction},
     utils::FnvHashMap,
 };
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, ToolSchema)]
 #[serde(tag = "operation", rename_all = "snake_case")]
+#[tool(
+    description = "Required operation. Test filters require test; deny_warnings requires clippy. fmt/fmt_check accept workspace/package selection. run/start require a named bin/example and accept literal args. poll/stop accept only process_id and offsets."
+)]
 pub enum CargoRequest {
     Check(CargoInput),
     Test(CargoInput),
@@ -72,11 +76,19 @@ impl CargoRequest {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, ToolSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProcessInput {
+    #[tool(
+        schema = "String",
+        min_length = 1,
+        description = "Required for poll/stop: opaque ID returned by operation start in this turn."
+    )]
     pub process_id: NonEmptyString,
     #[serde(default)]
+    #[tool(
+        description = "For poll/stop: use previous next_offset values for incremental output; omit for all retained output."
+    )]
     pub offsets: OutputOffsets,
 }
 
@@ -162,6 +174,7 @@ impl CargoInvocation {
 
 pub trait CargoPolicy: Send + Sync {
     const OPERATIONS: &'static [&'static str];
+    const FIELDS: &'static [&'static str] = &[];
 }
 
 pub struct AllOperations;
@@ -196,31 +209,27 @@ impl CargoPolicy for ValidationOperations {
 pub struct FormattingOperations;
 impl CargoPolicy for FormattingOperations {
     const OPERATIONS: &'static [&'static str] = &["fmt"];
+    const FIELDS: &'static [&'static str] = &[
+        "operation",
+        "workspace",
+        "package",
+        "environment",
+        "timeout_seconds",
+    ];
 }
 
+#[derive(ToolDef)]
+#[tool(
+    name = "cargo",
+    description = "Run typed Rust operations in the project sandbox. Missing crates.io dependencies are downloaded automatically. Select operation: check, test, fmt, fmt_check, clippy, run, start, poll or stop, as available to this worker. Prefer targeted validation; compilation alone does not prove behavior. run/start require a named binary or example; start returns a process_id for poll/stop. Stop managed targets before edits or other Cargo operations. Processes stop with the turn or at timeout_seconds: 30 minutes by default, at most one hour. Returns structured command, diagnostics, status and output evidence.",
+    input = "CargoRequest",
+    variants = "P::OPERATIONS",
+    fields = "P::FIELDS"
+)]
 pub struct Cargo<P: CargoPolicy = AllOperations>(PhantomData<P>);
 impl<P: CargoPolicy> Display for Cargo<P> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str("cargo")
-    }
-}
-
-impl<P: CargoPolicy> ToolDefTrait for Cargo<P> {
-    fn tool_name() -> &'static str {
-        "cargo"
-    }
-    fn tool_description() -> &'static str {
-        "Run typed Rust operations in the project sandbox. Missing crates.io dependencies are downloaded automatically. Select operation: check, test, fmt, fmt_check, clippy, run, start, poll or stop, as available to this worker. Prefer targeted validation; compilation alone does not prove behavior. run/start require a named binary or example; start returns a process_id for poll/stop. Stop managed targets before edits or other Cargo operations. Processes stop with the turn or at timeout_seconds: 30 minutes by default, at most one hour. Returns structured command, diagnostics, status and output evidence."
-    }
-    fn field_properties() -> FnvHashMap<String, ToolProperty> {
-        properties(P::OPERATIONS)
-    }
-
-    fn required_fields() -> Vec<String> {
-        vec!["operation".into()]
-    }
-    fn req(&self) -> anyhow::Result<FnvHashMap<String, String>> {
-        Ok(Default::default())
     }
 }
 
@@ -290,41 +299,6 @@ impl<C: Context, A, P: CargoPolicy> ToolTrait<C, A> for Cargo<P> {
     fn effect_from_input(input: &Self::Input) -> ToolOpKind {
         input.effect()
     }
-}
-
-fn properties(operations: &[&str]) -> FnvHashMap<String, ToolProperty> {
-    json!({
-        "operation": {"type":"string", "enum":operations, "description":"Required operation. Test filters require test; deny_warnings requires clippy. fmt/fmt_check accept workspace/package selection. run/start require a named bin/example and accept literal args. poll/stop accept only process_id and offsets."},
-        "workspace": {"type":"boolean", "description":"Select the workspace; mutually exclusive with package. Not available for run/start."},
-        "package": {"type":"string", "description":"One Cargo package name; omit to use Cargo's default members.", "minLength":1, "maxLength":256},
-        "environment": {"type":"object", "description":"Clean environment additions: RUST_LOG, RUST_BACKTRACE, NO_COLOR, or uppercase JOE_RUN_* keys. No toolchain, loader, Cargo or network overrides.", "additionalProperties":{"type":"string","maxLength":4096}, "maxProperties":16},
-        "timeout_seconds":{"type":"integer","minimum":1,"maximum":CargoOperation::MAX_TIMEOUT_SECONDS,"default":CargoOperation::DEFAULT_TIMEOUT_SECONDS,"description":"Sandbox process deadline including build time; defaults to 1800 seconds, at most 3600. Sandbox preparation has a separate tool budget."},
-        "features":{"type":"array","items":{"type":"string","minLength":1,"maxLength":256},"maxItems":64},
-        "all_features":{"type":"boolean"},
-        "no_default_features":{"type":"boolean"},
-        "target":{"oneOf":[named_target("bin"),named_target("example"),named_target("test"),{"type":"object","properties":{"kind":{"type":"string","enum":["lib","all","tests"]}},"required":["kind"],"additionalProperties":false}]},
-        "target_triple":{"type":"string","description":"Built-in Rust target triple; no custom target JSON or paths."},
-        "release":{"type":"boolean"},
-        "include_warnings":{"type":"boolean","description":"Accepted for compatibility; structured diagnostics always retain warnings."},
-        "test_name":{"type":"string","description":"Optional test name filter for the test operation."},
-        "exact":{"type":"boolean","description":"Require an exact test_name match."},
-        "show_output":{"type":"boolean","description":"Include output from successful tests."},
-        "deny_warnings":{"type":"boolean","description":"Deny warnings during clippy."},
-        "args":{"type":"array","items":{"type":"string","maxLength":4096},"maxItems":64,"description":"For run/start: individual literal program arguments after --. No shell expansion."},
-        "process_id":{"type":"string","minLength":1,"description":"Required for poll/stop: opaque ID returned by operation start in this turn."},
-        "offsets":{"type":"object","properties":{"stdout":{"type":"integer","minimum":0},"stderr":{"type":"integer","minimum":0}},"additionalProperties":false,"description":"For poll/stop: use previous next_offset values for incremental output; omit for all retained output."}
-    })
-    .as_object().unwrap().iter()
-    .filter(|(name, _)| match operations {
-        ["fmt"] => matches!(name.as_str(), "operation" | "workspace" | "package" | "environment" | "timeout_seconds"),
-        _ => true,
-    })
-    .map(|(name, schema)| (name.clone(), ToolProperty::Schema(schema.clone())))
-    .collect()
-}
-
-fn named_target(kind: &str) -> Value {
-    json!({"type":"object","properties":{"kind":{"type":"string","enum":[kind]},"name":{"type":"string","minLength":1,"maxLength":256}},"required":["kind","name"],"additionalProperties":false})
 }
 
 #[cfg(test)]

@@ -174,14 +174,27 @@ pub enum Features {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, turbo_code_macros::ToolSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum DefaultFeatures {
     Enabled,
     Disabled,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    turbo_code_macros::ToolSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Configuration {
     Normal,

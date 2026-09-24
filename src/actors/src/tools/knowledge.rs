@@ -12,34 +12,67 @@ use common_models::knowledge::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, time::Duration};
-use tools::tool_defs::{
-    LenientDeserialize, ToolDefTrait, ToolId, ToolOpKind, ToolProperty, ToolTrait, ToolType,
-};
+use tools::tool_defs::{LenientDeserialize, ToolId, ToolOpKind, ToolTrait, ToolType};
+use turbo_code_macros::{ToolDef, ToolSchema};
 use utils::utils::FnvHashMap;
 
+#[derive(ToolDef)]
+#[tool(
+    name = "knowledge",
+    description = "Prepare and query immutable repository knowledge actors. Explicit prepare uses rust-analyzer libraries in process over captured source and Cargo manifests to resolve local Rust references, calls and trait relations. No executable, Cargo, build script or proc macro is run. Requires root Cargo.toml, not Cargo.lock or a provisioned sandbox. Only captured local dependencies and native baseline cfg are analyzed; sysroot, registry/git dependencies, generated code and custom build cfg are diagnostic coverage gaps. Preparation is explicit and unavailable in plan mode. Status, search, inspect and repartition are read-only. Search routes paths/symbols/documentation to primary and related shard worker IDs; ask those IDs with ask_immutable_worker. Use generation for pagination and inspection. Repartition reuses unchanged semantic inputs after a model/budget change. Edits require prepare again. Clear retires knowledge only, preserving compaction snapshots. No startup indexing or provider requests during preparation. In-memory and scoped to this conversation.",
+    input = "Input"
+)]
 pub struct Knowledge;
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, ToolSchema)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Input {
     Prepare {
+        #[tool(max_items = 128, description = "prepare only: explicit Cargo features")]
         features: Option<Vec<String>>,
+        #[tool(description = "prepare only: defaults to enabled")]
         default_features: Option<DefaultFeatures>,
+        #[tool(
+            min_items = 1,
+            max_items = 2,
+            description = "prepare only: defaults to normal and test; not an all-cfg union"
+        )]
         configurations: Option<Vec<Configuration>>,
     },
     Repartition,
     Status {
+        #[tool(minimum = 0, description = "status/search only: default 0")]
         offset: Option<usize>,
+        #[tool(
+            minimum = 1,
+            maximum = 32,
+            description = "status/search only: default 10"
+        )]
         limit: Option<usize>,
     },
     Search {
+        #[tool(nullable, description = "search only: 1–32 words, at most 2048 bytes")]
         query: String,
+        #[tool(
+            description = "Required for inspect and nonzero search offsets; identity from status/search"
+        )]
         generation: Option<String>,
+        #[tool(minimum = 0, description = "status/search only: default 0")]
         offset: Option<usize>,
+        #[tool(
+            minimum = 1,
+            maximum = 32,
+            description = "status/search only: default 10"
+        )]
         limit: Option<usize>,
     },
     Inspect {
+        #[tool(nullable, description = "inspect only: semantic symbol ID from search")]
         symbol: String,
+        #[tool(
+            nullable,
+            description = "Required for inspect and nonzero search offsets; identity from status/search"
+        )]
         generation: String,
     },
     Clear,
@@ -111,34 +144,6 @@ pub(crate) fn access<C: Context>(actor: &ActorContext<C>) -> anyhow::Result<&Act
 impl std::fmt::Display for Knowledge {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "knowledge")
-    }
-}
-
-impl ToolDefTrait for Knowledge {
-    fn tool_name() -> &'static str {
-        "knowledge"
-    }
-    fn tool_description() -> &'static str {
-        "Prepare and query immutable repository knowledge actors. Explicit prepare uses rust-analyzer libraries in process over captured source and Cargo manifests to resolve local Rust references, calls and trait relations. No executable, Cargo, build script or proc macro is run. Requires root Cargo.toml, not Cargo.lock or a provisioned sandbox. Only captured local dependencies and native baseline cfg are analyzed; sysroot, registry/git dependencies, generated code and custom build cfg are diagnostic coverage gaps. Preparation is explicit and unavailable in plan mode. Status, search, inspect and repartition are read-only. Search routes paths/symbols/documentation to primary and related shard worker IDs; ask those IDs with ask_immutable_worker. Use generation for pagination and inspection. Repartition reuses unchanged semantic inputs after a model/budget change. Edits require prepare again. Clear retires knowledge only, preserving compaction snapshots. No startup indexing or provider requests during preparation. In-memory and scoped to this conversation."
-    }
-    fn field_properties() -> FnvHashMap<String, ToolProperty> {
-        json!({
-            "action":{"type":"string","enum":["prepare","repartition","status","search","inspect","clear"]},
-            "features":{"type":["array","null"],"items":{"type":"string"},"maxItems":128,"description":"prepare only: explicit Cargo features"},
-            "default_features":{"type":["string","null"],"enum":["enabled","disabled",null],"description":"prepare only: defaults to enabled"},
-            "configurations":{"type":["array","null"],"items":{"type":"string","enum":["normal","test"]},"minItems":1,"maxItems":2,"description":"prepare only: defaults to normal and test; not an all-cfg union"},
-            "query":{"type":["string","null"],"description":"search only: 1–32 words, at most 2048 bytes"},
-            "generation":{"type":["string","null"],"description":"Required for inspect and nonzero search offsets; identity from status/search"},
-            "symbol":{"type":["string","null"],"description":"inspect only: semantic symbol ID from search"},
-            "offset":{"type":["integer","null"],"minimum":0,"description":"status/search only: default 0"},
-            "limit":{"type":["integer","null"],"minimum":1,"maximum":32,"description":"status/search only: default 10"}
-        }).as_object().unwrap().iter().map(|(name, value)| (name.clone(), ToolProperty::Schema(value.clone()))).collect()
-    }
-    fn required_fields() -> Vec<String> {
-        vec!["action".into()]
-    }
-    fn req(&self) -> anyhow::Result<FnvHashMap<String, String>> {
-        Ok(Default::default())
     }
 }
 

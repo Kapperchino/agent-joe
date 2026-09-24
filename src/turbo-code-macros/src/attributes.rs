@@ -46,6 +46,29 @@ impl Attributes {
         self.values.contains_key(name)
     }
 
+    pub fn expression(&self, name: &str) -> syn::Result<Option<&Expr>> {
+        self.values
+            .get(name)
+            .map(|meta| match meta {
+                Meta::NameValue(value) => Ok(&value.value),
+                meta => Err(syn::Error::new_spanned(meta, "Expected a value")),
+            })
+            .transpose()
+    }
+
+    pub fn nested(&self, name: &str, allowed: &[&str]) -> syn::Result<Self> {
+        match self.values.get(name) {
+            None => Ok(Self {
+                values: BTreeMap::new(),
+            }),
+            Some(Meta::List(list)) => {
+                let tokens = &list.tokens;
+                Self::new(&[syn::parse_quote!(#[tool(#tokens)])], "tool", allowed)
+            }
+            Some(meta) => Err(syn::Error::new_spanned(meta, "Expected nested constraints")),
+        }
+    }
+
     pub fn flag(&self, name: &str) -> syn::Result<bool> {
         match self.values.get(name) {
             None => Ok(false),

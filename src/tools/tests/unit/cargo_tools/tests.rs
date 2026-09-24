@@ -1,6 +1,7 @@
 use super::*;
 use crate::tool_defs::erased_tool;
 use analysis::contexts::rust_empty_context::RustEmptyContext;
+use serde_json::json;
 
 #[test]
 fn validation_requirements_accept_only_finite_read_only_or_run_commands() {
@@ -136,5 +137,67 @@ fn worker_permissions_reject_operations_outside_the_advertised_set() {
         formatting
             .display_erased(&json!({"operation":"run","target":{"kind":"example","name":"server"}}))
             .is_err()
+    );
+}
+
+#[test]
+fn derived_cargo_schema_preserves_constraints_and_policy_filters() {
+    let properties = Cargo::<AllOperations>::field_properties();
+    let schema: serde_json::Map<_, _> = properties
+        .into_iter()
+        .map(|(name, property)| (name, property.into_schema()))
+        .collect();
+    assert_eq!(
+        schema["operation"]["enum"],
+        json!(AllOperations::OPERATIONS)
+    );
+    assert_eq!(Cargo::<AllOperations>::required_fields(), ["operation"]);
+    assert_eq!(schema["features"]["maxItems"], 64);
+    assert_eq!(schema["features"]["items"]["minLength"], 1);
+    assert_eq!(schema["features"]["items"]["maxLength"], 256);
+    assert_eq!(schema["args"]["items"]["maxLength"], 4096);
+    assert_eq!(schema["environment"]["maxProperties"], 16);
+    assert_eq!(
+        schema["environment"]["additionalProperties"]["type"],
+        "string"
+    );
+    assert_eq!(
+        schema["environment"]["additionalProperties"]["maxLength"],
+        4096
+    );
+    assert_eq!(schema["process_id"]["minLength"], 1);
+    assert_eq!(schema["offsets"]["additionalProperties"], false);
+    assert_eq!(schema["offsets"]["properties"]["stdout"]["minimum"], 0);
+    for kind in ["bin", "example", "test"] {
+        let target = schema["target"]["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|variant| variant["properties"]["kind"]["enum"] == json!([kind]))
+            .unwrap();
+        assert_eq!(target["required"], json!(["kind", "name"]));
+        assert_eq!(target["properties"]["name"]["minLength"], 1);
+        assert_eq!(target["properties"]["name"]["maxLength"], 256);
+        assert_eq!(target["additionalProperties"], false);
+    }
+    let validation = Cargo::<ValidationOperations>::field_properties();
+    assert_eq!(
+        validation["operation"].clone().into_schema()["enum"],
+        json!(ValidationOperations::OPERATIONS)
+    );
+    let formatting = Cargo::<FormattingOperations>::field_properties();
+    assert_eq!(
+        formatting["operation"].clone().into_schema()["enum"],
+        json!(["fmt"])
+    );
+    assert_eq!(formatting.len(), FormattingOperations::FIELDS.len());
+    assert!(
+        FormattingOperations::FIELDS
+            .iter()
+            .all(|name| formatting.contains_key(*name))
+    );
+    assert_eq!(
+        Cargo::<FormattingOperations>::required_fields(),
+        ["operation"]
     );
 }

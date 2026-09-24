@@ -20,3 +20,7 @@ mod runtime_test;
 pub mod compactor;
 
 pub mod states;
+
+#[cfg(test)]
+#[path = "../tests/unit/tool_schema.rs"]
+mod tool_schema_test;

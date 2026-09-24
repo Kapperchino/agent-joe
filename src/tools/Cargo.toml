@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+common-models = { path = "../common-models" }
 turbo-code-macros = { path = "../turbo-code-macros" }
 analysis = { path = "../analysis" }
 

@@ -172,13 +172,13 @@ struct VariantSchema {
     fields: Vec<FieldSchema>,
 }
 
-enum VariantNaming {
+pub(crate) enum VariantNaming {
     Unchanged,
     SnakeCase,
 }
 
 impl VariantNaming {
-    fn new(value: Option<String>, input: &DeriveInput) -> syn::Result<Self> {
+    pub(crate) fn new(value: Option<String>, input: &DeriveInput) -> syn::Result<Self> {
         match value.as_deref() {
             None => Ok(Self::Unchanged),
             Some("snake_case") => Ok(Self::SnakeCase),
@@ -189,7 +189,7 @@ impl VariantNaming {
         }
     }
 
-    fn apply(&self, name: &str) -> String {
+    pub(crate) fn apply(&self, name: &str) -> String {
         match self {
             Self::Unchanged => name.to_owned(),
             Self::SnakeCase => name

@@ -3,17 +3,23 @@ use crate::states::runtime::ExecutionRole;
 use analysis::contexts::context::Context;
 use async_trait::async_trait;
 use common_models::interaction::PlanUpdate;
-use serde_json::{Value, json};
-use tools::tool_defs::{
-    LenientDeserialize, ToolDefTrait, ToolId, ToolOpKind, ToolProperty, ToolTrait, ToolType,
-};
+use serde_json::Value;
+use tools::tool_defs::{LenientDeserialize, ToolId, ToolOpKind, ToolTrait, ToolType};
+use turbo_code_macros::{ToolDef, ToolSchema};
 use utils::utils::FnvHashMap;
 
+#[derive(ToolDef)]
+#[tool(
+    name = "update_plan",
+    description = "Track work with 1–16 stable steps, dependencies and acceptance criteria. Plan mode requires completed investigation steps with observed evidence before finishing; future implementation steps may remain pending. In implementation mode, skip simple tasks unless specific validation was requested. Record each requested Cargo check in an implementation step's validation field using its exact Cargo tool parameters. Implementation completion requires those checks to succeed on the current workspace. Batch progress into one update at meaningful milestones. Use current revisions from runtime context. Existing pending steps may complete directly with successful evidence source IDs and explanations; dependencies must be completed. New steps start pending or in_progress; at most one is in_progress. Reopen completed steps after requirements change and changed or blocked steps before completion. Does not change work mode.",
+    input = "Input"
+)]
 pub struct UpdatePlan;
 
-#[derive(Clone, serde::Deserialize)]
+#[derive(Clone, serde::Deserialize, ToolSchema)]
 #[serde(transparent)]
 pub struct Input {
+    #[tool(schema = "PlanUpdate<tools::cargo_tools::CargoRequest>")]
     update: PlanUpdate,
 }
 
@@ -26,39 +32,6 @@ impl LenientDeserialize for Input {
 impl std::fmt::Display for UpdatePlan {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "update_plan")
-    }
-}
-
-impl ToolDefTrait for UpdatePlan {
-    fn tool_name() -> &'static str {
-        "update_plan"
-    }
-    fn tool_description() -> &'static str {
-        "Track work with 1–16 stable steps, dependencies and acceptance criteria. Plan mode requires completed investigation steps with observed evidence before finishing; future implementation steps may remain pending. In implementation mode, skip simple tasks unless specific validation was requested. Record each requested Cargo check in an implementation step's validation field using its exact Cargo tool parameters. Implementation completion requires those checks to succeed on the current workspace. Batch progress into one update at meaningful milestones. Use current revisions from runtime context. Existing pending steps may complete directly with successful evidence source IDs and explanations; dependencies must be completed. New steps start pending or in_progress; at most one is in_progress. Reopen completed steps after requirements change and changed or blocked steps before completion. Does not change work mode."
-    }
-    fn field_properties() -> FnvHashMap<String, ToolProperty> {
-        json!({
-            "revision":{"type":"integer","description":"Current plan revision"},
-            "requirements_revision":{"type":"integer","description":"Current requirements revision"},
-            "steps":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"object","additionalProperties":false,"properties":{
-                "id":{"type":"string"},"description":{"type":"string"},"dependencies":{"type":"array","items":{"type":"string"}},
-                "kind":{"type":"string","enum":["investigation","implementation"],"description":"Investigation establishes findings and design decisions before the final plan; implementation covers future edits and checks. Defaults to implementation for older plans."},
-                "acceptance":{"type":"string"},"state":{"type":"string","enum":["pending","in_progress","completed","blocked"]},
-                "evidence":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{"source":{"type":"string"},"explanation":{"type":"string"}},"required":["source","explanation"]}},
-                "blocked_reason":{"type":["string","null"]},
-                "validation":{"type":["object","null"],"description":"Exact Cargo tool input for a requested finite check (check, test, fmt_check, clippy or run); null for other work","properties":crate::tools::update_plan::validation_properties(),"required":["operation"]}
-            },"required":["id","description","dependencies","acceptance","state","evidence","blocked_reason"]}}
-}).as_object().unwrap().iter()
-            .map(|(name, schema)| (name.clone(), ToolProperty::Schema(schema.clone()))).collect()
-    }
-    fn required_fields() -> Vec<String> {
-        ["revision", "requirements_revision", "steps"]
-            .into_iter()
-            .map(str::to_owned)
-            .collect()
-    }
-    fn req(&self) -> anyhow::Result<FnvHashMap<String, String>> {
-        Ok(Default::default())
     }
 }
 
@@ -118,11 +91,4 @@ impl<C: Context> ToolTrait<C, ActorContext<C>> for UpdatePlan {
     fn tool_type() -> ToolType {
         ToolType::Client
     }
-}
-
-fn validation_properties() -> serde_json::Map<String, Value> {
-    tools::cargo_tools::Cargo::<tools::cargo_tools::AllOperations>::field_properties()
-        .into_iter()
-        .map(|(name, property)| (name, property.into_schema()))
-        .collect()
 }

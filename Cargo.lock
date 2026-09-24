@@ -772,6 +772,7 @@ dependencies = [
  "commands",
  "serde",
  "serde_json",
+ "turbo-code-macros",
 ]
 
 [[package]]
@@ -5879,6 +5880,7 @@ dependencies = [
  "analysis",
  "anyhow",
  "async-trait",
+ "common-models",
  "futures",
  "ra_ap_ide",
  "serde",
@@ -6266,6 +6268,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-util",
+ "turbo-code-macros",
  "uuid",
 ]
 

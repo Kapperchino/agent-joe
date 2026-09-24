@@ -1,8 +1,9 @@
 use super::{PlanReview, bounded_text, valid_id};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use turbo_code_macros::ToolSchema;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToolSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum StepState {
     #[default]
@@ -12,7 +13,7 @@ pub enum StepState {
     Blocked,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToolSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum StepKind {
     Investigation,
@@ -26,32 +27,41 @@ pub enum Investigation<'a> {
     Complete,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToolSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PlanEvidence {
     pub source: String,
     pub explanation: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToolSchema)]
 #[serde(deny_unknown_fields)]
-pub struct PlanStep {
+pub struct PlanStep<V = ValidationRequirement> {
     pub id: String,
     #[serde(default)]
+    #[tool(
+        description = "Investigation establishes findings and design decisions before the final plan; implementation covers future edits and checks. Defaults to implementation for older plans."
+    )]
     pub kind: StepKind,
     pub description: String,
     #[serde(default)]
+    #[tool(required)]
     pub dependencies: Vec<String>,
     pub acceptance: String,
     pub state: StepState,
     #[serde(default)]
+    #[tool(required)]
     pub evidence: Vec<PlanEvidence>,
+    #[tool(required)]
     pub blocked_reason: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub validation: Option<ValidationRequirement>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[tool(
+        description = "Exact Cargo tool input for a requested finite check (check, test, fmt_check, clippy or run); null for other work"
+    )]
+    pub validation: Option<V>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToolSchema)]
 #[serde(transparent)]
 pub struct ValidationRequirement {
     pub cargo: serde_json::Map<String, serde_json::Value>,
@@ -64,12 +74,15 @@ pub struct Plan {
     pub steps: Vec<PlanStep>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToolSchema)]
 #[serde(deny_unknown_fields)]
-pub struct PlanUpdate {
+pub struct PlanUpdate<V = ValidationRequirement> {
+    #[tool(description = "Current plan revision")]
     pub revision: u64,
+    #[tool(description = "Current requirements revision")]
     pub requirements_revision: u64,
-    pub steps: Vec<PlanStep>,
+    #[tool(min_items = 1, max_items = 16)]
+    pub steps: Vec<PlanStep<V>>,
 }
 
 impl PlanStep {

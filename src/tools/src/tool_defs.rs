@@ -10,6 +10,8 @@ use std::time::Duration;
 use turbo_code_macros::ToolInput;
 use utils::utils::FnvHashMap;
 
+pub use common_models::tool_schema as schema;
+
 pub trait ToolDefTrait {
     fn tool_name() -> &'static str;
     fn tool_description() -> &'static str;

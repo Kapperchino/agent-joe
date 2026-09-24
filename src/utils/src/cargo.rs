@@ -3,6 +3,7 @@ use cargo_metadata::{CompilerMessage, Message, diagnostic::DiagnosticLevel};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use tokio::process::Command;
+use turbo_code_macros::ToolSchema;
 
 use crate::execution::ExecutionScope;
 use crate::sandbox::Sandbox;
@@ -30,36 +31,73 @@ impl CargoAction {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToolSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct CargoInput {
+    #[tool(
+        description = "Select the workspace; mutually exclusive with package. Not available for run/start."
+    )]
     pub workspace: bool,
+    #[tool(
+        description = "One Cargo package name; omit to use Cargo's default members.",
+        min_length = 1,
+        max_length = 256
+    )]
     pub package: Option<String>,
+    #[tool(max_items = 64, items(min_length = 1, max_length = 256))]
     pub features: Vec<String>,
     pub all_features: bool,
     pub no_default_features: bool,
     pub target: Option<CargoTarget>,
+    #[tool(description = "Built-in Rust target triple; no custom target JSON or paths.")]
     pub target_triple: Option<String>,
     pub release: bool,
+    #[tool(description = "Optional test name filter for the test operation.")]
     pub test_name: Option<String>,
+    #[tool(description = "Require an exact test_name match.")]
     pub exact: bool,
+    #[tool(description = "Include output from successful tests.")]
     pub show_output: bool,
+    #[tool(description = "Deny warnings during clippy.")]
     pub deny_warnings: bool,
+    #[tool(
+        description = "Accepted for compatibility; structured diagnostics always retain warnings."
+    )]
     pub include_warnings: Option<bool>,
+    #[tool(
+        description = "For run/start: individual literal program arguments after --. No shell expansion.",
+        max_items = 64,
+        items(max_length = 4096)
+    )]
     pub args: Vec<String>,
+    #[tool(
+        description = "Clean environment additions: RUST_LOG, RUST_BACKTRACE, NO_COLOR, or uppercase JOE_RUN_* keys. No toolchain, loader, Cargo or network overrides.",
+        max_properties = 16,
+        additional_properties(max_length = 4096)
+    )]
     pub environment: BTreeMap<String, String>,
+    #[tool(description = "Sandbox process deadline including build time; defaults to 1800 seconds, at most 3600. Sandbox preparation has a separate tool budget.", minimum = 1, maximum = CargoOperation::MAX_TIMEOUT_SECONDS, default = CargoOperation::DEFAULT_TIMEOUT_SECONDS)]
     pub timeout_seconds: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToolSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CargoTarget {
     Lib,
     All,
     Tests,
-    Test { name: String },
-    Example { name: String },
-    Bin { name: String },
+    Test {
+        #[tool(min_length = 1, max_length = 256)]
+        name: String,
+    },
+    Example {
+        #[tool(min_length = 1, max_length = 256)]
+        name: String,
+    },
+    Bin {
+        #[tool(min_length = 1, max_length = 256)]
+        name: String,
+    },
 }
 
 impl CargoTarget {
@@ -350,10 +388,12 @@ impl crate::sandbox::sealed::Operation for CargoOperation {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToolSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct OutputOffsets {
+    #[tool(minimum = 0)]
     pub stdout: usize,
+    #[tool(minimum = 0)]
     pub stderr: usize,
 }
 
