@@ -246,6 +246,8 @@ cancelled compaction does not publish a worker. Snapshots created during compact
 inherit the parent actor's context ceiling, including `--context-tokens`
 overrides, and reserve at most 4096 tokens for each answer. Snapshot capture never
 silently truncates history to make it fit.
+Snapshot token estimates count the frozen text and message overhead without
+counting an extra layer of JSON transport escaping.
 
 Both the main worker and simple worker expose `ask_immutable_worker`:
 

@@ -82,6 +82,34 @@ fn token_budget_does_not_treat_text_or_json_bytes_as_tokens() {
 }
 
 #[test]
+fn text_prompt_rejects_tools_and_nontext_content() {
+    let mut request = ClientRequest::new(vec![Message::new("plain text".into())]);
+    assert!(TextPrompt::new(&request).is_ok());
+    request.tools.push(ToolDefinition::Search {
+        name: "web_search".into(),
+    });
+    assert!(TextPrompt::new(&request).is_err());
+    request.tools.clear();
+    exchange(
+        &mut request.messages,
+        "read",
+        "read_file",
+        "result",
+        ExchangeOutcome::Succeeded,
+    );
+    for message in request.messages.iter().skip(1) {
+        assert!(TextPrompt::new(&ClientRequest::new(vec![message.clone()])).is_err());
+    }
+    let request = ClientRequest::new(vec![Message {
+        role: Role::User,
+        content: vec![ContentBlock::RuntimeUpdate(
+            clients::runtime_update::RuntimeUpdate::Snapshot(Default::default()),
+        )],
+    }]);
+    assert!(TextPrompt::new(&request).is_err());
+}
+
+#[test]
 fn repeated_compaction_preserves_requirements_questions_evidence_and_recent_pairs() {
     let mut input = input();
     input.history.push(Message::new(

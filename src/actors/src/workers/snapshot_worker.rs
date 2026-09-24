@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use clients::llm::{self, ClientRequest, LLmClient, Message, StreamEvent};
 use clients::response::StreamNextStep;
 use common_models::runtime_ids::TurnId;
-use conversation::context::{CompleteHistory, ContextLimits, estimated_tokens};
+use conversation::context::{CompleteHistory, ContextLimits, TextPrompt};
 use futures::TryStreamExt;
 use ractor::{ActorProcessingErr, ActorRef};
 use response_stream::StreamProcessor;
@@ -125,7 +125,7 @@ impl Snapshot {
             ..request
         };
         let client = client.snapshot();
-        let required = estimated_tokens(&request)?;
+        let required = TextPrompt::new(&request)?.estimated_tokens();
         match required <= limits.input() {
             true => Ok(Self {
                 request,
@@ -159,7 +159,7 @@ impl Snapshot {
         }?;
         let mut request = self.request.clone();
         request.messages.push(Message::new(question));
-        match estimated_tokens(&request)? <= self.limits.input() {
+        match TextPrompt::new(&request)?.estimated_tokens() <= self.limits.input() {
             true => Ok(request),
             false => Err(anyhow::anyhow!(
                 "Snapshot question exceeds the remaining context budget; snapshot is unchanged"

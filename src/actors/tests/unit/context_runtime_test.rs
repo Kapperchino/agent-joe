@@ -82,7 +82,7 @@ async fn compaction_snapshot_uses_the_parent_context_override() {
         ..configured_runtime(&workspace)
     };
     let store = runtime.sessions.clone().unwrap();
-    let id = saved_history_with_output(&store, &r#"{"path":"src\\lib.rs"}"#.repeat(3500));
+    let id = saved_history_with_output(&store, &r#"{"path":"src\\lib.rs"}"#.repeat(5000));
     let (normal, requests) = flume::unbounded();
     let (compactions, native_requests) = flume::unbounded();
     let client = llm::LLmClient::Injected(Arc::new(NativeProvider {
@@ -121,6 +121,89 @@ async fn resume(h: &Harness, id: &str) {
         .event(|packet| matches!(packet, ActorToTuiPacket::SessionResumed(_)))
         .await;
     assert!(matches!(event, ActorToTuiPacket::SessionResumed(Ok(_))));
+}
+
+#[tokio::test]
+async fn compaction_snapshot_does_not_double_count_json_escaping() {
+    let workspace = session::test_support::Workspace::new();
+    let runtime = configured_runtime(&workspace);
+    let store = runtime.sessions.clone().unwrap();
+    let id = saved_history_with_output(&store, &r#"{"path":"src\\lib.rs"}"#.repeat(450));
+    let (normal, requests) = flume::unbounded();
+    let (compactions, native_requests) = flume::unbounded();
+    let client = llm::LLmClient::Injected(Arc::new(NativeProvider {
+        normal: Provider(normal),
+        compactions,
+    }));
+    let h = Harness::with_client(vec![], runtime, client, requests).await;
+    resume(&h, &id).await;
+    let history = serde_json::to_value(transcript(&h.history().await)).unwrap();
+    h.actor
+        .send_message(Message::Command(Command::Compact))
+        .unwrap();
+    let compact = within(native_requests.recv_async()).await.unwrap();
+    let captured = serde_json::to_value(&compact.request.messages).unwrap();
+    assert!(
+        compact
+            .reply
+            .send(Ok(serde_json::from_value(json!({
+                "output": [{"type": "compaction", "encrypted_content": "preserved history"}]
+            }))
+            .unwrap()))
+            .is_ok()
+    );
+    h.terminal(Lifecycle::Completed).await;
+    assert_eq!(
+        serde_json::to_value(transcript(&h.history().await)).unwrap(),
+        history
+    );
+    let workers = h.runtime.immutable_workers.list(&id);
+    assert_eq!(workers.len(), 1);
+    let query = h.runtime.immutable_workers.ask(
+        &id,
+        &workers[0].worker_id,
+        "What did the earlier investigation contain?".into(),
+        Duration::from_secs(1),
+    );
+    let provider = async {
+        let (request, reply) = h.request().await;
+        assert!(estimated_tokens(&request).unwrap() > configured_limits().input());
+        assert!(
+            conversation::context::TextPrompt::new(&request)
+                .unwrap()
+                .estimated_tokens()
+                <= configured_limits().input()
+        );
+        let frozen: Value = serde_json::from_str(
+            request.messages[0]
+                .text()
+                .strip_prefix("Frozen context:\n")
+                .unwrap(),
+        )
+        .unwrap();
+        let messages = frozen["messages"].as_array().unwrap();
+        assert_eq!(
+            serde_json::to_value(&messages[..captured.as_array().unwrap().len()]).unwrap(),
+            captured
+        );
+        answer(
+            reply,
+            response(vec![text("The saved source included src/lib.rs")]),
+        );
+    };
+    let (result, ()) = tokio::join!(query, provider);
+    assert_eq!(
+        result.unwrap().answer,
+        "The saved source included src/lib.rs"
+    );
+    let saved = store
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|snapshot| snapshot.id == id)
+        .unwrap();
+    assert_eq!(saved.context.generation, 1);
+    h.stop().await;
 }
 
 fn summary(reply: oneshot::Sender<anyhow::Result<Events>>) {
