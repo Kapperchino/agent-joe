@@ -25,7 +25,9 @@ pub struct AskImmutableWorkerInput {
     pub action: String,
     #[tool(description = "Immutable worker ID from list; required for ask")]
     pub worker_id: Option<String>,
-    #[tool(description = "Independent question, up to 16384 UTF-8 bytes; required for ask")]
+    #[tool(
+        description = "Independent question; respect max_question_bytes from list, up to 16384 UTF-8 bytes; required for ask"
+    )]
     pub question: Option<String>,
 }
 
@@ -56,7 +58,9 @@ impl TryFrom<AskImmutableWorkerInput> for Action {
                 question: input
                     .question
                     .filter(|question| !question.trim().is_empty())
-                    .filter(|question| question.len() <= 16384)
+                    .filter(|question| {
+                        question.len() <= conversation::frozen_context::MAX_QUESTION_BYTES
+                    })
                     .ok_or_else(|| {
                         anyhow::anyhow!("Use ask with a nonempty question of at most 16384 bytes")
                     })?,

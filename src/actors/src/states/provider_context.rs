@@ -1,5 +1,5 @@
 use crate::actor::ActorContext;
-use crate::states::provider_task::{ProviderTarget, ProviderTask};
+use crate::states::provider_task::{ProviderInput, ProviderTarget, ProviderTask};
 use crate::states::runtime::{ExecutionRole, Runtime};
 use crate::states::services::ActorServices;
 use crate::states::stream_processor::ProviderAction;
@@ -21,6 +21,7 @@ pub struct ProviderContext<'a, C: Context> {
     pub session: &'a SessionState,
     pub runtime: &'a Runtime,
     pub request_mode: RequestMode,
+    pub frozen_request: Option<&'a clients::llm::ClientRequest>,
     pub services: &'a ActorServices<C, ActorContext<C>>,
 }
 
@@ -49,7 +50,20 @@ impl<C: Context> ProviderContext<'_, C> {
     ) {
         let client = client.snapshot();
         let input = self.session.persistence.committed(()).and_then(|()| {
-            self.input(run.tag.turn, &client).map_err(|error| {
+            let input = match self.frozen_request {
+                Some(request) => self
+                    .runtime
+                    .context_budget
+                    .resolve(client.context_window())
+                    .map(|limits| ProviderInput::Frozen {
+                        request: request.clone(),
+                        limits,
+                    }),
+                None => self
+                    .input(run.tag.turn, &client)
+                    .map(ProviderInput::Conversation),
+            };
+            input.map_err(|error| {
                 Failure::new(
                     FailureKind::InvalidInput,
                     format!("Request context configuration failed: {error}"),

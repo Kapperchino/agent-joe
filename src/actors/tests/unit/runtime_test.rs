@@ -909,11 +909,11 @@ impl ErasedToolTrait<TestContext, ActorContext<TestContext>> for DelegateTool {
             runtime: info.runtime.child(info.runtime.scope.child()),
         };
         let result = if self.panic_start {
-            crate::worker::run_worker(FailingWorker, dependency, info.actor_ref.clone())
+            crate::worker::run_worker(FailingWorker, dependency, info.actor_ref.get_cell())
                 .await
                 .map_err(|error| error.into_tool_failure().into())
         } else {
-            crate::worker::run_worker(FixtureWorker, dependency, info.actor_ref.clone())
+            crate::worker::run_worker(FixtureWorker, dependency, info.actor_ref.get_cell())
                 .await
                 .map_err(|error| error.into_tool_failure().into())
         };

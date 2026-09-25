@@ -4,8 +4,7 @@ use crate::event_reporter::EventReporter;
 use crate::immutable_workers::{ImmutableWorker, ImmutableWorkerDescription};
 use crate::states::runtime::Runtime;
 use crate::states::stream_processor::ProviderAction;
-use crate::workers::snapshot_worker::SnapshotWorker;
-use clients::failure::{Failure, FailureKind};
+use clients::failure::Failure;
 use clients::response::StreamNextStep;
 use common_models::tui_models::{ActorToTuiPacket, TokenCount};
 use ractor::ActorRef;
@@ -82,20 +81,17 @@ impl ProviderSession<'_> {
     }
 
     async fn compact(&mut self, compaction: CompactedContext) -> Result<(), Failure> {
-        let worker = ImmutableWorker::spawn(
-            SnapshotWorker,
+        let worker = ImmutableWorker::snapshot(
             compaction.snapshot,
             ImmutableWorkerDescription {
                 kind: "snapshot".into(),
                 description: format!(
-                    "Older context preserved by compaction generation {}. Includes the compacted exchanges and any earlier compaction memory.",
+                    "Parent context before compaction generation {}. Includes all active exchanges and any earlier compaction memory.",
                     compaction.checkpoint.generation
                 ),
             },
             self.actor,
-        )
-        .await
-        .map_err(|error| Failure::new(FailureKind::Worker, error.to_string()))?;
+        );
         self.session
             .control(self.runtime.session_access(self.reporter))
             .persistence

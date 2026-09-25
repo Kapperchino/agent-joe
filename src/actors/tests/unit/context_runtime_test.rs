@@ -50,8 +50,76 @@ fn configured_limits() -> ContextLimits {
     ContextLimits::new(24_000, 2048).unwrap()
 }
 
+#[tokio::test]
+async fn oversized_snapshot_blocks_automatic_and_manual_compaction_before_provider_calls() {
+    use crate::states::provider_task::{ProviderTarget, ProviderTask};
+    use conversation::context::{Checkpoint, ContextInput, NativeCompaction, RequestMode};
+
+    let (normal, requests) = flume::unbounded();
+    let (compactions, native_requests) = flume::unbounded();
+    let client = llm::LLmClient::Injected(Arc::new(NativeProvider {
+        normal: Provider(normal),
+        compactions,
+    }));
+    let h = Harness::with_client(vec![], Runtime::default(), client.clone(), requests).await;
+    let mut input = ContextInput {
+        runtime: None,
+        prompt_cache_key: Some("parent-cache".into()),
+        purpose: llm::RequestPurpose::Conversation,
+        history: std::iter::once(llm::Message::new("workspace".into()))
+            .chain((0..8).map(|index| {
+                llm::Message::new_assistant(format!(
+                    "Investigation {index}: {}",
+                    "older context ".repeat(1000)
+                ))
+            }))
+            .collect(),
+        checkpoint: Checkpoint::default(),
+        instructions: "Preserve the investigation".into(),
+        tools: vec![ToolDefinition::Client {
+            name: "read_file".into(),
+            description: "parameter description ".repeat(5000),
+            properties: Default::default(),
+            required: Vec::new(),
+        }],
+        limits: configured_limits(),
+        native: NativeCompaction::Auto,
+        mode: RequestMode::Continue,
+    };
+    let history = serde_json::to_value(&input.history).unwrap();
+    assert!(
+        estimated_tokens(&input.request(&input.checkpoint).unwrap()).unwrap()
+            > input.limits.snapshot().input()
+    );
+    for mode in [RequestMode::Continue, RequestMode::Compact] {
+        input.mode = mode;
+        let mut task = ProviderTask {
+            budget: None,
+            target: ProviderTarget {
+                actor: h.actor.clone(),
+                tag: Tag::new(common_models::runtime_ids::TurnId::new()),
+            },
+            client: client.clone(),
+            request_timeout: Duration::from_secs(1),
+            compaction_timeout: Duration::from_secs(1),
+        };
+        let error = crate::compactor::prepare(&input, &mut task)
+            .await
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("Snapshot context requires"));
+        assert!(native_requests.is_empty());
+        assert!(h.requests.is_empty());
+        assert!(h.runtime.immutable_workers.list("actor-1").is_empty());
+        assert_eq!(serde_json::to_value(&input.history).unwrap(), history);
+        assert_eq!(input.checkpoint.through, 1);
+        assert_eq!(input.checkpoint.generation, 0);
+    }
+    h.stop().await;
+}
+
 fn saved_history(store: &Arc<SessionStore>) -> String {
-    saved_history_with_output(store, &"inspected source ".repeat(2000))
+    saved_history_with_output(store, &"inspected source ".repeat(1000))
 }
 
 fn saved_history_with_output(store: &Arc<SessionStore>, output: &str) -> String {
@@ -82,7 +150,7 @@ async fn compaction_snapshot_uses_the_parent_context_override() {
         ..configured_runtime(&workspace)
     };
     let store = runtime.sessions.clone().unwrap();
-    let id = saved_history_with_output(&store, &r#"{"path":"src\\lib.rs"}"#.repeat(5000));
+    let id = saved_history_with_output(&store, &r#"{"path":"src\\lib.rs"}"#.repeat(3500));
     let (normal, requests) = flume::unbounded();
     let (compactions, native_requests) = flume::unbounded();
     let client = llm::LLmClient::Injected(Arc::new(NativeProvider {
@@ -91,12 +159,20 @@ async fn compaction_snapshot_uses_the_parent_context_override() {
     }));
     let h = Harness::with_client(vec![], runtime, client.clone(), requests).await;
     resume(&h, &id).await;
+    let (reply, receive) = oneshot::channel();
+    h.actor
+        .send_message(Message::CaptureSnapshot(reply.into()))
+        .unwrap();
+    let snapshot = within(receive).await.unwrap().unwrap();
+    let request = snapshot
+        .question_request("What was captured?".into())
+        .unwrap();
+    assert!(Snapshot::new(request, &client, limits, Duration::from_secs(1)).is_err());
     h.actor
         .send_message(Message::Command(Command::Compact))
         .unwrap();
     let compact = within(native_requests.recv_async()).await.unwrap();
     assert!(estimated_tokens(&compact.request).unwrap() <= limits.input());
-    assert!(Snapshot::new(compact.request, &client, limits, Duration::from_secs(1)).is_err());
     assert!(
         compact
             .reply
@@ -124,11 +200,11 @@ async fn resume(h: &Harness, id: &str) {
 }
 
 #[tokio::test]
-async fn compaction_snapshot_does_not_double_count_json_escaping() {
+async fn compaction_snapshot_preserves_structured_context_and_cache_key() {
     let workspace = session::test_support::Workspace::new();
     let runtime = configured_runtime(&workspace);
     let store = runtime.sessions.clone().unwrap();
-    let id = saved_history_with_output(&store, &r#"{"path":"src\\lib.rs"}"#.repeat(450));
+    let id = saved_history_with_output(&store, &r#"{"path":"src\\lib.rs"}"#.repeat(200));
     let (normal, requests) = flume::unbounded();
     let (compactions, native_requests) = flume::unbounded();
     let client = llm::LLmClient::Injected(Arc::new(NativeProvider {
@@ -142,7 +218,7 @@ async fn compaction_snapshot_does_not_double_count_json_escaping() {
         .send_message(Message::Command(Command::Compact))
         .unwrap();
     let compact = within(native_requests.recv_async()).await.unwrap();
-    let captured = serde_json::to_value(&compact.request.messages).unwrap();
+    let compacted_messages = compact.request.messages;
     assert!(
         compact
             .reply
@@ -167,24 +243,23 @@ async fn compaction_snapshot_does_not_double_count_json_escaping() {
     );
     let provider = async {
         let (request, reply) = h.request().await;
-        assert!(estimated_tokens(&request).unwrap() > configured_limits().input());
+        assert!(estimated_tokens(&request).unwrap() <= configured_limits().input());
+        assert_eq!(request.prompt_cache_key.as_deref(), Some(id.as_str()));
+        let captured = &request.messages[..request.messages.len() - 2];
+        assert!(compacted_messages.iter().all(|message| {
+            captured.iter().any(|captured| {
+                serde_json::to_value(captured).unwrap() == serde_json::to_value(message).unwrap()
+            })
+        }));
         assert!(
-            conversation::context::TextPrompt::new(&request)
-                .unwrap()
-                .estimated_tokens()
-                <= configured_limits().input()
-        );
-        let frozen: Value = serde_json::from_str(
-            request.messages[0]
-                .text()
-                .strip_prefix("Frozen context:\n")
-                .unwrap(),
-        )
-        .unwrap();
-        let messages = frozen["messages"].as_array().unwrap();
-        assert_eq!(
-            serde_json::to_value(&messages[..captured.as_array().unwrap().len()]).unwrap(),
             captured
+                .iter()
+                .any(|message| message.text().contains("Investigation 4"))
+        );
+        assert!(
+            request.messages[request.messages.len() - 2]
+                .text()
+                .starts_with("Answer only the question")
         );
         answer(
             reply,
@@ -854,7 +929,7 @@ async fn compaction_snapshots_keep_independent_windows_and_stop_on_clear() {
     let workspace = session::test_support::Workspace::new();
     let runtime = configured_runtime(&workspace);
     let store = runtime.sessions.clone().unwrap();
-    let id = saved_history(&store);
+    let id = saved_history_with_output(&store, &"inspected source ".repeat(1000));
     let h = Harness::with_runtime(vec![], runtime).await;
     resume(&h, &id).await;
     for generation in 1..=2 {
@@ -897,11 +972,10 @@ async fn compaction_snapshots_keep_independent_windows_and_stop_on_clear() {
         );
         let provider = async {
             let (request, reply) = h.request().await;
-            assert!(request.tools.is_empty());
-            assert_eq!(request.messages.len(), 2);
-            assert_eq!(request.messages[1].text(), question);
-            assert!(!request.messages[0].text().contains("Independent question"));
-            let frozen = request.messages[0].text();
+            assert_eq!(request.messages.last().unwrap().text(), question);
+            let frozen =
+                serde_json::to_string(&request.messages[..request.messages.len() - 2]).unwrap();
+            assert!(!frozen.contains("Independent question"));
             answer(reply, response(vec![text("Historical answer")]));
             frozen
         };

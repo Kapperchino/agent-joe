@@ -47,10 +47,39 @@ pub struct ProviderTask {
     pub compaction_timeout: Duration,
 }
 
+pub enum ProviderInput {
+    Conversation(conversation::context::ContextInput),
+    Frozen {
+        request: clients::llm::ClientRequest,
+        limits: conversation::context::ContextLimits,
+    },
+}
+
+impl ProviderInput {
+    fn mode(&self) -> clients::response::RequestMode {
+        match self {
+            Self::Conversation(input) => input.mode,
+            Self::Frozen { .. } => clients::response::RequestMode::SingleResponse,
+        }
+    }
+
+    async fn prepare(
+        self,
+        task: &mut ProviderTask,
+    ) -> anyhow::Result<crate::compactor::PreparedRequest> {
+        match self {
+            Self::Conversation(input) => crate::compactor::prepare(&input, task).await,
+            Self::Frozen { request, limits } => {
+                crate::compactor::PreparedRequest::new(request, None, limits, None)
+            }
+        }
+    }
+}
+
 impl ProviderTask {
     pub fn spawn(
         self,
-        input: Result<conversation::context::ContextInput, Failure>,
+        input: Result<ProviderInput, Failure>,
         run: &ProviderRun,
         owner: &ExecutionScope,
         previous: Option<ExecutionScope>,
@@ -82,21 +111,19 @@ impl ProviderTask {
 
     async fn pump(
         mut self,
-        input: Result<conversation::context::ContextInput, Failure>,
+        input: Result<ProviderInput, Failure>,
         retry_delay: Duration,
     ) -> Result<(), Failure> {
         let input = input?;
+        let mode = input.mode();
         if !retry_delay.is_zero() {
             tokio::time::sleep(retry_delay).await;
         }
-        let prepared = tokio::time::timeout(
-            self.compaction_timeout,
-            crate::compactor::prepare(&input, &mut self),
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("Context compaction timed out"))
-        .and_then(std::convert::identity)
-        .map_err(context_failure)?;
+        let prepared = tokio::time::timeout(self.compaction_timeout, input.prepare(&mut self))
+            .await
+            .map_err(|_| anyhow::anyhow!("Context compaction timed out"))
+            .and_then(std::convert::identity)
+            .map_err(context_failure)?;
         let (reply, receive) = tokio::sync::oneshot::channel();
         self.target.send(ProviderEvent::ContextPrepared {
             update: prepared.update,
@@ -106,7 +133,7 @@ impl ProviderTask {
             .await
             .map_err(|_| Failure::new(FailureKind::Worker, "Context commit timed out"))?
             .map_err(|_| Failure::new(FailureKind::Worker, "Context commit was cancelled"))??;
-        match input.mode {
+        match mode {
             clients::response::RequestMode::Compact => self.target.send(ProviderEvent::Compacted),
             mode => self.stream(prepared.request, mode).await,
         }

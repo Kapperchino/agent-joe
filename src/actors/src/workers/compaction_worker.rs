@@ -74,7 +74,7 @@ impl CompactionWorker {
                     ..Runtime::default()
                 },
             },
-            task.target.actor.clone(),
+            task.target.actor.get_cell(),
         )
         .await
         .map_err(|error| match error {

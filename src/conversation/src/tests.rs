@@ -17,12 +17,118 @@ fn input() -> ContextInput {
 }
 
 #[test]
-fn compaction_trigger_uses_ninety_percent_of_the_context_window() {
-    let astra = ContextLimits::new(272_000, 16_000).unwrap();
-    assert_eq!(astra.trigger(), 244_800);
+fn compaction_trigger_reserves_growth_and_snapshot_questions() {
+    for limits in [
+        ContextLimits::new(4096, 1024).unwrap(),
+        ContextLimits::new(12_000, 2048).unwrap(),
+        ContextLimits::new(272_000, 16_000).unwrap(),
+    ] {
+        let snapshot = crate::frozen_context::SnapshotBudget::new(limits.snapshot());
+        assert!(limits.trigger() + limits.response() as usize <= snapshot.context_tokens());
+        assert!(limits.trigger() <= limits.ceiling() * 9 / 10);
+        assert!(limits.trigger() <= limits.input());
+        let mut request = ClientRequest::new(vec![Message::new("parent context".into())]);
+        let padding = limits.trigger() - estimated_tokens(&request).unwrap() - 1;
+        request.system = Some(" word".repeat(padding));
+        assert_eq!(estimated_tokens(&request).unwrap(), limits.trigger() - 1);
+        request.messages.push(Message::new_assistant(
+            " word".repeat(limits.response() as usize),
+        ));
+        assert!(crate::frozen_context::FrozenContext::new(request, limits.snapshot()).is_ok());
+    }
+}
 
-    let response_constrained = ContextLimits::new(12_000, 2048).unwrap();
-    assert_eq!(response_constrained.trigger(), response_constrained.input());
+#[test]
+fn snapshot_at_its_context_boundary_fits_every_admitted_question() {
+    use crate::frozen_context::{FrozenContext, MAX_QUESTION_BYTES, SnapshotBudget};
+
+    for ceiling in [4096, 16_000, 272_000] {
+        let limits = ContextLimits::new(ceiling, 1024).unwrap();
+        let budget = SnapshotBudget::new(limits);
+        let mut request = ClientRequest::new(vec![Message::new("parent context".into())]);
+        let padding = budget.context_tokens() - estimated_tokens(&request).unwrap();
+        request.system = Some(" word".repeat(padding));
+        assert_eq!(estimated_tokens(&request).unwrap(), budget.context_tokens());
+        let parent = serde_json::to_value(&request.messages).unwrap();
+        let frozen = FrozenContext::new(request.clone(), limits).unwrap();
+        let allowance = frozen.max_question_bytes();
+        assert!(allowance <= MAX_QUESTION_BYTES);
+        for question in [
+            "x".repeat(allowance),
+            "\\".repeat(allowance),
+            "\u{0000}".repeat(allowance),
+            format!("{}{}", "é".repeat(allowance / 2), "x".repeat(allowance % 2)),
+            format!(
+                "{}{}",
+                "🦀".repeat(allowance / 4),
+                "x".repeat(allowance % 4)
+            ),
+        ] {
+            assert_eq!(question.len(), allowance);
+            let asked = frozen.question_request(question).unwrap();
+            assert!(estimated_tokens(&asked).unwrap() <= limits.input());
+            assert_eq!(
+                serde_json::to_value(&asked.messages[..request.messages.len()]).unwrap(),
+                parent
+            );
+        }
+        assert!(frozen.question_request("x".repeat(allowance + 1)).is_err());
+        request.system.as_mut().unwrap().push_str(" word");
+        assert!(FrozenContext::new(request, limits).is_err());
+    }
+    assert_eq!(
+        SnapshotBudget::new(ContextLimits::new(2_000_000, 1024).unwrap()).question_bytes(),
+        MAX_QUESTION_BYTES
+    );
+}
+
+#[test]
+fn compaction_selects_a_complete_prefix_that_fits_the_input_budget() {
+    let mut input = input();
+    for index in 0..8 {
+        exchange(
+            &mut input.history,
+            &format!("read-{index}"),
+            "read_file",
+            &"older context ".repeat(2000),
+            ExchangeOutcome::Succeeded,
+        );
+    }
+    let before = serde_json::to_value(&input.history).unwrap();
+    let largest = ClientRequest::new(input.prefix(&input.checkpoint, 13).unwrap())
+        .with_system(input.instructions.clone());
+    assert!(estimated_tokens(&largest).unwrap() > input.limits.input());
+    for mode in [RequestMode::Continue, RequestMode::Compact] {
+        input.mode = mode;
+        let BudgetPlan::Compact(plan) = input.plan().unwrap() else {
+            panic!("expected compaction")
+        };
+        assert!(plan.through < 13);
+        assert!(
+            CompleteHistory::new(&input.history)
+                .unwrap()
+                .ends
+                .contains(&plan.through)
+        );
+        assert!(estimated_tokens(&plan.request).unwrap() <= input.limits.input());
+        assert_eq!(serde_json::to_value(&input.history).unwrap(), before);
+    }
+}
+
+#[test]
+fn compaction_rejects_mandatory_context_that_cannot_fit_any_exchange() {
+    let mut input = input();
+    input.instructions = "mandatory operating instruction ".repeat(10_000);
+    for index in 0..5 {
+        input
+            .history
+            .push(Message::new_assistant(format!("Complete exchange {index}")));
+    }
+    let history = serde_json::to_value(&input.history).unwrap();
+    let error = input.plan().err().unwrap();
+    assert!(error.to_string().contains("compaction input budget"));
+    assert_eq!(serde_json::to_value(&input.history).unwrap(), history);
+    assert_eq!(input.checkpoint.generation, 0);
 }
 
 enum ExchangeOutcome {

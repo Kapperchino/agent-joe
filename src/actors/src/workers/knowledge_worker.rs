@@ -30,6 +30,10 @@ pub struct KnowledgeWorkerState {
 }
 
 impl KnowledgeWorkerState {
+    pub(crate) fn max_question_bytes(&self) -> usize {
+        self.snapshot.max_question_bytes()
+    }
+
     pub(crate) fn new(
         context: &str,
         client: &LLmClient,
@@ -60,7 +64,7 @@ impl KnowledgeWorkerState {
         })
     }
 
-    async fn answer(&self, question: String) -> anyhow::Result<String> {
+    async fn answer(&self, question: String, parent: ractor::ActorCell) -> anyhow::Result<String> {
         match question.len() <= 16384
             && self.budget.admits(estimated_tokens(
                 &self.snapshot.question_request(question.clone())?,
@@ -72,7 +76,7 @@ impl KnowledgeWorkerState {
         }?;
         let _permit = self.gate.acquire().await?;
         self.freshness.check().await?;
-        let answer = self.snapshot.answer(question).await?;
+        let answer = self.snapshot.answer(question, parent).await?;
         self.freshness.check().await?;
         Ok(answer)
     }
@@ -96,7 +100,7 @@ impl Worker for KnowledgeWorker {
 
     async fn handle(
         &self,
-        _: ActorRef<Self::Msg>,
+        myself: ActorRef<Self::Msg>,
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
@@ -114,7 +118,7 @@ impl Worker for KnowledgeWorker {
             biased;
             _ = abandoned => Err(anyhow::anyhow!("Knowledge question caller cancelled")),
             _ = state.freshness.cancel.cancelled() => Err(anyhow::anyhow!("Knowledge generation is stale or retired")),
-            result = state.answer(question) => result,
+            result = state.answer(question, myself.get_cell()) => result,
         };
         let _ = reply.send(result);
         Ok(())

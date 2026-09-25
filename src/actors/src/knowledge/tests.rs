@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     worker::{Worker, WorkerAdapter},
-    workers::snapshot_worker::{Snapshot, SnapshotWorker},
+    workers::snapshot_worker::Snapshot,
 };
 use async_trait::async_trait;
 use clients::llm::{self, StreamEvent, StreamProvider};
@@ -207,8 +207,8 @@ async fn knowledge_workers_use_measured_tool_free_independent_requests() {
         let ask = fixture.ask(worker, question);
         let captured = fixture.captured().await;
         assert!(captured.request.tools.is_empty());
-        assert_eq!(captured.request.messages.len(), 2);
-        assert_eq!(captured.request.messages[1].text(), question);
+        assert_eq!(captured.request.messages.len(), 3);
+        assert_eq!(captured.request.messages[2].text(), question);
         assert_eq!(captured.request.max_output_tokens, Some(1024));
         assert!(
             generation
@@ -217,7 +217,9 @@ async fn knowledge_workers_use_measured_tool_free_independent_requests() {
                 .admits(estimated_tokens(&captured.request).unwrap())
         );
         let mut without_question = captured.request.clone();
-        without_question.messages.pop();
+        without_question
+            .messages
+            .truncate(without_question.messages.len() - 2);
         assert_eq!(
             estimated_tokens(&without_question).unwrap(),
             generation.index.shards[0].summary.estimated_tokens
@@ -304,17 +306,14 @@ async fn knowledge_publication_rollback_repartition_and_targeted_clear_preserve_
         Duration::from_secs(1),
     )
     .unwrap();
-    let snapshot = ImmutableWorker::spawn(
-        SnapshotWorker,
+    let snapshot = ImmutableWorker::snapshot(
         snapshot,
         ImmutableWorkerDescription {
             kind: "snapshot".into(),
             description: "historical".into(),
         },
         &fixture.actor,
-    )
-    .await
-    .unwrap();
+    );
     let snapshot = fixture.registry.insert("owner", snapshot);
     let failed = Preparation::begin(&fixture.registry, "owner").unwrap();
     assert!(Preparation::begin(&fixture.registry, "owner").is_err());

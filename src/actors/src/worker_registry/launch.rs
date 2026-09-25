@@ -149,7 +149,7 @@ pub(crate) fn start(
         execution: execution.clone(),
         session: session.clone(),
     };
-    let parent = info.actor_ref.clone();
+    let parent = info.actor_ref.get_cell();
     let registry = registry.clone();
     prepared.parent_scope.tasks.clone().spawn(async move {
         let runner = prepared.parent_scope.child();

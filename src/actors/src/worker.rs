@@ -111,7 +111,7 @@ pub trait ContextWorker: Send + Sync + 'static {
 pub async fn run_worker<W: ContextWorker>(
     worker: W,
     mut dependency: Dependency<W::C>,
-    parent: ActorRef<Message>,
+    parent: ractor::ActorCell,
 ) -> Result<String, WorkerFailure> {
     dependency.runtime.role = match dependency.runtime.role {
         ExecutionRole::Root => ExecutionRole::Helper,
@@ -127,13 +127,8 @@ pub async fn run_worker<W: ContextWorker>(
     let (reply, receive) = tokio::sync::oneshot::channel();
     let handle = owner.tasks.spawn(async move {
         let _registration = registration;
-        let spawned = Actor::spawn_linked(
-            None,
-            WorkerAdapter::new(worker),
-            dependency,
-            parent.get_cell(),
-        )
-        .await;
+        let spawned =
+            Actor::spawn_linked(None, WorkerAdapter::new(worker), dependency, parent).await;
         let result = match spawned {
             Ok((actor, handle)) => {
                 RunningWorker { actor, handle }

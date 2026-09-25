@@ -34,6 +34,7 @@ use utils::power::SleepInhibitor;
 pub struct ActorState<C: Context> {
     pub session: SessionState,
     pub request_mode: RequestMode,
+    pub frozen_request: Option<clients::llm::ClientRequest>,
     pub turn: TurnMachine,
     pub worker_replies: crate::worker::WorkerReplies,
     pub llm: LLmClient,
@@ -64,6 +65,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     ) -> anyhow::Result<Self> {
         let dependency = mode.configure(dependency);
         let request_mode = mode.request_mode();
+        let frozen_request = mode.frozen_request();
         let reporter = mode.reporter(&dependency);
         let Dependency {
             client,
@@ -97,6 +99,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             )),
             session: activation.state,
             request_mode,
+            frozen_request,
             llm: client,
             turn: TurnMachine::new(runtime.scope.clone(), request_mode),
             worker_replies: Default::default(),
@@ -116,6 +119,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             session: &self.session,
             runtime: &self.runtime,
             request_mode: self.request_mode,
+            frozen_request: self.frozen_request.as_ref(),
             services: &self.services,
         }
     }

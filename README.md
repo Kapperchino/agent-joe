@@ -59,8 +59,9 @@ actor stops retain a post-stop cleanup fallback when mailbox delivery is unavail
 | OpenRouter | Does not support web_search but everything should work |
 | Local      | Response api fully supported                           |
 
-Context compaction runs automatically at 90% of the model's context window,
-bounded by the available input budget, or manually with `/compact` while idle.
+Context compaction runs automatically at or before 90% of the model's context
+window, reserving room for response growth and snapshot questions, or manually
+with `/compact` while idle.
 The default `--native-compaction auto` uses streaming native compaction with Codex login,
 including Astra, and the standalone compaction endpoint with the public OpenAI
 API. Other providers use conversation summaries. `--native-compaction off`
@@ -238,16 +239,32 @@ retains the existing databases.
 
 ## Immutable workers and automatic compaction snapshots
 
-Successful automatic or manual compaction creates an immutable snapshot worker
-for the older context being compacted, including earlier compaction memory,
-effective instructions, historical tool definitions/results, and runtime state.
-Each compaction adds a worker instead of replacing previous snapshots. Failed or
-cancelled compaction does not publish a worker. Snapshots created during compaction
-inherit the parent actor's context ceiling, including `--context-tokens`
-overrides, and reserve at most 4096 tokens for each answer. Snapshot capture never
-silently truncates history to make it fit.
-Snapshot token estimates count the frozen text and message overhead without
-counting an extra layer of JSON transport escaping.
+Successful automatic or manual compaction preserves the parent's full active
+request context in an immutable snapshot, including earlier compaction memory,
+effective instructions, tool definitions/results, and runtime state. Each
+compaction adds a snapshot instead of replacing previous ones. Failed or cancelled
+compaction does not publish a snapshot.
+
+Snapshot questions use the regular worker handler. They retain the parent's exact
+message prefix, instructions, tools, model settings, and prompt cache key, then
+append an instruction to answer only the question, followed by the question itself.
+This allows reuse of the parent's cached prefix while the provider retains it.
+Compaction changes the parent's active prefix but does not delete the provider's
+old cache. Each question runs independently; its answer is not added to the snapshot.
+
+Compaction snapshots inherit the parent's context ceiling, including
+`--context-tokens` overrides, and reserve at most 4096 tokens for each answer.
+They use the same token estimate as the parent without wrapping context in JSON.
+Compaction requires a validated snapshot before calling the compaction provider or
+changing the checkpoint. Capture reserves space for the question-only instruction,
+the full advertised question allowance, and the answer. The allowance scales with
+the context size and is returned as `max_question_bytes` when workers are listed.
+Every nonempty question within that allowance fits the snapshot's local context
+budget. Parent compaction triggers early enough to leave room for a response and
+snapshot questions. An oversized snapshot blocks compaction without changing
+history; snapshots are never silently truncated or compacted. Compaction selects
+the largest older prefix of complete exchanges that fits its input budget and retains at least the two latest
+exchanges in the parent's active context. The full saved transcript is preserved.
 
 Both the main worker and simple worker expose `ask_immutable_worker`:
 
@@ -256,7 +273,7 @@ Both the main worker and simple worker expose `ask_immutable_worker`:
 {"action":"ask","worker_id":"<id from list>","question":"What did the earlier investigation find?"}
 ```
 
-Listing returns IDs, kinds, and descriptions. Asking returns the worker metadata
+Listing returns IDs, kinds, descriptions, and snapshot question byte limits. Asking returns the worker metadata
 and answer. The interface is not snapshot-specific: future immutable workers can
 implement `worker::Worker` with `immutable_workers::ImmutableMessage` as their message type, handle `Ask`, be spawned through
 `ImmutableWorker::spawn`, and registered in `Runtime::immutable_workers` under
@@ -389,62 +406,61 @@ and procedural macro definitions must remain unavailable, with diagnostics.
 
 ### Manual snapshot actor API
 
-The `actors::workers::snapshot_worker` module provides a question-only worker using
-the same `Worker` lifecycle and `WorkerAdapter` as the normal tool-using workers.
-Context-based workers implement `ContextWorker`, which supplies the shared
-conversation lifecycle through a blanket `Worker` implementation. Snapshot workers
-implement `Worker` directly with frozen state, without a workspace context.
-Send `actor::Message::CaptureSnapshot` to a settled
-source actor to capture its full transcript, effective instructions, tool
-definitions and results, existing compaction memory, runtime state, and provider
-configuration. Capture rejects active turns and incomplete tool exchanges; it
-does not truncate history or trigger compaction to make the snapshot fit.
+Snapshot workers implement `ContextWorker` and use its shared `Worker` handler.
+Send `actor::Message::CaptureSnapshot` to a settled source actor to capture the
+same active request context the parent uses, including its instructions, tool
+schemas, existing compaction memory, runtime state, and provider configuration.
+Capture rejects active turns, incomplete tool exchanges, and context that cannot
+fit the reserved question and answer space.
 
-For independently managed snapshots, spawn `WorkerAdapter::new(SnapshotWorker)`
-with the returned `Snapshot`, then send
-`SnapshotMessage::Ask { question, reply, admission: None }`. Each question is independent: the
-actor uses its frozen context plus only that question, and retains neither the
-question nor its answer. Historical messages and tools are losslessly encoded as
-inert reference data, not enabled capabilities. There are no workspace tools,
-file watchers, delegation, live context refreshes, or session writes. Files and
-artifact contents not already present in the captured context are not fetched.
+Register the captured `Snapshot` with `ImmutableWorker::snapshot`. Each question
+runs through the normal worker lifecycle with the frozen parent prefix, the
+question-only instruction, and the question. Questions and answers are discarded
+after each request. The worker has no executable workspace tools, file watcher,
+or persistent session writes.
 
 ```rust
 use actors::{
     actor::Message,
-    worker::WorkerAdapter,
-    workers::snapshot_worker::{SnapshotMessage, SnapshotWorker},
+    immutable_workers::{ImmutableWorker, ImmutableWorkerDescription, ImmutableWorkerRegistry},
 };
-use ractor::{Actor, ActorRef};
+use ractor::ActorRef;
+use std::time::Duration;
 use tokio::sync::oneshot;
 
 async fn ask_snapshot(source: &ActorRef<Message>, question: String) -> anyhow::Result<String> {
     let (reply, receive) = oneshot::channel();
     source.send_message(Message::CaptureSnapshot(reply.into()))?;
     let snapshot = receive.await??;
-    let (actor, handle) = Actor::spawn(None, WorkerAdapter::new(SnapshotWorker), snapshot).await?;
-
-    let (reply, receive) = oneshot::channel();
-    actor.send_message(SnapshotMessage::Ask { question, reply: reply.into(), admission: None })?;
-    let answer = receive.await;
-    actor.stop(None);
-    handle.await?;
-    answer?
+    let registry = ImmutableWorkerRegistry::default();
+    let worker = ImmutableWorker::snapshot(
+        snapshot,
+        ImmutableWorkerDescription {
+            kind: "snapshot".into(),
+            description: "Captured parent context".into(),
+        },
+        source,
+    );
+    let view = registry.insert("manual", worker);
+    let result = registry
+        .ask("manual", &view.worker_id, question, Duration::from_secs(60))
+        .await;
+    registry.clear("manual").await;
+    result.map(|answer| answer.answer)
 }
 ```
 
-Keep the actor reference to ask multiple independent questions before stopping
-it. Snapshots are in-memory and caller-managed; they remain usable after the
-source changes or stops, but are not saved for application restarts. For callers
-without a source actor, `Snapshot::new` accepts an owned `ClientRequest`, a client,
-context limits, and a nonzero per-question timeout.
+Keep the registry and worker ID to ask multiple independent questions. Its listing
+includes the maximum question size in UTF-8 bytes. Registered snapshots live until
+their conversation is cleared or stopped and are not restored after a restart.
+`Snapshot::new` also accepts an owned `ClientRequest`, a client, context limits,
+and a nonzero per-question timeout.
 
-Blank or oversized questions, tool responses, incomplete streams, and provider
-failures return errors without changing the snapshot. Requests reserve output
-space and have a whole-request timeout and cumulative response-size limit.
-Provider configuration and per-question turn state are isolated; an injected
-`StreamProvider` is still a shared provider implementation and must enforce its
-own internal isolation.
+Questions outside the advertised size limit are invalid input. Valid questions
+cannot overflow a captured snapshot's reserved local context budget. Provider
+failures, cancellation, and malformed responses still return errors without
+changing the captured context. Provider configuration is frozen; an injected
+`StreamProvider` remains a shared implementation.
 
 ## Tests
 

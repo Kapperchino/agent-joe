@@ -1,5 +1,6 @@
 use crate::actor::Message;
 use crate::worker::{Worker, WorkerAdapter};
+use crate::workers::snapshot_worker::Snapshot;
 use anyhow::Context as _;
 use ractor::{Actor, ActorRef, RpcReplyPort};
 use serde::{Deserialize, Serialize};
@@ -27,6 +28,8 @@ pub struct ImmutableWorkerDescription {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImmutableWorkerView {
     pub worker_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_question_bytes: Option<usize>,
     #[serde(flatten)]
     pub description: ImmutableWorkerDescription,
 }
@@ -40,17 +43,41 @@ pub struct ImmutableAnswer {
 #[derive(Clone)]
 struct Endpoint {
     view: ImmutableWorkerView,
-    actor: ActorRef<ImmutableMessage>,
+    target: ImmutableTarget,
+}
+
+#[derive(Clone)]
+enum ImmutableTarget {
+    Actor(ActorRef<ImmutableMessage>),
+    Snapshot {
+        snapshot: Arc<Snapshot>,
+        owner: ActorRef<Message>,
+        scope: utils::execution::ExecutionScope,
+    },
+}
+
+impl ImmutableTarget {
+    fn cancel(&self) {
+        match self {
+            Self::Actor(actor) => actor.kill(),
+            Self::Snapshot { scope, .. } => scope.cancel.cancel(),
+        }
+    }
 }
 
 pub struct ImmutableWorker {
     endpoint: Endpoint,
-    handle: tokio::task::JoinHandle<()>,
+    handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl ImmutableWorker {
     pub(crate) fn view(&self) -> ImmutableWorkerView {
         self.endpoint.view.clone()
+    }
+
+    pub(crate) fn with_question_limit(mut self, bytes: usize) -> Self {
+        self.endpoint.view.max_question_bytes = Some(bytes);
+        self
     }
 
     pub async fn spawn<W: Worker<Msg = ImmutableMessage>>(
@@ -70,23 +97,53 @@ impl ImmutableWorker {
             endpoint: Endpoint {
                 view: ImmutableWorkerView {
                     worker_id: uuid::Uuid::new_v4().to_string(),
+                    max_question_bytes: None,
                     description,
                 },
-                actor,
+                target: ImmutableTarget::Actor(actor),
             },
-            handle,
+            handle: Some(handle),
         })
     }
 
+    pub fn snapshot(
+        snapshot: Snapshot,
+        description: ImmutableWorkerDescription,
+        owner: &ActorRef<Message>,
+    ) -> Self {
+        Self {
+            endpoint: Endpoint {
+                view: ImmutableWorkerView {
+                    worker_id: uuid::Uuid::new_v4().to_string(),
+                    max_question_bytes: Some(snapshot.max_question_bytes()),
+                    description,
+                },
+                target: ImmutableTarget::Snapshot {
+                    snapshot: Arc::new(snapshot),
+                    owner: owner.clone(),
+                    scope: utils::execution::ExecutionScope::current().child(),
+                },
+            },
+            handle: None,
+        }
+    }
+
     async fn stop(mut self) {
-        self.endpoint.actor.kill();
-        let _ = (&mut self.handle).await;
+        self.endpoint.target.cancel();
+        match &self.endpoint.target {
+            ImmutableTarget::Snapshot { scope, .. } => scope.finish().await,
+            ImmutableTarget::Actor(_) => {
+                if let Some(handle) = self.handle.take() {
+                    let _ = handle.await;
+                }
+            }
+        }
     }
 }
 
 impl Drop for ImmutableWorker {
     fn drop(&mut self) {
-        self.endpoint.actor.kill();
+        self.endpoint.target.cancel();
     }
 }
 
@@ -174,16 +231,32 @@ impl ImmutableWorkerRegistry {
             }
             _ => None,
         };
-        let (reply, receive) = tokio::sync::oneshot::channel();
-        endpoint.actor.send_message(ImmutableMessage::Ask {
-            question,
-            reply: reply.into(),
-            admission,
-        })?;
-        let answer = tokio::time::timeout(timeout, receive)
-            .await
-            .context("Immutable worker question timed out")?
-            .context("Immutable worker stopped before answering")??;
+        let answer = tokio::time::timeout(timeout, async {
+            match &endpoint.target {
+                ImmutableTarget::Actor(actor) => {
+                    let (reply, receive) = tokio::sync::oneshot::channel();
+                    actor.send_message(ImmutableMessage::Ask {
+                        question,
+                        reply: reply.into(),
+                        admission,
+                    })?;
+                    receive
+                        .await
+                        .context("Immutable worker stopped before answering")?
+                }
+                ImmutableTarget::Snapshot {
+                    snapshot,
+                    owner,
+                    scope,
+                } => {
+                    scope
+                        .enter(snapshot.answer(question, owner.get_cell()))
+                        .await
+                }
+            }
+        })
+        .await
+        .context("Immutable worker question timed out")??;
         Ok(ImmutableAnswer {
             worker: endpoint.view,
             answer,

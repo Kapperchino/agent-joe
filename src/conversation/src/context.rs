@@ -10,6 +10,7 @@ pub use clients::response::RequestMode;
 
 const REQUEST_TOKEN_RESERVE: usize = 1024;
 const MESSAGE_TOKEN_RESERVE: usize = 32;
+const RESPONSE_OVERHEAD_TOKENS: usize = 128;
 
 pub struct TextPrompt<'a> {
     request: &'a ClientRequest,
@@ -77,10 +78,23 @@ impl ContextLimits {
         self.ceiling - self.response as usize
     }
     pub fn trigger(self) -> usize {
-        (self.ceiling - self.ceiling.div_ceil(10)).min(self.input())
+        let snapshot = crate::frozen_context::SnapshotBudget::new(self.snapshot());
+        (self.ceiling - self.ceiling.div_ceil(10))
+            .min(self.input())
+            .min(
+                snapshot
+                    .context_tokens()
+                    .saturating_sub(self.response as usize + RESPONSE_OVERHEAD_TOKENS),
+            )
     }
     pub fn summary_bytes(self) -> usize {
         (self.input() / 8).min(8192)
+    }
+    pub fn snapshot(self) -> Self {
+        Self {
+            response: self.response.min(4096),
+            ..self
+        }
     }
 }
 
@@ -343,21 +357,31 @@ pub struct CompactionPlan {
 
 impl CompactionPlan {
     fn new(input: &ContextInput, exchanges: &CompleteHistory) -> anyhow::Result<Self> {
-        let through = exchanges.ends.iter().rev().nth(2).copied()
-                    .filter(|through| *through > input.checkpoint.through)
-                    .ok_or_else(|| anyhow::anyhow!("No older complete exchanges can be compacted while retaining the two most recent exchanges. Shorten the latest input or use a larger --context-tokens limit."))?;
-        let messages = input.prefix(&input.checkpoint, through)?;
-        let request = ClientRequest::new(messages)
-            .with_system(input.instructions.clone())
-            .with_prompt_cache_key(input.prompt_cache_key.clone())
-            .with_purpose(clients::llm::RequestPurpose::Compaction)
-            .with_output_limit(input.limits.response());
-        match estimated_tokens(&request)? <= input.limits.input() {
-            true => Ok(Self { through, request }),
-            false => Err(anyhow::anyhow!(
-                "The older context exceeds the compaction input budget. Resume with a larger --context-tokens limit or start a new session; saved history is intact."
-            )),
-        }
+        let mut boundaries = exchanges
+            .ends
+            .iter()
+            .rev()
+            .skip(2)
+            .copied()
+            .take_while(|through| *through > input.checkpoint.through)
+            .peekable();
+        boundaries.peek().ok_or_else(|| anyhow::anyhow!("No older complete exchanges can be compacted while retaining the two most recent exchanges. Shorten the latest input or use a larger --context-tokens limit."))?;
+        let selected = boundaries.try_fold(None, |selected, through| match selected {
+            Some(plan) => Ok(Some(plan)),
+            None => {
+                let request = ClientRequest::new(input.prefix(&input.checkpoint, through)?)
+                    .with_system(input.instructions.clone())
+                    .with_prompt_cache_key(input.prompt_cache_key.clone())
+                    .with_purpose(clients::llm::RequestPurpose::Compaction)
+                    .with_output_limit(input.limits.response());
+                let plan = Self { through, request };
+                let fits = estimated_tokens(&plan.request)? <= input.limits.input();
+                Ok::<_, anyhow::Error>(fits.then_some(plan))
+            }
+        })?;
+        selected.ok_or_else(|| anyhow::anyhow!(
+            "No older complete exchanges fit the compaction input budget. Resume with a larger --context-tokens limit or start a new session; saved history is intact."
+        ))
     }
 }
 
@@ -556,9 +580,15 @@ mod tests;
 
 pub fn estimated_tokens(request: &ClientRequest) -> anyhow::Result<usize> {
     let tokenizer = tiktoken_rs::o200k_base_singleton();
+    let messages = request.messages.iter().try_fold(0, |total, message| {
+        Ok::<_, anyhow::Error>(
+            total
+                + tokenizer.count_ordinary(&serde_json::to_string(message)?)
+                + MESSAGE_TOKEN_RESERVE,
+        )
+    })?;
     Ok(REQUEST_TOKEN_RESERVE
         + tokenizer.count_ordinary(request.system.as_deref().unwrap_or_default())
-        + tokenizer.count_ordinary(&serde_json::to_string(&request.messages)?)
-        + tokenizer.count_ordinary(&serde_json::to_string(&request.tools)?)
-        + request.messages.len() * MESSAGE_TOKEN_RESERVE)
+        + messages
+        + tokenizer.count_ordinary(&serde_json::to_string(&request.tools)?))
 }

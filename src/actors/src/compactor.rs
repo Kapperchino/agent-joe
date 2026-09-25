@@ -26,7 +26,7 @@ pub struct PreparedRequest {
 }
 
 impl PreparedRequest {
-    fn new(
+    pub(crate) fn new(
         request: ClientRequest,
         compaction: Option<CompactedContext>,
         limits: ContextLimits,
@@ -61,17 +61,8 @@ pub async fn prepare(
         ),
         BudgetPlan::Compact(plan) => {
             let method = CompactionMethod::new(input, task)?;
-            let mut captured = plan.request.clone().with_tools(input.tools.clone());
-            captured
-                .messages
-                .extend(input.runtime.as_ref().map(|runtime| clients::llm::Message {
-                    role: clients::llm::Role::User,
-                    content: vec![clients::llm::ContentBlock::RuntimeUpdate(
-                        clients::runtime_update::RuntimeUpdate::Snapshot(runtime.clone()),
-                    )],
-                }));
             let snapshot = Snapshot::for_compaction(
-                captured,
+                input.request(&input.checkpoint)?,
                 &task.client,
                 input.limits,
                 task.request_timeout,

@@ -642,7 +642,7 @@ async fn bounded_workers_compact_and_continue_the_same_investigation() {
     )
     .unwrap();
     let runtime = Runtime {
-        context_budget: conversation::context::ContextBudget::new(Some(64_000), 2048).unwrap(),
+        context_budget: conversation::context::ContextBudget::new(Some(64_000), 12_000).unwrap(),
         ..Runtime::for_workspace(workspace.path.clone()).unwrap()
     };
     let actor = RepositoryActor::with_runtime(BaseWorker::new(), runtime, false).await;
@@ -768,7 +768,8 @@ async fn both_root_modes_query_automatically_created_compaction_snapshots() {
     for mode in [Mode::Simple, Mode::Delegated] {
         let workspace = session::test_support::Workspace::new();
         let runtime = Runtime {
-            context_budget: conversation::context::ContextBudget::new(Some(48_000), 2048).unwrap(),
+            context_budget: conversation::context::ContextBudget::new(Some(72_000), 28_000)
+                .unwrap(),
             ..Runtime::for_workspace(workspace.path.clone()).unwrap()
         };
         let registry = runtime.immutable_workers.clone();
@@ -855,15 +856,14 @@ async fn both_root_modes_query_automatically_created_compaction_snapshots() {
             )]),
         );
         let (request, reply) = actor.request().await;
-        assert!(request.tools.is_empty());
-        assert_eq!(request.messages.len(), 2);
-        let frozen = request.messages[0].text();
-        assert!(frozen.starts_with("Frozen context:\n"));
+        assert_eq!(request.prompt_cache_key.as_deref(), Some(owner.as_str()));
+        let frozen =
+            serde_json::to_string(&request.messages[..request.messages.len() - 2]).unwrap();
         assert!(frozen.contains("Original investigation 0"));
-        assert!(frozen.contains("ask_immutable_worker"));
+        assert!(request.tools.iter().any(|tool| matches!(tool, ToolDefinition::Client { name, .. } if name == "ask_immutable_worker")));
         assert!(!frozen.contains("What was the first investigation?"));
         assert_eq!(
-            request.messages[1].text(),
+            request.messages.last().unwrap().text(),
             "What was the first investigation?"
         );
         answer(

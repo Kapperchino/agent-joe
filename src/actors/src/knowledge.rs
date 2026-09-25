@@ -598,9 +598,10 @@ impl ImmutableWorkerRegistry {
                 freshness.clone(),
                 self.knowledge_gate.clone(),
             )?;
+            let max_question_bytes = state.max_question_bytes();
             workers.push(ImmutableWorker::spawn(KnowledgeWorker, state, ImmutableWorkerDescription {
                 kind: "knowledge".into(), description: format!("Repository knowledge generation {}, shard {}. {} primary source bytes across {} files; use knowledge search/inspect for routing. Fixed context, no tools; stale inputs require rebuilding.", index.generation, shard.summary.index, shard.summary.owned_bytes, shard.summary.paths.len()),
-            }, context.actor).await?);
+            }, context.actor).await?.with_question_limit(max_question_bytes));
         }
         freshness.check().await?;
         let generation = Arc::new(Generation {

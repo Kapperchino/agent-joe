@@ -1,4 +1,5 @@
 pub mod context;
+pub mod frozen_context;
 
 use crate::context::{Checkpoint, RequestMode};
 use clients::llm::{Message, Role};

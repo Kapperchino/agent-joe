@@ -8,6 +8,7 @@ use tools::tool_defs::erased_tool;
 pub enum ActorMode {
     Conversation,
     SingleResponse(EventReporter),
+    Snapshot(clients::llm::ClientRequest),
 }
 
 impl ActorMode {
@@ -16,7 +17,7 @@ impl ActorMode {
         dependency: Dependency<C>,
     ) -> Dependency<C> {
         match self {
-            Self::SingleResponse(_) => Dependency {
+            Self::SingleResponse(_) | Self::Snapshot(_) => Dependency {
                 tools: Vec::new(),
                 runtime: Runtime {
                     sessions: None,
@@ -65,13 +66,20 @@ impl ActorMode {
     pub(crate) fn request_mode(&self) -> RequestMode {
         match self {
             Self::Conversation => RequestMode::Continue,
-            Self::SingleResponse(_) => RequestMode::SingleResponse,
+            Self::SingleResponse(_) | Self::Snapshot(_) => RequestMode::SingleResponse,
+        }
+    }
+
+    pub(crate) fn frozen_request(&self) -> Option<clients::llm::ClientRequest> {
+        match self {
+            Self::Snapshot(request) => Some(request.clone()),
+            Self::Conversation | Self::SingleResponse(_) => None,
         }
     }
 
     pub(crate) fn reporter<C: Context>(self, dependency: &Dependency<C>) -> EventReporter {
         match self {
-            Self::Conversation => EventReporter::Interactive {
+            Self::Conversation | Self::Snapshot(_) => EventReporter::Interactive {
                 actor_id: dependency.context.get_id(),
                 tui_tx: dependency.tui_tx.clone(),
             },

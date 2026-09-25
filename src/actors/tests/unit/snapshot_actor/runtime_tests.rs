@@ -1,11 +1,11 @@
 use super::*;
 use crate::immutable_workers::{ImmutableWorker, ImmutableWorkerDescription, ImmutableWorkerView};
-use crate::workers::snapshot_worker::{Snapshot, SnapshotMessage, SnapshotWorker};
+use crate::workers::snapshot_worker::Snapshot;
 use conversation::context::ContextLimits;
 
 struct SnapshotHarness {
-    actor: ActorRef<SnapshotMessage>,
-    handle: Option<tokio::task::JoinHandle<()>>,
+    owner: Harness,
+    worker: ImmutableWorkerView,
     requests: flume::Receiver<Request>,
 }
 
@@ -24,25 +24,35 @@ impl SnapshotHarness {
     }
 
     async fn spawn(snapshot: Snapshot, requests: flume::Receiver<Request>) -> Self {
-        let (actor, handle) = Actor::spawn(None, WorkerAdapter::new(SnapshotWorker), snapshot)
-            .await
-            .unwrap();
+        let owner = Harness::new(vec![], Duration::from_secs(1)).await;
+        let worker = ImmutableWorker::snapshot(
+            snapshot,
+            ImmutableWorkerDescription {
+                kind: "snapshot".into(),
+                description: "Frozen fixture context".into(),
+            },
+            &owner.actor,
+        );
+        let worker = owner.runtime.immutable_workers.insert("actor-1", worker);
         Self {
-            actor,
-            handle: Some(handle),
+            owner,
+            worker,
             requests,
         }
     }
 
     fn ask(&self, question: &str) -> oneshot::Receiver<anyhow::Result<String>> {
         let (reply, receive) = oneshot::channel();
-        self.actor
-            .send_message(SnapshotMessage::Ask {
-                question: question.into(),
-                reply: reply.into(),
-                admission: None,
-            })
-            .unwrap();
+        let registry = self.owner.runtime.immutable_workers.clone();
+        let worker = self.worker.worker_id.clone();
+        let question = question.to_owned();
+        tokio::spawn(async move {
+            let result = registry
+                .ask("actor-1", &worker, question, Duration::from_secs(2))
+                .await
+                .map(|answer| answer.answer);
+            let _ = reply.send(result);
+        });
         receive
     }
 
@@ -50,15 +60,8 @@ impl SnapshotHarness {
         within(self.requests.recv_async()).await.unwrap()
     }
 
-    async fn stop(mut self) {
-        self.actor.stop(None);
-        within(self.handle.take().unwrap()).await.unwrap();
-    }
-}
-
-impl Drop for SnapshotHarness {
-    fn drop(&mut self) {
-        self.actor.stop(None);
+    async fn stop(self) {
+        self.owner.stop().await;
     }
 }
 
@@ -68,13 +71,10 @@ fn context() -> llm::ClientRequest {
 }
 
 fn frozen(request: &llm::ClientRequest) -> Value {
-    serde_json::from_str(
-        request.messages[0]
-            .text()
-            .strip_prefix("Frozen context:\n")
-            .unwrap(),
-    )
-    .unwrap()
+    json!({
+        "messages": &request.messages[..request.messages.len() - 2],
+        "tools": request.tools,
+    })
 }
 
 async fn capture(actor: &ActorRef<Message>) -> anyhow::Result<Snapshot> {
@@ -86,18 +86,42 @@ async fn capture(actor: &ActorRef<Message>) -> anyhow::Result<Snapshot> {
 }
 
 async fn register_snapshot(h: &Harness, owner: &str) -> ImmutableWorkerView {
-    let worker = ImmutableWorker::spawn(
-        SnapshotWorker,
+    let worker = ImmutableWorker::snapshot(
         capture(&h.actor).await.unwrap(),
         ImmutableWorkerDescription {
             kind: "snapshot".into(),
             description: "Frozen fixture context".into(),
         },
         &h.actor,
-    )
-    .await
-    .unwrap();
+    );
     h.runtime.immutable_workers.insert(owner, worker)
+}
+
+#[tokio::test]
+async fn listed_question_allowance_fits_through_the_regular_worker() {
+    let source = context();
+    let expected = serde_json::to_value(&source.messages).unwrap();
+    let h = SnapshotHarness::new(source, Duration::from_secs(1)).await;
+    let allowance = h.worker.max_question_bytes.unwrap();
+    assert_eq!(
+        h.owner.runtime.immutable_workers.list("actor-1")[0].max_question_bytes,
+        Some(allowance)
+    );
+    let question = "\0".repeat(allowance);
+    let result = h.ask(&question);
+    let (request, reply) = h.request().await;
+    assert_eq!(frozen(&request)["messages"], expected);
+    assert_eq!(request.messages.last().unwrap().text(), question);
+    assert!(
+        conversation::context::estimated_tokens(&request).unwrap()
+            <= ContextLimits::new(16_000, 2048).unwrap().input()
+    );
+    answer(reply, response(vec![text("The entire question fits")]));
+    assert_eq!(
+        within(result).await.unwrap().unwrap(),
+        "The entire question fits"
+    );
+    h.stop().await;
 }
 
 #[tokio::test]
@@ -129,9 +153,10 @@ async fn registered_snapshot_survives_completed_and_interrupted_owner_turns() {
         assert_eq!(registry.list(owner).len(), 1);
         let serve = async {
             let (request, reply) = h.request().await;
-            assert_eq!(request.messages.len(), 2);
-            assert!(request.tools.is_empty());
-            let current = request.messages[0].text();
+            assert_eq!(request.messages.len(), 4);
+            assert!(!request.tools.is_empty());
+            let current =
+                serde_json::to_string(&request.messages[..request.messages.len() - 2]).unwrap();
             assert!(!current.contains("Later owner"));
             match &prefix {
                 Some(previous) => assert_eq!(previous, &current),
@@ -186,12 +211,7 @@ async fn clearing_registered_snapshots_cancels_pending_requests_and_streams() {
             Duration::from_secs(2),
         );
         let (result, ()) = within(async { tokio::join!(ask, clear) }).await;
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("stopped before answering")
-        );
+        assert!(result.is_err());
         assert!(registry.list(owner).is_empty());
         assert!(h.requests.is_empty());
         h.stop().await;
@@ -216,8 +236,13 @@ async fn repeated_questions_preserve_context_without_retaining_questions_or_answ
     ] {
         let result = h.ask(question);
         let (request, reply) = h.request().await;
-        assert_eq!(request.messages.len(), 2);
-        assert_eq!(request.messages[1].text(), question);
+        assert_eq!(request.messages.len(), 3);
+        assert!(
+            request.messages[1]
+                .text()
+                .starts_with("Answer only the question")
+        );
+        assert_eq!(request.messages[2].text(), question);
         assert_eq!(frozen(&request)["messages"], expected);
         assert!(
             request
@@ -228,7 +253,7 @@ async fn repeated_questions_preserve_context_without_retaining_questions_or_answ
         );
         assert!(request.tools.is_empty());
         assert_eq!(request.max_output_tokens, Some(2048));
-        assert_ne!(request.prompt_cache_key.as_deref(), Some("parent"));
+        assert_eq!(request.prompt_cache_key.as_deref(), Some("parent"));
         let current = request.messages[0].text();
         match &prefix {
             Some(previous) => assert_eq!(previous, &current),
@@ -251,7 +276,33 @@ async fn repeated_questions_preserve_context_without_retaining_questions_or_answ
 }
 
 #[tokio::test]
-async fn historical_tools_are_lossless_inert_data_for_both_provider_mappings() {
+async fn caller_timeout_cancels_the_regular_worker_and_keeps_the_snapshot_reusable() {
+    let h = SnapshotHarness::new(context(), Duration::from_secs(1)).await;
+    let query = h.owner.runtime.immutable_workers.ask(
+        "actor-1",
+        &h.worker.worker_id,
+        "Wait for an answer".into(),
+        Duration::from_millis(50),
+    );
+    let provider = async {
+        let (_, mut reply) = h.request().await;
+        within(reply.closed()).await;
+    };
+    let (result, ()) = within(async { tokio::join!(query, provider) }).await;
+    assert!(result.unwrap_err().to_string().contains("timed out"));
+    let result = h.ask("Next independent question");
+    let (request, reply) = h.request().await;
+    assert_eq!(
+        frozen(&request)["messages"],
+        serde_json::to_value(context().messages).unwrap()
+    );
+    answer(reply, response(vec![text("Still available")]));
+    assert_eq!(within(result).await.unwrap().unwrap(), "Still available");
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn historical_tools_preserve_the_parent_prefix_for_both_provider_mappings() {
     let tool_id = ToolId {
         id: "historical".to_owned().try_into().unwrap(),
         call_id: None,
@@ -277,6 +328,20 @@ async fn historical_tools_are_lossless_inert_data_for_both_provider_mappings() {
         properties: Default::default(),
         required: Vec::new(),
     });
+    for block in source
+        .messages
+        .iter_mut()
+        .flat_map(|message| &mut message.content)
+    {
+        match block {
+            ContentBlock::ToolBlock { tool_id, .. } | ContentBlock::ToolResult { tool_id, .. } => {
+                tool_id.call_id = Some("historical-call".to_owned().try_into().unwrap())
+            }
+            _ => {}
+        }
+    }
+    let parent_openai = clients::openai::ClientRequest::try_from(source.clone()).unwrap();
+    let parent_claude = clients::claude::ClientRequest::try_from(source.clone()).unwrap();
     let expected_messages = serde_json::to_value(&source.messages).unwrap();
     let expected_tools = serde_json::to_value(&source.tools).unwrap();
     let h = SnapshotHarness::new(source, Duration::from_secs(1)).await;
@@ -284,18 +349,28 @@ async fn historical_tools_are_lossless_inert_data_for_both_provider_mappings() {
     let (request, reply) = h.request().await;
     assert_eq!(frozen(&request)["messages"], expected_messages);
     assert_eq!(frozen(&request)["tools"], expected_tools);
-    assert!(request.tools.is_empty());
-    assert!(
-        request
-            .messages
-            .iter()
-            .flat_map(|message| &message.content)
-            .all(|block| matches!(block, ContentBlock::MessageBlock { .. }))
+    assert_eq!(
+        serde_json::to_value(&request.tools).unwrap(),
+        expected_tools
     );
     let openai = clients::openai::ClientRequest::try_from(request.clone()).unwrap();
     let claude = clients::claude::ClientRequest::try_from(request).unwrap();
-    assert!(openai.tools.is_empty());
-    assert!(claude.tools.is_empty());
+    assert_eq!(
+        serde_json::to_value(&openai.input[..parent_openai.input.len()]).unwrap(),
+        serde_json::to_value(&parent_openai.input).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(&openai.tools).unwrap(),
+        serde_json::to_value(&parent_openai.tools).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(&claude.messages[..parent_claude.messages.len()]).unwrap(),
+        serde_json::to_value(&parent_claude.messages).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(&claude.tools).unwrap(),
+        serde_json::to_value(&parent_claude.tools).unwrap()
+    );
     answer(reply, response(vec![text("The file contained αβγ")]));
     assert_eq!(
         within(result).await.unwrap().unwrap(),
@@ -370,18 +445,12 @@ async fn capture_rejects_active_turns_and_survives_source_changes_and_shutdown()
         serde_json::to_value(&captured[..history.len()]).unwrap(),
         serde_json::to_value(&history).unwrap()
     );
-    assert_eq!(captured.len(), history.len() + 1);
-    assert!(matches!(
-        captured.last().unwrap().content.as_slice(),
-        [ContentBlock::RuntimeUpdate(
-            clients::runtime_update::RuntimeUpdate::Snapshot(_)
-        )]
-    ));
+    assert_eq!(captured.len(), history.len());
     assert_eq!(
         runtime_snapshot(&captured),
         runtime_snapshot(&source_request.messages)
     );
-    assert_ne!(request.prompt_cache_key, source_request.prompt_cache_key);
+    assert_eq!(request.prompt_cache_key, source_request.prompt_cache_key);
     assert!(
         request
             .system
@@ -400,7 +469,7 @@ async fn capture_rejects_active_turns_and_survives_source_changes_and_shutdown()
 }
 
 #[tokio::test]
-async fn capture_preserves_full_transcript_and_existing_compaction_memory() {
+async fn capture_matches_parent_active_context_after_compaction() {
     let h = Harness::new(vec![], Duration::from_secs(1)).await;
     let (tx, requests) = flume::unbounded();
     let (tui_tx, _) = flume::unbounded();
@@ -436,7 +505,12 @@ async fn capture_preserves_full_transcript_and_existing_compaction_memory() {
         )
         .unwrap(),
     );
-    let expected = serde_json::to_value(state.session.conversation.history()).unwrap();
+    let input = state
+        .provider_context()
+        .input(common_models::runtime_ids::TurnId::new(), &state.llm)
+        .unwrap();
+    let parent = input.request(&input.checkpoint).unwrap();
+    let expected = serde_json::to_value(&parent.messages).unwrap();
     let snapshot = state
         .provider_context()
         .capture_snapshot(&state.turn, &state.llm)
@@ -448,9 +522,23 @@ async fn capture_preserves_full_transcript_and_existing_compaction_memory() {
     let (request, reply) = snapshot.request().await;
     let captured: Vec<llm::Message> =
         serde_json::from_value(frozen(&request)["messages"].clone()).unwrap();
-    assert_eq!(serde_json::to_value(&captured[..5]).unwrap(), expected);
-    assert_eq!(captured.len(), 7);
-    assert!(captured[5].text().contains("Existing summary"));
+    assert_eq!(serde_json::to_value(&captured).unwrap(), expected);
+    assert_eq!(request.system, parent.system);
+    assert_eq!(request.prompt_cache_key, parent.prompt_cache_key);
+    assert_eq!(
+        serde_json::to_value(&request.tools).unwrap(),
+        serde_json::to_value(&parent.tools).unwrap()
+    );
+    assert!(
+        captured
+            .iter()
+            .any(|message| message.text().contains("Existing summary"))
+    );
+    assert!(
+        !captured
+            .iter()
+            .any(|message| message.text().contains("Old detailed evidence"))
+    );
     assert_eq!(captured[0].text(), "workspace revision 7");
     answer(
         reply,
@@ -479,7 +567,7 @@ async fn invalid_questions_do_not_call_provider_or_poison_actor() {
     }
     let result = h.ask("A valid question");
     let (request, reply) = h.request().await;
-    assert_eq!(request.messages.len(), 2);
+    assert_eq!(request.messages.len(), 3);
     answer(reply, response(vec![text("Still available")]));
     assert_eq!(within(result).await.unwrap().unwrap(), "Still available");
     h.stop().await;
@@ -520,7 +608,7 @@ async fn malformed_tool_refused_and_empty_answers_leave_snapshot_reusable() {
     for events in failures {
         let result = h.ask("Answer from the original context");
         let (request, reply) = h.request().await;
-        assert_eq!(request.messages.len(), 2);
+        assert_eq!(request.messages.len(), 3);
         assert_eq!(
             frozen(&request)["messages"],
             serde_json::to_value(context().messages).unwrap()
@@ -605,7 +693,7 @@ async fn provider_errors_and_stream_timeouts_do_not_retain_partial_answers() {
 
     let result = h.ask("Next independent question");
     let (request, reply) = h.request().await;
-    assert_eq!(request.messages.len(), 2);
+    assert_eq!(request.messages.len(), 3);
     assert_eq!(
         frozen(&request)["messages"],
         serde_json::to_value(context().messages).unwrap()
