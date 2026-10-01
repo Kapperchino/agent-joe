@@ -532,6 +532,15 @@ impl ChangeTracker {
         Ok(())
     }
 
+    pub fn observed_versions(&self) -> anyhow::Result<BTreeMap<PathBuf, FileVersion>> {
+        Ok(self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Change journal lock poisoned"))?
+            .observed
+            .clone())
+    }
+
     pub fn apply(
         &self,
         workspace: &WorkspacePolicy,

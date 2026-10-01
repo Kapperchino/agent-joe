@@ -103,6 +103,31 @@ fn instructions_have_ordered_provenance_and_require_delivery_before_edits() {
 }
 
 #[test]
+fn relocation_preserves_delivered_guidance_but_rechecks_changed_sources() {
+    let original = Fixture::new();
+    let destination = Fixture::new();
+    for fixture in [&original, &destination] {
+        fixture.write("AGENTS.md", "repository guidance");
+        fixture.write("src/AGENTS.md", "source guidance");
+    }
+    let guidance = Instructions::new(original.workspace.clone());
+    guidance.discover(&["src/new.rs".into()]).unwrap();
+    guidance.operating("").unwrap();
+    let relocated = guidance.relocated(destination.workspace.clone()).unwrap();
+    relocated.prepare_edit(&["src/new.rs".into()]).unwrap();
+    destination.write("src/AGENTS.md", "changed source guidance");
+    assert!(relocated.prepare_edit(&["src/new.rs".into()]).is_err());
+    assert!(
+        relocated
+            .operating("")
+            .unwrap()
+            .contains("changed source guidance")
+    );
+    relocated.prepare_edit(&["src/new.rs".into()]).unwrap();
+    guidance.prepare_edit(&["src/new.rs".into()]).unwrap();
+}
+
+#[test]
 fn ignored_rules_apply_and_oversized_sources_fail_without_truncation() {
     let fixture = Fixture::new();
     fixture.write(".gitignore", "ignored/\nAGENTS.md\n");

@@ -1,7 +1,6 @@
 use crate::runtime::SessionRuntime;
 use analysis::contexts::context::Context;
 use clients::llm::{LLmClient, Message};
-use interaction::access::InteractionRole;
 
 pub enum SessionTransition {
     Start,
@@ -18,7 +17,6 @@ pub struct SessionRelocation<C: Context> {
 impl<C: Context + Clone> SessionRelocation<C> {
     pub async fn new(context: &C, runtime: SessionRuntime) -> anyhow::Result<Self> {
         let mut context = context.clone();
-        context.clear_task_context();
         context.relocate(runtime.scope.workspace()?.root().to_path_buf())?;
         let message = Message::new(context.get_ctx().await);
         Ok(Self {
@@ -29,28 +27,16 @@ impl<C: Context + Clone> SessionRelocation<C> {
     }
 
     pub async fn prepare(context: &C, runtime: &SessionRuntime) -> anyhow::Result<Option<Self>> {
-        let mut runtime = runtime.clone();
-        let session = match (&runtime.role, &runtime.project, &runtime.session) {
-            (InteractionRole::Root, Some(_), Some(session))
-                if session.snapshot()?.worktree.is_none() =>
+        let mut updated = runtime.clone();
+        updated.prepare_workspace(tools::tool_defs::ToolOpKind::Read)?;
+        match (runtime.scope.workspace(), updated.scope.workspace()) {
+            (Ok(previous), Ok(workspace))
+                if previous.root() != workspace.root()
+                    || !std::sync::Arc::ptr_eq(&runtime.scope.changes, &updated.scope.changes) =>
             {
-                Some(session.clone())
+                Self::new(context, updated).await.map(Some)
             }
-            _ => None,
-        };
-        match session {
-            Some(session) => {
-                runtime.activate_session(None)?;
-                let snapshot = session.snapshot()?;
-                match snapshot.worktree {
-                    Some(_) => {
-                        runtime.scope.changes = session.change_tracker(snapshot.changes);
-                        Self::new(context, runtime).await.map(Some)
-                    }
-                    None => Ok(None),
-                }
-            }
-            None => Ok(None),
+            _ => Ok(None),
         }
     }
 }
@@ -72,7 +58,7 @@ impl SessionTransition {
                 .as_ref()
                 .map(|session| session.snapshot())
                 .transpose()?
-                .and_then(|snapshot| snapshot.worktree),
+                .and_then(|snapshot| snapshot.worktree.or(snapshot.worktree_source)),
             Self::Start | Self::Clear => None,
         };
         runtime.session = match &runtime.sessions {
@@ -81,7 +67,6 @@ impl SessionTransition {
             }
             None => runtime.session,
         };
-        runtime.activate_session(source.as_ref())?;
         runtime.scope.changes = match self {
             Self::Start => match &runtime.session {
                 Some(session) if session.snapshot()?.parent.is_none() => {
@@ -95,6 +80,7 @@ impl SessionTransition {
                 .map(|session| session.change_tracker(Default::default()))
                 .unwrap_or_default(),
         };
+        runtime.activate_session(source.as_ref())?;
         Ok(runtime)
     }
 }

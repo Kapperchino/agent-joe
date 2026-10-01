@@ -76,6 +76,15 @@ impl ToolBatchMut<'_> {
 }
 
 impl TurnState {
+    pub fn follow_workspace(&mut self, scope: &ExecutionScope) -> anyhow::Result<()> {
+        match self {
+            Self::Provider(turn) => turn.scope.follow(scope),
+            Self::Tools(turn) => turn.scope.follow(scope),
+            Self::Stopping(turn) => turn.scope.follow(scope),
+            Self::Idle | Self::Waiting(_) => Ok(()),
+        }
+    }
+
     pub fn tools_mut(&mut self, tag: Tag) -> Option<ToolBatchMut<'_>> {
         let tools = match self {
             Self::Tools(turn) => Some(ToolBatchMut {

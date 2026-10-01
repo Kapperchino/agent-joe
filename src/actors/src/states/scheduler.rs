@@ -237,19 +237,81 @@ impl<C: Context + Clone + 'static> Executor<C> {
             .workspace
             .acquire(prepared.effect, &scope)
             .await?;
-        let outcome = AssertUnwindSafe(self.invoke(prepared, &scope, tag, lease.revision()))
-            .catch_unwind()
-            .await
-            .unwrap_or_else(|_| {
-                Err(ToolFailure::new(
-                    ToolFailureKind::Panicked,
-                    effects(prepared.effect),
-                    "Tool implementation panicked",
-                ))
-            });
+        let checkpoint = self
+            .runtime
+            .binding
+            .as_ref()
+            .map(|binding| binding.checkpoint(prepared.effect))
+            .transpose()
+            .map_err(|error| execution_error(error, ToolOpKind::Read))?
+            .flatten();
+        let outcome = async {
+            let executor = self.workspace(prepared.effect).map_err(|error| {
+                ToolFailure::new(
+                    ToolFailureKind::Execution,
+                    FailureImpact::NotStarted,
+                    format!("Could not prepare session workspace: {error:#}"),
+                )
+            })?;
+            let scope = match executor.runtime.binding {
+                Some(_) => scope
+                    .following(&executor.runtime.scope)
+                    .map_err(|error| execution_error(error, prepared.effect))?,
+                None => scope.clone(),
+            };
+            AssertUnwindSafe(executor.invoke(prepared, &scope, tag, lease.revision()))
+                .catch_unwind()
+                .await
+                .unwrap_or_else(|_| {
+                    Err(ToolFailure::new(
+                        ToolFailureKind::Panicked,
+                        effects(prepared.effect),
+                        "Tool implementation panicked",
+                    ))
+                })
+        }
+        .await;
         scope.finish().await;
+        let outcome = match (outcome, checkpoint, &self.runtime.binding) {
+            (Err(mut failure), Some(checkpoint), Some(binding)) => {
+                match binding.discard_unused(checkpoint) {
+                    Ok(session::runtime::WorkspaceRecovery::Unchanged) => {
+                        failure.impact = match failure.impact {
+                            FailureImpact::NotStarted => FailureImpact::NotStarted,
+                            _ => FailureImpact::NoWorkspaceChange,
+                        }
+                    }
+                    Ok(session::runtime::WorkspaceRecovery::Retained) => {}
+                    Err(error) => failure
+                        .message
+                        .push_str(&format!("; worktree retained: {error:#}")),
+                }
+                Err(failure)
+            }
+            (outcome, _, _) => outcome,
+        };
         drop(lease);
         outcome
+    }
+
+    fn workspace(&self, effect: ToolOpKind) -> anyhow::Result<Self> {
+        let mut executor = self.clone();
+        let mut runtime = executor.runtime.session_runtime();
+        runtime.prepare_workspace(effect)?;
+        executor.runtime = executor.runtime.with_session(runtime);
+        if executor.runtime.binding.is_some() {
+            executor.runtime.turn_scope = executor
+                .runtime
+                .turn_scope
+                .as_ref()
+                .map(|scope| scope.following(&executor.runtime.scope))
+                .transpose()?;
+            let root = executor.runtime.scope.workspace()?.root().to_path_buf();
+            if self.runtime.scope.workspace()?.root() != root {
+                executor.context.relocate(root)?;
+            }
+        }
+        Ok(executor)
     }
 
     fn record_intent(&self, prepared: &PreparedTool<C>) -> Result<(), ToolFailure> {

@@ -68,6 +68,17 @@ impl ExecutionScope {
         }
     }
 
+    pub fn following(&self, scope: &Self) -> anyhow::Result<Self> {
+        let workspace = self.workspace()?;
+        let target = scope.workspace()?;
+        let mut result = match workspace.root() == target.root() {
+            true => self.clone(),
+            false => self.relocated(workspace.relocated(target.root().to_path_buf())?),
+        };
+        result.changes = scope.changes.clone();
+        Ok(result)
+    }
+
     pub async fn shutdown_sandbox(&self) -> anyhow::Result<()> {
         #[cfg(unix)]
         if let Some(sandbox) = &self.sandbox {
@@ -193,6 +204,11 @@ pub struct OwnedScope(ExecutionScope);
 impl OwnedScope {
     pub fn new(scope: ExecutionScope) -> Self {
         Self(scope)
+    }
+
+    pub fn follow(&mut self, scope: &ExecutionScope) -> anyhow::Result<()> {
+        self.0 = self.0.following(scope)?;
+        Ok(())
     }
 }
 impl std::ops::Deref for OwnedScope {

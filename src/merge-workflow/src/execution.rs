@@ -27,8 +27,16 @@ pub enum MergeWorktree {
     Isolated(SessionWorktree),
 }
 
+pub enum WorktreeCleanup {
+    Remove,
+    Retain,
+}
+
 pub trait MergePersistence: InteractionPersistence {
     fn worktree(&self) -> anyhow::Result<MergeWorktree>;
+    fn worktree_cleanup(&self) -> anyhow::Result<WorktreeCleanup> {
+        Ok(WorktreeCleanup::Remove)
+    }
     fn record_approval(&mut self, approval: MergeApproval) -> anyhow::Result<()>;
     fn clear_worktree(&mut self);
 }
@@ -115,7 +123,7 @@ impl MergeWorkspace {
         }
     }
 
-    fn merge(self, commit: &str) -> anyhow::Result<MergeResult> {
+    fn merge(self, commit: &str, cleanup: WorktreeCleanup) -> anyhow::Result<MergeResult> {
         match self.worktree.merge(&self.project, commit) {
             Ok(outcome) => {
                 let message = match outcome {
@@ -124,7 +132,13 @@ impl MergeWorkspace {
                         format!("Merged session into {target}: {commit}")
                     }
                 };
-                Ok(match self.worktree.cleanup(&self.project, commit) {
+                let cleanup = match cleanup {
+                    WorktreeCleanup::Remove => self.worktree.cleanup(&self.project, commit),
+                    WorktreeCleanup::Retain => Err(anyhow::anyhow!(
+                        "Another session still reads this worktree before its first write"
+                    )),
+                };
+                Ok(match cleanup {
                     Ok(()) => MergeResult::Cleaned { message },
                     Err(error) => MergeResult::Retained { message, error },
                 })
@@ -272,12 +286,14 @@ impl<P: MergePersistence> SessionMerge<'_, P> {
         let approved = commit.clone();
         let outcome = async {
             let workspace = MergeWorkspace::new(&self.environment, &self.interaction)?;
+            let cleanup = self.interaction.persistence.worktree_cleanup()?;
             let runtime = &self.environment;
             let lease = runtime
                 .workspace
                 .acquire(ToolOpKind::Write, runtime.scope)
                 .await?;
-            let outcome = tokio::task::spawn_blocking(move || workspace.merge(&approved)).await?;
+            let outcome =
+                tokio::task::spawn_blocking(move || workspace.merge(&approved, cleanup)).await?;
             drop(lease);
             outcome
         }

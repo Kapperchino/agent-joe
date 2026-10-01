@@ -61,6 +61,7 @@ pub struct Runtime {
     pub project: Option<Arc<utils::workspace::WorkspacePolicy>>,
     pub session: Option<Arc<session::Session>>,
     pub workspace: Arc<Workspace>,
+    pub binding: Option<Arc<session::runtime::SessionWorkspace>>,
     pub scope: ExecutionScope,
     pub tool_timeout: Duration,
     pub request_timeout: Duration,
@@ -81,6 +82,7 @@ impl Default for Runtime {
             project: None,
             session: None,
             workspace: Arc::new(Workspace::new(4)),
+            binding: None,
             scope: ExecutionScope::default(),
             tool_timeout: Duration::from_secs(300),
             request_timeout: Duration::from_secs(180),
@@ -161,6 +163,7 @@ impl Runtime {
             project: self.project.clone(),
             session: self.session.clone(),
             workspace: self.workspace.clone(),
+            binding: self.binding.clone(),
             scope: self.scope.clone(),
         }
     }
@@ -172,6 +175,7 @@ impl Runtime {
             project: runtime.project,
             session: runtime.session,
             workspace: runtime.workspace,
+            binding: runtime.binding,
             scope: runtime.scope,
             ..self
         }

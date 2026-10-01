@@ -94,8 +94,9 @@ impl<C: Context + Clone> SessionActivation<C> {
             }
         };
         let history = initial_history(&context).await;
+        let previous = runtime.scope.workspace().ok();
         let runtime = transition.apply(runtime, client, &history)?;
-        let context = Self::relocate(context, &runtime)?;
+        let context = Self::relocate(context, &runtime, previous.as_deref())?;
         let history = initial_history(&context).await;
         Ok(Self {
             state: SessionState::new(
@@ -119,14 +120,15 @@ impl<C: Context + Clone> SessionActivation<C> {
         session: Arc<Session>,
         source: Option<&SessionWorktree>,
     ) -> anyhow::Result<Self> {
+        let previous = runtime.scope.workspace().ok();
         let mut runtime = runtime.clone();
         runtime.session = Some(session.clone());
-        runtime.activate_session(source)?;
         let snapshot = session.snapshot()?;
         runtime.scope.changes = session.change_tracker(snapshot.changes.clone());
+        runtime.activate_session(source)?;
         let mut context = context.clone();
         context.clear_task_context();
-        let context = Self::relocate(context, &runtime)?;
+        let context = Self::relocate(context, &runtime, previous.as_deref())?;
         let fresh = Message::new(context.get_ctx().await);
         Ok(Self {
             state: SessionState::new(
@@ -150,15 +152,14 @@ impl<C: Context + Clone> SessionActivation<C> {
             },
         })
     }
-    fn relocate(mut context: C, runtime: &SessionRuntime) -> anyhow::Result<C> {
-        match runtime
-            .session
-            .as_ref()
-            .map(|session| session.snapshot())
-            .transpose()?
-        {
-            Some(snapshot) if snapshot.worktree.is_some() => {
-                context.relocate(runtime.scope.workspace()?.root().to_path_buf())?;
+    fn relocate(
+        mut context: C,
+        runtime: &SessionRuntime,
+        previous: Option<&utils::workspace::WorkspacePolicy>,
+    ) -> anyhow::Result<C> {
+        match (previous, runtime.scope.workspace()) {
+            (Some(previous), Ok(workspace)) if previous.root() != workspace.root() => {
+                context.relocate(workspace.root().to_path_buf())?;
             }
             _ => {}
         }

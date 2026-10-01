@@ -69,7 +69,8 @@ impl Instructions {
     pub fn relocated(&self, workspace: Arc<WorkspacePolicy>) -> anyhow::Result<Self> {
         let instructions = Self {
             workspace,
-            ..self.reset()
+            global: self.global.clone(),
+            state: Arc::new(Mutex::new(self.state.lock().unwrap().clone())),
         };
         instructions.sources()?;
         Ok(instructions)

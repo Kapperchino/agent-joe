@@ -270,12 +270,18 @@ struct SessionCleanup<'repo> {
     transaction: git2::Transaction<'repo>,
 }
 
+enum CleanupPurpose {
+    Merged,
+    Unwritten,
+}
+
 impl<'repo> SessionCleanup<'repo> {
     fn new(
         session: &SessionWorktree,
         project: &WorkspacePolicy,
         git: &'repo GitRepository,
         approved: &str,
+        purpose: CleanupPurpose,
     ) -> anyhow::Result<Self> {
         let workspace = session.workspace(project)?;
         let child = GitRepository::required(&workspace)?;
@@ -302,7 +308,11 @@ impl<'repo> SessionCleanup<'repo> {
             && actual.head == expected.head
             && actual.files == expected.files
             && child.repo.state() == RepositoryState::Clean;
-        match integrated && unchanged {
+        let removable = match purpose {
+            CleanupPurpose::Merged => integrated && unchanged,
+            CleanupPurpose::Unwritten => unchanged,
+        };
+        match removable {
             true => Ok(()),
             false => Err(anyhow::anyhow!(
                 "Cleanup conflict: session has unmerged commits, local edits, or a pending Git operation"
@@ -758,7 +768,12 @@ impl SessionWorktree {
 
     pub fn cleanup(&self, project: &WorkspacePolicy, approved: &str) -> anyhow::Result<()> {
         let git = GitRepository::source(project)?;
-        SessionCleanup::new(self, project, &git, approved)?.execute()
+        SessionCleanup::new(self, project, &git, approved, CleanupPurpose::Merged)?.execute()
+    }
+
+    pub fn discard_unwritten(&self, project: &WorkspacePolicy, base: &str) -> anyhow::Result<()> {
+        let git = GitRepository::source(project)?;
+        SessionCleanup::new(self, project, &git, base, CleanupPurpose::Unwritten)?.execute()
     }
 
     pub fn prune(

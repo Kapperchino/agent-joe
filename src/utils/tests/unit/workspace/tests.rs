@@ -698,6 +698,123 @@ fn worker_restrictions_intersect_parent_policy_and_preserve_safe_discovery() {
 }
 
 #[test]
+fn relocated_worker_policy_preserves_intersected_paths_and_rebinds_file_access() {
+    let original = Fixture::new();
+    let destination = Fixture::new();
+    for fixture in [&original, &destination] {
+        std::fs::create_dir_all(fixture.root.join("allowed/nested")).unwrap();
+        std::fs::create_dir(fixture.root.join("other")).unwrap();
+        std::fs::write(fixture.root.join("allowed/nested/file"), "original").unwrap();
+        std::fs::write(fixture.root.join("allowed/sibling"), "sibling").unwrap();
+        std::fs::write(fixture.root.join("other/file"), "secret").unwrap();
+    }
+    std::fs::write(destination.root.join("allowed/nested/file"), "destination").unwrap();
+    let child = original
+        .policy()
+        .restricted(&[original.root.join("allowed")], RootAccess::ReadWrite)
+        .unwrap()
+        .restricted(&[PathBuf::from("allowed/nested")], RootAccess::ReadWrite)
+        .unwrap()
+        .restricted(&[PathBuf::from(".")], RootAccess::ReadWrite)
+        .unwrap();
+    let relocated = child.relocated(destination.root.clone()).unwrap();
+    assert_eq!(relocated.root(), destination.policy().root());
+    assert_eq!(
+        relocated.read(Path::new("allowed/nested/file")).unwrap(),
+        "destination"
+    );
+    assert!(
+        relocated
+            .read(&original.root.join("allowed/nested/file"))
+            .is_err()
+    );
+    assert!(
+        relocated
+            .write(&original.root.join("allowed/nested/file"), "denied")
+            .is_err()
+    );
+    for path in ["allowed/sibling", "other/file"] {
+        assert!(relocated.read(Path::new(path)).is_err());
+        assert!(relocated.write(Path::new(path), "denied").is_err());
+    }
+    assert!(!relocated.permits_workspace_access(Access::Read));
+    assert!(!relocated.permits_workspace_execution());
+    assert_eq!(
+        crate::inventory::Inventory::scan(&relocated).unwrap().files,
+        vec![PathBuf::from("allowed/nested/file")]
+    );
+    relocated
+        .write(Path::new("allowed/nested/file"), "changed")
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(destination.root.join("allowed/nested/file")).unwrap(),
+        "changed"
+    );
+    assert_eq!(
+        child.read(Path::new("allowed/nested/file")).unwrap(),
+        "original"
+    );
+}
+
+#[test]
+fn relocated_policy_preserves_read_only_roots_and_inherited_access() {
+    let original = Fixture::new();
+    let destination = Fixture::new();
+    for fixture in [&original, &destination] {
+        std::fs::create_dir(fixture.root.join("read-only")).unwrap();
+        std::fs::write(fixture.root.join("read-only/file"), "protected").unwrap();
+    }
+    let policy = WorkspacePolicy::new(
+        original.root.clone(),
+        vec![
+            RootSpec {
+                path: original.root.clone(),
+                access: RootAccess::ReadWrite,
+            },
+            RootSpec {
+                path: original.root.join("read-only"),
+                access: RootAccess::ReadOnly,
+            },
+        ],
+    )
+    .unwrap();
+    let relocated = policy.relocated(destination.root.clone()).unwrap();
+    assert_eq!(
+        relocated
+            .read_only_roots()
+            .map(Path::to_path_buf)
+            .collect::<Vec<_>>(),
+        vec![destination.policy().root().join("read-only")]
+    );
+    assert!(relocated.permits_workspace_access(Access::Read));
+    assert!(relocated.permits_workspace_execution());
+    assert_eq!(
+        relocated.read(Path::new("read-only/file")).unwrap(),
+        "protected"
+    );
+    assert!(
+        relocated
+            .write(Path::new("read-only/file"), "denied")
+            .is_err()
+    );
+    relocated.write(Path::new("writable"), "allowed").unwrap();
+    assert!(!original.root.join("writable").exists());
+    let readonly = policy
+        .restricted(&[PathBuf::from(".")], RootAccess::ReadOnly)
+        .unwrap()
+        .restricted(&[PathBuf::from(".")], RootAccess::ReadWrite)
+        .unwrap()
+        .relocated(destination.root.clone())
+        .unwrap();
+    assert!(readonly.permits_workspace_access(Access::Read));
+    assert!(!readonly.permits_workspace_access(Access::Write));
+    assert!(!readonly.permits_workspace_execution());
+    assert_eq!(readonly.read(Path::new("writable")).unwrap(), "allowed");
+    assert!(readonly.write(Path::new("writable"), "denied").is_err());
+    assert_eq!(relocated.read(Path::new("writable")).unwrap(), "allowed");
+}
+
+#[test]
 fn session_generation_files_are_private_and_reject_links_and_traversal() {
     use std::os::unix::fs::{PermissionsExt, symlink};
     let fixture = Fixture::new();

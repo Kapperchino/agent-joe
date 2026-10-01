@@ -7,6 +7,15 @@ use utils::{
 };
 
 impl SessionStore {
+    pub(crate) fn has_worktree_readers(&self, id: &str) -> anyhow::Result<bool> {
+        Ok(self.list()?.iter().any(|snapshot| {
+            snapshot
+                .worktree_source
+                .as_ref()
+                .is_some_and(|source| source.id() == id)
+        }))
+    }
+
     pub fn prune_worktrees(
         self: &Arc<Self>,
         project: &WorkspacePolicy,
@@ -43,7 +52,7 @@ impl SessionStore {
             )
             .collect::<Vec<_>>();
         Ok(format!(
-            "Pruned {removed} session worktree(s); skipped {skipped}.\n{}\nDiscarded worktree changes cannot be restored by /resume. Saved conversations remain; resuming a pruned session creates a fresh worktree from main.",
+            "Pruned {removed} session worktree(s); skipped {skipped}.\n{}\nDiscarded worktree changes cannot be restored by /resume. Saved conversations remain; the next write in a pruned session creates a fresh worktree from main.",
             rows.join("\n")
         ))
     }
@@ -54,6 +63,12 @@ impl SessionStore {
         project: &WorkspacePolicy,
         mode: PruneMode,
     ) -> anyhow::Result<PruneOutcome> {
+        match self.has_worktree_readers(id)? {
+            true => Err(anyhow::anyhow!(
+                "Another session still reads this worktree before its first write"
+            )),
+            false => Ok(()),
+        }?;
         let owner = self.update(Some(id), |database| {
             let mut transaction = database.env.write_txn()?;
             let snapshot = database.snapshot(&transaction, id)?;

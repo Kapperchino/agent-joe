@@ -1786,6 +1786,207 @@ async fn worker_cancellation_drains_managed_targets_and_reports_final_process_ev
 }
 
 #[tokio::test]
+async fn delegated_first_write_lazily_isolates_the_root_and_preserves_child_path_limits() {
+    let workspace = session::test_support::Workspace::new();
+    let repo = git2::Repository::init(&workspace.path).unwrap();
+    repo.set_head("refs/heads/main").unwrap();
+    std::fs::create_dir(workspace.path.join("assigned")).unwrap();
+    std::fs::write(workspace.path.join("assigned/value.txt"), "original\n").unwrap();
+    std::fs::write(workspace.path.join("secret.txt"), "secret\n").unwrap();
+    let tree = {
+        let mut index = repo.index().unwrap();
+        for path in ["assigned/value.txt", "secret.txt"] {
+            index.add_path(std::path::Path::new(path)).unwrap();
+        }
+        index.write().unwrap();
+        index.write_tree().unwrap()
+    };
+    let signature = git2::Signature::now("Fixture", "fixture@example.com").unwrap();
+    let base = repo
+        .commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "base",
+            &repo.find_tree(tree).unwrap(),
+            &[],
+        )
+        .unwrap();
+    let index = std::fs::read(repo.path().join("index")).unwrap();
+    std::fs::write(workspace.path.join("baseline.txt"), "user baseline").unwrap();
+    let actor = RepositoryActor::new(BaseWorker::new(), workspace.path.clone()).await;
+    assert!(actor.store.list().unwrap()[0].worktree.is_none());
+    assert_eq!(repo.worktrees().unwrap().len(), 0);
+    let started =
+        StartedWorker::new(&actor, worker_input("knowledge\napply_patch", "assigned")).await;
+    assert!(
+        actor
+            .store
+            .list()
+            .unwrap()
+            .iter()
+            .all(|snapshot| snapshot.worktree.is_none())
+    );
+    assert_eq!(repo.worktrees().unwrap().len(), 0);
+    answer(
+        started.child.1,
+        response(vec![tool(
+            "knowledge",
+            "before-write",
+            json!({"action":"read", "file_path":"assigned/value.txt"}),
+        )]),
+    );
+    let (read, reply) = actor.request().await;
+    assert_eq!(latest_result(&read)["content"], "1: original");
+    assert!(
+        actor
+            .store
+            .list()
+            .unwrap()
+            .iter()
+            .all(|snapshot| snapshot.worktree.is_none())
+    );
+    assert_eq!(repo.worktrees().unwrap().len(), 0);
+    answer(
+        reply,
+        response(vec![tool(
+            "apply_patch",
+            "first-write",
+            json!({"patch":"*** Begin Patch\n*** Update File: assigned/value.txt\n@@\n-original\n+worker edit\n*** End Patch"}),
+        )]),
+    );
+    let (edited, reply) = actor.request().await;
+    let edit_id = latest_result(&edited)["edit"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let snapshots = actor.store.list().unwrap();
+    assert_eq!(snapshots.len(), 2);
+    let root = snapshots
+        .iter()
+        .find(|snapshot| snapshot.parent.is_none())
+        .unwrap();
+    let child = snapshots
+        .iter()
+        .find(|snapshot| snapshot.parent.is_some())
+        .unwrap();
+    let worktree = root.worktree.as_ref().unwrap();
+    assert_ne!(worktree.path, workspace.path);
+    assert_eq!(repo.worktrees().unwrap().len(), 1);
+    assert!(repo.find_worktree(&root.id).is_ok());
+    assert!(repo.find_worktree(&child.id).is_err());
+    assert!(child.worktree.is_none());
+    assert_eq!(root.changes.records.len(), 1);
+    assert_eq!(root.changes.records[0].id, edit_id);
+    assert_eq!(
+        std::fs::read_to_string(worktree.path.join("assigned/value.txt")).unwrap(),
+        "worker edit\n"
+    );
+    answer(
+        reply,
+        response(vec![tool(
+            "knowledge",
+            "after-write",
+            json!({"action":"read", "file_path":"assigned/value.txt"}),
+        )]),
+    );
+    let (read, reply) = actor.request().await;
+    assert_eq!(latest_result(&read)["content"], "1: worker edit");
+    let mut reply = reply;
+    for input in [
+        json!({"action":"read", "file_path":"secret.txt"}),
+        json!({"action":"read", "file_path":workspace.path.join("assigned/value.txt")}),
+    ] {
+        answer(
+            reply,
+            response(vec![tool("knowledge", "denied-read", input)]),
+        );
+        let (denied, next) = actor.request().await;
+        assert!(
+            latest_result(&denied)["error"]
+                .as_str()
+                .unwrap()
+                .contains("access denied")
+        );
+        reply = next;
+    }
+    answer(
+        reply,
+        response(vec![tool(
+            "apply_patch",
+            "denied-write",
+            json!({"patch":"*** Begin Patch\n*** Update File: secret.txt\n@@\n-secret\n+forbidden\n*** End Patch"}),
+        )]),
+    );
+    let (denied, reply) = actor.request().await;
+    assert!(
+        latest_result(&denied)["error"]
+            .as_str()
+            .unwrap()
+            .contains("access denied")
+    );
+    assert_eq!(
+        std::fs::read_to_string(worktree.path.join("secret.txt")).unwrap(),
+        "secret\n"
+    );
+    answer(
+        reply,
+        response(vec![text("Updated the assigned file in isolation.")]),
+    );
+    answer(
+        started.parent.1,
+        response(vec![tool(
+            "worker_status",
+            "collect",
+            json!({"action":"wait", "worker_id":started.id, "seconds":2}),
+        )]),
+    );
+    let (parent, reply) = actor.request().await;
+    let result = latest_result(&parent);
+    let report = &result["workers"][0]["report"];
+    assert_eq!(report["status"], "completed");
+    assert_eq!(report["changed_files"], json!(["assigned/value.txt"]));
+    assert_eq!(report["edits"][0]["id"], edit_id);
+    answer(
+        reply,
+        response(vec![tool(
+            "knowledge",
+            "parent-read",
+            json!({"action":"read", "file_path":"assigned/value.txt"}),
+        )]),
+    );
+    let (read, reply) = actor.request().await;
+    assert_eq!(latest_result(&read)["content"], "1: worker edit");
+    answer(
+        reply,
+        response(vec![tool("review_changes", "parent-review", json!({}))]),
+    );
+    let (reviewed, reply) = actor.request().await;
+    let review = latest_result(&reviewed);
+    assert_eq!(review["changes"].as_array().unwrap().len(), 1);
+    assert_eq!(review["changes"][0]["path"], "assigned/value.txt");
+    assert_eq!(review["changes"][0]["ownership"], "joe");
+    assert_eq!(repo.worktrees().unwrap().len(), 1);
+    assert_eq!(repo.head().unwrap().name().unwrap(), "refs/heads/main");
+    assert_eq!(repo.refname_to_id("HEAD").unwrap(), base);
+    assert_eq!(std::fs::read(repo.path().join("index")).unwrap(), index);
+    assert_eq!(
+        std::fs::read_to_string(workspace.path.join("assigned/value.txt")).unwrap(),
+        "original\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(workspace.path.join("secret.txt")).unwrap(),
+        "secret\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(workspace.path.join("baseline.txt")).unwrap(),
+        "user baseline"
+    );
+    actor.stop().await;
+    drop(reply);
+}
+
+#[tokio::test]
 async fn worker_edits_share_parent_journal_and_exclude_root_undo_and_worktree_writes() {
     let workspace = session::test_support::Workspace::new();
     std::fs::create_dir(workspace.path.join("assigned")).unwrap();

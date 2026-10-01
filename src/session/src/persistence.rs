@@ -136,6 +136,16 @@ impl InteractionPersistence for SessionPersistence<'_> {
 }
 
 impl merge_workflow::execution::MergePersistence for SessionPersistence<'_> {
+    fn worktree_cleanup(&self) -> anyhow::Result<merge_workflow::execution::WorktreeCleanup> {
+        use merge_workflow::execution::WorktreeCleanup;
+        match self.session {
+            Some(session) if session.store.has_worktree_readers(&session.id)? => {
+                Ok(WorktreeCleanup::Retain)
+            }
+            _ => Ok(WorktreeCleanup::Remove),
+        }
+    }
+
     fn worktree(&self) -> anyhow::Result<merge_workflow::execution::MergeWorktree> {
         use merge_workflow::execution::MergeWorktree;
         match self.session {

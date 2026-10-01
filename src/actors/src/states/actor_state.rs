@@ -221,7 +221,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     }
 
     fn relocate_session(&mut self, relocation: SessionRelocation<C>) -> anyhow::Result<()> {
-        self.turn.relocate(relocation.runtime.scope.clone())?;
+        self.turn.follow_workspace(&relocation.runtime.scope)?;
         self.runtime
             .immutable_workers
             .clear_knowledge(&self.runtime.worker_owner(self.context.get_id()));
@@ -298,10 +298,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
 
     pub async fn dispatch(&mut self, event: impl Into<Event>) {
         let event = event.into();
-        let workspace = match self.turn.needs_workspace(&event) {
-            true => self.prepare_session_workspace().await,
-            false => Ok(()),
-        };
+        let workspace = self.prepare_session_workspace().await;
         if let Err(error) = workspace {
             self.session_control().persistence.fail(error);
         }
@@ -327,6 +324,9 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     pub async fn provider_event(&mut self, tag: Tag, event: ProviderEvent) {
         if let Some(response) = self.turn.provider_response(tag) {
             let action = self.stream.event(response, tag, event).await;
+            if let Err(error) = self.prepare_session_workspace().await {
+                self.session_control().persistence.fail(error);
+            }
             let action = self.provider_context().review(action).await;
             let update = ProviderSession {
                 session: &mut self.session,

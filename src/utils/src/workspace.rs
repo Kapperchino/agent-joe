@@ -118,6 +118,30 @@ impl WorkspacePolicy {
         &self.base
     }
 
+    pub fn relocated(&self, base: PathBuf) -> anyhow::Result<Self> {
+        let roots = self
+            .roots
+            .iter()
+            .map(|root| {
+                Ok(RootSpec {
+                    path: base.join(root.path.strip_prefix(&self.base)?),
+                    access: root.access,
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let relocated = Self::new(base, roots)?;
+        self.restrictions
+            .iter()
+            .try_fold(relocated, |policy, restriction| {
+                let paths = restriction
+                    .paths
+                    .iter()
+                    .map(|path| path.strip_prefix(&self.base).map(Path::to_path_buf))
+                    .collect::<Result<Vec<_>, _>>()?;
+                policy.restricted(&paths, restriction.access)
+            })
+    }
+
     pub fn restricted(&self, paths: &[PathBuf], access: RootAccess) -> anyhow::Result<Self> {
         let restriction = PathRestriction::new(self, paths, access)?;
         let roots = self

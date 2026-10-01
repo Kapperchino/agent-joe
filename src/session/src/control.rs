@@ -187,14 +187,17 @@ impl<C: Context + Clone, A> SessionCommands<'_, C, A> {
                     .session
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("There is no current session"))?;
-                let source = current.snapshot()?.worktree;
+                let snapshot = current.snapshot()?;
+                let source = snapshot.worktree.or(snapshot.worktree_source);
                 let session = current.fork()?;
                 let id = session.id.clone();
                 let activation =
                     SessionActivation::resume(self.context, self.runtime, session, source.as_ref())
                         .await?;
                 let workspace = match source {
-                    Some(_) => "The conversation uses a separate Git worktree.",
+                    Some(_) => {
+                        "The conversation reads the source worktree until its first write creates a separate Git worktree."
+                    }
                     None => {
                         "Both conversations use the same workspace; filesystem changes are shared."
                     }

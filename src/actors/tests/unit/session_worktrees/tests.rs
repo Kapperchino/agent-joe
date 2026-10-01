@@ -138,6 +138,61 @@ impl GitHarness {
         }
     }
 
+    async fn interrupt(&self) {
+        self.actor.send_message(Message::Interrupt).unwrap();
+        self.event(|packet| {
+            matches!(
+                packet,
+                ActorToTuiPacket::TurnChanged {
+                    state: Lifecycle::Cancelled,
+                    ..
+                }
+            )
+        })
+        .await;
+    }
+
+    async fn write_and_interrupt(&self, patch: &str) {
+        self.actor
+            .send_message(Message::StartWork(Some("Apply the fixture edit".into())))
+            .unwrap();
+        let (_, reply) = within(self.requests.recv_async()).await.unwrap();
+        answer(
+            reply,
+            response(vec![tool_call(
+                "apply_patch",
+                "edit",
+                json!({"patch": patch}),
+            )]),
+        );
+        let (request, reply) = within(self.requests.recv_async()).await.unwrap();
+        assert_tool_success(latest_tool_result(&request));
+        self.interrupt().await;
+        drop(reply);
+    }
+
+    async fn read_and_interrupt(&self, root: &std::path::Path, expected: &str) {
+        self.actor
+            .send_message(Message::StartWork(Some("Inspect the function".into())))
+            .unwrap();
+        let (request, reply) = within(self.requests.recv_async()).await.unwrap();
+        assert!(request.messages[0].text().contains(root.to_str().unwrap()));
+        answer(
+            reply,
+            response(vec![tool_call(
+                "knowledge",
+                "read-source",
+                json!({"action":"read", "file_path":"lib.rs"}),
+            )]),
+        );
+        let (request, reply) = within(self.requests.recv_async()).await.unwrap();
+        let result = latest_tool_result(&request);
+        assert_tool_success(result);
+        assert!(format!("{result:?}").contains(expected), "{result:?}");
+        self.interrupt().await;
+        drop(reply);
+    }
+
     async fn complete(&self, patch: Option<&str>) -> common_models::interaction::Question {
         self.complete_with_subject(patch, "Make value return 2 instead of 1")
             .await
@@ -160,30 +215,29 @@ impl GitHarness {
                 }
                 answer(reply, response(vec![block]));
                 let (request, reply) = within(self.requests.recv_async()).await.unwrap();
-                assert!(
-                    request
-                        .messages
-                        .iter()
-                        .any(|message| message.content.iter().any(|content| matches!(
-                            content,
-                            ContentBlock::ToolResult {
-                                is_error: None | Some(false),
-                                ..
-                            }
-                        )))
-                );
+                assert_tool_success(latest_tool_result(&request));
                 reply
             }
             None => reply,
         };
         answer(reply, response(vec![review_call(subject, "review-final")]));
-        let (_, reply) = within(self.requests.recv_async()).await.unwrap();
+        let (request, reply) = within(self.requests.recv_async()).await.unwrap();
+        assert_tool_success(latest_tool_result(&request));
         answer(reply, response(vec![text("Task completed")]));
         self.merge_question().await
     }
 
     async fn merge_question(&self) -> common_models::interaction::Question {
-        let packet = self.event(|packet| matches!(packet, ActorToTuiPacket::InteractionUpdated(view) if view.questions.iter().any(|question| question.id.starts_with("merge-")))).await;
+        let packet = self
+            .event(|packet| match packet {
+                ActorToTuiPacket::InteractionUpdated(view) => view
+                    .questions
+                    .iter()
+                    .any(|question| question.id.starts_with("merge-")),
+                ActorToTuiPacket::SessionError(_) => true,
+                _ => false,
+            })
+            .await;
         assert!(self.requests.is_empty());
         match packet {
             ActorToTuiPacket::InteractionUpdated(view) => view
@@ -191,7 +245,7 @@ impl GitHarness {
                 .into_iter()
                 .find(|question| question.id.starts_with("merge-"))
                 .unwrap(),
-            _ => panic!("Unexpected merge response"),
+            packet => panic!("Unexpected merge response: {packet:?}"),
         }
     }
 
@@ -216,6 +270,28 @@ impl GitHarness {
 }
 
 const PATCH: &str = "*** Begin Patch\n*** Update File: lib.rs\n@@\n-pub fn value() -> u32 { 1 }\n+pub fn value() -> u32 { 2 }\n*** End Patch";
+const NOOP_PATCH: &str = "*** Begin Patch\n*** Update File: lib.rs\n@@\n-pub fn value() -> u32 { 1 }\n+pub fn value() -> u32 { 1 }\n*** End Patch";
+
+fn tool_call(name: &str, id: &str, arguments: Value) -> ContentBlock {
+    let mut block = call(name, id);
+    if let ContentBlock::ToolBlock { input, .. } = &mut block {
+        *input = arguments.as_object().unwrap().clone();
+    }
+    block
+}
+
+fn assert_tool_success(result: &ContentBlock) {
+    assert!(
+        matches!(
+            result,
+            ContentBlock::ToolResult {
+                is_error: None | Some(false),
+                ..
+            }
+        ),
+        "{result:?}"
+    );
+}
 
 fn review_call(subject: &str, id: &str) -> ContentBlock {
     let mut block = call("review_changes", id);
@@ -229,8 +305,262 @@ fn review_call(subject: &str, id: &str) -> ContentBlock {
 }
 
 #[tokio::test]
+async fn new_and_read_only_resumed_sessions_stay_in_the_original_checkout() {
+    let h = GitHarness::new().await;
+    let original = h.store.list().unwrap()[0].id.clone();
+    let base = h.repo.refname_to_id("HEAD").unwrap();
+    let index = std::fs::read(h.repo.path().join("index")).unwrap();
+    assert!(h.snapshot(&original).worktree.is_none());
+    assert_eq!(h.repo.worktrees().unwrap().len(), 0);
+    h.read_and_interrupt(&h.workspace.path, "pub fn value() -> u32 { 1 }")
+        .await;
+    assert!(h.snapshot(&original).worktree.is_none());
+    assert_eq!(h.repo.worktrees().unwrap().len(), 0);
+    h.command(Command::New).await;
+    let fresh = h
+        .store
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|snapshot| snapshot.id != original)
+        .unwrap();
+    assert!(fresh.worktree.is_none());
+    h.read_and_interrupt(&h.workspace.path, "pub fn value() -> u32 { 1 }")
+        .await;
+    assert!(h.snapshot(&fresh.id).worktree.is_none());
+    h.actor
+        .send_message(Message::Command(Command::Resume(ResumeTarget::Session {
+            id: original.clone(),
+        })))
+        .unwrap();
+    assert!(matches!(
+        h.event(|packet| matches!(packet, ActorToTuiPacket::SessionResumed(_)))
+            .await,
+        ActorToTuiPacket::SessionResumed(Ok(_))
+    ));
+    assert!(h.snapshot(&original).worktree.is_none());
+    h.read_and_interrupt(&h.workspace.path, "pub fn value() -> u32 { 1 }")
+        .await;
+    assert!(h.snapshot(&original).worktree.is_none());
+    assert_eq!(h.repo.worktrees().unwrap().len(), 0);
+    for id in [&original, &fresh.id] {
+        assert!(
+            h.repo
+                .find_branch(&format!("joe/session/{id}"), git2::BranchType::Local)
+                .is_err()
+        );
+    }
+    assert_eq!(h.repo.refname_to_id("HEAD").unwrap(), base);
+    assert_eq!(std::fs::read(h.repo.path().join("index")).unwrap(), index);
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn rejected_first_edits_leave_no_worktree_and_a_valid_retry_is_isolated() {
+    let h = GitHarness::new().await;
+    let id = h.store.list().unwrap()[0].id.clone();
+    let base = h.repo.refname_to_id("HEAD").unwrap();
+    let index = std::fs::read(h.repo.path().join("index")).unwrap();
+    h.actor
+        .send_message(Message::StartWork(Some("Edit safely".into())))
+        .unwrap();
+    let (_, mut reply) = within(h.requests.recv_async()).await.unwrap();
+    for (attempt, patch) in [
+        "not a patch",
+        "*** Begin Patch\n*** Add File: ../outside.txt\n+denied\n*** End Patch",
+        "*** Begin Patch\n*** Update File: lib.rs\n@@\n-missing context\n+replacement\n*** End Patch",
+    ].into_iter().enumerate() {
+        answer(reply, response(vec![tool_call("apply_patch", &format!("rejected-{attempt}"), json!({"patch":patch}))]));
+        let (request, next) = within(h.requests.recv_async()).await.unwrap();
+        assert!(matches!(latest_tool_result(&request), ContentBlock::ToolResult { is_error: Some(true), .. }));
+        assert!(h.snapshot(&id).worktree.is_none());
+        assert_eq!(h.repo.worktrees().unwrap().len(), 0);
+        assert!(h.repo.find_branch(&format!("joe/session/{id}"), git2::BranchType::Local).is_err());
+        reply = next;
+    }
+    answer(
+        reply,
+        response(vec![tool_call(
+            "apply_patch",
+            "valid",
+            json!({"patch":PATCH}),
+        )]),
+    );
+    let (request, reply) = within(h.requests.recv_async()).await.unwrap();
+    assert_tool_success(latest_tool_result(&request));
+    let worktree = h.snapshot(&id).worktree.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(worktree.path.join("lib.rs")).unwrap(),
+        "pub fn value() -> u32 { 2 }\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(h.workspace.path.join("lib.rs")).unwrap(),
+        "pub fn value() -> u32 { 1 }\n"
+    );
+    assert_eq!(h.repo.refname_to_id("HEAD").unwrap(), base);
+    assert_eq!(std::fs::read(h.repo.path().join("index")).unwrap(), index);
+    h.interrupt().await;
+    drop(reply);
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn first_write_rejects_a_session_base_that_differs_from_previously_read_files() {
+    let h = GitHarness::new().await;
+    let id = h.store.list().unwrap()[0].id.clone();
+    std::fs::write(
+        h.workspace.path.join("lib.rs"),
+        "pub fn value() -> u32 { 9 }\n",
+    )
+    .unwrap();
+    h.read_and_interrupt(&h.workspace.path, "pub fn value() -> u32 { 9 }")
+        .await;
+    h.actor
+        .send_message(Message::StartWork(Some("Edit safely".into())))
+        .unwrap();
+    let (_, reply) = within(h.requests.recv_async()).await.unwrap();
+    answer(
+        reply,
+        response(vec![tool_call(
+            "apply_patch",
+            "stale",
+            json!({"patch":PATCH}),
+        )]),
+    );
+    let (request, reply) = within(h.requests.recv_async()).await.unwrap();
+    let result = latest_tool_result(&request);
+    assert!(matches!(
+        result,
+        ContentBlock::ToolResult {
+            is_error: Some(true),
+            ..
+        }
+    ));
+    assert!(format!("{result:?}").contains("differs from the session base"));
+    assert!(h.snapshot(&id).worktree.is_none());
+    assert_eq!(h.repo.worktrees().unwrap().len(), 0);
+    assert_eq!(
+        std::fs::read_to_string(h.workspace.path.join("lib.rs")).unwrap(),
+        "pub fn value() -> u32 { 9 }\n"
+    );
+    h.interrupt().await;
+    drop(reply);
+    std::fs::write(
+        h.workspace.path.join("lib.rs"),
+        "pub fn value() -> u32 { 1 }\n",
+    )
+    .unwrap();
+    h.read_and_interrupt(&h.workspace.path, "pub fn value() -> u32 { 1 }")
+        .await;
+    h.write_and_interrupt(PATCH).await;
+    assert!(h.snapshot(&id).worktree.is_some());
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn first_write_creates_one_isolated_worktree_and_later_writes_reuse_it() {
+    let h = GitHarness::new().await;
+    let id = h.store.list().unwrap()[0].id.clone();
+    let base = h.repo.refname_to_id("HEAD").unwrap();
+    let index = std::fs::read(h.repo.path().join("index")).unwrap();
+    h.actor
+        .send_message(Message::StartWork(Some("Update the function".into())))
+        .unwrap();
+    let (request, reply) = within(h.requests.recv_async()).await.unwrap();
+    assert!(
+        request.messages[0]
+            .text()
+            .contains(h.workspace.path.to_str().unwrap())
+    );
+    assert!(h.snapshot(&id).worktree.is_none());
+    assert_eq!(h.repo.worktrees().unwrap().len(), 0);
+    answer(
+        reply,
+        response(vec![tool_call(
+            "knowledge",
+            "before-write",
+            json!({"action":"read", "file_path":"lib.rs"}),
+        )]),
+    );
+    let (request, reply) = within(h.requests.recv_async()).await.unwrap();
+    assert_tool_success(latest_tool_result(&request));
+    assert!(h.snapshot(&id).worktree.is_none());
+    assert_eq!(h.repo.worktrees().unwrap().len(), 0);
+    answer(
+        reply,
+        response(vec![tool_call(
+            "apply_patch",
+            "first-write",
+            json!({"patch": PATCH}),
+        )]),
+    );
+    let (request, reply) = within(h.requests.recv_async()).await.unwrap();
+    assert_tool_success(latest_tool_result(&request));
+    let worktree = h.snapshot(&id).worktree.unwrap();
+    assert_ne!(worktree.path, h.workspace.path);
+    assert_eq!(h.repo.worktrees().unwrap().len(), 1);
+    assert!(h.repo.find_worktree(&id).is_ok());
+    assert!(
+        request.messages[0]
+            .text()
+            .contains(worktree.path.to_str().unwrap())
+    );
+    assert_eq!(
+        std::fs::read_to_string(worktree.path.join("lib.rs")).unwrap(),
+        "pub fn value() -> u32 { 2 }\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(h.workspace.path.join("lib.rs")).unwrap(),
+        "pub fn value() -> u32 { 1 }\n"
+    );
+    answer(
+        reply,
+        response(vec![tool_call(
+            "knowledge",
+            "after-write",
+            json!({"action":"read", "file_path":"lib.rs"}),
+        )]),
+    );
+    let (request, reply) = within(h.requests.recv_async()).await.unwrap();
+    let result = latest_tool_result(&request);
+    assert_tool_success(result);
+    assert!(format!("{result:?}").contains("pub fn value() -> u32 { 2 }"));
+    let patch = "*** Begin Patch\n*** Update File: lib.rs\n@@\n-pub fn value() -> u32 { 2 }\n+pub fn value() -> u32 { 3 }\n*** End Patch";
+    answer(
+        reply,
+        response(vec![tool_call(
+            "apply_patch",
+            "second-write",
+            json!({"patch": patch}),
+        )]),
+    );
+    let (request, reply) = within(h.requests.recv_async()).await.unwrap();
+    assert_tool_success(latest_tool_result(&request));
+    assert_eq!(h.snapshot(&id).worktree.unwrap().path, worktree.path);
+    assert_eq!(h.repo.worktrees().unwrap().len(), 1);
+    assert_eq!(
+        std::fs::read_to_string(worktree.path.join("lib.rs")).unwrap(),
+        "pub fn value() -> u32 { 3 }\n"
+    );
+    h.interrupt().await;
+    drop(reply);
+    h.read_and_interrupt(&worktree.path, "pub fn value() -> u32 { 3 }")
+        .await;
+    assert_eq!(h.snapshot(&id).worktree.unwrap().path, worktree.path);
+    assert_eq!(h.repo.worktrees().unwrap().len(), 1);
+    assert_eq!(h.repo.refname_to_id("HEAD").unwrap(), base);
+    assert_eq!(std::fs::read(h.repo.path().join("index")).unwrap(), index);
+    assert_eq!(
+        std::fs::read_to_string(h.workspace.path.join("lib.rs")).unwrap(),
+        "pub fn value() -> u32 { 1 }\n"
+    );
+    h.stop().await;
+}
+
+#[tokio::test]
 async fn plan_handoff_uses_a_fresh_worktree_with_the_planned_files() {
     let h = GitHarness::new().await;
+    h.write_and_interrupt(NOOP_PATCH).await;
     let original = h.store.list().unwrap().remove(0);
     let original_worktree = original.worktree.as_ref().unwrap();
     let planned_source = "pub fn value() -> u32 { 7 }\n";
@@ -299,7 +629,7 @@ async fn plan_handoff_uses_a_fresh_worktree_with_the_planned_files() {
         }))
         .await;
     assert!(result.contains("new agent"), "{result}");
-    let (request, _reply) = within(h.requests.recv_async()).await.unwrap();
+    let (request, reply) = within(h.requests.recv_async()).await.unwrap();
     let state = runtime_snapshot(&request.messages);
     assert_eq!(
         state.planning.mode,
@@ -313,7 +643,38 @@ async fn plan_handoff_uses_a_fresh_worktree_with_the_planned_files() {
         .iter()
         .find(|snapshot| snapshot.id != original.id)
         .unwrap();
-    let worktree = new.worktree.as_ref().unwrap();
+    assert!(new.worktree.is_none());
+    assert!(h.repo.find_worktree(&new.id).is_err());
+    assert!(
+        request.messages[0]
+            .text()
+            .contains(&original_worktree.path.display().to_string())
+    );
+    answer(
+        reply,
+        response(vec![tool_call(
+            "knowledge",
+            "handoff-read",
+            json!({"action":"read", "file_path":"lib.rs"}),
+        )]),
+    );
+    let (request, reply) = within(h.requests.recv_async()).await.unwrap();
+    let result = latest_tool_result(&request);
+    assert_tool_success(result);
+    assert!(format!("{result:?}").contains("pub fn value() -> u32 { 7 }"));
+    assert!(h.snapshot(&new.id).worktree.is_none());
+    let patch = "*** Begin Patch\n*** Update File: lib.rs\n@@\n-pub fn value() -> u32 { 7 }\n+pub fn value() -> u32 { 7 }\n*** End Patch";
+    answer(
+        reply,
+        response(vec![tool_call(
+            "apply_patch",
+            "handoff-write",
+            json!({"patch": patch}),
+        )]),
+    );
+    let (request, _reply) = within(h.requests.recv_async()).await.unwrap();
+    assert_tool_success(latest_tool_result(&request));
+    let worktree = h.snapshot(&new.id).worktree.unwrap();
     assert_ne!(worktree.path, original_worktree.path);
     assert_eq!(
         std::fs::read_to_string(worktree.path.join("lib.rs")).unwrap(),
@@ -337,11 +698,75 @@ async fn plan_handoff_uses_a_fresh_worktree_with_the_planned_files() {
 }
 
 #[tokio::test]
+async fn lazy_fork_sources_survive_prune_and_merge_until_the_fork_writes() {
+    let h = GitHarness::new().await;
+    let original = h.store.list().unwrap()[0].id.clone();
+    let question = h.complete(Some(PATCH)).await;
+    h.answer_merge(&question, "skip").await;
+    let source = h.snapshot(&original).worktree.unwrap();
+    h.command(Command::Fork).await;
+    let fork = h
+        .store
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|snapshot| snapshot.id != original)
+        .unwrap();
+    assert!(fork.worktree.is_none());
+    assert_eq!(fork.worktree_source.unwrap().path, source.path);
+    h.command(Command::New).await;
+    let message = h.command(Command::Prune(PruneMode::Force)).await;
+    assert!(message.contains("Pruned 0"), "{message}");
+    assert!(source.path.exists());
+    h.actor
+        .send_message(Message::Command(Command::Resume(ResumeTarget::Session {
+            id: original.clone(),
+        })))
+        .unwrap();
+    assert!(matches!(
+        h.event(|packet| matches!(packet, ActorToTuiPacket::SessionResumed(_)))
+            .await,
+        ActorToTuiPacket::SessionResumed(Ok(_))
+    ));
+    let question = h.complete(None).await;
+    let message = h.answer_merge(&question, "merge").await;
+    assert!(message.contains("remain recorded"), "{message}");
+    assert!(source.path.exists());
+    assert_eq!(
+        std::fs::read_to_string(h.workspace.path.join("lib.rs")).unwrap(),
+        "pub fn value() -> u32 { 2 }\n"
+    );
+    h.actor
+        .send_message(Message::Command(Command::Resume(ResumeTarget::Session {
+            id: fork.id.clone(),
+        })))
+        .unwrap();
+    assert!(matches!(
+        h.event(|packet| matches!(packet, ActorToTuiPacket::SessionResumed(_)))
+            .await,
+        ActorToTuiPacket::SessionResumed(Ok(_))
+    ));
+    h.read_and_interrupt(&source.path, "pub fn value() -> u32 { 2 }")
+        .await;
+    h.write_and_interrupt("*** Begin Patch\n*** Update File: lib.rs\n@@\n-pub fn value() -> u32 { 2 }\n+pub fn value() -> u32 { 3 }\n*** End Patch").await;
+    let fork_tree = h.snapshot(&fork.id).worktree.unwrap();
+    assert_ne!(fork_tree.path, source.path);
+    assert!(h.snapshot(&fork.id).worktree_source.is_none());
+    let message = h.command(Command::Prune(PruneMode::Merged)).await;
+    assert!(message.contains("Pruned 1"), "{message}");
+    assert!(!source.path.exists());
+    assert!(fork_tree.path.exists());
+    h.stop().await;
+}
+
+#[tokio::test]
 async fn prune_removes_inactive_merged_worktrees() {
     let h = GitHarness::new().await;
+    h.write_and_interrupt(NOOP_PATCH).await;
     let id = h.store.list().unwrap()[0].id.clone();
     let worktree = h.snapshot(&id).worktree.unwrap();
     h.command(Command::New).await;
+    h.write_and_interrupt(NOOP_PATCH).await;
     let message = h.command(Command::parse("prune").unwrap()).await;
     assert!(
         message.contains("Pruned 1 session worktree(s); skipped 1"),
@@ -357,10 +782,11 @@ async fn prune_removes_inactive_merged_worktrees() {
 async fn force_prune_discards_inactive_worktrees_preserves_history_and_allows_resume() {
     let h = GitHarness::new().await;
     let id = h.store.list().unwrap()[0].id.clone();
-    let worktree = h.snapshot(&id).worktree.unwrap();
     let question = h.complete(Some(PATCH)).await;
+    let worktree = h.snapshot(&id).worktree.unwrap();
     let saved = h.snapshot(&id);
     h.command(Command::New).await;
+    h.write_and_interrupt(NOOP_PATCH).await;
     let current = h
         .store
         .list()
@@ -434,6 +860,14 @@ async fn force_prune_discards_inactive_worktrees_preserves_history_and_allows_re
             .await,
         ActorToTuiPacket::SessionResumed(Ok(_))
     ));
+    assert!(h.snapshot(&id).worktree.is_none());
+    assert!(!worktree.path.exists());
+    h.read_and_interrupt(&h.workspace.path, "pub fn value() -> u32 { 8 }")
+        .await;
+    assert!(h.snapshot(&id).worktree.is_none());
+    let patch = "*** Begin Patch\n*** Update File: lib.rs\n@@\n-pub fn value() -> u32 { 8 }\n+pub fn value() -> u32 { 8 }\n*** End Patch";
+    h.write_and_interrupt(patch).await;
+    assert_eq!(h.snapshot(&id).worktree.unwrap().path, worktree.path);
     assert_eq!(
         git2::Repository::open(&worktree.path)
             .unwrap()
@@ -450,6 +884,7 @@ async fn force_prune_discards_inactive_worktrees_preserves_history_and_allows_re
 #[tokio::test]
 async fn prune_skips_live_sessions_and_continues_after_locked_worktrees() {
     let h = GitHarness::new().await;
+    h.write_and_interrupt(NOOP_PATCH).await;
     let project = utils::workspace::WorkspacePolicy::workspace(h.workspace.path.clone()).unwrap();
     let live = h
         .store
@@ -525,8 +960,8 @@ async fn prune_skips_live_sessions_and_continues_after_locked_worktrees() {
 async fn prune_recovers_interrupted_cleanup_and_clears_saved_worktree_state() {
     let h = GitHarness::new().await;
     let id = h.store.list().unwrap()[0].id.clone();
-    let worktree = h.snapshot(&id).worktree.unwrap();
     h.complete(Some(PATCH)).await;
+    let worktree = h.snapshot(&id).worktree.unwrap();
     h.command(Command::New).await;
     let reference = format!("refs/heads/joe/session/{id}");
     let mut options = git2::WorktreePruneOptions::new();
@@ -564,7 +999,7 @@ async fn prune_recovers_interrupted_cleanup_and_clears_saved_worktree_state() {
     );
     h.actor
         .send_message(Message::Command(Command::Resume(ResumeTarget::Session {
-            id,
+            id: id.clone(),
         })))
         .unwrap();
     assert!(matches!(
@@ -572,6 +1007,10 @@ async fn prune_recovers_interrupted_cleanup_and_clears_saved_worktree_state() {
             .await,
         ActorToTuiPacket::SessionResumed(Ok(_))
     ));
+    assert!(h.snapshot(&id).worktree.is_none());
+    assert!(!worktree.path.exists());
+    h.write_and_interrupt(NOOP_PATCH).await;
+    assert_eq!(h.snapshot(&id).worktree.unwrap().path, worktree.path);
     assert!(worktree.path.exists());
     h.stop().await;
 }
@@ -579,6 +1018,7 @@ async fn prune_recovers_interrupted_cleanup_and_clears_saved_worktree_state() {
 #[tokio::test]
 async fn prune_rejects_plan_mode_and_active_turns() {
     let h = GitHarness::new().await;
+    h.write_and_interrupt(NOOP_PATCH).await;
     let id = h.store.list().unwrap()[0].id.clone();
     let worktree = h.snapshot(&id).worktree.unwrap();
     std::fs::write(worktree.path.join("local.txt"), "unmerged\n").unwrap();
@@ -622,6 +1062,7 @@ async fn prune_rejects_plan_mode_and_active_turns() {
 #[tokio::test]
 async fn missing_and_invalid_commit_subjects_are_corrected_in_the_existing_agent_context() {
     let h = GitHarness::new().await;
+    h.write_and_interrupt(NOOP_PATCH).await;
     let id = h.store.list().unwrap()[0].id.clone();
     let worktree = h.snapshot(&id).worktree.unwrap();
     let base = h.repo.refname_to_id("HEAD").unwrap();
@@ -736,10 +1177,30 @@ async fn unchanged_tasks_do_not_request_a_commit_subject_or_merge() {
     let h = GitHarness::new().await;
     let id = h.store.list().unwrap()[0].id.clone();
     let base = h.repo.refname_to_id("HEAD").unwrap();
+    assert!(h.snapshot(&id).worktree.is_none());
+    assert_eq!(h.repo.worktrees().unwrap().len(), 0);
     h.actor
         .send_message(Message::StartWork(Some("Inspect the function".into())))
         .unwrap();
-    let (_, reply) = within(h.requests.recv_async()).await.unwrap();
+    let (request, reply) = within(h.requests.recv_async()).await.unwrap();
+    assert!(
+        request.messages[0]
+            .text()
+            .contains(h.workspace.path.to_str().unwrap())
+    );
+    answer(
+        reply,
+        response(vec![tool_call(
+            "knowledge",
+            "unchanged-source",
+            json!({"action":"read", "file_path":"lib.rs"}),
+        )]),
+    );
+    let (request, reply) = within(h.requests.recv_async()).await.unwrap();
+    let result = latest_tool_result(&request);
+    assert_tool_success(result);
+    assert!(format!("{result:?}").contains("pub fn value() -> u32 { 1 }"));
+    assert!(h.snapshot(&id).worktree.is_none());
     answer(reply, response(vec![text("No changes needed")]));
     h.event(|packet| {
         matches!(
@@ -758,6 +1219,9 @@ async fn unchanged_tasks_do_not_request_a_commit_subject_or_merge() {
     within(receive).await.unwrap();
     assert!(h.requests.is_empty());
     assert_eq!(h.repo.refname_to_id("HEAD").unwrap(), base);
+    assert!(h.snapshot(&id).worktree.is_none());
+    assert_eq!(h.repo.worktrees().unwrap().len(), 0);
+    assert!(h.snapshot(&id).questions.pending().is_empty());
     assert!(matches!(
         h.snapshot(&id).merge_approval,
         merge_workflow::MergeApproval::None
@@ -769,8 +1233,8 @@ async fn unchanged_tasks_do_not_request_a_commit_subject_or_merge() {
 async fn approving_a_conflicted_merge_resolves_and_merges_without_another_question() {
     let h = GitHarness::new().await;
     let id = h.store.list().unwrap()[0].id.clone();
-    let worktree = h.snapshot(&id).worktree.unwrap();
     let question = h.complete(Some(PATCH)).await;
+    let worktree = h.snapshot(&id).worktree.unwrap();
     let target = h.commit_main("pub fn value() -> u32 { 3 }\n");
     let message = h.answer_merge(&question, "merge").await;
     assert!(message.contains("Resolving merge conflicts"), "{message}");
@@ -891,8 +1355,8 @@ async fn approving_a_conflicted_merge_resolves_and_merges_without_another_questi
 async fn incomplete_conflict_resolution_cannot_merge_even_after_model_completion() {
     let h = GitHarness::new().await;
     let id = h.store.list().unwrap()[0].id.clone();
-    let worktree = h.snapshot(&id).worktree.unwrap();
     let question = h.complete(Some(PATCH)).await;
+    let worktree = h.snapshot(&id).worktree.unwrap();
     let target = h.commit_main("pub fn value() -> u32 { 3 }\n");
     assert!(
         h.answer_merge(&question, "merge")
@@ -1039,9 +1503,9 @@ async fn merge_questions_survive_session_switches_and_failed_tasks_revoke_approv
 async fn successful_tasks_prompt_and_only_explicit_acceptance_updates_main() {
     let h = GitHarness::new().await;
     let id = h.store.list().unwrap()[0].id.clone();
-    let worktree = h.snapshot(&id).worktree.unwrap();
     let base = h.repo.refname_to_id("HEAD").unwrap();
     let question = h.complete(Some(PATCH)).await;
+    let worktree = h.snapshot(&id).worktree.unwrap();
     assert!(question.prompt.contains("main"));
     assert_eq!(question.purpose, QuestionPurpose::Merge);
     assert_eq!(h.snapshot(&id).questions.pending(), &[question.clone()]);
@@ -1271,8 +1735,8 @@ async fn legacy_and_interrupted_merge_approvals_restore_as_shared_questions() {
 async fn new_fork_and_resume_keep_distinct_workspaces_and_switch_context() {
     let h = GitHarness::new().await;
     let original = h.store.list().unwrap()[0].id.clone();
-    let worktree = h.snapshot(&original).worktree.unwrap();
     let question = h.complete(Some(PATCH)).await;
+    let worktree = h.snapshot(&original).worktree.unwrap();
     h.answer_merge(&question, "keep").await;
     let message = h.command(Command::Fork).await;
     assert!(message.contains("Forked conversation"), "{message}");
@@ -1283,7 +1747,14 @@ async fn new_fork_and_resume_keep_distinct_workspaces_and_switch_context() {
         .into_iter()
         .find(|snapshot| snapshot.id != original)
         .unwrap();
-    let fork_tree = fork.worktree.unwrap();
+    assert!(fork.worktree.is_none());
+    assert!(h.repo.find_worktree(&fork.id).is_err());
+    h.read_and_interrupt(&worktree.path, "pub fn value() -> u32 { 2 }")
+        .await;
+    assert!(h.snapshot(&fork.id).worktree.is_none());
+    let patch = "*** Begin Patch\n*** Update File: lib.rs\n@@\n-pub fn value() -> u32 { 2 }\n+pub fn value() -> u32 { 2 }\n*** End Patch";
+    h.write_and_interrupt(patch).await;
+    let fork_tree = h.snapshot(&fork.id).worktree.unwrap();
     assert_ne!(fork_tree.path, worktree.path);
     assert_eq!(
         std::fs::read_to_string(fork_tree.path.join("lib.rs")).unwrap(),
@@ -1300,9 +1771,13 @@ async fn new_fork_and_resume_keep_distinct_workspaces_and_switch_context() {
         .unwrap()
         .into_iter()
         .find(|snapshot| snapshot.id != original && snapshot.id != fork.id)
-        .unwrap()
-        .worktree
         .unwrap();
+    assert!(fresh.worktree.is_none());
+    h.read_and_interrupt(&h.workspace.path, "pub fn value() -> u32 { 1 }")
+        .await;
+    assert!(h.snapshot(&fresh.id).worktree.is_none());
+    h.write_and_interrupt(NOOP_PATCH).await;
+    let fresh = h.snapshot(&fresh.id).worktree.unwrap();
     assert!(
         std::fs::read_to_string(fresh.path.join("lib.rs"))
             .unwrap()
@@ -1354,6 +1829,7 @@ async fn new_fork_and_resume_keep_distinct_workspaces_and_switch_context() {
 #[tokio::test]
 async fn another_task_after_merge_gets_a_fresh_isolated_workspace() {
     let h = GitHarness::new().await;
+    h.write_and_interrupt(NOOP_PATCH).await;
     let id = h.store.list().unwrap()[0].id.clone();
     let worktree = h.snapshot(&id).worktree.unwrap();
     let cache = worktree
@@ -1384,6 +1860,10 @@ async fn another_task_after_merge_gets_a_fresh_isolated_workspace() {
     ));
     let merged = h.repo.refname_to_id("HEAD").unwrap();
     let history = h.snapshot(&id).history.len();
+    h.read_and_interrupt(&h.workspace.path, "pub fn value() -> u32 { 2 }")
+        .await;
+    assert!(h.snapshot(&id).worktree.is_none());
+    assert!(!worktree.path.exists());
     let patch = "*** Begin Patch\n*** Update File: lib.rs\n@@\n-pub fn value() -> u32 { 2 }\n+pub fn value() -> u32 { 4 }\n*** End Patch";
     let question = h.complete(Some(patch)).await;
     assert_eq!(h.snapshot(&id).worktree.unwrap().path, worktree.path);
@@ -1419,8 +1899,8 @@ async fn another_task_after_merge_gets_a_fresh_isolated_workspace() {
 async fn merged_session_can_be_resumed_from_current_main() {
     let h = GitHarness::new().await;
     let id = h.store.list().unwrap()[0].id.clone();
-    let worktree = h.snapshot(&id).worktree.unwrap();
     let question = h.complete(Some(PATCH)).await;
+    let worktree = h.snapshot(&id).worktree.unwrap();
     assert!(
         h.answer_merge(&question, "merge")
             .await
@@ -1438,14 +1918,8 @@ async fn merged_session_can_be_resumed_from_current_main() {
             .await,
         ActorToTuiPacket::SessionResumed(Ok(_))
     ));
-    assert_eq!(h.snapshot(&id).worktree.unwrap().path, worktree.path);
-    assert_eq!(
-        git2::Repository::open(&worktree.path)
-            .unwrap()
-            .refname_to_id("HEAD")
-            .unwrap(),
-        main
-    );
+    assert!(h.snapshot(&id).worktree.is_none());
+    assert!(!worktree.path.exists());
     h.actor
         .send_message(Message::StartWork(Some(
             "Inspect the resumed workspace".into(),
@@ -1455,8 +1929,27 @@ async fn merged_session_can_be_resumed_from_current_main() {
     assert!(
         request.messages[0]
             .text()
-            .contains(worktree.path.to_str().unwrap())
+            .contains(h.workspace.path.to_str().unwrap())
     );
+    answer(
+        reply,
+        response(vec![tool_call(
+            "knowledge",
+            "resumed-source",
+            json!({"action":"read", "file_path":"lib.rs"}),
+        )]),
+    );
+    let (request, reply) = within(h.requests.recv_async()).await.unwrap();
+    let result = latest_tool_result(&request);
+    assert_tool_success(result);
+    assert!(format!("{result:?}").contains("pub fn value() -> u32 { 8 }"));
+    assert!(h.snapshot(&id).worktree.is_none());
+    answer(
+        reply,
+        response(vec![tool_call("review_changes", "review-main", json!({}))]),
+    );
+    let (request, reply) = within(h.requests.recv_async()).await.unwrap();
+    assert_tool_success(latest_tool_result(&request));
     answer(reply, response(vec![text("Inspected")]));
     h.event(|packet| {
         matches!(
@@ -1468,12 +1961,25 @@ async fn merged_session_can_be_resumed_from_current_main() {
         )
     })
     .await;
+    assert!(h.snapshot(&id).worktree.is_none());
+    assert!(!worktree.path.exists());
+    let patch = "*** Begin Patch\n*** Update File: lib.rs\n@@\n-pub fn value() -> u32 { 8 }\n+pub fn value() -> u32 { 8 }\n*** End Patch";
+    h.write_and_interrupt(patch).await;
+    assert_eq!(h.snapshot(&id).worktree.unwrap().path, worktree.path);
+    assert_eq!(
+        git2::Repository::open(&worktree.path)
+            .unwrap()
+            .refname_to_id("HEAD")
+            .unwrap(),
+        main
+    );
     h.stop().await;
 }
 
 #[tokio::test]
 async fn cleanup_failure_reports_successful_merge_and_preserves_data_for_retry() {
     let h = GitHarness::new().await;
+    h.write_and_interrupt(NOOP_PATCH).await;
     let id = h.store.list().unwrap()[0].id.clone();
     let worktree = h.snapshot(&id).worktree.unwrap();
     std::fs::write(worktree.path.join(".gitignore"), "private.txt\n").unwrap();

@@ -27,9 +27,11 @@ cd /path/to/your/project
 On first launch, follow the setup screen to choose Claude, OpenAI (API key or
 Codex login), OpenRouter, or a local OpenAI-compatible server.
 
-Git projects require a committed local `main` branch. Sessions work in separate
-worktrees based on `main`, leaving existing checkout edits untouched; merging back
-requires your approval.
+Read-only sessions use the existing checkout without creating a worktree. The
+first write operation creates a separate session worktree based on a committed
+local `main` branch, leaving existing checkout edits untouched. Delegated writers
+share that session worktree; merging back requires your approval. Forks and plan
+handoffs read their source worktree until their own first write.
 
 ## Usage
 

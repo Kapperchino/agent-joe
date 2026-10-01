@@ -128,6 +128,8 @@ pub struct Snapshot {
     #[serde(default)]
     pub worktree: Option<utils::git::worktrees::session::SessionWorktree>,
     #[serde(default)]
+    pub worktree_source: Option<utils::git::worktrees::session::SessionWorktree>,
+    #[serde(default)]
     pub merge_approval: merge_workflow::MergeApproval,
     pub id: String,
     workspace: String,
@@ -247,6 +249,7 @@ pub enum OperationState {
 #[derive(Clone, Serialize, Deserialize)]
 pub enum Event {
     Worktree(Option<utils::git::worktrees::session::SessionWorktree>),
+    WorktreeSource(utils::git::worktrees::session::SessionWorktree),
     WorktreePruned,
     MergeApproval(merge_workflow::MergeApproval),
     Planning(common_models::interaction::Planning),
@@ -319,6 +322,7 @@ impl SessionStore {
             sequence: 1,
             changes: Default::default(),
             worktree: None,
+            worktree_source: None,
             merge_approval: Default::default(),
             id: id.clone(),
             workspace: self.storage.workspace_identity().to_owned(),
@@ -457,7 +461,7 @@ impl Session {
             snapshot.id = self.store.storage.new_id();
             snapshot.sequence = 1;
             snapshot.changes = Default::default();
-            snapshot.worktree = None;
+            snapshot.worktree_source = snapshot.worktree.take().or(snapshot.worktree_source);
             snapshot.merge_approval = Default::default();
             snapshot
                 .questions
@@ -603,20 +607,23 @@ impl Snapshot {
                     .insert(worker.worker_id.clone(), worker.as_ref().clone());
             }
             Event::Changes(changes) => self.changes = changes.clone(),
+            Event::WorktreeSource(source) => self.worktree_source = Some(source.clone()),
             Event::Worktree(worktree) => {
                 if self.worktree.is_none() && worktree.is_some() {
                     self.changes = Default::default();
                 }
                 self.worktree = worktree.clone();
+                self.worktree_source = None;
             }
             Event::WorktreePruned => {
                 self.worktree = None;
+                self.worktree_source = None;
                 self.changes = Default::default();
                 self.merge_approval = Default::default();
                 self.questions
                     .withdraw(common_models::interaction::QuestionPurpose::Merge);
                 self.history.push(Message::new(
-                    "The session worktree was pruned. Its unmerged commits and local files were discarded. Resuming creates a fresh worktree from current main; previous edits and merge approvals no longer apply.".into(),
+                    "The session worktree was pruned. Its unmerged commits and local files were discarded. The next write creates a fresh worktree from current main; previous edits and merge approvals no longer apply.".into(),
                 ));
             }
             Event::MergeApproval(approval) => self.merge_approval = approval.clone(),

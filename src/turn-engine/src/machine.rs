@@ -303,24 +303,13 @@ impl TurnMachine {
         }
     }
 
-    pub fn needs_workspace(&self, event: &Event) -> bool {
-        match (&self.state, event) {
-            (
-                SessionState::Running(Session {
-                    state: TurnState::Idle | TurnState::Waiting(_),
-                    ..
-                }),
-                Event::Session(SessionEvent::Start(_) | SessionEvent::Steer(_)),
-            )
-            | (
-                SessionState::Running(Session {
-                    state: TurnState::Idle | TurnState::Waiting(_),
-                    questions: QuestionGate::Required,
-                    ..
-                }),
-                Event::Session(SessionEvent::QuestionsChanged(QuestionGate::Open)),
-            ) => true,
-            _ => false,
+    pub fn follow_workspace(&mut self, scope: &ExecutionScope) -> anyhow::Result<()> {
+        match &mut self.state {
+            SessionState::Running(session) | SessionState::Closing(session) => {
+                session.scope = session.scope.following(scope)?;
+                session.state.follow_workspace(scope)
+            }
+            _ => Ok(()),
         }
     }
 
