@@ -25,11 +25,25 @@ pub enum ClaudeEffort {
     #[strum(message = "low")]
     Low,
     #[strum(message = "medium")]
+    #[serde(rename = "medium", alias = "med")]
     Med,
     #[strum(message = "high")]
     High,
+    #[strum(message = "xhigh")]
+    Xhigh,
     #[strum(message = "max")]
     Max,
+}
+
+impl ClaudeEffort {
+    pub fn supported_for_model(model: &str) -> &'static [Self] {
+        match crate::models::model_name(model) {
+            "claude-opus-5-5" | "claude-fable-5-1" | "claude-sonnet-5-5" | "claude-opus-4-7" => {
+                &[Self::Low, Self::Med, Self::High, Self::Xhigh, Self::Max]
+            }
+            _ => &[Self::Low, Self::Med, Self::High, Self::Max],
+        }
+    }
 }
 
 // we could add auth login later, could get ppl banned

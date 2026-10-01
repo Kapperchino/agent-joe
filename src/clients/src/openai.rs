@@ -890,6 +890,13 @@ impl OpenAIClient {
     }
 
     pub fn new(config: OpenAIConfig) -> anyhow::Result<Self> {
+        Self::with_client_builder(config, Client::builder())
+    }
+
+    pub(crate) fn with_client_builder(
+        config: OpenAIConfig,
+        builder: reqwest::ClientBuilder,
+    ) -> anyhow::Result<Self> {
         let headers = match &config.auth {
             OpenAIAuthConfig::APIKey(api) => {
                 let mut headers = header::HeaderMap::new();
@@ -949,7 +956,7 @@ impl OpenAIClient {
         };
 
         let retry_policy = ExponentialBackoff::builder().build_with_max_retries(HTTP_MAX_RETRIES);
-        let inner_client = Client::builder()
+        let inner_client = builder
             .connect_timeout(Duration::from_secs(60))
             .read_timeout(Duration::from_secs(600))
             .default_headers(headers)

@@ -21,3 +21,7 @@ pub mod runtime_update;
 mod sse;
 
 pub mod response;
+
+#[cfg(test)]
+#[path = "../tests/unit/http_fixture.rs"]
+mod http_fixture;

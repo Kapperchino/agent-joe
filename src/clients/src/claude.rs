@@ -1,6 +1,7 @@
 use crate::claude_config::{ClaudeAuthConfig, ClaudeConfig, ClaudeEffort};
 use crate::llm;
 use crate::llm::{ClientResponse, LLmClientTrait};
+use crate::models::{ClaudeModels, model_name};
 use anyhow::{Error, anyhow};
 use futures::{Stream, StreamExt};
 use reqwest::{Client, header};
@@ -68,38 +69,26 @@ pub struct ChatRequest {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<Tool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub effort: Option<ClaudeEffort>,
+    pub output_config: Option<OutputConfig>,
 }
 
 #[derive(Debug, Serialize)]
 struct ChatRequestStream {
-    pub model: String,
-    pub max_tokens: u32,
-    pub messages: Vec<Message>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub system: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub thinking: Option<Thinking>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub tools: Vec<Tool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub effort: Option<ClaudeEffort>,
+    #[serde(flatten)]
+    request: ChatRequest,
     pub stream: bool,
 }
 
 #[derive(Debug, Serialize)]
-pub struct Thinking {
-    #[serde(rename = "type")]
-    pub thinking_type: ThinkingType,
-    pub budget_tokens: u32,
+pub struct OutputConfig {
+    pub effort: ClaudeEffort,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ThinkingType {
-    Enabled,
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum Thinking {
+    Enabled { budget_tokens: u32 },
+    Adaptive,
 }
 #[derive(Debug, Deserialize)]
 pub struct Usage {
@@ -359,6 +348,44 @@ pub struct ClientRequest {
     pub max_output_tokens: Option<u32>,
 }
 
+impl ChatRequest {
+    fn new(req: ClientRequest, config: &ClaudeConfig) -> Self {
+        let model = req.model.unwrap_or_else(|| config.model.clone());
+        let known_model = model_name(&model).parse::<ClaudeModels>().ok();
+        let max_tokens = req.max_output_tokens.unwrap_or(MAX_TOKENS);
+        let thinking = match (known_model.as_ref(), req.thinking, max_tokens) {
+            (
+                Some(ClaudeModels::Opus5_5 | ClaudeModels::Fable5_1 | ClaudeModels::Sonnet5_5),
+                _,
+                _,
+            ) => Some(Thinking::Adaptive),
+            (Some(ClaudeModels::Opus4_7 | ClaudeModels::Sonnet4_6), true, _) => {
+                Some(Thinking::Adaptive)
+            }
+            (_, true, 1025..) => Some(Thinking::Enabled {
+                budget_tokens: 1024,
+            }),
+            _ => None,
+        };
+        let output_config = match known_model {
+            Some(ClaudeModels::Haiku4_5) | None => None,
+            Some(_) => Some(OutputConfig {
+                effort: req.effort.unwrap_or_else(|| config.effort.clone()),
+            }),
+        };
+        Self {
+            model,
+            max_tokens,
+            messages: req.messages,
+            system: req.system,
+            temperature: None,
+            thinking,
+            tools: req.tools,
+            output_config,
+        }
+    }
+}
+
 impl ClaudeClient {
     const BASE_URL: &'static str = "https://api.anthropic.com/v1";
     const API_VERSION: &'static str = "2023-06-01";
@@ -402,22 +429,7 @@ impl ClaudeClient {
         })
     }
     pub async fn chat(&self, req: ClientRequest) -> ClaudeResult<ChatResponse> {
-        let inner_req = ChatRequest {
-            model: req.model.unwrap_or(self.config.model.clone()),
-            max_tokens: req.max_output_tokens.unwrap_or(MAX_TOKENS),
-            messages: req.messages,
-            system: req.system,
-            temperature: None,
-            thinking: match req.thinking && req.max_output_tokens.unwrap_or(MAX_TOKENS) > 1024 {
-                true => Some(Thinking {
-                    thinking_type: ThinkingType::Enabled,
-                    budget_tokens: 1024,
-                }),
-                false => None,
-            },
-            tools: req.tools,
-            effort: req.effort,
-        };
+        let inner_req = ChatRequest::new(req, &self.config);
         self.send_request(inner_req).await
     }
 
@@ -444,22 +456,8 @@ impl ClaudeClient {
     {
         let url = format!("{}/messages", self.base_url);
         let request = ChatRequestStream {
-            model: req.model.unwrap_or_else(|| self.config.model.clone()),
-            max_tokens: req.max_output_tokens.unwrap_or(MAX_TOKENS),
-            messages: req.messages,
-            system: req.system,
-            temperature: None,
-            thinking: if req.thinking && req.max_output_tokens.unwrap_or(MAX_TOKENS) > 1024 {
-                Some(Thinking {
-                    thinking_type: ThinkingType::Enabled,
-                    budget_tokens: 1024,
-                })
-            } else {
-                None
-            },
-            tools: req.tools,
+            request: ChatRequest::new(req, &self.config),
             stream: true,
-            effort: req.effort,
         };
 
         let initial = self.client.post(&url).json(&request).send().await?;
@@ -503,3 +501,7 @@ impl LLmClientTrait for ClaudeClient {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/claude/tests.rs"]
+mod tests;

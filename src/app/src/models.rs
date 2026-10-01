@@ -40,9 +40,9 @@ impl EffortsSelection {
                 .iter()
                 .map(|effort| effort.as_ref().to_string())
                 .collect(),
-            EffortsSelection::Claude => ClaudeEffort::VARIANTS
-                .into_iter()
-                .map(|x| x.to_string())
+            EffortsSelection::Claude => ClaudeEffort::supported_for_model(model)
+                .iter()
+                .map(|effort| effort.as_ref().to_string())
                 .collect(),
             EffortsSelection::Other => {
                 vec![]
@@ -50,3 +50,7 @@ impl EffortsSelection {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/models/tests.rs"]
+mod tests;

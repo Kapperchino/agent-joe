@@ -271,8 +271,8 @@ fn cache_keys_follow_supported_routes_and_codex_reasoning_can_be_disabled() {
 #[tokio::test]
 async fn codex_quota_exhaustion_sends_exactly_one_http_request() {
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
+    let fixture = crate::http_fixture::HttpFixture::new().await;
+    let listener = fixture.listener.clone();
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let count = calls.clone();
     let server = tokio::spawn(async move {
@@ -297,8 +297,11 @@ async fn codex_quota_exhaustion_sends_exactly_one_http_request() {
             reader.get_mut().write_all(wire.as_bytes()).await.unwrap();
         }
     });
-    let mut client = OpenAIClient::new(config(codex_auth())).unwrap();
-    client.config.auth = OpenAIAuthConfig::Local(LocalOpenAIConfig { api_key: None, url });
+    let mut client = fixture.client(config(codex_auth()));
+    client.config.auth = OpenAIAuthConfig::Local(LocalOpenAIConfig {
+        api_key: None,
+        url: fixture.url.clone(),
+    });
     let result = tokio::time::timeout(
         Duration::from_secs(2),
         client.chat_stream_openai(ClientRequest::new(vec![InputItem::user("task".into())])),

@@ -87,9 +87,11 @@ pub enum OpenAIEffort {
 
 impl OpenAIEffort {
     pub fn supported_for_model(model: &str) -> &'static [Self] {
-        match model {
-            "gpt-6-astra" => &[Self::Low, Self::Medium, Self::High, Self::Xhigh, Self::Max],
-            "gpt-5.6" | "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna" => &[
+        match crate::models::model_name(model) {
+            "gpt-6.1-sol" | "gpt-6-astra" => {
+                &[Self::Low, Self::Medium, Self::High, Self::Xhigh, Self::Max]
+            }
+            "gpt-6-sol" | "gpt-6-luna" | "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna" => &[
                 Self::None,
                 Self::Low,
                 Self::Medium,

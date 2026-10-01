@@ -4,8 +4,14 @@ pub const FALLBACK_CONTEXT_WINDOW: usize = 128_000;
 
 #[derive(Debug, PartialEq, EnumString, VariantNames, Clone)]
 pub enum OpenAIModels {
+    #[strum(serialize = "gpt-6.1-sol")]
+    GPT6_1_SOL,
     #[strum(serialize = "gpt-6-astra")]
     GPT6_ASTRA,
+    #[strum(serialize = "gpt-6-sol")]
+    GPT6_SOL,
+    #[strum(serialize = "gpt-6-luna")]
+    GPT6_LUNA,
     #[strum(serialize = "gpt-5.6-sol")]
     GPT5_6_SOL,
     #[strum(serialize = "gpt-5.6-terra")]
@@ -21,7 +27,10 @@ pub enum OpenAIModels {
 impl OpenAIModels {
     pub fn context_window(&self) -> usize {
         match self {
+            Self::GPT6_1_SOL => 1_050_000,
             Self::GPT6_ASTRA => 1_050_000,
+            Self::GPT6_SOL => 1_050_000,
+            Self::GPT6_LUNA => 1_050_000,
             Self::GPT5_6_SOL => 1_050_000,
             Self::GPT5_6_TERRA => 1_050_000,
             Self::GPT5_6_LUNA => 1_050_000,
@@ -32,7 +41,10 @@ impl OpenAIModels {
 
     pub fn codex_context_window(&self) -> usize {
         match self {
+            Self::GPT6_1_SOL => 272_000,
             Self::GPT6_ASTRA => 272_000,
+            Self::GPT6_SOL => 272_000,
+            Self::GPT6_LUNA => 272_000,
             Self::GPT5_6_SOL => 272_000,
             Self::GPT5_6_TERRA => 272_000,
             Self::GPT5_6_LUNA => 272_000,
@@ -44,6 +56,12 @@ impl OpenAIModels {
 
 #[derive(Debug, PartialEq, EnumString, VariantNames, Clone)]
 pub enum ClaudeModels {
+    #[strum(serialize = "claude-opus-5-5")]
+    Opus5_5,
+    #[strum(serialize = "claude-fable-5-1")]
+    Fable5_1,
+    #[strum(serialize = "claude-sonnet-5-5")]
+    Sonnet5_5,
     #[strum(serialize = "claude-opus-4-7")]
     Opus4_7,
     #[strum(serialize = "claude-sonnet-4-6")]
@@ -55,6 +73,7 @@ pub enum ClaudeModels {
 impl ClaudeModels {
     pub fn context_window(&self) -> usize {
         match self {
+            Self::Opus5_5 | Self::Fable5_1 | Self::Sonnet5_5 => 1_000_000,
             Self::Opus4_7 => 1_000_000,
             Self::Sonnet4_6 => 1_000_000,
             Self::Haiku4_5 => 200_000,
@@ -86,7 +105,7 @@ pub fn codex_context_window(model: &str) -> usize {
         .unwrap_or(FALLBACK_CONTEXT_WINDOW)
 }
 
-fn model_name(model: &str) -> &str {
+pub(crate) fn model_name(model: &str) -> &str {
     let model = model
         .strip_prefix("openai/")
         .or_else(|| model.strip_prefix("anthropic/"))
