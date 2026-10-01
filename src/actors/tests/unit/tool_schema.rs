@@ -20,6 +20,9 @@ fn knowledge_schema_is_derived_from_actions_and_typed_options() {
     assert_eq!(
         schema["action"]["enum"],
         json!([
+            "read",
+            "list",
+            "ask",
             "prepare",
             "repartition",
             "status",
@@ -43,8 +46,34 @@ fn knowledge_schema_is_derived_from_actions_and_typed_options() {
     assert_eq!(schema["limit"]["minimum"], 1);
     assert_eq!(schema["limit"]["maximum"], 32);
     assert_eq!(schema["offset"]["minimum"], 0);
-    for name in ["generation", "query", "symbol"] {
+    for name in [
+        "file_path",
+        "worker_id",
+        "question",
+        "generation",
+        "query",
+        "symbol",
+    ] {
         assert_eq!(schema[name]["type"], json!(["string", "null"]));
+    }
+    assert_eq!(schema["range"]["type"], json!(["object", "null"]));
+    assert_eq!(schema["range"]["required"], json!(["start", "end"]));
+    for input in [
+        json!({"action":"read","file_path":"Cargo.toml","range":null}),
+        json!({"action":"read","file_path":"src/lib.rs","range":{"start":1,"end":3}}),
+        json!({"action":"list"}),
+        json!({"action":"ask","worker_id":"worker","question":"What is recorded?"}),
+    ] {
+        assert!(crate::tools::knowledge::Input::deserialize_lenient(input).is_ok());
+    }
+    for input in [
+        json!({"action":"read"}),
+        json!({"action":"read","file_path":null}),
+        json!({"action":"ask","worker_id":"worker"}),
+        json!({"action":"ask","question":"What is recorded?"}),
+        json!({"action":"list","file_path":"Cargo.toml"}),
+    ] {
+        assert!(crate::tools::knowledge::Input::deserialize_lenient(input).is_err());
     }
     assert!(
         crate::tools::knowledge::Input::deserialize_lenient(

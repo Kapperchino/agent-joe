@@ -337,7 +337,18 @@ impl ToolProperty {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, Eq, PartialEq, Hash, ToolInput)]
+#[derive(
+    Serialize,
+    Deserialize,
+    Debug,
+    Clone,
+    Default,
+    Eq,
+    PartialEq,
+    Hash,
+    ToolInput,
+    turbo_code_macros::ToolSchema,
+)]
 pub struct Range {
     #[tool(description = "Start line (inclusive)", required)]
     pub start: u32,

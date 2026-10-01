@@ -13,7 +13,7 @@ pub struct WorkerRequestInput {
     )]
     pub constraints: String,
     #[tool(
-        description = "Allowed tool names separated by newlines, such as find_files and read_file; functions. prefixes are accepted. inspect_context, git, review_changes, worktree and cargo require allowed_paths: .; use scoped file tools for narrower paths",
+        description = "Allowed tool names separated by newlines, such as find_files and knowledge; functions. prefixes are accepted. inspect_context, git, review_changes, worktree and cargo require allowed_paths: .; use scoped file tools or knowledge with action read for narrower paths. Other knowledge actions require the root with whole-project access",
         required
     )]
     pub allowed_tools: String,

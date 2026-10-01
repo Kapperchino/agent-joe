@@ -105,9 +105,9 @@ async fn plan_mode_requires_investigation_evidence_and_preserves_pending_impleme
         answer(
             reply,
             response(vec![tool(
-                "read_file",
+                "knowledge",
                 "missing-read",
-                json!({"file_path":"missing.txt"}),
+                json!({"action":"read","file_path":"missing.txt"}),
             )]),
         );
         let (request, reply) = actor.request().await;
@@ -143,12 +143,16 @@ async fn plan_mode_requires_investigation_evidence_and_preserves_pending_impleme
         answer(
             reply,
             response(vec![tool(
-                "read_file",
+                "knowledge",
                 "observed",
-                json!({"file_path":"behavior.txt"}),
+                json!({"action":"read","file_path":"behavior.txt"}),
             )]),
         );
         let (request, reply) = actor.request().await;
+        assert_eq!(
+            latest_result(&request)["content"],
+            "1: Existing behavior and test cases"
+        );
         assert!(
             runtime_snapshot(&request.messages)
                 .evidence
@@ -355,7 +359,11 @@ async fn plan_mode_denies_all_cargo_and_mutation_tools_in_both_root_modes() {
         answer(
             reply,
             response(vec![
-                tool("read_file", "inspect", json!({"file_path":"original.txt"})),
+                tool(
+                    "knowledge",
+                    "inspect",
+                    json!({"action":"read","file_path":"original.txt"}),
+                ),
                 tool("worktree", "list", json!({"operation":"list"})),
             ]),
         );
@@ -488,9 +496,9 @@ async fn question_answers_cannot_expand_the_project_boundary() {
     answer(
         actor.request().await.1,
         response(vec![tool(
-            "read_file",
+            "knowledge",
             "outside",
-            json!({"file_path":private}),
+            json!({"action":"read","file_path":private}),
         )]),
     );
     let (request, reply) = actor.request().await;
@@ -646,7 +654,7 @@ async fn bounded_workers_compact_and_continue_the_same_investigation() {
         ..Runtime::for_workspace(workspace.path.clone()).unwrap()
     };
     let actor = RepositoryActor::with_runtime(BaseWorker::new(), runtime, false).await;
-    let started = StartedWorker::new(&actor, worker_input("read_file", ".")).await;
+    let started = StartedWorker::new(&actor, worker_input("knowledge", ".")).await;
     let mut child = started.child;
     let mut compactions = 0;
     for index in 0..8 {
@@ -655,9 +663,9 @@ async fn bounded_workers_compact_and_continue_the_same_investigation() {
             response(vec![
                 text(&format!("Investigation {index}: {}", "x".repeat(70_000))),
                 tool(
-                    "read_file",
+                    "knowledge",
                     &format!("read-{index}"),
-                    json!({"file_path":"evidence.txt"}),
+                    json!({"action":"read","file_path":"evidence.txt"}),
                 ),
             ]),
         );
@@ -678,7 +686,10 @@ async fn bounded_workers_compact_and_continue_the_same_investigation() {
             child = actor.request().await;
         }
         assert!(matches!(child.0.purpose, llm::RequestPurpose::Worker));
-        assert!(result_text(&child.0).contains("Evidence survives compaction"));
+        assert_eq!(
+            latest_result(&child.0)["content"],
+            "1: Evidence survives compaction"
+        );
     }
     assert!(compactions > 0);
     answer(
@@ -734,10 +745,12 @@ async fn root_modes_complete_small_changes_directly_and_simple_has_no_delegation
             })
             .collect::<Vec<_>>();
         assert!(
-            tools.contains(&"read_file")
+            tools.contains(&"knowledge")
                 && tools.contains(&"apply_patch")
                 && tools.contains(&"cargo")
         );
+        assert!(!tools.contains(&"read_file"));
+        assert!(!tools.contains(&"ask_immutable_worker"));
         assert_eq!(
             tools.contains(&"start_worker"),
             matches!(mode, Mode::Delegated)
@@ -836,11 +849,7 @@ async fn both_root_modes_query_automatically_created_compaction_snapshots() {
         assert_eq!(workers.len(), 1);
         answer(
             reply,
-            response(vec![tool(
-                "ask_immutable_worker",
-                "list",
-                json!({"action":"list"}),
-            )]),
+            response(vec![tool("knowledge", "list", json!({"action":"list"}))]),
         );
         let (request, reply) = actor.request().await;
         assert!(result_text(&request).contains(&workers[0].worker_id));
@@ -848,7 +857,7 @@ async fn both_root_modes_query_automatically_created_compaction_snapshots() {
         answer(
             reply,
             response(vec![tool(
-                "ask_immutable_worker",
+                "knowledge",
                 "ask",
                 json!({
                     "action":"ask", "worker_id": workers[0].worker_id, "question":"What was the first investigation?"
@@ -860,7 +869,9 @@ async fn both_root_modes_query_automatically_created_compaction_snapshots() {
         let frozen =
             serde_json::to_string(&request.messages[..request.messages.len() - 2]).unwrap();
         assert!(frozen.contains("Original investigation 0"));
-        assert!(request.tools.iter().any(|tool| matches!(tool, ToolDefinition::Client { name, .. } if name == "ask_immutable_worker")));
+        assert!(request.tools.iter().any(
+            |tool| matches!(tool, ToolDefinition::Client { name, .. } if name == "knowledge")
+        ));
         assert!(!frozen.contains("What was the first investigation?"));
         assert_eq!(
             request.messages.last().unwrap().text(),
@@ -941,22 +952,20 @@ async fn both_root_modes_list_and_ask_non_snapshot_immutable_workers() {
             .send_message(Message::StartWork(Some("Consult immutable workers".into())))
             .unwrap();
         let (request, reply) = actor.request().await;
-        assert!(request.tools.iter().any(|definition| matches!(definition, ToolDefinition::Client { name, .. } if name == "ask_immutable_worker")));
+        assert!(request.tools.iter().any(|definition| matches!(definition, ToolDefinition::Client { name, .. } if name == "knowledge")));
         answer(
             reply,
-            response(vec![tool(
-                "ask_immutable_worker",
-                "list",
-                json!({"action":"list"}),
-            )]),
+            response(vec![tool("knowledge", "list", json!({"action":"list"}))]),
         );
         let (request, reply) = actor.request().await;
-        assert!(result_text(&request).contains(&registered.worker_id));
-        assert!(result_text(&request).contains("reference"));
+        let listed = latest_result(&request);
+        assert_eq!(listed["action"], "list");
+        assert_eq!(listed["workers"][0]["worker_id"], registered.worker_id);
+        assert_eq!(listed["workers"][0]["kind"], "reference");
         answer(
             reply,
             response(vec![tool(
-                "ask_immutable_worker",
+                "knowledge",
                 "ask",
                 json!({
                     "action":"ask", "worker_id":registered.worker_id, "question":"What is recorded?"
@@ -964,17 +973,20 @@ async fn both_root_modes_list_and_ask_non_snapshot_immutable_workers() {
             )]),
         );
         let (request, mut reply) = actor.request().await;
-        assert!(result_text(&request).contains("Frozen reference: What is recorded?"));
+        let asked = latest_result(&request);
+        assert_eq!(asked["action"], "ask");
+        assert_eq!(asked["result"]["worker"]["worker_id"], registered.worker_id);
+        assert_eq!(
+            asked["result"]["answer"],
+            "Frozen reference: What is recorded?"
+        );
         for input in [
             json!({"action":"ask", "worker_id":"missing", "question":"Question"}),
             json!({"action":"ask", "worker_id":registered.worker_id, "question":" "}),
             json!({"action":"ask", "worker_id":registered.worker_id, "question":"x".repeat(16385)}),
             json!({"action":"unknown"}),
         ] {
-            answer(
-                reply,
-                response(vec![tool("ask_immutable_worker", "invalid", input)]),
-            );
+            answer(reply, response(vec![tool("knowledge", "invalid", input)]));
             let (request, next) = actor.request().await;
             assert!(matches!(
                 latest_tool_result(&request),
@@ -1006,7 +1018,7 @@ async fn qualified_worker_tools_execute_with_scoped_read_access() {
     let actor = RepositoryActor::new(BaseWorker::new(), workspace.path.clone()).await;
     let started = StartedWorker::new(
         &actor,
-        worker_input("functions.find_files\nfunctions.read_file", "assigned"),
+        worker_input("functions.find_files\nfunctions.knowledge", "assigned"),
     )
     .await;
     let names = started
@@ -1019,7 +1031,7 @@ async fn qualified_worker_tools_execute_with_scoped_read_access() {
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(names, ["find_files", "read_file"]);
+    assert_eq!(names, ["find_files", "knowledge"]);
     answer(
         started.child.1,
         response(vec![tool("find_files", "discover", json!({"pattern":""}))]),
@@ -1030,9 +1042,9 @@ async fn qualified_worker_tools_execute_with_scoped_read_access() {
     answer(
         reply,
         response(vec![tool(
-            "read_file",
+            "knowledge",
             "denied",
-            json!({"file_path":"secret.txt"}),
+            json!({"action":"read","file_path":"secret.txt"}),
         )]),
     );
     let (denied, reply) = actor.request().await;
@@ -1041,13 +1053,36 @@ async fn qualified_worker_tools_execute_with_scoped_read_access() {
     answer(
         reply,
         response(vec![tool(
-            "read_file",
+            "knowledge",
             "read",
-            json!({"file_path":"assigned/evidence.txt"}),
+            json!({"action":"read","file_path":"assigned/evidence.txt"}),
         )]),
     );
-    let (read, reply) = actor.request().await;
-    assert!(result_text(&read).contains("Read evidence marker"));
+    let (read, mut reply) = actor.request().await;
+    let read = latest_result(&read);
+    assert_eq!(read["action"], "read");
+    assert_eq!(read["file_path"], "assigned/evidence.txt");
+    assert_eq!(read["content"], "1: Read evidence marker");
+    assert_eq!(read["related"]["state"], "unavailable");
+    for input in [
+        json!({"action":"list"}),
+        json!({"action":"ask","worker_id":"missing","question":"Read outside the allowance?"}),
+    ] {
+        answer(
+            reply,
+            response(vec![tool("knowledge", "restricted", input)]),
+        );
+        let (denied, next) = actor.request().await;
+        assert!(matches!(
+            latest_tool_result(&denied),
+            ContentBlock::ToolResult {
+                is_error: Some(true),
+                ..
+            }
+        ));
+        assert!(!result_text(&denied).contains("Secret marker"));
+        reply = next;
+    }
     answer(
         reply,
         response(vec![text("Scoped investigation complete.")]),
@@ -1063,7 +1098,7 @@ async fn qualified_worker_tools_execute_with_scoped_read_access() {
     let (parent, reply) = actor.request().await;
     let report = &latest_result(&parent)["workers"][0]["report"];
     assert_eq!(report["status"], "completed");
-    assert_eq!(report["budget"]["tool_calls"], 3);
+    assert_eq!(report["budget"]["tool_calls"], 5);
     assert_eq!(report["changed_files"], json!([]));
     completed_root(&actor, reply).await;
     actor.stop().await;
@@ -1083,7 +1118,7 @@ async fn bounded_worker_inherits_constraints_denies_other_paths_and_returns_obse
     std::fs::write(workspace.path.join(".gitignore"), "logs/\n").unwrap();
     let actor = RepositoryActor::configured(BaseWorker::new(), workspace.path.clone(), true).await;
     let started =
-        StartedWorker::new(&actor, worker_input("read_file\napply_patch", "assigned")).await;
+        StartedWorker::new(&actor, worker_input("knowledge\napply_patch", "assigned")).await;
     let worker_request = &started.child.0;
     let handoff = worker_request
         .messages
@@ -1104,9 +1139,9 @@ async fn bounded_worker_inherits_constraints_denies_other_paths_and_returns_obse
     answer(
         started.child.1,
         response(vec![tool(
-            "read_file",
+            "knowledge",
             "denied",
-            json!({"file_path": "secret.txt"}),
+            json!({"action":"read","file_path": "secret.txt"}),
         )]),
     );
     let (denied, reply) = actor.request().await;
@@ -1124,9 +1159,9 @@ async fn bounded_worker_inherits_constraints_denies_other_paths_and_returns_obse
     answer(
         reply,
         response(vec![tool(
-            "read_file",
+            "knowledge",
             "large-evidence",
-            json!({"file_path":"assigned/evidence.txt"}),
+            json!({"action":"read","file_path":"assigned/evidence.txt"}),
         )]),
     );
     let (archived, reply) = actor.request().await;
@@ -1437,9 +1472,9 @@ fn actor_store(path: &std::path::Path) -> Arc<session::SessionStore> {
 #[test]
 fn worker_contracts_reject_invalid_deadlines_and_widened_permissions() {
     let valid =
-        || serde_json::from_value::<WorkerRequestInput>(worker_input("read_file", "src")).unwrap();
+        || serde_json::from_value::<WorkerRequestInput>(worker_input("knowledge", "src")).unwrap();
     for seconds in [0, 3601] {
-        let mut input = worker_input("read_file", "src");
+        let mut input = worker_input("knowledge", "src");
         input["seconds"] = json!(seconds);
         assert!(
             WorkerRequest::new(serde_json::from_value(input).unwrap(), |_| Some(
@@ -1470,7 +1505,7 @@ async fn independent_read_workers_run_concurrently_and_followups_receive_only_se
         reply,
         response(vec![
             tool("start_worker", "one", worker_input("find_files", ".")),
-            tool("start_worker", "two", worker_input("read_file", ".")),
+            tool("start_worker", "two", worker_input("knowledge", ".")),
         ]),
     );
     let mut parent = None;

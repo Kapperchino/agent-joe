@@ -10,7 +10,7 @@ mod ownership;
 mod partition;
 mod routing;
 
-pub use routing::{Route, RoutePage, SymbolInspection};
+pub use routing::{FileContext, RelatedText, Route, RoutePage, SymbolInspection};
 
 pub const MAX_SHARDS: usize = 256;
 const MAX_CONTEXT_BYTES: usize = 128 * 1024 * 1024;

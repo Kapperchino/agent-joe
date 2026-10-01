@@ -12,14 +12,16 @@ use common_models::knowledge::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, time::Duration};
-use tools::tool_defs::{LenientDeserialize, ToolId, ToolOpKind, ToolTrait, ToolType};
+use tools::tool_defs::{LenientDeserialize, Range, ToolId, ToolOpKind, ToolTrait, ToolType};
 use turbo_code_macros::{ToolDef, ToolSchema};
 use utils::utils::FnvHashMap;
+
+mod read;
 
 #[derive(ToolDef)]
 #[tool(
     name = "knowledge",
-    description = "Prepare and query immutable repository knowledge actors. Explicit prepare uses rust-analyzer libraries in process over captured source and Cargo manifests to resolve local Rust references, calls and trait relations. No executable, Cargo, build script or proc macro is run. Requires root Cargo.toml, not Cargo.lock or a provisioned sandbox. Only captured local dependencies and native baseline cfg are analyzed; sysroot, registry/git dependencies, generated code and custom build cfg are diagnostic coverage gaps. Preparation is explicit and unavailable in plan mode. Status, search, inspect and repartition are read-only. Search routes paths/symbols/documentation to primary and related shard worker IDs; ask those IDs with ask_immutable_worker. Use generation for pagination and inspection. Repartition reuses unchanged semantic inputs after a model/budget change. Edits require prepare again. Clear retires knowledge only, preserving compaction snapshots. No startup indexing or provider requests during preparation. In-memory and scoped to this conversation.",
+    description = "Get repository and conversation context in one place. Read returns current UTF-8 file content with one-based lines and exclusive range ends, or a bounded directory listing. No preparation is needed, including for new, non-Rust or explicitly named ignored files. Read the relevant region before editing; scoped instructions are activated. When current repository knowledge is available, read also includes up to eight related semantic source excerpts (2048 characters each), truncation metadata and worker IDs. Missing, stale or restricted knowledge never blocks an allowed file read. List discovers immutable workers; ask queries a worker_id from list/read/search/status with an independent question. Workers are tool-free, in-memory and retain no questions or answers; compaction snapshots preserve historical context. Prepare explicitly builds local Rust semantic knowledge in process without Cargo, build scripts or proc macros, and is unavailable in plan mode. It requires root Cargo.toml and whole-workspace root access; sysroot, registry/git dependencies, generated code and custom cfg remain coverage gaps. Search routes paths/symbols/documentation; inspect describes a symbol. Use generation for pagination and inspection. Repartition reuses unchanged semantic inputs after model/budget changes. Edits require prepare again. Clear retires repository knowledge only, preserving snapshots. Delegated/restricted readers cannot access whole-repository knowledge. No startup indexing or provider requests during preparation.",
     input = "Input"
 )]
 pub struct Knowledge;
@@ -27,6 +29,27 @@ pub struct Knowledge;
 #[derive(Clone, Debug, Deserialize, Serialize, ToolSchema)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Input {
+    Read {
+        #[tool(nullable, description = "read only: known file or directory path")]
+        file_path: String,
+        #[tool(
+            description = "read only: one-based start inclusive, end exclusive, clamped to EOF; omit for the whole file"
+        )]
+        range: Option<Range>,
+    },
+    List {},
+    Ask {
+        #[tool(
+            nullable,
+            description = "ask only: immutable worker ID from list/read/search/status"
+        )]
+        worker_id: String,
+        #[tool(
+            nullable,
+            description = "ask only: independent nonempty question; respect the worker's max_question_bytes, at most 16384 UTF-8 bytes"
+        )]
+        question: String,
+    },
     Prepare {
         #[tool(max_items = 128, description = "prepare only: explicit Cargo features")]
         features: Option<Vec<String>>,
@@ -181,12 +204,11 @@ impl std::fmt::Display for Knowledge {
     }
 }
 
-#[async_trait]
-impl<C: Context> ToolTrait<C, ActorContext<C>> for Knowledge {
-    type Input = Input;
-    type Output = Value;
-
-    async fn run(input: Input, _: ToolId, _: &C, actor: &ActorContext<C>) -> anyhow::Result<Value> {
+impl Knowledge {
+    async fn repository<C: Context>(
+        input: Input,
+        actor: &ActorContext<C>,
+    ) -> anyhow::Result<Value> {
         let info = access(actor)?;
         let registry = &info.runtime.immutable_workers;
         let workspace = &info.runtime.scope.workspace()?;
@@ -198,6 +220,9 @@ impl<C: Context> ToolTrait<C, ActorContext<C>> for Knowledge {
             timeout: info.runtime.request_timeout,
         };
         match input {
+            Input::Read { .. } | Input::List {} | Input::Ask { .. } => {
+                Err(anyhow::anyhow!("Expected a repository knowledge operation"))
+            }
             Input::Prepare {
                 features,
                 default_features,
@@ -258,9 +283,67 @@ impl<C: Context> ToolTrait<C, ActorContext<C>> for Knowledge {
             }
         }
     }
+}
+
+#[async_trait]
+impl<C: Context> ToolTrait<C, ActorContext<C>> for Knowledge {
+    type Input = Input;
+    type Output = Value;
+
+    async fn run(
+        input: Input,
+        id: ToolId,
+        context: &C,
+        actor: &ActorContext<C>,
+    ) -> anyhow::Result<Value> {
+        use super::ask_immutable_worker::{AskImmutableWorker, AskImmutableWorkerInput};
+        match input {
+            Input::Read { file_path, range } => read::run(file_path, range, context, actor).await,
+            Input::List {} => {
+                access(actor)?;
+                Ok(serde_json::to_value(
+                    AskImmutableWorker::run(
+                        AskImmutableWorkerInput {
+                            action: "list".into(),
+                            worker_id: None,
+                            question: None,
+                        },
+                        id,
+                        context,
+                        actor,
+                    )
+                    .await?,
+                )?)
+            }
+            Input::Ask {
+                worker_id,
+                question,
+            } => {
+                access(actor)?;
+                Ok(serde_json::to_value(
+                    AskImmutableWorker::run(
+                        AskImmutableWorkerInput {
+                            action: "ask".into(),
+                            worker_id: Some(worker_id),
+                            question: Some(question),
+                        },
+                        id,
+                        context,
+                        actor,
+                    )
+                    .await?,
+                )?)
+            }
+            input => Self::repository(input, actor).await,
+        }
+    }
 
     fn display_input(input: &Input) -> String {
-        format!("knowledge {input:?}")
+        match input {
+            Input::Read { file_path, range } => format!("- knowledge read `{file_path}` {range:?}"),
+            Input::Ask { worker_id, .. } => format!("- knowledge ask {worker_id}"),
+            _ => format!("knowledge {input:?}"),
+        }
     }
     fn req_from_input(_: &Input) -> anyhow::Result<FnvHashMap<String, String>> {
         Ok(Default::default())
@@ -277,6 +360,7 @@ impl<C: Context> ToolTrait<C, ActorContext<C>> for Knowledge {
     fn effect_from_input(input: &Input) -> ToolOpKind {
         match input {
             Input::Prepare { .. } => ToolOpKind::Validate,
+            Input::Ask { .. } => ToolOpKind::DelegateRead,
             _ => ToolOpKind::Read,
         }
     }

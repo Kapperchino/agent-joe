@@ -8,7 +8,6 @@ use ractor::{ActorProcessingErr, ActorRef};
 use std::marker::PhantomData;
 use tools::apply_patch::ApplyPatch;
 use tools::grep::GrepTool;
-use tools::read_file::ReadFile;
 use tools::tool_defs::{ErasedToolRef, erased_tool};
 
 pub struct WriteWorker<C: Context> {
@@ -45,7 +44,7 @@ impl ContextWorker for WriteWorker<RustEmptyContext> {
             erased_tool::<tools::find_files::FindFiles, Self::C, ActorContext<Self::C>>(),
             erased_tool::<tools::list_directory::ListDirectory, Self::C, ActorContext<Self::C>>(),
             erased_tool::<tools::inspect_context::InspectContext, Self::C, ActorContext<Self::C>>(),
-            erased_tool::<ReadFile, Self::C, ActorContext<Self::C>>(),
+            erased_tool::<crate::tools::knowledge::Knowledge, Self::C, ActorContext<Self::C>>(),
             erased_tool::<GrepTool, Self::C, ActorContext<Self::C>>(),
             erased_tool::<ApplyPatch, Self::C, ActorContext<Self::C>>(),
             erased_tool::<tools::cargo_tools::Cargo, Self::C, ActorContext<Self::C>>(),

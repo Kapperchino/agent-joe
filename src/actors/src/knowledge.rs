@@ -5,9 +5,11 @@ use crate::{
     },
     workers::knowledge_worker::{KnowledgeWorker, KnowledgeWorkerState, request},
 };
-use analysis::knowledge::{KnowledgeBudget, KnowledgeIndex, RoutePage, SymbolInspection};
+use analysis::knowledge::{
+    FileContext, KnowledgeBudget, KnowledgeIndex, RoutePage, SymbolInspection,
+};
 use clients::llm::{LLmClient, SessionProvider};
-use common_models::knowledge::{SemanticProfile, SourcePath, SymbolId};
+use common_models::knowledge::{LineSpan, SemanticProfile, SourcePath, SymbolId};
 use conversation::context::{ContextBudget, estimated_tokens};
 use ractor::ActorRef;
 use serde::Serialize;
@@ -209,6 +211,24 @@ impl Generation {
         })
     }
 
+    pub fn file_context(
+        &self,
+        path: &SourcePath,
+        range: Option<LineSpan>,
+    ) -> anyhow::Result<RoutedFile> {
+        let context = self.index.file_context(path, range)?;
+        let shards = context
+            .primary_shards
+            .iter()
+            .chain(&context.related_shards)
+            .copied()
+            .collect();
+        Ok(RoutedFile {
+            workers: self.routes(shards),
+            context,
+        })
+    }
+
     fn routes(&self, shards: BTreeSet<usize>) -> Vec<ShardWorker> {
         shards
             .into_iter()
@@ -321,6 +341,12 @@ pub struct GenerationSummary {
 #[derive(Serialize)]
 pub struct RoutedPage {
     pub page: RoutePage,
+    pub workers: Vec<ShardWorker>,
+}
+
+#[derive(Serialize)]
+pub struct RoutedFile {
+    pub context: FileContext,
     pub workers: Vec<ShardWorker>,
 }
 

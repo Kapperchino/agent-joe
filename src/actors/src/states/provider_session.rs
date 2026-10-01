@@ -107,7 +107,7 @@ impl ProviderSession<'_> {
             .immutable_workers
             .insert(&self.runtime.worker_owner(self.actor_id), worker);
         self.reporter.send(ActorToTuiPacket::ContextNotice(
-            format!("Context compacted. Immutable worker {} preserves the older context; use ask_immutable_worker to query it. The saved transcript and full output artifacts remain available.", view.worker_id),
+            format!("Context compacted. Immutable worker {} preserves the older context; use knowledge with action ask to query it. The saved transcript and full output artifacts remain available.", view.worker_id),
         ));
         Ok(())
     }

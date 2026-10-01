@@ -79,7 +79,7 @@ impl GitHarness {
                         ActorContext<RustContext>,
                     >(),
                     tools::tool_defs::erased_tool::<
-                        tools::read_file::ReadFile,
+                        crate::tools::knowledge::Knowledge,
                         RustContext,
                         ActorContext<RustContext>,
                     >(),
@@ -264,7 +264,11 @@ async fn plan_handoff_uses_a_fresh_worktree_with_the_planned_files() {
         within(h.requests.recv_async()).await.unwrap().1,
         response(vec![
             tool("update_plan", "plan", plan.clone()),
-            tool("read_file", "planned-source", json!({"file_path":"lib.rs"})),
+            tool(
+                "knowledge",
+                "planned-source",
+                json!({"action":"read","file_path":"lib.rs"}),
+            ),
         ]),
     );
     let (_, reply) = within(h.requests.recv_async()).await.unwrap();
@@ -785,13 +789,14 @@ async fn approving_a_conflicted_merge_resolves_and_merges_without_another_questi
     assert_eq!(h.repo.refname_to_id("HEAD").unwrap(), target);
     let conflicted = std::fs::read_to_string(worktree.path.join("lib.rs")).unwrap();
     assert!(conflicted.contains("<<<<<<<"));
-    answer(
-        reply,
-        response(vec![read_call(
-            std::path::Path::new("lib.rs"),
-            "read-conflicts",
-        )]),
-    );
+    let mut read = call("knowledge", "read-conflicts");
+    if let ContentBlock::ToolBlock { input, .. } = &mut read {
+        *input = json!({"action":"read", "file_path":"lib.rs"})
+            .as_object()
+            .unwrap()
+            .clone();
+    }
+    answer(reply, response(vec![read]));
     let (_, reply) = within(h.requests.recv_async()).await.unwrap();
     let patch = format!(
         "*** Begin Patch\n*** Update File: lib.rs\n@@\n{}+pub fn value() -> u32 {{ 5 }}\n*** End Patch",

@@ -11,6 +11,8 @@ use futures::{StreamExt, future::BoxFuture, stream::BoxStream};
 use ractor::{Actor, ActorProcessingErr};
 use tokio::sync::oneshot;
 
+mod tool_tests;
+
 type Events = BoxStream<'static, anyhow::Result<StreamEvent>>;
 
 struct Captured {

@@ -111,9 +111,16 @@ cancellation and generation retirement drop in-flight requests. Workspace/model
 fingerprints are checked at query and answer boundaries. Runtime activation and
 shutdown clear the owner registry; relocation clears only repository knowledge.
 
-The root main/simple worker exposes `knowledge` plus `ask_immutable_worker`.
-Preparation is classified as `Validate` from its parsed input; search, inspection,
-status, repartitioning, and clear are `Read`. Delegated/restricted contexts cannot
-query whole-repository knowledge. No preparation occurs on startup. See the root
-README for profiles, ceilings, generation IDs, freshness behavior, direct-library
-tests, and unavailable sysroot/external/generated-code coverage.
+Main, simple, read, and write workers expose `knowledge` as the unified context
+tool. `read` accepts `file_path` and an optional one-based, end-exclusive `range`,
+returning current line-numbered `content` and `related` context. Related context
+includes routing context and immutable worker IDs when a prepared generation is
+available, or an explicit unavailable reason without blocking the read. Reading
+does not prepare knowledge or invoke a provider. `list` discovers immutable context
+workers and `ask` accepts `worker_id` and `question`, including compaction snapshots.
+Preparation is classified as `Validate` from its parsed input, `ask` as
+`DelegateRead`, and other actions as `Read`. Delegated/restricted contexts can read
+allowed files, but cannot query whole-repository knowledge or list/ask immutable
+workers. No preparation occurs on startup. See the root README for profiles,
+ceilings, generation IDs, freshness behavior, direct-library tests, and unavailable
+sysroot/external/generated-code coverage.

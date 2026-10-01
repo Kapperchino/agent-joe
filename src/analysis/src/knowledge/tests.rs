@@ -310,3 +310,104 @@ fn knowledge_optional_headers_yield_to_owned_source_and_point_locations_route() 
     let rendered: serde_json::Value = serde_json::from_str(&index.shards[0].context).unwrap();
     assert!(rendered["secondary_headers"].as_array().unwrap().len() < 8);
 }
+
+#[test]
+fn knowledge_file_context_selects_exact_paths_ranges_and_bidirectional_related_text() {
+    let selected = source("src/lib.rs", "fn first() { target(); }\nfn second() {}\n");
+    let target = source("target.rs", "pub fn target() {}\n");
+    let caller = source("caller.rs", "fn caller() { first(); }\n");
+    let unrelated = source("other/src/lib.rs", "fn unrelated() {}\n");
+    let mut first = symbol("first", &selected, SymbolKind::Function);
+    first.origin = SymbolOrigin::Source {
+        location: SourceLocation {
+            path: selected.path().clone(),
+            span: ByteSpan::new(0, 25).unwrap(),
+        },
+    };
+    let mut second = symbol("second", &selected, SymbolKind::Function);
+    second.origin = SymbolOrigin::Source {
+        location: SourceLocation {
+            path: selected.path().clone(),
+            span: ByteSpan::new(25, selected.span().end()).unwrap(),
+        },
+    };
+    let symbols = vec![
+        first,
+        second,
+        symbol("target", &target, SymbolKind::Function),
+        symbol("caller", &caller, SymbolKind::Function),
+        symbol("unrelated", &unrelated, SymbolKind::Function),
+    ];
+    let path = selected.path().clone();
+    let index = index(graph(
+        vec![selected, target, caller, unrelated],
+        symbols,
+        vec![
+            relation("first", "target"),
+            relation("caller", "first"),
+            relation("unrelated", "second"),
+        ],
+    ));
+    let context = index
+        .file_context(&path, Some(LineSpan { start: 1, end: 2 }))
+        .unwrap();
+    assert_eq!(context.generation, "generation");
+    assert_eq!(context.path, path);
+    assert_eq!(context.related_total, 2);
+    assert!(!context.related_truncated);
+    assert_eq!(context.related[0].text, "fn caller() { first(); }\n");
+    assert_eq!(context.related[1].text, "pub fn target() {}\n");
+    assert_eq!(context.related[1].lines.start, 1);
+    assert_eq!(context.related[1].lines.end, 2);
+    assert!(!context.primary_shards.is_empty());
+    assert_eq!(
+        index
+            .file_context(&path, Some(LineSpan { start: 2, end: 3 }))
+            .unwrap()
+            .related_total,
+        1
+    );
+    assert!(
+        index
+            .file_context(
+                &SourcePath::try_from("missing.rs".to_owned()).unwrap(),
+                None
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn knowledge_file_context_bounds_deduplicates_and_preserves_utf8_excerpts() {
+    let main = source("main.rs", "fn main() {}\n");
+    let normal = symbol("main", &main, SymbolKind::Function);
+    let mut test = normal.clone();
+    test.id = SymbolId("main-test".into());
+    test.configuration = Configuration::Test;
+    let mut symbols = vec![normal, test];
+    let mut sources = vec![main];
+    let mut relations = Vec::new();
+    for number in 0..10 {
+        let id = format!("target{number}");
+        let target = source(&format!("{id}.rs"), "🦀".repeat(2100));
+        let normal = symbol(&id, &target, SymbolKind::Function);
+        let mut test = normal.clone();
+        test.id = SymbolId(format!("{id}-test"));
+        test.configuration = Configuration::Test;
+        relations.extend([relation("main", &id), relation("main-test", &test.id.0)]);
+        symbols.extend([normal, test]);
+        sources.push(target);
+    }
+    let index = index(graph(sources, symbols, relations));
+    let context = index
+        .file_context(&SourcePath::try_from("main.rs".to_owned()).unwrap(), None)
+        .unwrap();
+    assert_eq!(context.related_total, 10);
+    assert_eq!(context.related.len(), 8);
+    assert!(context.related_truncated);
+    for excerpt in context.related {
+        assert!(excerpt.truncated);
+        assert_eq!(excerpt.text, "🦀".repeat(2048));
+        assert_eq!(excerpt.location.span.len(), excerpt.text.len() as u32);
+    }
+}

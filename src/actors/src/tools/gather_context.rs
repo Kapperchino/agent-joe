@@ -58,7 +58,7 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for GatherContext {
     ) -> anyhow::Result<Self::Output> {
         super::delegated::run(
             input.context,
-            "find_files\nlist_directory\nread_file\ngrep\ngit\nreview_changes",
+            "find_files\nlist_directory\nknowledge\ngrep\ngit\nreview_changes",
             context,
             actor,
         )

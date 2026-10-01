@@ -73,6 +73,34 @@ fn workers_expose_one_cargo_tool_with_their_allowed_operations() {
     assert_eq!(writing, simple);
 }
 
+#[test]
+fn context_workers_expose_only_the_unified_knowledge_tool() {
+    use crate::workers::{read_worker::ReadWorker, write_worker::WriteWorker};
+    use analysis::contexts::{context::Context, rust_empty_context::RustEmptyContext};
+
+    fn context_tools<C: Context>(tools: Vec<ErasedToolRef<C, ActorContext<C>>>) -> Vec<String> {
+        tools
+            .iter()
+            .map(|tool| tool.name())
+            .filter(|name| {
+                matches!(
+                    name.as_str(),
+                    "knowledge" | "read_file" | "ask_immutable_worker"
+                )
+            })
+            .collect()
+    }
+
+    for names in [
+        context_tools(BaseWorker::<RustContext>::tools()),
+        context_tools(SimpleWorker::<RustContext>::tools()),
+        context_tools(ReadWorker::<RustEmptyContext>::tools()),
+        context_tools(WriteWorker::<RustEmptyContext>::tools()),
+    ] {
+        assert_eq!(names, ["knowledge"]);
+    }
+}
+
 struct RepositoryActor {
     actor: ActorRef<Message>,
     handle: tokio::task::JoinHandle<()>,
@@ -240,16 +268,16 @@ async fn patch_mismatch_continues_to_read_and_retry_in_both_worker_modes() {
         answer(
             reply,
             response(vec![tool(
-                "read_file",
+                "knowledge",
                 "read-current",
-                json!({"file_path": "target.txt"}),
+                json!({"action":"read","file_path": "target.txt"}),
             )]),
         );
         let (read, reply) = actor.request().await;
         assert!(matches!(
             latest_tool_result(&read),
             ContentBlock::ToolResult { content, is_error: None, .. }
-                if content.contains("1: current")
+                if serde_json::from_str::<Value>(content).unwrap()["content"] == "1: current"
         ));
         answer(
             reply,
@@ -426,13 +454,17 @@ async fn simple_and_delegated_turns_receive_scoped_rules_before_editing_and_read
         answer(
             reply,
             response(vec![tool(
-                "read_file",
+                "knowledge",
                 "read-new",
-                json!({"file_path": "docs/new.md", "range": {"start": 1, "end": 3}}),
+                json!({"action":"read","file_path": "docs/new.md", "range": {"start": 1, "end": 3}}),
             )]),
         );
         let (read, reply) = actor.request().await;
-        assert!(result_text(&read).contains("1: αβ\n2: second"));
+        assert!(matches!(
+            latest_tool_result(&read),
+            ContentBlock::ToolResult { content, is_error: None, .. }
+                if serde_json::from_str::<Value>(content).unwrap()["content"] == "1: αβ\n2: second"
+        ));
         answer(reply, response(vec![text("Created the Markdown file.")]));
         if matches!(mode, Mode::Delegated) {
             let (parent, reply) = actor.request().await;

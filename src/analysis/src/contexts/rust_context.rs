@@ -33,7 +33,7 @@ impl Context for RustContext {
 
     async fn get_ctx(&self) -> String {
         format!(
-            "project_root: {}\nUse find_files, list_directory, grep, and read_file to inspect current repository files. Line numbers start at one; range ends are exclusive. Discovery honors .gitignore and .ignore; explicit reads can access allowed ignored files. Rust analysis is optional; there is no complete symbol map in this context. Use inspect_context to inspect active scoped instructions and inventory limits.",
+            "project_root: {}\nUse find_files, list_directory, and grep to discover current repository files, then knowledge with action read and file_path to read their content and available related context. Line numbers start at one; range ends are exclusive. Discovery honors .gitignore and .ignore; explicit reads can access allowed ignored files. Use knowledge with action list to discover immutable context workers and action ask with worker_id and question to query one. List, ask, and semantic knowledge operations require the root with whole-project access; scoped delegated workers can use read. Rust analysis is optional; there is no complete symbol map in this context. Use inspect_context to inspect active scoped instructions and inventory limits.",
             self.cur_dir.display()
         )
     }

@@ -8,7 +8,6 @@ use ractor::{ActorProcessingErr, ActorRef};
 use std::marker::PhantomData;
 use tools::apply_patch::ApplyPatch;
 use tools::grep::GrepTool;
-use tools::read_file::ReadFile;
 use tools::tool_defs::{ErasedToolRef, erased_tool};
 use tools::web_search::WebSearch;
 
@@ -42,11 +41,6 @@ impl ContextWorker for SimpleWorker<RustContext> {
 
     fn tools() -> Vec<ErasedToolRef<Self::C, ActorContext<Self::C>>> {
         vec![
-            erased_tool::<
-                crate::tools::ask_immutable_worker::AskImmutableWorker,
-                Self::C,
-                ActorContext<Self::C>,
-            >(),
             erased_tool::<crate::tools::knowledge::Knowledge, Self::C, ActorContext<Self::C>>(),
             erased_tool::<tools::worktree::Worktree, Self::C, ActorContext<Self::C>>(),
             erased_tool::<tools::undo_changes::UndoChanges, Self::C, ActorContext<Self::C>>(),
@@ -55,7 +49,6 @@ impl ContextWorker for SimpleWorker<RustContext> {
             erased_tool::<tools::find_files::FindFiles, Self::C, ActorContext<Self::C>>(),
             erased_tool::<tools::list_directory::ListDirectory, Self::C, ActorContext<Self::C>>(),
             erased_tool::<tools::inspect_context::InspectContext, Self::C, ActorContext<Self::C>>(),
-            erased_tool::<ReadFile, Self::C, ActorContext<Self::C>>(),
             erased_tool::<GrepTool, Self::C, ActorContext<Self::C>>(),
             erased_tool::<ApplyPatch, Self::C, ActorContext<Self::C>>(),
             erased_tool::<tools::cargo_tools::Cargo, Self::C, ActorContext<Self::C>>(),

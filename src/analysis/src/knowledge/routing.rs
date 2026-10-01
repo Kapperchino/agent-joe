@@ -37,6 +37,26 @@ pub struct SymbolInspection {
     pub relations_truncated: bool,
 }
 
+#[derive(Debug, Serialize)]
+pub struct RelatedText {
+    pub symbol: SymbolHeader,
+    pub location: SourceLocation,
+    pub lines: LineSpan,
+    pub text: String,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FileContext {
+    pub generation: String,
+    pub path: SourcePath,
+    pub primary_shards: BTreeSet<usize>,
+    pub related_shards: BTreeSet<usize>,
+    pub related: Vec<RelatedText>,
+    pub related_total: usize,
+    pub related_truncated: bool,
+}
+
 struct LocatedShard {
     span: ByteSpan,
     shard: usize,
@@ -211,6 +231,115 @@ impl Query {
 }
 
 impl KnowledgeIndex {
+    pub fn file_context(
+        &self,
+        path: &SourcePath,
+        range: Option<LineSpan>,
+    ) -> anyhow::Result<FileContext> {
+        let sources: BTreeMap<_, _> = self
+            .graph
+            .data()
+            .sources
+            .iter()
+            .map(|source| (source.path(), source))
+            .collect();
+        let source = sources
+            .get(path)
+            .context("File is not in the prepared knowledge generation")?;
+        let selected: BTreeSet<_> = self
+            .graph
+            .data()
+            .symbols
+            .iter()
+            .filter_map(|symbol| {
+                symbol
+                    .origin
+                    .location()
+                    .filter(|location| {
+                        &location.path == path
+                            && range.is_none_or(|range| {
+                                location.span.lines(source.text()).is_ok_and(|lines| {
+                                    lines.start < range.end && range.start < lines.end
+                                })
+                            })
+                    })
+                    .map(|_| symbol.id.clone())
+            })
+            .collect();
+        let mut adjacent = BTreeSet::new();
+        for relation in &self.graph.data().relations {
+            for target in relation.target.symbols() {
+                match (
+                    selected.contains(&relation.source),
+                    selected.contains(target),
+                ) {
+                    (true, false) => {
+                        adjacent.insert(target.clone());
+                    }
+                    (false, true) => {
+                        adjacent.insert(relation.source.clone());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut locations = BTreeSet::new();
+        let related: Vec<_> = adjacent
+            .iter()
+            .filter_map(|id| self.routing.symbols.get(id))
+            .map(|index| &self.graph.data().symbols[*index])
+            .filter_map(|symbol| symbol.origin.location().map(|location| (symbol, location)))
+            .filter(|(_, location)| locations.insert((*location).clone()))
+            .collect();
+        let related_total = related.len();
+        let excerpts = related
+            .into_iter()
+            .take(8)
+            .map(|(symbol, location)| {
+                let source = sources
+                    .get(&location.path)
+                    .context("Missing related source")?;
+                let original = location.span.text(source.text())?;
+                let text = clipped(original, 2048);
+                let span = ByteSpan::new(
+                    location.span.start(),
+                    location.span.start() + text.len() as u32,
+                )?;
+                Ok(RelatedText {
+                    symbol: SymbolHeader::from(symbol),
+                    location: SourceLocation {
+                        path: location.path.clone(),
+                        span,
+                    },
+                    lines: span.lines(source.text())?,
+                    truncated: text.len() < original.len(),
+                    text,
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let primary_shards = self
+            .routing
+            .file_shards
+            .get(path)
+            .cloned()
+            .unwrap_or_default();
+        let related_shards = adjacent
+            .iter()
+            .flat_map(|id| self.routing.symbol_shards.get(id).into_iter().flatten())
+            .filter(|shard| !primary_shards.contains(shard))
+            .copied()
+            .collect();
+        Ok(FileContext {
+            generation: self.generation.clone(),
+            path: path.clone(),
+            primary_shards,
+            related_shards,
+            related: excerpts,
+            related_total,
+            related_truncated: related_total > 8,
+        })
+    }
+
     pub fn search(&self, text: &str, offset: usize, limit: usize) -> anyhow::Result<RoutePage> {
         let query = Query::new(text, offset, limit)?;
         let sources: BTreeMap<_, _> = self
