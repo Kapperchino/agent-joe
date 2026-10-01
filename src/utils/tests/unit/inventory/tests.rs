@@ -85,6 +85,57 @@ fn inventory_covers_non_rust_empty_hidden_and_new_files_with_nested_ignore_rules
 }
 
 #[test]
+fn inventory_excludes_protected_storage_without_reporting_skipped_entries() {
+    let fixture = Fixture::new();
+    fixture.write("allowed.txt", "needle");
+    for path in [
+        ".git",
+        ".turbo-code",
+        ".joe-worktrees",
+        "nested/.TURBO-CODE",
+    ] {
+        let directory = fixture.root.join(path);
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("private"), "secret").unwrap();
+    }
+    for inventory in [
+        Inventory::scan(&fixture.workspace).unwrap(),
+        Inventory::scan_git(&fixture.workspace).unwrap(),
+    ] {
+        assert_eq!(inventory.files, vec![PathBuf::from("allowed.txt")]);
+        assert_eq!(inventory.skipped, 0);
+    }
+    assert!(
+        fixture
+            .workspace
+            .read(Path::new(".turbo-code/private"))
+            .is_err()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn inventory_excludes_links_before_inspecting_them() {
+    let fixture = Fixture::new();
+    fixture.write("allowed.txt", "needle");
+    for path in [".git", ".turbo-code", ".joe-worktrees"] {
+        std::os::unix::fs::symlink("missing", fixture.root.join(path)).unwrap();
+    }
+    for inventory in [
+        Inventory::scan(&fixture.workspace).unwrap(),
+        Inventory::scan_git(&fixture.workspace).unwrap(),
+    ] {
+        assert_eq!(inventory.files, vec![PathBuf::from("allowed.txt")]);
+        assert_eq!(inventory.skipped, 0);
+    }
+    std::os::unix::fs::symlink("missing", fixture.root.join("target")).unwrap();
+    assert_eq!(Inventory::scan(&fixture.workspace).unwrap().skipped, 0);
+    assert_eq!(Inventory::scan_git(&fixture.workspace).unwrap().skipped, 1);
+    std::os::unix::fs::symlink("missing", fixture.root.join("source.rs")).unwrap();
+    assert_eq!(Inventory::scan(&fixture.workspace).unwrap().skipped, 1);
+}
+
+#[test]
 fn discovery_matches_unicode_text_and_literal_paths_with_filters_and_limits() {
     let fixture = Fixture::new();
     for path in [
