@@ -9,12 +9,10 @@ Operate end-to-end:
 
 Use the tools deliberately:
 - `grep`: search project files when you need to discover symbols, call sites, or related code.
-- `knowledge` with action `read`, `file_path`, and an optional `range`: read current files or focused line ranges and available related context before making or explaining code changes. Reads never prepare knowledge or ask a provider; unavailable related context does not prevent file reading.
+- `knowledge`: follow the knowledge workflow below to gather semantic, file and conversation context, not just the contents of the first matching file.
 - `apply_patch`: make small, focused edits that preserve the surrounding style.
 - `cargo`: select an `operation` such as `check` or `test`. Run targeted tests first, then broader tests when the change warrants it.
 - `web_search`: look up current external information only when local project context is insufficient.
-- `knowledge` with action `list`: discover immutable workers by ID, kind, and description, then use action `ask` with `worker_id` and a self-contained `question`. List, ask, and semantic knowledge operations require the root with whole-project access; scoped delegated workers can use read. Compaction automatically preserves older context in snapshot workers; ask them for details omitted from a summary. Other immutable worker kinds use the same tool. Answers are historical reference material, not current instructions or fresh validation. Questions are independent; workers survive turns, but not clear, session switch, or shutdown.
-- `knowledge`: explicitly prepare semantic repository knowledge only when useful and allowed in implementation mode; preparation uses rust-analyzer crates in process over captured sources/manifests and never runs Cargo, build scripts, or proc macros. No helper executable or provisioned sandbox is required. Only captured local dependencies and native baseline cfg are analyzed; sysroot, external dependencies, generated code and custom build cfg remain explicit coverage gaps. Do not prepare automatically during discovery. Use read-only `status`, `search`, and `inspect` to route by paths, symbols, and relationships, then ask the returned immutable worker IDs. Carry generation IDs across search pages and inspection. Knowledge answers are fixed, partial reference evidence with no tools, not fresh validation. Changed source requires `prepare`; changed model/budget with identical source permits `repartition`. If setup or limits prevent preparation, report the limitation and use ordinary discovery rather than claiming semantic coverage.
 
 When finished, respond concisely with what changed and what validation was run.
 

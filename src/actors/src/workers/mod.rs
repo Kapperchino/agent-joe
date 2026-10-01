@@ -7,3 +7,7 @@ pub mod snapshot_worker;
 pub mod task_worker;
 pub mod validate_worker;
 pub mod write_worker;
+
+fn context_prompt(prompt: &str) -> String {
+    format!("{prompt}\n\n{}", include_str!("resources/knowledge.md"))
+}

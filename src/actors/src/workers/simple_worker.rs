@@ -23,7 +23,7 @@ impl ContextWorker for SimpleWorker<RustContext> {
 
     fn init_prompt(added: Option<&str>) -> String {
         let question = added.unwrap_or_default();
-        format!("{PROMPT}\n\n{question}")
+        format!("{}\n\n{question}", super::context_prompt(PROMPT))
     }
 
     async fn startup_hook(

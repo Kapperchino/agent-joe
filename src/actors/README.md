@@ -121,6 +121,17 @@ workers and `ask` accepts `worker_id` and `question`, including compaction snaps
 Preparation is classified as `Validate` from its parsed input, `ask` as
 `DelegateRead`, and other actions as `Read`. Delegated/restricted contexts can read
 allowed files, but cannot query whole-repository knowledge or list/ask immutable
-workers. No preparation occurs on startup. See the root README for profiles,
-ceilings, generation IDs, freshness behavior, direct-library tests, and unavailable
-sysroot/external/generated-code coverage.
+workers. No preparation occurs on startup.
+
+Main and simple root workers share the actionable workflow in
+`src/workers/resources/knowledge.md`. Nontrivial investigations and cross-module
+changes check `status`, explicitly `prepare` absent or source-stale knowledge in
+implementation mode, route with `search`/`inspect`, and `ask` relevant immutable
+workers before choosing an implementation. Current reads confirm source before
+edits; `list`/`ask` recover missing conversation details after compaction.
+Single-file tasks can stay with focused discovery and reads. Plan mode cannot
+prepare, and scoped children rely on parent-provided semantic context. Preparation
+or query failures must be reported before falling back to ordinary discovery;
+context answers do not replace behavioral validation. Source changes require
+preparation again, while model/budget-only changes permit `repartition`. `clear`
+intentionally retires repository knowledge without discarding snapshots.

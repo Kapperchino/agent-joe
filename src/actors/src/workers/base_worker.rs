@@ -21,7 +21,7 @@ impl ContextWorker for BaseWorker<RustContext> {
     type C = RustContext;
 
     fn init_prompt(_: Option<&str>) -> String {
-        PROMPT.to_owned()
+        super::context_prompt(PROMPT)
     }
 
     async fn startup_hook(

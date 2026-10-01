@@ -101,6 +101,122 @@ fn context_workers_expose_only_the_unified_knowledge_tool() {
     }
 }
 
+#[test]
+fn knowledge_workflow_is_shared_by_root_prompts_and_preserves_added_context() {
+    let workflow = include_str!("../../src/workers/resources/knowledge.md");
+    for action in [
+        "status",
+        "prepare",
+        "search",
+        "inspect",
+        "ask",
+        "read",
+        "list",
+        "repartition",
+        "clear",
+    ] {
+        assert!(workflow.contains(&format!("\"action\":\"{action}\"")));
+    }
+    for boundary in [
+        "Plan mode",
+        "Delegated or restricted workers",
+        "Changed source requires",
+        "not fresh validation",
+        "Do not repeatedly retry an unchanged failure",
+    ] {
+        assert!(workflow.contains(boundary));
+    }
+    for prompt in [
+        BaseWorker::<RustContext>::init_prompt(None),
+        SimpleWorker::<RustContext>::init_prompt(Some("Selected task context")),
+    ] {
+        assert!(prompt.contains(workflow));
+        assert_eq!(prompt.matches("Knowledge workflow:").count(), 1);
+        assert!(!prompt.contains("Do not prepare automatically during discovery"));
+    }
+    assert!(
+        SimpleWorker::<RustContext>::init_prompt(Some("Selected task context"))
+            .ends_with("\n\nSelected task context")
+    );
+    let knowledge = SimpleWorker::<RustContext>::tools()
+        .into_iter()
+        .find(|tool| tool.name() == "knowledge")
+        .unwrap()
+        .definition();
+    match knowledge {
+        ToolDefinition::Client { description, .. } => {
+            for instruction in [
+                "For nontrivial or cross-module work",
+                "search/inspect/status",
+                "All actions except read require the root conversation",
+                "report the limitation",
+            ] {
+                assert!(description.contains(instruction));
+            }
+        }
+        _ => panic!("Knowledge must be a client tool"),
+    }
+}
+
+#[tokio::test]
+async fn knowledge_workflow_reaches_root_requests_without_startup_preparation() {
+    let workflow = include_str!("../../src/workers/resources/knowledge.md");
+    for mode in [Mode::Simple, Mode::Delegated] {
+        let workspace = session::test_support::Workspace::new();
+        let actor = match mode {
+            Mode::Simple => RepositoryActor::new(SimpleWorker::new(), workspace.path.clone()).await,
+            Mode::Delegated => {
+                RepositoryActor::new(BaseWorker::new(), workspace.path.clone()).await
+            }
+        };
+        actor
+            .actor
+            .send_message(Message::StartWork(Some(
+                "Investigate callers and dependency interactions".into(),
+            )))
+            .unwrap();
+        let (request, reply) = actor.request().await;
+        assert!(request.system.as_deref().unwrap().contains(workflow));
+        let workspace_context = request
+            .messages
+            .iter()
+            .map(|message| message.text())
+            .find(|text| text.starts_with("project_root:"))
+            .unwrap();
+        for instruction in [
+            "use knowledge status, prepare",
+            "inspect relationships, and ask returned worker IDs",
+            "Use list and ask to recover missing historical context",
+            "Plan mode cannot prepare",
+            "report the limitation",
+        ] {
+            assert!(workspace_context.contains(instruction));
+        }
+        assert!(!workspace_context.contains("Rust analysis is optional"));
+        answer(
+            reply,
+            response(vec![tool(
+                "knowledge",
+                "knowledge-status",
+                json!({"action":"status"}),
+            )]),
+        );
+        let (request, reply) = actor.request().await;
+        assert!(matches!(
+            latest_tool_result(&request),
+            ContentBlock::ToolResult { content, is_error: None, .. }
+                if serde_json::from_str::<Value>(content).unwrap()["state"] == "absent"
+        ));
+        answer(
+            reply,
+            response(vec![text(
+                "No repository knowledge was prepared on startup.",
+            )]),
+        );
+        actor.stop().await;
+    }
+}
+
 struct RepositoryActor {
     actor: ActorRef<Message>,
     handle: tokio::task::JoinHandle<()>,
