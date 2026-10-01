@@ -7,6 +7,7 @@ use clients::llm::{self, LLmClient};
 use commands::command::{Command, ResumeTarget};
 use common_models::tui_models::{ActorToTuiPacket, SessionMessage, SessionTranscript};
 use conversation::Conversation;
+use tools::tool_defs::ErasedToolRef;
 use turn_engine::machine::TurnMachine;
 use turn_engine::turn::FollowUp;
 use utils::git::worktrees::session::PruneMode;
@@ -107,15 +108,16 @@ pub enum SessionCommand<C: Context> {
     },
 }
 
-pub struct SessionCommands<'a, C: Context> {
+pub struct SessionCommands<'a, C: Context, A> {
     pub context: &'a C,
     pub runtime: &'a SessionRuntime,
     pub client: &'a LLmClient,
     pub turn: &'a TurnMachine,
     pub conversation: &'a Conversation,
+    pub tools: &'a [ErasedToolRef<C, A>],
 }
 
-impl<C: Context + Clone> SessionCommands<'_, C> {
+impl<C: Context + Clone, A> SessionCommands<'_, C, A> {
     pub async fn run(&self, command: &Command) -> anyhow::Result<SessionCommand<C>> {
         let store = self
             .runtime
@@ -149,9 +151,13 @@ impl<C: Context + Clone> SessionCommands<'_, C> {
             SessionAction::Pick => SessionCommand::Report(ActorToTuiPacket::SessionChoices(Ok(
                 store.resume_choices(&self.client.session_provider(), current)?,
             ))),
-            SessionAction::Current { id } => SessionCommand::Report(
-                ActorToTuiPacket::SessionResumed(Ok(session_transcript(self.conversation, id))),
-            ),
+            SessionAction::Current { id } => {
+                SessionCommand::Report(ActorToTuiPacket::SessionResumed(Ok(session_transcript(
+                    self.conversation,
+                    id,
+                    self.tools,
+                ))))
+            }
             SessionAction::Resume { id } => {
                 let workspace = self
                     .runtime
@@ -167,6 +173,7 @@ impl<C: Context + Clone> SessionCommands<'_, C> {
                 let packet = ActorToTuiPacket::SessionResumed(Ok(session_transcript(
                     &activation.state.conversation,
                     id,
+                    self.tools,
                 )));
                 SessionCommand::Activate {
                     activation: Box::new(activation),
@@ -204,7 +211,11 @@ impl<C: Context + Clone> SessionCommands<'_, C> {
     }
 }
 
-fn session_transcript(conversation: &Conversation, id: &str) -> SessionTranscript {
+fn session_transcript<C: Context, A>(
+    conversation: &Conversation,
+    id: &str,
+    tools: &[ErasedToolRef<C, A>],
+) -> SessionTranscript {
     let messages = conversation
         .history()
         .iter()
@@ -221,13 +232,19 @@ fn session_transcript(conversation: &Conversation, id: &str) -> SessionTranscrip
                         Some(SessionMessage::Assistant(text.clone()))
                     }
                     (_, llm::ContentBlock::ToolBlock { name, input, .. }) => {
-                        Some(SessionMessage::Tool(format!(
-                            "{name}: {}",
-                            serde_json::Value::Object(input.clone())
-                        )))
-                    }
-                    (_, llm::ContentBlock::ToolResult { content, .. }) => {
-                        Some(SessionMessage::Tool(content.clone()))
+                        let display = tools
+                            .iter()
+                            .find(|tool| tool.name() == name.as_ref())
+                            .and_then(|tool| {
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    tool.display_erased(&serde_json::Value::Object(input.clone()))
+                                }))
+                                .ok()
+                                .and_then(Result::ok)
+                            })
+                            .filter(|display| !display.trim().is_empty())
+                            .unwrap_or_else(|| format!("- {name}"));
+                        Some(SessionMessage::Tool(display))
                     }
                     (_, llm::ContentBlock::ThinkingBlock { thinking, .. }) => {
                         Some(SessionMessage::Thinking(thinking.clone()))
@@ -241,11 +258,20 @@ fn session_transcript(conversation: &Conversation, id: &str) -> SessionTranscrip
                                 .join("\n"),
                         ))
                     }
-                    (_, llm::ContentBlock::RuntimeUpdate(_)) => None,
+                    (
+                        _,
+                        llm::ContentBlock::RuntimeUpdate(_) | llm::ContentBlock::ToolResult { .. },
+                    ) => None,
                     (_, llm::ContentBlock::OpenAICompaction(_)) => Some(SessionMessage::Thinking(
                         "Provider-compacted context".into(),
                     )),
                 })
+        })
+        .filter(|message| match message {
+            SessionMessage::User(text)
+            | SessionMessage::Assistant(text)
+            | SessionMessage::Tool(text)
+            | SessionMessage::Thinking(text) => !text.trim().is_empty(),
         })
         .collect();
     SessionTranscript {
@@ -290,3 +316,7 @@ fn list_sessions(store: &SessionStore, current: Option<&str>) -> anyhow::Result<
         rows.join("\n")
     ))
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/transcript_test.rs"]
+mod tests;

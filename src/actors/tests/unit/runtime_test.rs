@@ -1504,6 +1504,7 @@ async fn failed_validation_is_an_error_with_diagnostics_in_history() {
 #[tokio::test]
 async fn durable_session_resumes_after_actor_restart_and_clear_keeps_the_archive() {
     use commands::command::{Command, ResumeTarget};
+    use common_models::tui_models::SessionMessage;
     let workspace = session::test_support::Workspace::new();
     let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
     let store = runtime.sessions.clone().unwrap();
@@ -1512,6 +1513,13 @@ async fn durable_session_resumes_after_actor_restart_and_clear_keeps_the_archive
     let id = store.list().unwrap()[0].id.clone();
     h.start("Keep existing changes; fix this bug");
     answer(h.request().await.1, response(vec![call("write", "edit")]));
+    let live_tools = match h
+        .event(|packet| matches!(packet, ActorToTuiPacket::ToolUse(_)))
+        .await
+    {
+        ActorToTuiPacket::ToolUse(lines) => lines,
+        _ => panic!("Expected live tool summaries"),
+    };
     within(entered.recv_async())
         .await
         .unwrap()
@@ -1556,11 +1564,41 @@ async fn durable_session_resumes_after_actor_restart_and_clear_keeps_the_archive
     let restored = h
         .event(|packet| matches!(packet, ActorToTuiPacket::SessionResumed(_)))
         .await;
+    let transcript = match restored {
+        ActorToTuiPacket::SessionResumed(Ok(transcript)) => transcript,
+        packet => panic!("Expected a restored transcript, got {packet:?}"),
+    };
+    assert_eq!(transcript.id, id);
+    assert!(transcript.messages.contains(&SessionMessage::User(
+        "Keep existing changes; fix this bug".into()
+    )));
     assert!(
-        matches!(restored, ActorToTuiPacket::SessionResumed(Ok(transcript)) if transcript.id == id
-        && transcript.messages.contains(&common_models::tui_models::SessionMessage::User("Keep existing changes; fix this bug".into()))
-        && transcript.messages.contains(&common_models::tui_models::SessionMessage::Assistant("Fix validated".into()))
-        && !transcript.messages.iter().any(|message| matches!(message, common_models::tui_models::SessionMessage::User(text) if text.starts_with("workspace revision"))))
+        transcript
+            .messages
+            .contains(&SessionMessage::Assistant("Fix validated".into()))
+    );
+    assert!(!transcript.messages.iter().any(
+        |message| matches!(message, SessionMessage::User(text) if text.starts_with("workspace revision"))
+    ));
+    let resumed_tools = transcript
+        .messages
+        .iter()
+        .filter_map(|message| match message {
+            SessionMessage::Tool(text) => Some(text.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(resumed_tools, live_tools);
+    h.actor
+        .send_message(Message::Command(Command::Resume(ResumeTarget::Session {
+            id: id.clone(),
+        })))
+        .unwrap();
+    let current = h
+        .event(|packet| matches!(packet, ActorToTuiPacket::SessionResumed(_)))
+        .await;
+    assert!(
+        matches!(current, ActorToTuiPacket::SessionResumed(Ok(current)) if current.messages == transcript.messages)
     );
     assert!(h.requests.is_empty());
     assert!(entered.is_empty());

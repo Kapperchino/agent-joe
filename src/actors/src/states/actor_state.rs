@@ -267,6 +267,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             client: &self.llm,
             turn: &self.turn,
             conversation: &self.session.conversation,
+            tools: &self.services.tools,
         }
         .run(command)
         .await?;
