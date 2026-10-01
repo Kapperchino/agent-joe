@@ -60,7 +60,7 @@ actor stops retain a post-stop cleanup fallback when mailbox delivery is unavail
 | Local      | Response api fully supported                           |
 
 Context compaction runs automatically at or before 90% of the model's context
-window, reserving room for response growth and snapshot questions, or manually
+window, reserving room for the response, or manually
 with `/compact` while idle.
 The default `--native-compaction auto` uses streaming native compaction with Codex login,
 including Astra, and the standalone compaction endpoint with the public OpenAI
@@ -252,19 +252,22 @@ This allows reuse of the parent's cached prefix while the provider retains it.
 Compaction changes the parent's active prefix but does not delete the provider's
 old cache. Each question runs independently; its answer is not added to the snapshot.
 
-Compaction snapshots inherit the parent's context ceiling, including
-`--context-tokens` overrides, and reserve at most 4096 tokens for each answer.
-They use the same token estimate as the parent without wrapping context in JSON.
+Compaction snapshots retain context up to the parent's full context ceiling,
+including `--context-tokens` overrides. Their local request ceiling adds space for
+the question-only instruction, the full advertised question allowance, and an
+answer of at most 4096 tokens. This extra space does not reduce the parent's
+context allowance or compaction threshold. Provider context limits still apply.
+Snapshots use the same token estimate as the parent without wrapping context in JSON.
 Compaction requires a validated snapshot before calling the compaction provider or
-changing the checkpoint. Capture reserves space for the question-only instruction,
-the full advertised question allowance, and the answer. The allowance scales with
-the context size and is returned as `max_question_bytes` when workers are listed.
-Every nonempty question within that allowance fits the snapshot's local context
-budget. Parent compaction triggers early enough to leave room for a response and
-snapshot questions. An oversized snapshot blocks compaction without changing
-history; snapshots are never silently truncated or compacted. Compaction selects
-the largest older prefix of complete exchanges that fits its input budget and retains at least the two latest
-exchanges in the parent's active context. The full saved transcript is preserved.
+changing the checkpoint. The question allowance scales with the captured context
+limit and is returned as `max_question_bytes` when workers are listed. Every
+nonempty question within that allowance fits the snapshot's local request budget.
+Snapshot questions bypass compaction and its timeout and recovery handling.
+Captured context exceeding the parent's full ceiling blocks compaction without
+changing history; snapshots are never silently truncated or compacted. Compaction
+selects the largest older prefix of complete exchanges that fits its input budget
+and retains at least the two latest exchanges in the parent's active context.
+The full saved transcript is preserved.
 
 Both the main worker and simple worker expose `ask_immutable_worker`:
 
@@ -410,8 +413,8 @@ Snapshot workers implement `ContextWorker` and use its shared `Worker` handler.
 Send `actor::Message::CaptureSnapshot` to a settled source actor to capture the
 same active request context the parent uses, including its instructions, tool
 schemas, existing compaction memory, runtime state, and provider configuration.
-Capture rejects active turns, incomplete tool exchanges, and context that cannot
-fit the reserved question and answer space.
+Capture rejects active turns, incomplete tool exchanges, and context exceeding
+the parent's full context ceiling. Question and answer space is added separately.
 
 Register the captured `Snapshot` with `ImmutableWorker::snapshot`. Each question
 runs through the normal worker lifecycle with the frozen parent prefix, the

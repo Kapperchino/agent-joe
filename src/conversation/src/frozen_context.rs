@@ -8,22 +8,37 @@ const JSON_BYTES_PER_INPUT_BYTE: usize = 6;
 
 #[derive(Clone, Copy)]
 pub struct SnapshotBudget {
+    context_tokens: usize,
+    question_bytes: usize,
     limits: ContextLimits,
 }
 
 impl SnapshotBudget {
-    pub fn new(limits: ContextLimits) -> Self {
-        Self { limits }
+    pub fn new(context: ContextLimits) -> anyhow::Result<Self> {
+        let question_bytes = (context.input() / 64).min(MAX_QUESTION_BYTES);
+        let extra = question_bytes * JSON_BYTES_PER_INPUT_BYTE
+            + QUESTION_OVERHEAD_TOKENS
+            + context.response() as usize;
+        let ceiling = context.ceiling().checked_add(extra).ok_or_else(|| {
+            anyhow::anyhow!("Snapshot context limit leaves no room for questions and answers")
+        })?;
+        Ok(Self {
+            context_tokens: context.ceiling(),
+            question_bytes,
+            limits: ContextLimits::new(ceiling, context.response())?,
+        })
     }
 
     pub fn question_bytes(self) -> usize {
-        (self.limits.input() / 64).min(MAX_QUESTION_BYTES)
+        self.question_bytes
     }
 
     pub fn context_tokens(self) -> usize {
-        self.limits.input().saturating_sub(
-            self.question_bytes() * JSON_BYTES_PER_INPUT_BYTE + QUESTION_OVERHEAD_TOKENS,
-        )
+        self.context_tokens
+    }
+
+    pub fn limits(self) -> ContextLimits {
+        self.limits
     }
 }
 
@@ -42,7 +57,7 @@ impl FrozenContext {
             .chain(request.messages.iter().cloned())
             .collect::<Vec<_>>();
         CompleteHistory::new(&history)?;
-        let budget = SnapshotBudget::new(limits);
+        let budget = SnapshotBudget::new(limits)?;
         let required = estimated_tokens(&request)?;
         match required <= budget.context_tokens() {
             true => Ok(Self {
@@ -53,11 +68,14 @@ impl FrozenContext {
                 budget,
             }),
             false => Err(anyhow::anyhow!(
-                "Snapshot context requires {required} tokens but only {} are available after reserving space for a {}-byte question and the answer; context was not truncated or compacted",
+                "Snapshot context requires {required} tokens but its captured context limit is {}; context was not truncated or compacted",
                 budget.context_tokens(),
-                budget.question_bytes(),
             )),
         }
+    }
+
+    pub fn limits(&self) -> ContextLimits {
+        self.budget.limits()
     }
 
     pub fn max_question_bytes(&self) -> usize {

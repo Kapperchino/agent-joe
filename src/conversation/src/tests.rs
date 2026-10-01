@@ -17,24 +17,19 @@ fn input() -> ContextInput {
 }
 
 #[test]
-fn compaction_trigger_reserves_growth_and_snapshot_questions() {
+fn compaction_trigger_uses_the_parent_budget_without_snapshot_reservations() {
     for limits in [
         ContextLimits::new(4096, 1024).unwrap(),
         ContextLimits::new(12_000, 2048).unwrap(),
         ContextLimits::new(272_000, 16_000).unwrap(),
     ] {
-        let snapshot = crate::frozen_context::SnapshotBudget::new(limits.snapshot());
-        assert!(limits.trigger() + limits.response() as usize <= snapshot.context_tokens());
-        assert!(limits.trigger() <= limits.ceiling() * 9 / 10);
-        assert!(limits.trigger() <= limits.input());
-        let mut request = ClientRequest::new(vec![Message::new("parent context".into())]);
-        let padding = limits.trigger() - estimated_tokens(&request).unwrap() - 1;
-        request.system = Some(" word".repeat(padding));
-        assert_eq!(estimated_tokens(&request).unwrap(), limits.trigger() - 1);
-        request.messages.push(Message::new_assistant(
-            " word".repeat(limits.response() as usize),
-        ));
-        assert!(crate::frozen_context::FrozenContext::new(request, limits.snapshot()).is_ok());
+        let snapshot = crate::frozen_context::SnapshotBudget::new(limits.snapshot()).unwrap();
+        assert_eq!(snapshot.context_tokens(), limits.ceiling());
+        assert_eq!(
+            limits.trigger(),
+            (limits.ceiling() * 9 / 10).min(limits.input())
+        );
+        assert!(snapshot.limits().input() > limits.ceiling());
     }
 }
 
@@ -44,11 +39,11 @@ fn snapshot_at_its_context_boundary_fits_every_admitted_question() {
 
     for ceiling in [4096, 16_000, 272_000] {
         let limits = ContextLimits::new(ceiling, 1024).unwrap();
-        let budget = SnapshotBudget::new(limits);
+        let budget = SnapshotBudget::new(limits).unwrap();
         let mut request = ClientRequest::new(vec![Message::new("parent context".into())]);
         let padding = budget.context_tokens() - estimated_tokens(&request).unwrap();
         request.system = Some(" word".repeat(padding));
-        assert_eq!(estimated_tokens(&request).unwrap(), budget.context_tokens());
+        assert_eq!(estimated_tokens(&request).unwrap(), limits.ceiling());
         let parent = serde_json::to_value(&request.messages).unwrap();
         let frozen = FrozenContext::new(request.clone(), limits).unwrap();
         let allowance = frozen.max_question_bytes();
@@ -66,7 +61,8 @@ fn snapshot_at_its_context_boundary_fits_every_admitted_question() {
         ] {
             assert_eq!(question.len(), allowance);
             let asked = frozen.question_request(question).unwrap();
-            assert!(estimated_tokens(&asked).unwrap() <= limits.input());
+            assert!(estimated_tokens(&asked).unwrap() > limits.ceiling());
+            assert!(estimated_tokens(&asked).unwrap() <= frozen.limits().input());
             assert_eq!(
                 serde_json::to_value(&asked.messages[..request.messages.len()]).unwrap(),
                 parent
@@ -77,9 +73,17 @@ fn snapshot_at_its_context_boundary_fits_every_admitted_question() {
         assert!(FrozenContext::new(request, limits).is_err());
     }
     assert_eq!(
-        SnapshotBudget::new(ContextLimits::new(2_000_000, 1024).unwrap()).question_bytes(),
+        SnapshotBudget::new(ContextLimits::new(2_000_000, 1024).unwrap())
+            .unwrap()
+            .question_bytes(),
         MAX_QUESTION_BYTES
     );
+}
+
+#[test]
+fn snapshot_budget_rejects_overflow_when_adding_question_and_answer_space() {
+    let limits = ContextLimits::new(usize::MAX, 1024).unwrap();
+    assert!(crate::frozen_context::SnapshotBudget::new(limits).is_err());
 }
 
 #[test]

@@ -1,7 +1,7 @@
 use super::*;
 use clients::llm::{Message, StreamEvent, StreamProvider};
 use conversation::context::estimated_tokens;
-use conversation::frozen_context::QUESTION_INSTRUCTIONS;
+use conversation::frozen_context::{QUESTION_INSTRUCTIONS, SnapshotBudget};
 use futures::{future::BoxFuture, stream::BoxStream};
 use std::sync::Arc;
 
@@ -142,14 +142,20 @@ fn native_compaction_and_reasoning_keep_the_same_provider_prefix() {
 }
 
 #[test]
-fn compaction_snapshot_uses_the_parent_window_and_a_smaller_response_reserve() {
+fn compaction_snapshot_adds_question_and_answer_space_to_the_parent_window() {
     let request = ClientRequest::new(vec![Message::new("full context ".repeat(20_000))]);
     let limits = ContextLimits::new(24_000, 2048).unwrap();
     assert!(Snapshot::new(request.clone(), &client(), limits, Duration::from_secs(1)).is_err());
     assert!(Snapshot::for_compaction(request, &client(), limits, Duration::from_secs(1)).is_err());
     let snapshot =
         Snapshot::for_compaction(context(), &client(), limits, Duration::from_secs(1)).unwrap();
-    assert_eq!(snapshot.limits.ceiling(), limits.ceiling());
+    assert_eq!(
+        snapshot.limits.ceiling(),
+        SnapshotBudget::new(limits.snapshot())
+            .unwrap()
+            .limits()
+            .ceiling()
+    );
     assert_eq!(snapshot.limits.response(), 2048);
 
     let snapshot = Snapshot::for_compaction(
@@ -174,7 +180,13 @@ fn compaction_snapshot_inherits_a_parent_context_override() {
         .unwrap();
     assert!(estimated_tokens(&request).unwrap() > client().context_window());
     assert!(estimated_tokens(&request).unwrap() <= snapshot.limits.input());
-    assert_eq!(snapshot.limits.ceiling(), limits.ceiling());
+    assert_eq!(
+        snapshot.limits.ceiling(),
+        SnapshotBudget::new(limits.snapshot())
+            .unwrap()
+            .limits()
+            .ceiling()
+    );
     assert_eq!(snapshot.limits.response(), 4096);
 }
 
@@ -227,7 +239,12 @@ fn model_override_determines_the_frozen_context_budget() {
         .unwrap();
         assert_eq!(
             snapshot.limits.ceiling(),
-            clients::models::context_window(requested)
+            SnapshotBudget::new(
+                ContextLimits::new(clients::models::context_window(requested), 1024).unwrap()
+            )
+            .unwrap()
+            .limits()
+            .ceiling()
         );
         assert_eq!(snapshot.context.request().model.as_deref(), Some(requested));
         assert!(

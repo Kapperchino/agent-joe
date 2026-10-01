@@ -77,6 +77,7 @@ impl Snapshot {
             false => Ok(()),
         }?;
         let frozen = FrozenContext::new(request, limits)?;
+        let limits = frozen.limits();
         Ok(Self {
             context: frozen,
             client: client.snapshot(),

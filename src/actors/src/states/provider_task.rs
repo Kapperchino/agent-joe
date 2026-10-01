@@ -66,12 +66,25 @@ impl ProviderInput {
     async fn prepare(
         self,
         task: &mut ProviderTask,
-    ) -> anyhow::Result<crate::compactor::PreparedRequest> {
+    ) -> Result<crate::compactor::PreparedRequest, Failure> {
         match self {
-            Self::Conversation(input) => crate::compactor::prepare(&input, task).await,
-            Self::Frozen { request, limits } => {
-                crate::compactor::PreparedRequest::new(request, None, limits, None)
-            }
+            Self::Conversation(input) => tokio::time::timeout(
+                task.compaction_timeout,
+                crate::compactor::prepare(&input, task),
+            )
+            .await
+            .map_err(|_| anyhow::anyhow!("Context compaction timed out"))
+            .and_then(std::convert::identity)
+            .map_err(context_failure),
+            Self::Frozen { request, limits } => crate::compactor::PreparedRequest::new(
+                request, None, limits, None,
+            )
+            .map_err(|error| {
+                Failure::new(
+                    FailureKind::InvalidInput,
+                    format!("Snapshot context preparation failed: {error}"),
+                )
+            }),
         }
     }
 }
@@ -119,11 +132,7 @@ impl ProviderTask {
         if !retry_delay.is_zero() {
             tokio::time::sleep(retry_delay).await;
         }
-        let prepared = tokio::time::timeout(self.compaction_timeout, input.prepare(&mut self))
-            .await
-            .map_err(|_| anyhow::anyhow!("Context compaction timed out"))
-            .and_then(std::convert::identity)
-            .map_err(context_failure)?;
+        let prepared = input.prepare(&mut self).await?;
         let (reply, receive) = tokio::sync::oneshot::channel();
         self.target.send(ProviderEvent::ContextPrepared {
             update: prepared.update,

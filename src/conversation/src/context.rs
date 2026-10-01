@@ -10,7 +10,6 @@ pub use clients::response::RequestMode;
 
 const REQUEST_TOKEN_RESERVE: usize = 1024;
 const MESSAGE_TOKEN_RESERVE: usize = 32;
-const RESPONSE_OVERHEAD_TOKENS: usize = 128;
 
 pub struct TextPrompt<'a> {
     request: &'a ClientRequest,
@@ -78,14 +77,7 @@ impl ContextLimits {
         self.ceiling - self.response as usize
     }
     pub fn trigger(self) -> usize {
-        let snapshot = crate::frozen_context::SnapshotBudget::new(self.snapshot());
-        (self.ceiling - self.ceiling.div_ceil(10))
-            .min(self.input())
-            .min(
-                snapshot
-                    .context_tokens()
-                    .saturating_sub(self.response as usize + RESPONSE_OVERHEAD_TOKENS),
-            )
+        (self.ceiling - self.ceiling.div_ceil(10)).min(self.input())
     }
     pub fn summary_bytes(self) -> usize {
         (self.input() / 8).min(8192)

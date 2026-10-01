@@ -98,8 +98,19 @@ async fn register_snapshot(h: &Harness, owner: &str) -> ImmutableWorkerView {
 }
 
 #[tokio::test]
-async fn listed_question_allowance_fits_through_the_regular_worker() {
-    let source = context();
+async fn full_context_snapshot_questions_bypass_compaction() {
+    let limits = ContextLimits::new(16_000, 2048).unwrap();
+    let mut source = context();
+    let padding = limits.ceiling() - conversation::context::estimated_tokens(&source).unwrap();
+    source
+        .system
+        .as_mut()
+        .unwrap()
+        .push_str(&" word".repeat(padding));
+    assert_eq!(
+        conversation::context::estimated_tokens(&source).unwrap(),
+        limits.ceiling()
+    );
     let expected = serde_json::to_value(&source.messages).unwrap();
     let h = SnapshotHarness::new(source, Duration::from_secs(1)).await;
     let allowance = h.worker.max_question_bytes.unwrap();
@@ -112,15 +123,22 @@ async fn listed_question_allowance_fits_through_the_regular_worker() {
     let (request, reply) = h.request().await;
     assert_eq!(frozen(&request)["messages"], expected);
     assert_eq!(request.messages.last().unwrap().text(), question);
+    assert!(conversation::context::estimated_tokens(&request).unwrap() > limits.ceiling());
     assert!(
         conversation::context::estimated_tokens(&request).unwrap()
-            <= ContextLimits::new(16_000, 2048).unwrap().input()
+            <= conversation::frozen_context::SnapshotBudget::new(limits)
+                .unwrap()
+                .limits()
+                .input()
     );
+    assert!(matches!(request.purpose, llm::RequestPurpose::Worker));
     answer(reply, response(vec![text("The entire question fits")]));
     assert_eq!(
         within(result).await.unwrap().unwrap(),
         "The entire question fits"
     );
+    assert!(h.requests.is_empty());
+    assert_eq!(h.owner.runtime.immutable_workers.list("actor-1").len(), 1);
     h.stop().await;
 }
 

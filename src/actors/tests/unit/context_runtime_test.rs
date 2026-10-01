@@ -118,8 +118,94 @@ async fn oversized_snapshot_blocks_automatic_and_manual_compaction_before_provid
     h.stop().await;
 }
 
+#[tokio::test]
+async fn snapshot_question_reservations_do_not_block_parent_compaction() {
+    use crate::states::provider_task::{ProviderTarget, ProviderTask};
+    use conversation::context::{Checkpoint, ContextInput, NativeCompaction, RequestMode};
+    use conversation::frozen_context::SnapshotBudget;
+
+    let (normal, requests) = flume::unbounded();
+    let (compactions, native_requests) = flume::unbounded();
+    let client = llm::LLmClient::Injected(Arc::new(NativeProvider {
+        normal: Provider(normal),
+        compactions,
+    }));
+    let h = Harness::with_client(vec![], Runtime::default(), client.clone(), requests).await;
+    let limits = ContextLimits::new(272_000, 16_000).unwrap();
+    let mut input = ContextInput {
+        runtime: None,
+        prompt_cache_key: Some("parent-cache".into()),
+        purpose: llm::RequestPurpose::Conversation,
+        history: std::iter::once(llm::Message::new("workspace".into()))
+            .chain((0..8).map(|index| {
+                llm::Message::new_assistant(format!(
+                    "Investigation {index}: {}",
+                    "older context ".repeat(1000)
+                ))
+            }))
+            .collect(),
+        checkpoint: Checkpoint::default(),
+        instructions: "Preserve the investigation".into(),
+        tools: vec![],
+        limits,
+        native: NativeCompaction::Auto,
+        mode: RequestMode::Continue,
+    };
+    let padding = 247_450 - estimated_tokens(&input.request(&input.checkpoint).unwrap()).unwrap();
+    input.instructions.push_str(&" word".repeat(padding));
+    let captured = input.request(&input.checkpoint).unwrap();
+    assert_eq!(estimated_tokens(&captured).unwrap(), 247_450);
+    assert_eq!(limits.trigger(), 244_800);
+    for mode in [RequestMode::Continue, RequestMode::Compact] {
+        input.mode = mode;
+        let mut task = ProviderTask {
+            budget: None,
+            target: ProviderTarget {
+                actor: h.actor.clone(),
+                tag: Tag::new(common_models::runtime_ids::TurnId::new()),
+            },
+            client: client.clone(),
+            request_timeout: Duration::from_secs(1),
+            compaction_timeout: Duration::from_secs(1),
+        };
+        let provider = async {
+            let compact = within(native_requests.recv_async()).await.unwrap();
+            assert!(estimated_tokens(&compact.request).unwrap() <= limits.input());
+            let response = serde_json::from_value(json!({
+                "output": [{"type": "compaction", "encrypted_content": "preserved history"}]
+            }))
+            .unwrap();
+            assert!(compact.reply.send(Ok(response)).is_ok());
+        };
+        let (prepared, ()) = tokio::join!(crate::compactor::prepare(&input, &mut task), provider);
+        let prepared = prepared.unwrap();
+        assert!(estimated_tokens(&prepared.request).unwrap() <= limits.trigger());
+        let compaction = prepared.update.compaction.unwrap();
+        assert_eq!(compaction.checkpoint.generation, 1);
+        let snapshot = compaction.snapshot;
+        let request = snapshot
+            .question_request("\0".repeat(snapshot.max_question_bytes()))
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&request.messages[..captured.messages.len()]).unwrap(),
+            serde_json::to_value(&captured.messages).unwrap()
+        );
+        assert_eq!(request.system, captured.system);
+        assert!(
+            estimated_tokens(&request).unwrap()
+                <= SnapshotBudget::new(limits.snapshot())
+                    .unwrap()
+                    .limits()
+                    .input()
+        );
+        assert_eq!(input.checkpoint.generation, 0);
+        assert!(h.requests.is_empty());
+    }
+    h.stop().await;
+}
+
 fn saved_history(store: &Arc<SessionStore>) -> String {
-    saved_history_with_output(store, &"inspected source ".repeat(1000))
+    saved_history_with_output(store, &"inspected source ".repeat(1400))
 }
 
 fn saved_history_with_output(store: &Arc<SessionStore>, output: &str) -> String {
@@ -368,7 +454,16 @@ async fn automatic_compaction_survives_restart_and_forks() {
     resume(&h, &id).await;
     h.start("Continue the implementation");
     let (request, reply) = h.request().await;
-    assert!(request.system.unwrap().starts_with("Summarize only"));
+    assert!(
+        request
+            .system
+            .as_deref()
+            .unwrap()
+            .starts_with("Summarize only"),
+        "Expected compaction; received a request with {} tokens (trigger {})",
+        estimated_tokens(&request).unwrap(),
+        configured_limits().trigger()
+    );
     summary(reply);
     let (request, reply) = h.request().await;
     assert!(estimated_tokens(&request).unwrap() <= configured_limits().trigger());
