@@ -40,6 +40,9 @@ impl<'a> Interaction<'a> {
             QuestionPurpose::Merge => Err(anyhow::anyhow!(
                 "Only the runtime can request merge approval"
             )),
+            QuestionPurpose::PlanContinuation => Err(anyhow::anyhow!(
+                "Only the runtime can offer plan continuation"
+            )),
         }
     }
 

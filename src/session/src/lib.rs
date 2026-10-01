@@ -19,6 +19,7 @@ mod control_tests;
 mod generations;
 mod ownership;
 pub mod persistence;
+pub mod plan;
 mod prune;
 pub mod runtime;
 pub mod state;

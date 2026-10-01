@@ -16,6 +16,7 @@ pub enum QuestionPurpose {
     #[default]
     Clarification,
     Merge,
+    PlanContinuation,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

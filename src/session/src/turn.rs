@@ -54,6 +54,15 @@ impl SessionTurn<'_> {
     }
 
     pub async fn begin(&mut self, input: FollowUp, mode: RequestMode) {
+        let continuation = match input.prompt {
+            Some(_) => self
+                .interaction()
+                .withdraw_questions(QuestionPurpose::PlanContinuation),
+            None => Ok(()),
+        };
+        if let Err(error) = continuation {
+            self.history().persistence.fail(error);
+        }
         if let Err(error) = self
             .merge()
             .record_merge(MergeEvent::TaskStarted { turn: input.id })
@@ -104,7 +113,7 @@ impl SessionTurn<'_> {
             .interaction
             .answered(&input.id, input.answer.clone())?;
         let decision = match answered.answer.purpose {
-            QuestionPurpose::Clarification => None,
+            QuestionPurpose::Clarification | QuestionPurpose::PlanContinuation => None,
             QuestionPurpose::Merge => Some(self.merge().merge_decision(&input.id, &input.answer)?),
         };
         let message = Message::new(answered.answer.to_string());

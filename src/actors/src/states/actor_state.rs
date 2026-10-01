@@ -235,6 +235,9 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     async fn interaction_command(&mut self, command: &Command) -> anyhow::Result<String> {
         match self.session_turn().command(command)? {
             InteractionAction::Reply(message) => Ok(message),
+            InteractionAction::Answer(input) if self.is_plan_answer(&input) => {
+                self.answer_plan(&input).await
+            }
             InteractionAction::Answer(input) => {
                 let result = async {
                     match self.session_turn().answer(&input).await? {

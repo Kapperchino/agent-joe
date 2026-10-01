@@ -60,7 +60,7 @@ impl Planning {
     pub fn with_answer(&self, answer: &AnsweredQuestion) -> anyhow::Result<Self> {
         let mut planning = match answer.purpose {
             QuestionPurpose::Clarification => self.requirements_changed()?,
-            QuestionPurpose::Merge => self.clone(),
+            QuestionPurpose::Merge | QuestionPurpose::PlanContinuation => self.clone(),
         };
         planning.record_evidence(format!("answer:{}", answer.id), answer.text.clone());
         Ok(planning)

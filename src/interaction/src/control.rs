@@ -153,6 +153,7 @@ impl<P: InteractionPersistence> InteractionControl<'_, P> {
             )),
         }?;
         self.save_planning(planning)?;
+        self.withdraw_questions(QuestionPurpose::PlanContinuation)?;
         let mode = match mode {
             WorkMode::Plan => {
                 "Plan mode: read-only investigation. Use /implement to return to implementation."
