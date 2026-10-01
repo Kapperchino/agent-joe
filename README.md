@@ -40,3 +40,15 @@ requires your approval.
 - `/questions` opens pending questions; `/compact` condenses older context.
 - `Ctrl+o` toggles tool history. Run `turbo-code --help` for CLI options.
 
+## Security
+
+- **Restricted tools:** The agent has no general-purpose shell tool. File operations
+  stay within the project boundary and enforce protected paths.
+- **Isolated execution:** Cargo builds, build scripts, tests, and programs run in a
+  Linux VM without network access. Execution is refused if isolation is unavailable;
+  missing crates.io dependencies are downloaded separately on the host.
+- **Provider access:** Prompts and tool results, including source excerpts, are sent
+  to your configured model provider. Sandbox isolation does not make them private.
+
+Keep secrets out of prompts and accessible project files; `.gitignore` is not an
+access-control boundary. Review generated changes before merging.
