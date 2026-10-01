@@ -76,45 +76,46 @@ impl Inventory {
                 }
             }
             for entry in entries {
-                let kind = workspace.is_directory(&entry.path);
                 let excluded = crate::git::excluded(entry.path.strip_prefix(workspace.root())?)
                     || (matches!(mode, InventoryMode::Discovery)
                         && entry.name.eq_ignore_ascii_case("target"));
-                match kind {
-                    Ok(is_directory)
-                        if !excluded && workspace.check(&entry.path, Access::Read).is_ok() =>
-                    {
-                        let ignored = directory
-                            .rules
-                            .iter()
-                            .rev()
-                            .map(|rules| rules.matched(&entry.path, is_directory))
-                            .find(|matched| !matched.is_none())
-                            .is_some_and(|matched| matched.is_ignore());
-                        match (ignored, is_directory) {
-                            (true, _) => {}
-                            (false, true) => pending.push(Directory {
-                                path: entry.path,
-                                rules: directory.rules.clone(),
-                            }),
-                            (false, false) if workspace.file_size(&entry.path).is_err() => {
-                                inventory.skipped += 1
-                            }
-                            (false, false) => {
-                                let path = entry.path.strip_prefix(workspace.root())?.to_path_buf();
-                                path_bytes += path.as_os_str().len();
-                                match path_bytes <= MAX_PATH_BYTES {
-                                    true => Ok(()),
-                                    false => Err(anyhow::anyhow!(
-                                        "Inventory paths exceed 32 MiB; add ignore rules"
-                                    )),
-                                }?;
-                                inventory.files.push(path);
+                match excluded {
+                    true => {}
+                    false => match workspace.is_directory(&entry.path) {
+                        Ok(is_directory) if workspace.check(&entry.path, Access::Read).is_ok() => {
+                            let ignored = directory
+                                .rules
+                                .iter()
+                                .rev()
+                                .map(|rules| rules.matched(&entry.path, is_directory))
+                                .find(|matched| !matched.is_none())
+                                .is_some_and(|matched| matched.is_ignore());
+                            match (ignored, is_directory) {
+                                (true, _) => {}
+                                (false, true) => pending.push(Directory {
+                                    path: entry.path,
+                                    rules: directory.rules.clone(),
+                                }),
+                                (false, false) if workspace.file_size(&entry.path).is_err() => {
+                                    inventory.skipped += 1
+                                }
+                                (false, false) => {
+                                    let path =
+                                        entry.path.strip_prefix(workspace.root())?.to_path_buf();
+                                    path_bytes += path.as_os_str().len();
+                                    match path_bytes <= MAX_PATH_BYTES {
+                                        true => Ok(()),
+                                        false => Err(anyhow::anyhow!(
+                                            "Inventory paths exceed 32 MiB; add ignore rules"
+                                        )),
+                                    }?;
+                                    inventory.files.push(path);
+                                }
                             }
                         }
-                    }
-                    Ok(_) => {}
-                    Err(_) => inventory.skipped += 1,
+                        Ok(_) => {}
+                        Err(_) => inventory.skipped += 1,
+                    },
                 }
             }
         }

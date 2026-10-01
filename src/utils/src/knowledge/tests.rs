@@ -179,6 +179,44 @@ fn knowledge_graph_requires_exact_profile_and_complete_source_coverage() {
 }
 
 #[tokio::test]
+async fn knowledge_preparation_excludes_protected_storage_from_capture_and_freshness() {
+    let fixture = Fixture::new();
+    let before = Fingerprint::capture(&fixture.workspace).unwrap();
+    let storage = fixture.root.join(".turbo-code");
+    fs::create_dir(&storage).unwrap();
+    fs::write(storage.join("private"), "secret").unwrap();
+    let scope =
+        ExecutionScope::with_workspace(WorkspacePolicy::workspace(fixture.root.clone()).unwrap());
+    let prepared = scope.enter(prepare(fixture.profile())).await.unwrap();
+    assert_eq!(before, prepared.fingerprint);
+    assert!(
+        prepared
+            .graph
+            .data()
+            .sources
+            .iter()
+            .all(|source| !source.path().as_str().contains(".turbo-code"))
+    );
+    assert!(
+        prepared
+            .graph
+            .data()
+            .symbols
+            .iter()
+            .any(|symbol| symbol.name == "main" && symbol.state == DefinitionState::Resolved)
+    );
+    fs::write(storage.join("private"), "changed").unwrap();
+    assert!(prepared.fingerprint.is_current(&fixture.workspace).unwrap());
+    assert!(
+        fixture
+            .workspace
+            .read(Path::new(".turbo-code/private"))
+            .is_err()
+    );
+    scope.finish().await;
+}
+
+#[tokio::test]
 async fn knowledge_preparation_is_read_only_without_lockfile_or_executable_access() {
     let fixture = Fixture::new();
     fixture.workspace.delete(Path::new("Cargo.lock")).unwrap();
