@@ -141,7 +141,8 @@ The `--debug` display continues to show individual tool calls with full details.
 Use `/plan` while idle to investigate and design a change before implementation.
 Joe traces relevant code and tests, clarifies consequential choices, and prepares
 a plan covering the design, affected components, edge cases and validation.
-Workspace mutations and all Cargo operations remain disabled until `/implement`.
+Workspace mutations and all Cargo operations remain disabled until you explicitly
+choose implementation or use `/implement`.
 
 Tracked plans distinguish investigation from implementation. A planning turn can
 finish only after at least one investigation step exists and all investigation
@@ -149,6 +150,15 @@ steps are completed with recorded evidence. Future implementation and validation
 steps may remain pending. Changed requirements require reconciliation and renewed
 investigation. Existing saved steps default to implementation; Joe must add or
 reclassify investigation steps when continuing an older plan in plan mode.
+
+After a completed planning turn, Joe asks whether to **Implement in this session**,
+**Start a new agent with this plan**, or **Keep planning**. The first two choices
+start implementation immediately. A new agent gets a fresh conversation with the
+final plan, user requirements and answers, and tracked steps; the planning session
+remains available through `/sessions`. In Git projects, the new session gets a
+separate worktree based on the planning session's current files. Dismissing the
+question does not authorize implementation. A new planning request replaces the
+old offer after the revised plan is finished.
 
 ## Answering questions
 

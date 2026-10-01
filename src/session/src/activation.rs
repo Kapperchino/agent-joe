@@ -55,6 +55,32 @@ impl<C: Context + Clone> SessionActivation<C> {
         Self::fresh(context, runtime.clone(), client, SessionTransition::Clear).await
     }
 
+    pub async fn from_plan(
+        context: &C,
+        runtime: &SessionRuntime,
+        client: &LLmClient,
+        handoff: &crate::plan::PlanHandoff,
+    ) -> anyhow::Result<Self> {
+        let mut context = context.clone();
+        context.clear_task_context();
+        let mut activation = Self::fresh(
+            context,
+            runtime.clone(),
+            client,
+            SessionTransition::PlanHandoff,
+        )
+        .await?;
+        let message = Message::new(handoff.prompt.clone());
+        if let Some(session) = &activation.runtime.session {
+            session.record(crate::Event::Planning(handoff.planning.clone()))?;
+            session.record(crate::Event::History(vec![message.clone()]))?;
+        }
+        activation.state.interaction =
+            InteractionState::restored(handoff.planning.clone(), Default::default());
+        activation.state.conversation.push(message);
+        Ok(activation)
+    }
+
     async fn fresh(
         context: C,
         runtime: SessionRuntime,
@@ -63,7 +89,9 @@ impl<C: Context + Clone> SessionActivation<C> {
     ) -> anyhow::Result<Self> {
         let interaction = match transition {
             SessionTransition::Start => InteractionState::new(runtime.interaction.mode()),
-            SessionTransition::Clear => InteractionState::default(),
+            SessionTransition::Clear | SessionTransition::PlanHandoff => {
+                InteractionState::default()
+            }
         };
         let history = initial_history(&context).await;
         let runtime = transition.apply(runtime, client, &history)?;

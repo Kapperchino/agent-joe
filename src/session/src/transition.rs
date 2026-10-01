@@ -6,6 +6,7 @@ use interaction::access::InteractionRole;
 pub enum SessionTransition {
     Start,
     Clear,
+    PlanHandoff,
 }
 
 pub struct SessionRelocation<C: Context> {
@@ -63,7 +64,16 @@ impl SessionTransition {
     ) -> anyhow::Result<SessionRuntime> {
         let parent = match self {
             Self::Start => runtime.session.as_ref().map(|session| session.id.clone()),
-            Self::Clear => None,
+            Self::Clear | Self::PlanHandoff => None,
+        };
+        let source = match self {
+            Self::PlanHandoff => runtime
+                .session
+                .as_ref()
+                .map(|session| session.snapshot())
+                .transpose()?
+                .and_then(|snapshot| snapshot.worktree),
+            Self::Start | Self::Clear => None,
         };
         runtime.session = match &runtime.sessions {
             Some(store) => {
@@ -71,7 +81,7 @@ impl SessionTransition {
             }
             None => runtime.session,
         };
-        runtime.activate_session(None)?;
+        runtime.activate_session(source.as_ref())?;
         runtime.scope.changes = match self {
             Self::Start => match &runtime.session {
                 Some(session) if session.snapshot()?.parent.is_none() => {
@@ -79,7 +89,7 @@ impl SessionTransition {
                 }
                 _ => runtime.scope.changes,
             },
-            Self::Clear => runtime
+            Self::Clear | Self::PlanHandoff => runtime
                 .session
                 .as_ref()
                 .map(|session| session.change_tracker(Default::default()))

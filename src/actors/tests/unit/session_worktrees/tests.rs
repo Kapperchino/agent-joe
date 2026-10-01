@@ -229,6 +229,110 @@ fn review_call(subject: &str, id: &str) -> ContentBlock {
 }
 
 #[tokio::test]
+async fn plan_handoff_uses_a_fresh_worktree_with_the_planned_files() {
+    let h = GitHarness::new().await;
+    let original = h.store.list().unwrap().remove(0);
+    let original_worktree = original.worktree.as_ref().unwrap();
+    let planned_source = "pub fn value() -> u32 { 7 }\n";
+    std::fs::write(original_worktree.path.join("lib.rs"), planned_source).unwrap();
+    h.command(Command::Plan).await;
+    h.actor
+        .send_message(Message::StartWork(Some(
+            "Plan a compatible change to value".into(),
+        )))
+        .unwrap();
+    let tool = |name: &str, id: &str, input: Value| {
+        let mut block = call(name, id);
+        if let ContentBlock::ToolBlock {
+            input: arguments, ..
+        } = &mut block
+        {
+            *arguments = input.as_object().unwrap().clone();
+        }
+        block
+    };
+    let mut plan = json!({
+        "revision":0, "requirements_revision":0,
+        "steps":[
+            {"id":"inspect", "kind":"investigation", "description":"Inspect the planned files",
+             "dependencies":[], "acceptance":"Understand value", "state":"in_progress", "evidence":[], "blocked_reason":null},
+            {"id":"implement", "kind":"implementation", "description":"Change value compatibly",
+             "dependencies":["inspect"], "acceptance":"The API is unchanged", "state":"pending", "evidence":[], "blocked_reason":null}
+        ]
+    });
+    answer(
+        within(h.requests.recv_async()).await.unwrap().1,
+        response(vec![
+            tool("update_plan", "plan", plan.clone()),
+            tool("read_file", "planned-source", json!({"file_path":"lib.rs"})),
+        ]),
+    );
+    let (_, reply) = within(h.requests.recv_async()).await.unwrap();
+    plan["revision"] = json!(1);
+    plan["steps"][0]["state"] = json!("completed");
+    plan["steps"][0]["evidence"] =
+        json!([{"source":"tool:planned-source", "explanation":"Inspected value returning 7"}]);
+    answer(reply, response(vec![tool("update_plan", "planned", plan)]));
+    answer(
+        within(h.requests.recv_async()).await.unwrap().1,
+        response(vec![text(
+            "Change value from 7 to 8 without changing its API.",
+        )]),
+    );
+    let packet = h.event(|packet| matches!(packet,
+        ActorToTuiPacket::InteractionUpdated(view) if view.questions.iter().any(|question| question.purpose == QuestionPurpose::PlanContinuation)
+    )).await;
+    let question = match packet {
+        ActorToTuiPacket::InteractionUpdated(view) => view.questions[0].clone(),
+        _ => panic!("Expected a plan continuation question"),
+    };
+    let result = h
+        .command(Command::Answer(QuestionAnswer {
+            id: question.id,
+            answer: Answer::Choice {
+                choice_id: "new_agent".into(),
+            },
+        }))
+        .await;
+    assert!(result.contains("new agent"), "{result}");
+    let (request, _reply) = within(h.requests.recv_async()).await.unwrap();
+    let state = runtime_snapshot(&request.messages);
+    assert_eq!(
+        state.planning.mode,
+        common_models::interaction::WorkMode::Implement
+    );
+    assert_eq!(state.planning.requirements_revision, 0);
+    assert!(state.questions.is_empty());
+    let sessions = h.store.list().unwrap();
+    assert_eq!(sessions.len(), 2);
+    let new = sessions
+        .iter()
+        .find(|snapshot| snapshot.id != original.id)
+        .unwrap();
+    let worktree = new.worktree.as_ref().unwrap();
+    assert_ne!(worktree.path, original_worktree.path);
+    assert_eq!(
+        std::fs::read_to_string(worktree.path.join("lib.rs")).unwrap(),
+        planned_source
+    );
+    assert_eq!(
+        std::fs::read_to_string(original_worktree.path.join("lib.rs")).unwrap(),
+        planned_source
+    );
+    assert_eq!(
+        std::fs::read_to_string(h.workspace.path.join("lib.rs")).unwrap(),
+        "pub fn value() -> u32 { 1 }\n"
+    );
+    assert!(
+        request.messages[0]
+            .text()
+            .contains(&worktree.path.display().to_string())
+    );
+    assert!(new.parent.is_none());
+    h.stop().await;
+}
+
+#[tokio::test]
 async fn prune_removes_inactive_merged_worktrees() {
     let h = GitHarness::new().await;
     let id = h.store.list().unwrap()[0].id.clone();

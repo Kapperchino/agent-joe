@@ -65,6 +65,12 @@ pub(super) async fn execute<C: Context + Clone + 'static>(
                     "Session merge could not continue: {error:#}"
                 )));
             }
+            let continuation = completed.map_or(Ok(()), |turn| actor.offer_plan_continuation(turn));
+            if let Err(error) = continuation {
+                actor.reporter.send(ActorToTuiPacket::SessionError(format!(
+                    "Could not offer plan continuation: {error:#}"
+                )));
+            }
             EffectOutcome::Applied
         }
         Effect::LaunchProvider {

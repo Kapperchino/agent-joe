@@ -1,6 +1,7 @@
 pub mod actor_mode;
 pub mod actor_state;
 mod effects;
+mod plan_completion;
 pub mod provider_context;
 pub mod provider_session;
 pub mod provider_task;

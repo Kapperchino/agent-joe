@@ -2,6 +2,9 @@ use super::*;
 use commands::command::{Command, ResumeTarget};
 use common_models::interaction::{Plan, PlanEvidence, PlanStep, PlanUpdate, StepKind, StepState};
 
+#[path = "plan_completion_test.rs"]
+mod plan_completion;
+
 fn tool(name: &str, id: &str, input: Value) -> ContentBlock {
     ContentBlock::ToolBlock {
         tool_id: ToolId {
