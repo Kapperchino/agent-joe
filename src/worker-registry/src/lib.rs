@@ -2,6 +2,7 @@ pub mod budget;
 pub mod report;
 pub mod request;
 mod state;
+pub mod workflow;
 
 use budget::WorkerBudget;
 use report::{Evidence, WorkerReport, WorkerStatus, WorkerView};

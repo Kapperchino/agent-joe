@@ -6950,6 +6950,7 @@ name = "worker-registry"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "common-models",
  "serde",
  "serde_json",
  "tokio",

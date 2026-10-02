@@ -46,6 +46,11 @@ impl ContextWorker for BaseWorker<RustContext> {
                 erased_tool::<GatherContext, Self::C, ActorContext<Self::C>>(),
                 erased_tool::<MakeChanges, Self::C, ActorContext<Self::C>>(),
                 erased_tool::<
+                    crate::tools::run_workflow::RunWorkflow,
+                    Self::C,
+                    ActorContext<Self::C>,
+                >(),
+                erased_tool::<
                     crate::tools::validate_rust::ValidateRust,
                     Self::C,
                     ActorContext<Self::C>,

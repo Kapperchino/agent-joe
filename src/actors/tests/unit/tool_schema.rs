@@ -1,5 +1,6 @@
 use crate::tools::{
-    knowledge::Knowledge, request_user_input::RequestUserInput, update_plan::UpdatePlan,
+    knowledge::Knowledge, request_user_input::RequestUserInput, run_workflow::RunWorkflow,
+    update_plan::UpdatePlan,
 };
 use serde_json::{Value, json};
 use tools::tool_defs::{LenientDeserialize, ToolDefTrait};
@@ -166,6 +167,7 @@ fn generated_actor_properties_survive_provider_serialization() {
         Knowledge::field_properties(),
         RequestUserInput::field_properties(),
         UpdatePlan::field_properties(),
+        RunWorkflow::field_properties(),
     ] {
         for property in properties.into_values() {
             let expected = property.clone().into_schema();
@@ -175,4 +177,33 @@ fn generated_actor_properties_survive_provider_serialization() {
             assert_eq!(serde_json::to_value(claude).unwrap(), expected);
         }
     }
+}
+
+#[test]
+fn workflow_schema_exposes_typed_agents_and_composable_steps() {
+    let schema = properties::<RunWorkflow>();
+    assert_eq!(RunWorkflow::required_fields(), ["steps"]);
+    assert_eq!(schema["steps"]["minItems"], 1);
+    assert_eq!(schema["steps"]["maxItems"], 16);
+    assert_eq!(schema["agents"]["maxItems"], 16);
+    assert_eq!(
+        schema["agents"]["items"]["properties"]["seconds"]["maximum"],
+        3600
+    );
+    let choices = schema["steps"]["items"]["oneOf"].as_array().unwrap();
+    assert_eq!(choices[0]["properties"]["kind"]["enum"], json!(["agent"]));
+    assert_eq!(choices[1]["properties"]["kind"]["enum"], json!(["context"]));
+    assert_eq!(choices[0]["additionalProperties"], false);
+    assert!(
+        worker_registry::workflow::WorkflowInput::deserialize_lenient(json!({
+            "steps":[{"kind":"agent", "id":"read", "agent":"gather_context", "objective":"Inspect"}]
+        }))
+        .is_ok()
+    );
+    assert!(
+        worker_registry::workflow::WorkflowInput::deserialize_lenient(json!({
+            "steps":[{"kind":"context", "id":"missing-content"}]
+        }))
+        .is_err()
+    );
 }

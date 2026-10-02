@@ -58,7 +58,7 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for MakeChanges {
     ) -> anyhow::Result<Self::Output> {
         super::delegated::run(
             input.context,
-            "find_files\nlist_directory\nknowledge\ngrep\napply_patch\ncargo\ngit\nreview_changes\nundo_changes",
+            worker_registry::workflow::BuiltinAgent::MakeChanges,
             context,
             actor,
         )

@@ -183,6 +183,10 @@ impl WorkerRequest {
         &self.objective
     }
 
+    pub fn context(&self) -> &str {
+        &self.context
+    }
+
     pub fn budget(&self) -> BudgetLimits {
         self.budget
     }
@@ -197,6 +201,14 @@ impl WorkerRequest {
 
     pub fn allows_tool(&self, name: &str) -> bool {
         self.allowed_tools.iter().any(|tool| tool == name)
+    }
+
+    pub fn with_context(mut self, context: String) -> anyhow::Result<Self> {
+        self.context = context;
+        match serde_json::to_vec(&self)?.len() <= 65536 {
+            true => Ok(self),
+            false => Err(anyhow::anyhow!("Worker handoff exceeds 64 KiB")),
+        }
     }
 
     pub fn follow_up(

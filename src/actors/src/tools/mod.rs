@@ -5,6 +5,7 @@ pub mod knowledge;
 pub mod make_changes;
 pub mod read_artifact;
 pub mod request_user_input;
+pub mod run_workflow;
 pub mod start_worker;
 pub mod update_plan;
 pub mod validate_rust;

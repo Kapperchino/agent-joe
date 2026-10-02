@@ -39,3 +39,42 @@ fn convenience_tools_allow_the_full_worker_deadline() {
         expected
     );
 }
+
+#[test]
+fn workflow_permissions_and_deadlines_follow_the_configured_steps() {
+    use crate::actor::ActorContext;
+    use crate::tools::run_workflow::RunWorkflow;
+    use analysis::contexts::rust_context::RustContext;
+    use tools::tool_defs::{ToolOpKind, ToolTrait};
+    use worker_registry::workflow::WorkflowInput;
+
+    let read: WorkflowInput = serde_json::from_value(serde_json::json!({"steps":[
+        {"kind":"agent", "id":"read", "agent":"gather_context", "objective":"Inspect"}
+    ]}))
+    .unwrap();
+    let write: WorkflowInput = serde_json::from_value(serde_json::json!({"steps":[
+        {"kind":"agent", "id":"read", "agent":"gather_context", "objective":"Inspect"},
+        {"kind":"agent", "id":"write", "agent":"make_changes", "objective":"Implement"},
+        {"kind":"agent", "id":"validate", "agent":"validate_rust", "objective":"Check"}
+    ]}))
+    .unwrap();
+    assert_eq!(
+        <RunWorkflow as ToolTrait<RustContext, ActorContext<RustContext>>>::effect_from_input(
+            &read
+        ),
+        ToolOpKind::DelegateRead
+    );
+    assert_eq!(
+        <RunWorkflow as ToolTrait<RustContext, ActorContext<RustContext>>>::effect_from_input(
+            &write
+        ),
+        ToolOpKind::DelegateWrite
+    );
+    assert_eq!(
+        <RunWorkflow as ToolTrait<RustContext, ActorContext<RustContext>>>::execution_budget(
+            &write
+        )
+        .unwrap(),
+        std::time::Duration::from_secs(5400)
+    );
+}

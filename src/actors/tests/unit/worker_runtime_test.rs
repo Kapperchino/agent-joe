@@ -2,6 +2,9 @@ use super::*;
 use worker_registry::report::WorkerStatus;
 use worker_registry::request::{WorkerRequest, WorkerRequestInput};
 
+#[path = "workflow_runtime_test.rs"]
+mod workflow_tests;
+
 fn worker_input(tools: &str, paths: &str) -> Value {
     json!({
         "objective": "Inspect the assigned files and report evidence",

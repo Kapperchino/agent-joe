@@ -47,6 +47,21 @@ handoffs read their source worktree until their own first write.
   Main. Agent views are read-only and preserve your unsent main-conversation draft.
 - `Ctrl+o` toggles tool history. Run `turbo-code --help` for CLI options.
 
+## Agent workflows
+
+The default agent supports ordered pipelines through `run_workflow`. For example,
+ask Joe to implement a feature with three separate agents: **code → rewrite to
+repository standards → simplify**. Each phase has its own instructions, allowed
+tools and paths, and deadline. Later agents receive earlier findings and work in
+the same session workspace.
+
+Existing `gather_context`, `make_changes`, and `validate_rust` workflows remain
+available individually and can also be chained as built-in pipeline agents.
+Adding a phase requires another step, not a new tool. See the
+[workflow configuration examples](src/actors/README.md#composable-agent-workflows)
+for custom agents, built-in workflows, and extension points. Delegated workflows
+are not available with `--simple`.
+
 ## Security
 
 - **Restricted tools:** The agent has no general-purpose shell tool. File operations

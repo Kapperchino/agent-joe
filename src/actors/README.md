@@ -84,6 +84,150 @@ adapters that coordinate those types. Component unit tests live in their owning
 crates; actor integration tests exercise storage, streaming, worker execution,
 and session switching together.
 
+## Composable agent workflows
+
+`run_workflow` runs an ordered list of typed steps in the default root agent.
+Agent definitions are reusable profiles, separate from step objectives. Each
+agent step starts a distinct bounded worker, waits for its report, and collects
+that report before starting the next step. Workers share the session workspace;
+writers do not overlap within a pipeline.
+
+The following is the tool input for a three-agent **code → standards rewrite →
+simplify** pipeline. Replace the shared context with the actual requested feature
+and selected source information.
+
+```json
+{
+  "context": "Implement the requested feature while preserving the public API.",
+  "agents": [
+    {
+      "name": "coder",
+      "instructions": "Implement the behavior and focused regression tests.",
+      "allowed_tools": "find_files\nlist_directory\nknowledge\ngrep\napply_patch\ncargo\ngit\nreview_changes",
+      "allowed_paths": ".",
+      "seconds": 1800
+    },
+    {
+      "name": "standards",
+      "instructions": "Read scoped AGENTS.md guidance and rewrite the implementation to repository code standards without changing behavior.",
+      "allowed_tools": "find_files\nlist_directory\nknowledge\ngrep\napply_patch\ncargo\ngit\nreview_changes",
+      "allowed_paths": ".",
+      "seconds": 1800
+    },
+    {
+      "name": "simplifier",
+      "instructions": "Simplify the implementation without changing behavior; retain regression coverage and run relevant checks.",
+      "allowed_tools": "find_files\nlist_directory\nknowledge\ngrep\napply_patch\ncargo\ngit\nreview_changes",
+      "allowed_paths": ".",
+      "seconds": 1800
+    }
+  ],
+  "steps": [
+    {
+      "kind": "agent",
+      "id": "code",
+      "agent": "coder",
+      "objective": "Implement the requested feature",
+      "completion_criteria": "Behavior implemented with focused regression coverage"
+    },
+    {
+      "kind": "agent",
+      "id": "rewrite",
+      "agent": "standards",
+      "objective": "Rewrite the implementation to repository standards"
+    },
+    {
+      "kind": "agent",
+      "id": "simplify",
+      "agent": "simplifier",
+      "objective": "Simplify the implementation and validate the final behavior"
+    }
+  ]
+}
+```
+
+The existing convenience workflows are built-in profiles. No custom agent
+definitions are needed to compose them:
+
+```json
+{
+  "context": "Fix the reported bug while preserving unrelated changes.",
+  "steps": [
+    {
+      "kind": "agent",
+      "id": "investigate",
+      "agent": "gather_context",
+      "objective": "Locate the relevant implementation and regression coverage"
+    },
+    {
+      "kind": "agent",
+      "id": "implement",
+      "agent": "make_changes",
+      "objective": "Fix the bug and add a focused regression test"
+    },
+    {
+      "kind": "agent",
+      "id": "validate",
+      "agent": "validate_rust",
+      "objective": "Run the relevant Cargo tests and report their actual results"
+    }
+  ]
+}
+```
+
+`gather_context`, `make_changes`, and `validate_rust` still accept their original
+`context` argument and return a `WorkerReport` when called individually. They now
+use the same runner as one-step workflows. Their tool/path allowances and default
+1800-second worker deadlines are unchanged.
+
+To add a phase, append an agent step referencing a built-in or custom profile.
+The same profile can be referenced by multiple steps; each reference starts a
+new worker. To insert reference material without starting an agent, use a
+context step:
+
+```json
+{"kind":"context","id":"standards","content":"Preserve the public API"}
+```
+
+Agent steps also accept their own `context` and `completion_criteria`. Step IDs
+and custom agent names must be nonempty and
+unique; built-in names cannot be replaced.
+
+Every agent receives shared context, its own step context, and summaries of all
+earlier steps. Summaries include findings, changed files, unresolved issues and
+artifact references. Full worker reports, including observed validation evidence,
+remain in the final `WorkflowReport`. A noncompleted worker, launch failure or
+oversized handoff stops the pipeline and marks later steps skipped. Completed
+workers may still report limitations or failed validation: workflow completion
+does **not** establish that tests passed. The root agent must assess the reports
+and review the aggregate changes before finishing.
+
+Configuration supports 1–16 steps and at most 16 custom profiles. Configuration
+and each worker handoff are limited to 64 KiB; oversized handoffs fail rather than
+silently discard earlier findings. Custom deadlines are 1–3600 seconds, defaulting
+to 1800 per worker. Existing worker concurrency, start limits, cancellation,
+permissions and project boundaries still apply. Tool names and paths are
+newline-separated strings. Whole-project tools such as Cargo and Git require
+`allowed_paths: "."`; narrower scopes can use restricted file tools. Agents cannot
+delegate further. Read-only pipelines remain usable in plan mode, but pipelines
+with editing or Cargo steps require implementation mode.
+
+### Extension boundaries
+
+`worker_registry::workflow` owns the configuration, validated ordered steps,
+handoff construction and running/stopped state machine. `Workflow::run` accepts
+an asynchronous worker executor, so its ordering and failure behavior can be
+tested without actors or providers. `actors::tools::delegated` supplies the
+existing authorized worker launcher, writer exclusion and report collection.
+The `run_workflow` tool exposes the configuration with a structured schema and
+derives its effect and execution deadline from the compiled steps.
+
+New agent phases are configuration-only changes. A new non-agent step behavior
+belongs in `StepInput`, its validated `StepAction`, and the runner dispatch, with
+a corresponding report variant and regression coverage. No new lifecycle or
+worker-launch implementation is needed. Pipelines are sequential; they do not
+add branching, parallel execution or automatic pipeline resumption.
+
 ## Repository knowledge integration
 
 `common-models::knowledge` owns the validated semantic graph protocol.

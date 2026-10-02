@@ -56,7 +56,13 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for ValidateRust {
         context: &RustContext,
         actor: &ActorContext<RustContext>,
     ) -> anyhow::Result<Self::Output> {
-        super::delegated::run(input.context, "cargo", context, actor).await
+        super::delegated::run(
+            input.context,
+            worker_registry::workflow::BuiltinAgent::ValidateRust,
+            context,
+            actor,
+        )
+        .await
     }
     fn display_input(input: &Self::Input) -> String {
         Self {
