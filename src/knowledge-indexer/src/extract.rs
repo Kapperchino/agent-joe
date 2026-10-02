@@ -237,13 +237,16 @@ impl<'db> Index<'db> {
                 .and_then(|krate| krate.version(db))
                 .unwrap_or_default()
         );
-        let name = definition
-            .name(db)
-            .map(|name| name.display(db, edition).to_string())
-            .unwrap_or_else(|| match definition {
-                Definition::Module(_) | Definition::Crate(_) => crate_name.clone(),
-                _ => "impl".into(),
-            });
+        let name = match definition {
+            Definition::BuiltinAttr(attribute) => Some(attribute.name()),
+            Definition::ToolModule(tool) => Some(tool.name(db)),
+            _ => definition.name(db),
+        }
+        .map(|name| name.display(db, edition).to_string())
+        .unwrap_or_else(|| match definition {
+            Definition::Module(_) | Definition::Crate(_) => crate_name.clone(),
+            _ => "impl".into(),
+        });
         let modules = definition
             .canonical_module_path(db)
             .into_iter()

@@ -173,6 +173,83 @@ fn concrete(value: &Engine) { value.run(); }
 }
 
 #[test]
+fn builtin_attributes_keep_distinct_portable_identities() {
+    let source = r#"
+//- /main.rs crate:app
+#[allow(dead_code)]
+fn first() {}
+#[inline]
+fn second() {}
+//- /library.rs crate:library
+#[allow(dead_code)]
+pub fn third() {}
+"#;
+    let first = graph(source);
+    let second = graph(source);
+    assert_eq!(
+        serde_json::to_value(&first).unwrap(),
+        serde_json::to_value(&second).unwrap()
+    );
+    assert!(
+        edges(&first, "first", RelationKind::References)
+            .iter()
+            .any(|symbol| symbol.name == "allow")
+    );
+    assert!(
+        edges(&first, "second", RelationKind::References)
+            .iter()
+            .any(|symbol| symbol.name == "inline")
+    );
+    let attributes = first
+        .data()
+        .symbols
+        .iter()
+        .filter(|symbol| matches!(symbol.name.as_str(), "allow" | "inline"))
+        .collect::<Vec<_>>();
+    assert_eq!(attributes.len(), 2);
+    assert_ne!(attributes[0].id, attributes[1].id);
+    assert!(attributes.iter().all(|symbol| {
+        matches!(&symbol.origin, SymbolOrigin::External { crate_name } if crate_name == "builtin")
+    }));
+    assert_eq!(
+        edges(&first, "first", RelationKind::References)[0].id,
+        edges(&first, "third", RelationKind::References)[0].id
+    );
+}
+
+#[test]
+fn tool_modules_keep_distinct_portable_identities() {
+    let source = r#"
+//- /main.rs crate:app
+#[clippy::allow_attributes]
+fn first() {}
+#[rustfmt::skip]
+fn second() {}
+//- /library.rs crate:library
+#[clippy::allow_attributes]
+pub fn third() {}
+"#;
+    let first = graph(source);
+    let second = graph(source);
+    assert_eq!(
+        serde_json::to_value(&first).unwrap(),
+        serde_json::to_value(&second).unwrap()
+    );
+    let tool = |caller, name| {
+        edges(&first, caller, RelationKind::References)
+            .into_iter()
+            .find(|symbol| symbol.name == name)
+            .unwrap()
+    };
+    let clippy = tool("first", "clippy");
+    let rustfmt = tool("second", "rustfmt");
+    let library_clippy = tool("third", "clippy");
+    assert_ne!(clippy.id, rustfmt.id);
+    assert_ne!(clippy.id, library_clippy.id);
+    assert_ne!(clippy.crate_key, library_clippy.crate_key);
+}
+
+#[test]
 fn unresolved_and_inactive_source_is_preserved() {
     let graph = graph("#[cfg(missing)] fn hidden() {}\nfn main() { missing(); }");
     assert!(graph.data().sources[0].text().contains("fn hidden"));

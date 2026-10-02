@@ -23,9 +23,9 @@ fn captured_workspace_resolves_source_without_executing_generators() {
         ),
         (
             "app/src/lib.rs",
-            "mod helper;\ninclude!(concat!(env!(\"OUT_DIR\"), \"/generated.rs\"));\nmacros::produce!();\npub fn entry() { helper::target(); generated(); made(); }\n#[cfg(test)] fn only_test() { helper::target(); }\n",
+            "mod helper;\ninclude!(concat!(env!(\"OUT_DIR\"), \"/generated.rs\"));\nmacros::produce!();\n#[allow(dead_code)] pub fn entry() { helper::target(); generated(); made(); }\n#[cfg(test)] fn only_test() { helper::target(); }\n",
         ),
-        ("app/src/helper.rs", "pub fn target() {}\n"),
+        ("app/src/helper.rs", "#[inline] pub fn target() {}\n"),
         (
             "macros/Cargo.toml",
             "[package]\nname = 'macros'\nversion = '0.1.0'\nedition = '2024'\n[lib]\nproc-macro = true\n",
@@ -57,6 +57,18 @@ fn captured_workspace_resolves_source_without_executing_generators() {
     )
     .unwrap();
     let data = graph.data();
+    for configuration in [Configuration::Normal, Configuration::Test] {
+        let attributes = data
+            .symbols
+            .iter()
+            .filter(|symbol| {
+                symbol.configuration == configuration
+                    && matches!(symbol.name.as_str(), "allow" | "inline")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(attributes.len(), 2);
+        assert_ne!(attributes[0].id, attributes[1].id);
+    }
     assert!(
         !data
             .symbols
