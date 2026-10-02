@@ -1,5 +1,34 @@
 use super::*;
 
+fn row_text(rows: Vec<TranscriptLine>) -> Vec<String> {
+    rows.into_iter().map(|line| line.text).collect()
+}
+
+impl MessageTranscript {
+    fn committed_lines(&self) -> Vec<String> {
+        self.committed_rows()
+            .iter()
+            .map(|line| line.text.clone())
+            .collect()
+    }
+
+    fn expanded_tool_lines(&self, formatter: &MessageFormatter) -> Vec<String> {
+        row_text(self.expanded_tool_rows(formatter))
+    }
+
+    fn active_lines(&self, formatter: &MessageFormatter) -> Option<Vec<String>> {
+        self.active_rows(formatter).map(row_text)
+    }
+
+    fn take_scrollback_overflow(
+        &mut self,
+        live_line_capacity: usize,
+        formatter: &MessageFormatter,
+    ) -> Vec<String> {
+        row_text(self.take_scrollback_rows(live_line_capacity, formatter))
+    }
+}
+
 fn formatter() -> MessageFormatter {
     MessageFormatter::new(80)
 }
