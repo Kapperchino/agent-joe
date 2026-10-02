@@ -458,6 +458,84 @@ async fn first_write_rejects_a_session_base_that_differs_from_previously_read_fi
 }
 
 #[tokio::test]
+async fn first_write_ignores_previously_read_runtime_logs() {
+    let h = GitHarness::new().await;
+    let id = h.store.list().unwrap()[0].id.clone();
+    let logs = [
+        "logs/err.log",
+        "logs/stream_123.jsonl",
+        "logs/nested/stream_456.jsonl",
+        "logs/tracked.log",
+    ];
+    std::fs::create_dir_all(h.workspace.path.join("logs/nested")).unwrap();
+    std::fs::write(h.workspace.path.join(".gitignore"), "logs/\n").unwrap();
+    for path in logs {
+        std::fs::write(h.workspace.path.join(path), "initial log\n").unwrap();
+    }
+    let mut index = h.repo.index().unwrap();
+    index
+        .add_path(std::path::Path::new("logs/tracked.log"))
+        .unwrap();
+    index.write().unwrap();
+    let base = h.commit_main("pub fn value() -> u32 { 1 }\n");
+    let source_index = std::fs::read(h.repo.path().join("index")).unwrap();
+    h.actor
+        .send_message(Message::StartWork(Some(
+            "Inspect logs and edit the function".into(),
+        )))
+        .unwrap();
+    let (_, mut reply) = within(h.requests.recv_async()).await.unwrap();
+    for (attempt, path) in logs.into_iter().chain(["lib.rs"]).enumerate() {
+        answer(
+            reply,
+            response(vec![tool_call(
+                "knowledge",
+                &format!("read-before-edit-{attempt}"),
+                json!({"action":"read", "file_path":path}),
+            )]),
+        );
+        let (request, next) = within(h.requests.recv_async()).await.unwrap();
+        assert_tool_success(latest_tool_result(&request));
+        reply = next;
+    }
+    for path in ["logs/err.log", "logs/tracked.log"] {
+        std::fs::write(h.workspace.path.join(path), "updated log\n").unwrap();
+    }
+    std::fs::remove_file(h.workspace.path.join("logs/stream_123.jsonl")).unwrap();
+    answer(
+        reply,
+        response(vec![tool_call(
+            "apply_patch",
+            "edit-after-logs",
+            json!({"patch":PATCH}),
+        )]),
+    );
+    let (request, reply) = within(h.requests.recv_async()).await.unwrap();
+    assert_tool_success(latest_tool_result(&request));
+    let worktree = h.snapshot(&id).worktree.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(worktree.path.join("lib.rs")).unwrap(),
+        "pub fn value() -> u32 { 2 }\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(h.workspace.path.join("lib.rs")).unwrap(),
+        "pub fn value() -> u32 { 1 }\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(h.workspace.path.join("logs/err.log")).unwrap(),
+        "updated log\n"
+    );
+    assert_eq!(h.repo.refname_to_id("HEAD").unwrap(), base);
+    assert_eq!(
+        std::fs::read(h.repo.path().join("index")).unwrap(),
+        source_index
+    );
+    h.interrupt().await;
+    drop(reply);
+    h.stop().await;
+}
+
+#[tokio::test]
 async fn first_write_creates_one_isolated_worktree_and_later_writes_reuse_it() {
     let h = GitHarness::new().await;
     let id = h.store.list().unwrap()[0].id.clone();

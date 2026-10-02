@@ -107,15 +107,18 @@ impl SessionWorkspace {
                     *changes = self.session.change_tracker(Default::default());
                     let workspace = created.workspace(&self.project)?;
                     changes.start(&workspace)?;
-                    observed.into_iter().try_for_each(|(path, version)| {
-                        match workspace.file_version(&path)? == version {
-                            true => Ok(()),
-                            false => Err(anyhow::anyhow!(
-                                "Previously read file {} differs from the session base; no edit was applied. Reconcile the checkout with the committed session base before retrying",
-                                path.display()
-                            )),
-                        }
-                    })?;
+                    observed
+                        .into_iter()
+                        .filter(|(path, _)| !path.starts_with("logs"))
+                        .try_for_each(|(path, version)| {
+                            match workspace.file_version(&path)? == version {
+                                true => Ok(()),
+                                false => Err(anyhow::anyhow!(
+                                    "Previously read file {} differs from the session base; no edit was applied. Reconcile the checkout with the committed session base before retrying",
+                                    path.display()
+                                )),
+                            }
+                        })?;
                 }
                 worktree
             }
