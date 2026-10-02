@@ -95,6 +95,7 @@ impl MessageBoxState {
 
     pub fn update_width_height(&mut self, width: u16, height: u16) {
         self.viewport.update(width, height);
+        self.scrollback.update_width(self.viewport.wrap_width());
     }
 
     pub fn has_tool_history(&self) -> bool {
@@ -135,7 +136,7 @@ impl MessageBoxState {
                 let capacity = self.viewport.live_line_capacity(1);
                 let max_offset = self
                     .transcript
-                    .expanded_tool_lines(&self.formatter())
+                    .expanded_tool_rows(&self.formatter())
                     .len()
                     .saturating_sub(capacity);
                 let offset = offset.min(max_offset);
@@ -169,7 +170,7 @@ impl MessageBoxState {
         let formatter = self.formatter();
         let flushed_lines = self
             .transcript
-            .take_scrollback_overflow(self.live_line_capacity(), &formatter);
+            .take_scrollback_rows(self.live_line_capacity(), &formatter);
         if flushed_lines.is_empty() {
             return Ok(());
         }
@@ -227,17 +228,21 @@ impl MessageBoxState {
 
     fn history_lines(&self) -> Vec<Line<'static>> {
         let formatter = self.formatter();
-        self.transcript
-            .committed_lines()
+        let rows = self
+            .transcript
+            .committed_rows()
             .iter()
             .cloned()
             .chain(
                 self.transcript
-                    .active_lines(&formatter)
+                    .active_rows(&formatter)
                     .into_iter()
                     .flatten(),
             )
-            .map(Line::from)
+            .collect::<Vec<_>>();
+        self.scrollback
+            .render_history_lines(&rows)
+            .into_iter()
             .chain(self.busy_indicator.render_line(
                 &self.actor_state,
                 u16::try_from(self.viewport.wrap_width()).unwrap_or(u16::MAX),
@@ -266,20 +271,25 @@ impl MessageBoxState {
         match self.tool_history {
             ToolHistoryView::Collapsed => {
                 let lines = self.scrollback.render_live_lines(
-                    self.transcript.committed_lines(),
-                    self.transcript.active_lines(&formatter),
+                    self.transcript.committed_rows(),
+                    self.transcript.active_rows(&formatter),
                     self.busy_indicator.render_line(&self.actor_state, width),
                 );
                 self.viewport.visible_lines(lines)
             }
             ToolHistoryView::Expanded { offset } => {
-                let lines = self.transcript.expanded_tool_lines(&formatter);
+                let rows = self.transcript.expanded_tool_rows(&formatter);
+                let lines = self.scrollback.render_history_lines(&rows);
                 let capacity = self.viewport.live_line_capacity(1);
                 let start = lines.len().saturating_sub(capacity).saturating_sub(offset);
-                std::iter::once(Line::from(theme::muted(
-                    "Tool history · Ctrl+o / Esc collapse",
-                )))
-                .chain(lines.into_iter().skip(start).take(capacity).map(Line::from))
+                std::iter::once(
+                    Line::from(vec![
+                        theme::badge("Tool history", theme::ACCENT),
+                        theme::muted(" · Ctrl+o / Esc collapse"),
+                    ])
+                    .style(theme::base().bg(theme::SURFACE)),
+                )
+                .chain(lines.into_iter().skip(start).take(capacity))
                 .collect()
             }
         }

@@ -1,3 +1,4 @@
+use super::render::{LineKind, TranscriptLine};
 use crate::utils::draw_line::DrawLine;
 use crate::utils::draw_table::DrawTable;
 use crate::widgets::message_box::message_box::Msg;
@@ -19,11 +20,15 @@ impl MessageFormatter {
         self.wrap_width
     }
 
-    pub(super) fn format_msg(self, msg: Msg) -> Vec<String> {
+    pub(super) fn format_msg(self, msg: Msg) -> Vec<TranscriptLine> {
         match msg {
-            Msg::Message(message) => self.format_message(&message),
+            Msg::Message(message) => self
+                .format_message(&message)
+                .into_iter()
+                .map(TranscriptLine::message)
+                .collect(),
             Msg::Tool(message) => self.format_tool_message(&message),
-            Msg::Empty => vec![String::new()],
+            Msg::Empty => vec![TranscriptLine::message("")],
         }
     }
 
@@ -31,16 +36,41 @@ impl MessageFormatter {
         DrawTable::wrap_markdown_tables(message, self.wrap_width)
     }
 
-    pub(super) fn format_tool_entry(self, summary: &str) -> Vec<String> {
+    pub(super) fn format_tool_entry(self, summary: &str) -> Vec<TranscriptLine> {
+        let indent = match self.wrap_width {
+            0..=1 => "",
+            _ => "│ ",
+        };
         textwrap::wrap(
             summary,
             textwrap::Options::new(self.wrap_width)
-                .initial_indent("│ ")
-                .subsequent_indent("│ "),
+                .initial_indent(indent)
+                .subsequent_indent(indent),
         )
         .into_iter()
-        .map(|line| line.into_owned())
+        .enumerate()
+        .map(|(index, line)| {
+            let kind = match index {
+                0 => LineKind::ToolEntry,
+                _ => LineKind::ToolContinuation,
+            };
+            TranscriptLine::new(kind, line.into_owned())
+        })
         .collect()
+    }
+
+    pub(super) fn format_tool_heading(self, heading: &str) -> Vec<TranscriptLine> {
+        self.format_message(heading)
+            .into_iter()
+            .enumerate()
+            .map(|(index, line)| {
+                let kind = match index {
+                    0 => LineKind::ToolHeading,
+                    _ => LineKind::ToolContinuation,
+                };
+                TranscriptLine::new(kind, line)
+            })
+            .collect()
     }
 
     pub(super) fn tool_summary(message: &str) -> Option<String> {
@@ -56,30 +86,41 @@ impl MessageFormatter {
             .map(DrawLine::expand_tabs)
     }
 
-    fn format_tool_message(self, message: &str) -> Vec<String> {
-        match message.strip_prefix(TOOL_SUMMARY_PREFIX) {
-            Some(content) => match content.split_once('\n') {
-                Some((summary, rest)) => self
-                    .format_tool_summary(summary)
-                    .into_iter()
-                    .chain(rest.split('\n').map(DrawLine::expand_tabs))
-                    .collect(),
-                None => self.format_tool_summary(content),
-            },
-            None => self.format_message(message),
+    fn format_tool_message(self, message: &str) -> Vec<TranscriptLine> {
+        let content = message.strip_prefix(TOOL_SUMMARY_PREFIX).unwrap_or(message);
+        match content.split_once('\n') {
+            Some((summary, rest)) => self
+                .format_tool_summary(summary)
+                .into_iter()
+                .chain(rest.split('\n').map(|line| {
+                    TranscriptLine::new(LineKind::ToolDetail, DrawLine::expand_tabs(line))
+                }))
+                .collect(),
+            None => self.format_tool_summary(content),
         }
     }
 
-    fn format_tool_summary(self, summary: &str) -> Vec<String> {
+    fn format_tool_summary(self, summary: &str) -> Vec<TranscriptLine> {
         let summary = DrawLine::expand_tabs(summary);
+        let (initial_indent, subsequent_indent) = match self.wrap_width {
+            0..=1 => ("", ""),
+            _ => (TOOL_SUMMARY_PREFIX, TOOL_SUMMARY_CONTINUATION_INDENT),
+        };
         textwrap::wrap(
             &summary,
             textwrap::Options::new(self.wrap_width)
-                .initial_indent(TOOL_SUMMARY_PREFIX)
-                .subsequent_indent(TOOL_SUMMARY_CONTINUATION_INDENT),
+                .initial_indent(initial_indent)
+                .subsequent_indent(subsequent_indent),
         )
         .into_iter()
-        .map(|line| line.into_owned())
+        .enumerate()
+        .map(|(index, line)| {
+            let kind = match index {
+                0 => LineKind::ToolEntry,
+                _ => LineKind::ToolContinuation,
+            };
+            TranscriptLine::new(kind, line.into_owned())
+        })
         .collect()
     }
 }
