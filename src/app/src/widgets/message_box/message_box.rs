@@ -204,6 +204,47 @@ impl MessageBoxState {
         self.busy_indicator.advance(&self.actor_state);
     }
 
+    pub fn render_history(&self, area: Rect, buf: &mut Buffer, offset: usize) {
+        let lines = match self.tool_history {
+            ToolHistoryView::Collapsed => {
+                let lines = self.history_lines();
+                let capacity = usize::from(area.height);
+                let start = lines.len().saturating_sub(capacity).saturating_sub(offset);
+                lines
+                    .into_iter()
+                    .skip(start)
+                    .take(capacity)
+                    .collect::<Vec<_>>()
+            }
+            ToolHistoryView::Expanded { .. } => self.output_lines(area.width),
+        };
+        Paragraph::new(lines).style(theme::base()).render(area, buf);
+    }
+
+    pub fn history_line_count(&self) -> usize {
+        self.history_lines().len()
+    }
+
+    fn history_lines(&self) -> Vec<Line<'static>> {
+        let formatter = self.formatter();
+        self.transcript
+            .committed_lines()
+            .iter()
+            .cloned()
+            .chain(
+                self.transcript
+                    .active_lines(&formatter)
+                    .into_iter()
+                    .flatten(),
+            )
+            .map(Line::from)
+            .chain(self.busy_indicator.render_line(
+                &self.actor_state,
+                u16::try_from(self.viewport.wrap_width()).unwrap_or(u16::MAX),
+            ))
+            .collect()
+    }
+
     fn formatter(&self) -> MessageFormatter {
         MessageFormatter::new(self.viewport.wrap_width())
     }

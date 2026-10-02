@@ -80,6 +80,32 @@ impl Fixture {
         });
     }
 
+    fn agent_packet(&mut self, actor_id: u64, packet: ActorToTuiPacket) {
+        self.app.handle_actor_msg(ActorToTui { actor_id, packet });
+    }
+
+    fn agent_progress(&mut self, actor_id: u64, state: Lifecycle) {
+        self.agent_packet(
+            actor_id,
+            ActorToTuiPacket::AgentUpdated(common_models::tui_models::AgentProgress {
+                worker_id: format!("worker-{actor_id}"),
+                objective: format!("Inspect task {actor_id}"),
+                state,
+                detail: None,
+            }),
+        );
+    }
+
+    fn inspect_agent(&mut self, position: usize) {
+        self.app.agents.show_main();
+        self.app
+            .handle_key_event(&KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
+        for _ in 0..position {
+            self.key(KeyCode::Down);
+        }
+        self.key(KeyCode::Enter);
+    }
+
     fn key(&mut self, code: KeyCode) {
         self.app
             .handle_key_event(&KeyEvent::new(code, KeyModifiers::NONE));
@@ -104,8 +130,12 @@ impl Fixture {
     }
 
     fn render(&mut self) -> String {
+        self.render_size(100, 30)
+    }
+
+    fn render_size(&mut self, width: u16, height: u16) -> String {
         let mut terminal =
-            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
         terminal.draw(|frame| self.app.draw(frame)).unwrap();
         terminal
             .backend()
@@ -120,6 +150,285 @@ impl Fixture {
         self.app.actor_ref.stop(None);
         self.handle.await.unwrap();
     }
+}
+
+#[tokio::test]
+async fn agent_threads_isolate_interleaved_responses_and_tool_output() {
+    for mode in [ToolDisplay::Grouped, ToolDisplay::Expanded] {
+        let mut fixture = Fixture::with_tool_display(mode).await;
+        fixture.packet(ActorToTuiPacket::StateChanged(State::MessageStart));
+        fixture.packet(ActorToTuiPacket::Data("Main response".into()));
+        for id in [1, 2] {
+            fixture.agent_progress(id, Lifecycle::Running);
+            fixture.agent_packet(id, ActorToTuiPacket::StateChanged(State::MessageStart));
+        }
+        fixture.agent_packet(1, ActorToTuiPacket::Data("First agent".into()));
+        fixture.agent_packet(2, ActorToTuiPacket::Data("Second agent".into()));
+        fixture.agent_packet(1, ActorToTuiPacket::Data(" remains intact".into()));
+        fixture.agent_packet(1, ActorToTuiPacket::StateChanged(State::MessageStop));
+        fixture.agent_packet(
+            1,
+            ActorToTuiPacket::ToolUse(vec!["- read `private-agent.rs`".into()]),
+        );
+        fixture.agent_packet(
+            1,
+            ActorToTuiPacket::ContextNotice("Agent-only notice".into()),
+        );
+        let main = fixture.render();
+        assert!(main.contains("Main response"));
+        assert!(main.contains("2 running"));
+        for hidden in [
+            "First agent",
+            "Second agent",
+            "private-agent.rs",
+            "Agent-only notice",
+        ] {
+            assert!(!main.contains(hidden));
+        }
+        fixture.inspect_agent(1);
+        let first = fixture.render();
+        assert!(first.contains("AGENT 1"));
+        assert!(first.contains("worker-1"));
+        assert!(first.contains("Inspect task 1"));
+        assert!(first.contains("First agent remains intact"));
+        assert!(first.contains("private-agent.rs"));
+        assert!(first.contains("Agent-only notice"));
+        assert!(!first.contains("Second agent"));
+        assert!(!first.contains("Main response"));
+        fixture.packet(ActorToTuiPacket::Data(
+            " continues in the background".into(),
+        ));
+        fixture.inspect_agent(2);
+        let second = fixture.render();
+        assert!(second.contains("Second agent"));
+        assert!(!second.contains("First agent"));
+        fixture.key(KeyCode::Esc);
+        assert!(
+            fixture
+                .render()
+                .contains("Main response continues in the background")
+        );
+        assert!(fixture.render().contains("0 unread"));
+        fixture.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn agent_command_opens_local_picker_and_preserves_read_only_drafts() {
+    let mut fixture = Fixture::new().await;
+    fixture.agent_progress(1, Lifecycle::Running);
+    fixture.key(KeyCode::Char('/'));
+    fixture.app.input_box.paste("agent");
+    fixture.key(KeyCode::Enter);
+    assert!(fixture.render().contains("Agent threads"));
+    assert!(fixture.messages.is_empty());
+    fixture.key(KeyCode::Esc);
+    fixture.key(KeyCode::Char('i'));
+    fixture.app.input_box.paste("Unsent main draft");
+    fixture.inspect_agent(1);
+    fixture.key(KeyCode::Char('x'));
+    fixture.key(KeyCode::Enter);
+    fixture
+        .app
+        .handle_term_event(&Event::Paste("must not be inserted".into()));
+    assert_eq!(fixture.app.input_box.get_input(), "Unsent main draft");
+    assert!(fixture.messages.is_empty());
+    assert!(fixture.render().contains("read-only"));
+    fixture.key(KeyCode::Esc);
+    assert!(fixture.render().contains("Unsent main draft"));
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn agent_control_packets_cannot_change_main_session_or_validation() {
+    let mut fixture = Fixture::new().await;
+    fixture.packet(ActorToTuiPacket::StateChanged(State::MessageStart));
+    fixture.packet(ActorToTuiPacket::Data("Protected main response".into()));
+    fixture.agent_progress(1, Lifecycle::Running);
+    fixture.agent_packet(
+        1,
+        ActorToTuiPacket::ValidationUpdated(common_models::tui_models::ValidationProgress {
+            operation: "test".into(),
+            state: common_models::tui_models::ValidationState::Failed,
+        }),
+    );
+    fixture.agent_packet(1, ActorToTuiPacket::SessionChanged);
+    fixture.agent_packet(
+        1,
+        ActorToTuiPacket::CommandResult(Command::Clear, "Agent clear result".into()),
+    );
+    fixture.agent_packet(
+        1,
+        ActorToTuiPacket::CommandResult(Command::Logout, "Agent logout result".into()),
+    );
+    fixture.agent_packet(1, ActorToTuiPacket::SessionError("Agent-only error".into()));
+    assert!(fixture.app.validation.is_none());
+    assert!(!fixture.app.do_quit);
+    assert!(!fixture.app.do_clear_terminal);
+    let main = fixture.render();
+    assert!(main.contains("Protected main response"));
+    assert!(!main.contains("Agent clear result"));
+    assert!(!main.contains("Agent-only error"));
+    fixture.inspect_agent(1);
+    let agent = fixture.render();
+    assert!(agent.contains("Validation · test Failed"));
+    assert!(agent.contains("Agent clear result"));
+    assert!(agent.contains("Agent-only error"));
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn agent_terminal_updates_preserve_partial_output_and_clear_resets_threads() {
+    let mut fixture = Fixture::new().await;
+    for (id, state) in [
+        (1, Lifecycle::Completed),
+        (2, Lifecycle::Cancelled),
+        (3, Lifecycle::Failed),
+    ] {
+        fixture.agent_progress(id, Lifecycle::Running);
+        fixture.agent_packet(id, ActorToTuiPacket::StateChanged(State::MessageStart));
+        fixture.agent_packet(id, ActorToTuiPacket::Data(format!("Partial response {id}")));
+        fixture.agent_progress(id, state);
+    }
+    let main = fixture.render();
+    assert!(main.contains("0 running · 3 finished"));
+    fixture.inspect_agent(3);
+    let failed = fixture.render();
+    assert!(failed.contains("Failed"));
+    assert!(failed.contains("Partial response 3"));
+    fixture.packet(ActorToTuiPacket::SessionChanged);
+    assert!(fixture.app.agents.is_empty());
+    assert!(fixture.app.agents.is_main());
+    assert!(!fixture.render().contains("Partial response"));
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn agent_history_scrolls_without_affecting_main_tool_history() {
+    let mut fixture = Fixture::new().await;
+    fixture.packet(ActorToTuiPacket::ToolUse(vec![
+        "- read `main-only.rs`".into(),
+    ]));
+    fixture.agent_progress(1, Lifecycle::Running);
+    fixture.agent_packet(1, ActorToTuiPacket::StateChanged(State::MessageStart));
+    fixture.agent_packet(
+        1,
+        ActorToTuiPacket::Data(
+            (0..50)
+                .map(|index| format!("Agent history {index:02}\n"))
+                .collect::<String>(),
+        ),
+    );
+    fixture.agent_packet(1, ActorToTuiPacket::StateChanged(State::MessageStop));
+    fixture.agent_progress(1, Lifecycle::Completed);
+    fixture.inspect_agent(1);
+    let tail = fixture.render();
+    assert!(tail.contains("Agent history 49"));
+    assert!(!tail.contains("Agent history 00"));
+    fixture.key(KeyCode::Home);
+    let head = fixture.render();
+    assert!(head.contains("Agent history 00"));
+    assert!(!head.contains("Agent history 49"));
+    fixture.key(KeyCode::End);
+    assert!(fixture.render().contains("Agent history 49"));
+    fixture.agent_packet(
+        1,
+        ActorToTuiPacket::ToolUse(vec!["- read `agent-only.rs`".into()]),
+    );
+    fixture
+        .app
+        .handle_key_event(&KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+    let tools = fixture.render();
+    assert!(tools.contains("Tool history"));
+    assert!(tools.contains("collapse"));
+    assert!(tools.contains("agent-only.rs"));
+    assert!(!tools.contains("main-only.rs"));
+    assert!(!fixture.app.message_box.tool_history_expanded());
+    fixture.key(KeyCode::Esc);
+    assert!(!fixture.app.agents.is_main());
+    fixture.key(KeyCode::Esc);
+    assert!(fixture.render().contains("main-only.rs"));
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn agent_picker_handles_empty_and_compact_screens_and_can_interrupt_root() {
+    let mut fixture = Fixture::new().await;
+    fixture.app.agents.open();
+    fixture.key(KeyCode::Down);
+    fixture.key(KeyCode::Enter);
+    assert!(fixture.app.agents.is_main());
+    fixture.agent_progress(1, Lifecycle::Running);
+    fixture.inspect_agent(1);
+    for (width, height) in [(40, 12), (20, 8), (1, 1), (0, 0)] {
+        fixture.render_size(width, height);
+    }
+    fixture.packet(ActorToTuiPacket::TurnChanged {
+        turn_id: common_models::runtime_ids::TurnId::new(),
+        state: Lifecycle::Running,
+        detail: None,
+    });
+    fixture
+        .app
+        .handle_key_event(&KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+    assert!(matches!(
+        fixture.messages.recv_async().await.unwrap(),
+        Message::Interrupt
+    ));
+    assert!(!fixture.app.do_quit);
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn agent_header_preserves_objective_and_shows_contextual_empty_states() {
+    let mut fixture = Fixture::new().await;
+    fixture.agent_packet(
+        1,
+        ActorToTuiPacket::AgentUpdated(common_models::tui_models::AgentProgress {
+            worker_id: "12345678-1234-1234-1234-123456789abc".into(),
+            objective: "Inspect\nworker routing".into(),
+            state: Lifecycle::Running,
+            detail: None,
+        }),
+    );
+    fixture.app.agents.open();
+    assert!(fixture.render().contains("Enter"));
+    fixture.key(KeyCode::Down);
+    fixture.key(KeyCode::Enter);
+    let rendered = fixture.render_size(60, 20);
+    assert!(rendered.contains("AGENT 1"));
+    assert!(rendered.contains("Running"));
+    assert!(rendered.contains("Inspect worker routing"));
+    assert!(rendered.contains("Waiting for agent output"));
+    assert!(!rendered.contains("Enter"));
+    fixture.agent_progress(1, Lifecycle::Completed);
+    assert!(
+        fixture
+            .render()
+            .contains("No output was recorded for this agent.")
+    );
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn agent_picker_keeps_selected_threads_visible_and_wraps_navigation() {
+    let mut fixture = Fixture::new().await;
+    for id in 1..=12 {
+        fixture.agent_progress(id, Lifecycle::Completed);
+    }
+    fixture.app.agents.open();
+    fixture.key(KeyCode::Up);
+    assert!(fixture.render_size(80, 14).contains("Agent 12"));
+    fixture.key(KeyCode::Enter);
+    assert!(fixture.render().contains("worker worker-12"));
+    fixture
+        .app
+        .handle_key_event(&KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
+    fixture.key(KeyCode::Down);
+    assert!(fixture.render_size(80, 14).contains("Main conversation"));
+    fixture.key(KeyCode::Enter);
+    assert!(fixture.app.agents.is_main());
+    fixture.stop().await;
 }
 
 #[tokio::test]
@@ -591,11 +900,13 @@ async fn turn_metadata_is_only_shown_in_debug_mode() {
                     let metadata = format!("{owner} {turn_id}: {state:?}");
                     assert_eq!(
                         rendered.contains(&metadata),
-                        mode == ToolDisplay::Expanded && (state.terminal() || detail.is_some())
+                        actor_id == 0
+                            && mode == ToolDisplay::Expanded
+                            && (state.terminal() || detail.is_some())
                     );
                     assert_eq!(
                         rendered.contains("Turn detail"),
-                        detail.is_some() && mode == ToolDisplay::Expanded
+                        actor_id == 0 && detail.is_some() && mode == ToolDisplay::Expanded
                     );
                     assert!(rendered.contains("Response"));
                     match actor_id {
@@ -607,7 +918,7 @@ async fn turn_metadata_is_only_shown_in_debug_mode() {
                             );
                         }
                         worker => {
-                            assert_eq!(fixture.app.workers.get(&worker), Some(&state));
+                            assert_eq!(fixture.app.agents.state(worker), Some(state));
                             assert!(!fixture.app.root_busy);
                             assert!(fixture.app.queued.contains(&turn_id));
                             assert!(matches!(fixture.app.progress, Progress::Ready));
@@ -652,10 +963,10 @@ async fn validation_diagnostics_are_only_shown_in_debug_mode() {
             });
             let rendered = fixture.render();
             assert!(rendered.contains("Response"));
-            assert!(rendered.contains("last test Failed"));
+            assert_eq!(rendered.contains("last test Failed"), actor_id == 0);
             assert_eq!(
                 rendered.contains("exit_code"),
-                mode == ToolDisplay::Expanded
+                actor_id == 0 && mode == ToolDisplay::Expanded
             );
             let progress = fixture.app.progress_line(u16::MAX).to_string();
             assert_eq!(
@@ -680,13 +991,13 @@ async fn validation_diagnostics_are_only_shown_in_debug_mode() {
             let rendered = fixture.render();
             assert_eq!(
                 rendered.contains("exit_code"),
-                mode == ToolDisplay::Expanded
+                actor_id == 0 && mode == ToolDisplay::Expanded
             );
             assert_eq!(
                 rendered.contains("Automatic"),
-                mode == ToolDisplay::Expanded
+                actor_id == 0 && mode == ToolDisplay::Expanded
             );
-            assert!(rendered.contains("last test Failed"));
+            assert_eq!(rendered.contains("last test Failed"), actor_id == 0);
             fixture.stop().await;
         }
     }
@@ -770,7 +1081,7 @@ async fn worker_streams_update_progress_without_replacing_the_root_stream() {
     let rendered = fixture.render();
     assert!(!rendered.contains("Worker tool-call budget exhausted (128 calls)"));
     assert!(!rendered.contains(&format!("Worker 1 turn {worker_turn}: Failed")));
-    assert_eq!(fixture.app.workers.get(&1), Some(&Lifecycle::Failed));
+    assert_eq!(fixture.app.agents.state(1), Some(Lifecycle::Failed));
     assert!(fixture.app.root_busy);
     assert!(matches!(
         fixture.app.progress,

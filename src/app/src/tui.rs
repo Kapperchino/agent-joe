@@ -35,7 +35,7 @@ pub struct TUIApp {
     validation: Option<common_models::tui_models::ValidationProgress>,
     interaction: common_models::interaction::InteractionView,
     queued: std::collections::HashSet<common_models::runtime_ids::TurnId>,
-    workers: std::collections::BTreeMap<u64, common_models::tui_models::Lifecycle>,
+    agents: agents::AgentThreads,
     progress: Progress,
     input_mode: InputMode,
     do_quit: bool,
@@ -76,6 +76,7 @@ impl std::fmt::Display for Progress {
     }
 }
 
+mod agents;
 mod chrome;
 
 #[cfg(test)]
@@ -117,11 +118,15 @@ impl TUIApp {
         debug_mode: bool,
     ) -> Self {
         let config = config_context.get_config();
+        let tool_display = match debug_mode {
+            true => ToolDisplay::Expanded,
+            false => ToolDisplay::Grouped,
+        };
         Self {
             validation: None,
             interaction: Default::default(),
             queued: Default::default(),
-            workers: Default::default(),
+            agents: agents::AgentThreads::new(tool_display),
             progress: Progress::Ready,
             input_mode: Default::default(),
             do_quit: false,
@@ -132,11 +137,7 @@ impl TUIApp {
             request_context: Default::default(),
             debug_mode,
             input_box: InputBoxState::new(config),
-            message_box: MessageBoxState::with_tool_display(if debug_mode {
-                ToolDisplay::Expanded
-            } else {
-                ToolDisplay::Grouped
-            }),
+            message_box: MessageBoxState::with_tool_display(tool_display),
             do_clear_terminal: false,
             config_context,
             cursor_style: None,
@@ -167,6 +168,11 @@ impl TUIApp {
             let submitted_command = format!("/{}", &input);
             let command = Command::parse(&input);
             match command {
+                Ok(Command::Agent) => {
+                    self.update_input_mode(InputMode::HomeMenu(HomeMenu::Normal));
+                    self.message_box.close_tool_history();
+                    self.agents.open();
+                }
                 Ok(Command::ChangeModel(_, _)) => {
                     self.update_input_mode(InputMode::CommandMenu(CommandMenu::ModelSelector));
                 }
@@ -303,13 +309,18 @@ impl TUIApp {
 
         while !self.do_quit {
             tokio::select! {
-                _ = interval.tick() => self.message_box.advance_busy_indicator(),
+                _ = interval.tick() => {
+                    self.message_box.advance_busy_indicator();
+                    self.agents.advance();
+                },
                 Some(Ok(event)) = events.next() => self.handle_term_event(&event),
                 Ok(actor_msg) = actor_rx.recv_async() => self.handle_actor_msg(actor_msg),
             }
 
-            self.message_box
-                .flush_scrollback(&mut terminal, self.do_clear_terminal)?;
+            if self.agents.is_main() || self.do_clear_terminal {
+                self.message_box
+                    .flush_scrollback(&mut terminal, self.do_clear_terminal)?;
+            }
             self.update_cursor_style(&mut terminal)?;
             terminal.draw(|frame| self.draw(frame))?;
 
@@ -339,6 +350,8 @@ impl TUIApp {
 
     fn handle_actor_msg(&mut self, msg: ActorToTui) {
         match msg.packet {
+            packet if msg.actor_id != 0 => self.agents.handle(msg.actor_id, packet),
+            ActorToTuiPacket::AgentUpdated(_) => {}
             ActorToTuiPacket::ValidationUpdated(validation) => self.validation = Some(validation),
             ActorToTuiPacket::InteractionUpdated(view) if msg.actor_id == 0 => {
                 view.questions
@@ -402,25 +415,14 @@ impl TUIApp {
                 state,
                 detail,
             } => {
-                match msg.actor_id {
-                    0 => {
-                        self.root_busy = !state.terminal();
-                        self.queued
-                            .retain(|queued| *queued != turn_id || !state.terminal());
-                        self.progress = Progress::Turn(state);
-                    }
-                    worker => {
-                        self.workers.insert(worker, state);
-                    }
-                }
+                self.root_busy = !state.terminal();
+                self.queued
+                    .retain(|queued| *queued != turn_id || !state.terminal());
+                self.progress = Progress::Turn(state);
                 match (self.debug_mode, detail) {
                     (true, detail) if state.terminal() || detail.is_some() => {
-                        let owner = match msg.actor_id {
-                            0 => "Turn".to_owned(),
-                            worker => format!("Worker {worker} turn"),
-                        };
                         self.message_box.append(Msg::Message(format!(
-                            "{owner} {turn_id}: {state:?}{}",
+                            "Turn {turn_id}: {state:?}{}",
                             detail.map(|text| format!(" — {text}")).unwrap_or_default()
                         )));
                     }
@@ -483,6 +485,7 @@ impl TUIApp {
                 match command {
                     Command::Logout => self.kill(),
                     Command::Clear
+                    | Command::Agent
                     | Command::Plan
                     | Command::Implement
                     | Command::Questions
@@ -520,7 +523,8 @@ impl TUIApp {
             Event::FocusLost => {}
             Event::Key(key) => self.handle_key_event(key),
             Event::Mouse(_) => {}
-            Event::Paste(_) if self.message_box.tool_history_expanded() => {}
+            Event::Paste(_)
+                if !self.agents.is_main() || self.message_box.tool_history_expanded() => {}
             Event::Paste(text) => match self.input_mode {
                 InputMode::CommandMenu(CommandMenu::SessionSelector) => {
                     self.input_box.session_picker.paste(text)
@@ -543,6 +547,26 @@ impl TUIApp {
         match self.input_mode {
             _ if key.kind == KeyEventKind::Release
                 || (key.kind == KeyEventKind::Repeat && key.code == KeyCode::Enter) => {}
+            _ if !self.agents.is_main() => match (key.code, key.modifiers, self.root_busy) {
+                (KeyCode::Char('c'), modifiers, true)
+                    if modifiers.contains(KeyModifiers::CONTROL) =>
+                {
+                    self.interrupt()
+                }
+                (KeyCode::Char('c'), modifiers, false)
+                    if modifiers.contains(KeyModifiers::CONTROL) =>
+                {
+                    self.agents.show_main()
+                }
+                _ => self.agents.key(key),
+            },
+            InputMode::HomeMenu(HomeMenu::Normal | HomeMenu::Editing) | InputMode::None
+                if key.code == KeyCode::Char('g')
+                    && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.message_box.close_tool_history();
+                self.agents.open();
+            }
             InputMode::HomeMenu(HomeMenu::Normal | HomeMenu::Editing) | InputMode::None
                 if self.message_box.handle_tool_history_key(key) => {}
             InputMode::HomeMenu(HomeMenu::Normal) | InputMode::None => match key.code {
@@ -714,7 +738,7 @@ impl TUIApp {
         self.message_box.clear();
         self.do_clear_terminal = true;
         self.queued.clear();
-        self.workers.clear();
+        self.agents.clear();
         self.progress = Progress::Ready;
         self.validation = None;
     }
@@ -722,12 +746,14 @@ impl TUIApp {
     fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
         frame.render_widget(Block::new().style(theme::base()), area);
-        let input_height = self
-            .input_box
-            .get_height(area.width)
-            .min(area.height.saturating_sub(5).max(3));
-        let [msg_area, progress, input_area, footer] = Layout::vertical([
+        let input_height = match self.agents.is_main() {
+            true => self.input_box.get_height(area.width),
+            false => 3,
+        }
+        .min(area.height.saturating_sub(5).max(3));
+        let [msg_area, agent_status, progress, input_area, footer] = Layout::vertical([
             Constraint::Min(0),
+            Constraint::Length(u16::from(!self.agents.is_empty())),
             Constraint::Length(1),
             Constraint::Length(input_height),
             Constraint::Length(2),
@@ -736,14 +762,27 @@ impl TUIApp {
 
         frame.render_widget(self.progress_line(progress.width), progress);
         self.draw_footer(frame, footer);
+        frame.render_widget(self.agents.summary(), agent_status);
         self.message_box
             .update_width_height(msg_area.width, msg_area.height);
-        frame.render_stateful_widget(MessageBox {}, msg_area, &mut self.message_box);
-        frame.render_stateful_widget(InputBox::new(), input_area, &mut self.input_box);
+        self.agents.draw(frame, msg_area);
+        match self.agents.is_main() {
+            true => {
+                frame.render_stateful_widget(MessageBox {}, msg_area, &mut self.message_box);
+                frame.render_stateful_widget(InputBox::new(), input_area, &mut self.input_box);
+            }
+            false => frame.render_widget(
+                ratatui::widgets::Paragraph::new(
+                    "Esc returns to Main. Messages can only be sent from Main.",
+                )
+                .block(theme::panel("Agent inspection · read-only", theme::BORDER)),
+                input_area,
+            ),
+        }
 
         let cursor = self.input_box.get_cursor_pos(&input_area);
         let show_cursor = match self.input_mode {
-            _ if self.message_box.tool_history_expanded() => false,
+            _ if !self.agents.is_main() || self.message_box.tool_history_expanded() => false,
             InputMode::HomeMenu(HomeMenu::Editing | HomeMenu::InputCommand) => true,
             InputMode::HomeMenu(HomeMenu::Normal) => !self.input_box.is_empty(),
             InputMode::None | InputMode::CommandMenu(_) => false,

@@ -67,11 +67,7 @@ impl TUIApp {
             .iter()
             .filter(|step| step.state == StepState::Completed)
             .count();
-        let workers = self
-            .workers
-            .values()
-            .filter(|state| !state.terminal())
-            .count();
+        let workers = self.agents.active_count();
         details.extend([
             theme::muted(format!(" · plan {completed}/{}", steps.len())),
             theme::muted(format!(" · queued {}", self.queued.len())),
@@ -105,6 +101,7 @@ impl TUIApp {
         frame.render_widget(self.context_line(context.width), context);
         frame.render_widget(model_line, model);
         let mut shortcuts = match self.input_mode {
+            _ if !self.agents.is_main() => self.agents.hints(),
             _ if self.message_box.tool_history_expanded() => vec![
                 KeyHint::new("Ctrl+o/Esc", "collapse"),
                 KeyHint::new("↑/↓", "scroll"),
@@ -142,6 +139,7 @@ impl TUIApp {
             }
         };
         if !self.interaction.questions.is_empty()
+            && self.agents.is_main()
             && !self.message_box.tool_history_expanded()
             && matches!(self.input_mode, InputMode::HomeMenu(HomeMenu::Normal))
         {
@@ -154,6 +152,7 @@ impl TUIApp {
             shortcuts.insert(0, KeyHint::new("Ctrl+c", "interrupt"));
         }
         if self.message_box.has_tool_history()
+            && self.agents.is_main()
             && !self.message_box.tool_history_expanded()
             && matches!(
                 self.input_mode,
@@ -161,6 +160,9 @@ impl TUIApp {
             )
         {
             shortcuts.insert(0, KeyHint::new("Ctrl+o", "expand tools"));
+        }
+        if !self.agents.is_empty() && self.agents.is_main() {
+            shortcuts.insert(0, KeyHint::new("Ctrl+g", "agents"));
         }
         frame.render_widget(theme::hints(&shortcuts, hints.width), hints);
     }
