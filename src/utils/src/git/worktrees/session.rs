@@ -161,6 +161,74 @@ enum MergeState {
     Diverged,
 }
 
+struct MergeRecord {
+    reference: String,
+    commit: Oid,
+}
+
+impl MergeRecord {
+    fn new(
+        session: &SessionWorktree,
+        repo: &git2::Repository,
+        approved: &str,
+    ) -> anyhow::Result<Self> {
+        let approved = Oid::from_str(approved)?;
+        let reference = format!("{}{approved}", session.merge_prefix());
+        let commit = match repo.refname_to_id(&reference) {
+            Ok(commit) => Ok(commit),
+            Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(approved),
+            Err(error) => Err(error),
+        }?;
+        Ok(Self { reference, commit })
+    }
+}
+
+struct MergeCheckout<'repo> {
+    git: &'repo GitRepository,
+    commit: git2::Commit<'repo>,
+}
+
+impl<'repo> MergeCheckout<'repo> {
+    fn new(
+        workspace: &WorkspacePolicy,
+        git: &'repo GitRepository,
+        commit: Oid,
+    ) -> anyhow::Result<Self> {
+        let head = git.repo.head()?.peel_to_commit()?.id();
+        let before = WorktreeSnapshot::base(git, &head.to_string())?;
+        let after = WorktreeSnapshot::base(git, &commit.to_string())?;
+        for path in super::snapshot::changed_paths(&before.files, &after.files) {
+            let expected = before
+                .files
+                .get(&path)
+                .unwrap_or(&crate::changes::FileVersion::Missing);
+            match workspace.file_version(&path)?.with_git_mode() == *expected {
+                true => Ok(()),
+                false => Err(anyhow::anyhow!(
+                    "Merge checkout conflict: local data at {} would be overwritten",
+                    path.display()
+                )),
+            }?;
+        }
+        Ok(Self {
+            git,
+            commit: git.repo.find_commit(commit)?,
+        })
+    }
+
+    fn apply(&self) -> anyhow::Result<()> {
+        self.git.repo.checkout_tree(
+            self.commit.as_object(),
+            Some(
+                git2::build::CheckoutBuilder::new()
+                    .safe()
+                    .overwrite_ignored(false),
+            ),
+        )?;
+        Ok(())
+    }
+}
+
 enum LinkedWorktree {
     Available { repo: git2::Repository },
     Missing,
@@ -291,9 +359,12 @@ impl<'repo> SessionCleanup<'repo> {
         transaction.lock_ref(&reference)?;
         transaction.lock_ref(&target_reference)?;
         transaction.lock_ref("HEAD")?;
-        let approved_id = Oid::from_str(approved)?;
+        let approved_id = match purpose {
+            CleanupPurpose::Merged => MergeRecord::new(session, &git.repo, approved)?.commit,
+            CleanupPurpose::Unwritten => Oid::from_str(approved)?,
+        };
         let target = git.repo.refname_to_id(&target_reference)?;
-        let expected = WorktreeSnapshot::base(git, approved)?;
+        let expected = WorktreeSnapshot::base(git, &approved_id.to_string())?;
         let actual =
             WorktreeSnapshot::for_session_cleanup(&workspace, &child, &expected)?.with_git_modes();
         if let Some(entry) = child.status(&workspace)?.entries.first() {
@@ -411,7 +482,8 @@ impl<'repo> SessionCleanup<'repo> {
             )),
             false => Ok(()),
         }?;
-        git.repo
+        let mut cleanup = git
+            .repo
             .worktrees()?
             .iter()
             .try_fold(self, |cleanup, name| {
@@ -424,7 +496,17 @@ impl<'repo> SessionCleanup<'repo> {
                     )),
                     false => Ok(cleanup),
                 }
-            })
+            })?;
+        for record in git
+            .repo
+            .references_glob(&format!("{}*", session.merge_prefix()))?
+        {
+            let record = record?;
+            let reference = record.name()?;
+            cleanup.transaction.lock_ref(reference)?;
+            cleanup.transaction.remove(reference)?;
+        }
+        Ok(cleanup)
     }
 
     fn execute(mut self) -> anyhow::Result<()> {
@@ -489,6 +571,10 @@ impl SessionWorktree {
 
     fn branch(&self) -> String {
         format!("joe/session/{}", self.id)
+    }
+
+    fn merge_prefix(&self) -> String {
+        format!("refs/joe/session-merges/{}/", self.id)
     }
 
     pub fn id(&self) -> &str {
@@ -831,38 +917,61 @@ impl SessionWorktree {
         approved: &str,
     ) -> anyhow::Result<MergeOutcome> {
         let commit = self.checkpoint(project)?;
-        match commit.to_string() == approved {
+        let git = GitRepository::source(project)?;
+        let reference = format!("refs/heads/{}", self.target);
+        let session_reference = format!("refs/heads/{}", self.branch());
+        let mut transaction = git.repo.transaction()?;
+        transaction.lock_ref(&reference)?;
+        transaction.lock_ref(&session_reference)?;
+        transaction.lock_ref("HEAD")?;
+        let record = MergeRecord::new(self, &git.repo, approved)?;
+        transaction.lock_ref(&record.reference)?;
+        match commit == record.commit && git.repo.refname_to_id(&session_reference)? == commit {
             true => Ok(()),
             false => Err(anyhow::anyhow!(
                 "Session changes have changed since the merge question; complete the task again before approving"
             )),
         }?;
-        let git = GitRepository::source(project)?;
-        let reference = format!("refs/heads/{}", self.target);
-        let mut transaction = git.repo.transaction()?;
-        transaction.lock_ref(&reference)?;
-        transaction.lock_ref("HEAD")?;
         let target = git.repo.find_commit(git.repo.refname_to_id(&reference)?)?;
-        let state = match target.id() == commit
-            || git.repo.graph_descendant_of(target.id(), commit)?
-        {
-            true => MergeState::Integrated,
-            false if git.repo.graph_descendant_of(commit, target.id())? => MergeState::FastForward,
-            false => MergeState::Diverged,
-        };
+        let session = git.repo.find_commit(commit)?;
+        let state =
+            match target.id() == commit || git.repo.graph_descendant_of(target.id(), commit)? {
+                true => MergeState::Integrated,
+                false if session.parent_count() == 1 && session.parent_id(0)? == target.id() => {
+                    MergeState::FastForward
+                }
+                false => MergeState::Diverged,
+            };
         match state {
             MergeState::Integrated => Ok(MergeOutcome::Unchanged),
             MergeState::FastForward | MergeState::Diverged => {
                 let checked_out = git.repo.head()?.name()? == reference;
+                match state {
+                    MergeState::Diverged if git.repo.head()?.name()? == session_reference => Err(
+                        anyhow::anyhow!("Session branch is checked out in the source repository"),
+                    ),
+                    _ => Ok(()),
+                }?;
                 for name in git.repo.worktrees()?.iter() {
                     let name =
                         name?.ok_or_else(|| anyhow::anyhow!("Worktree name is not UTF-8"))?;
-                    match LinkedWorktree::new(&git, name)?.has_branch(&reference)? {
+                    let worktree = LinkedWorktree::new(&git, name)?;
+                    match worktree.has_branch(&reference)? {
                         true => Err(anyhow::anyhow!(
                             "{} is checked out in another worktree",
                             self.target
                         )),
                         false => Ok(()),
+                    }?;
+                    match state {
+                        MergeState::Diverged
+                            if name != self.id && worktree.has_branch(&session_reference)? =>
+                        {
+                            Err(anyhow::anyhow!(
+                                "Session branch is checked out in another worktree"
+                            ))
+                        }
+                        _ => Ok(()),
                     }?;
                 }
                 match checked_out
@@ -876,7 +985,6 @@ impl SessionWorktree {
                     false => Ok(()),
                 }?;
                 let signature = Signature::now("Agent Joe", "agent-joe@localhost")?;
-                let session = git.repo.find_commit(commit)?;
                 let merged = match state {
                     MergeState::FastForward => commit,
                     MergeState::Diverged => {
@@ -904,20 +1012,34 @@ impl SessionWorktree {
                             &signature,
                             &message,
                             &tree,
-                            &[&target, &session],
+                            &[&target],
                         )?
                     }
                     MergeState::Integrated => target.id(),
                 };
-                let merged_commit = git.repo.find_commit(merged)?;
-                if checked_out {
-                    git.repo.checkout_tree(
-                        merged_commit.as_object(),
-                        Some(
-                            git2::build::CheckoutBuilder::new()
-                                .safe()
-                                .overwrite_ignored(false),
-                        ),
+                let workspace = self.workspace(project)?;
+                let child = GitRepository::required(&workspace)?;
+                let session_checkout = (merged != commit)
+                    .then(|| MergeCheckout::new(&workspace, &child, merged))
+                    .transpose()?;
+                let target_checkout = checked_out
+                    .then(|| MergeCheckout::new(project, &git, merged))
+                    .transpose()?;
+                for checkout in target_checkout.iter().chain(session_checkout.iter()) {
+                    checkout.apply()?;
+                }
+                if merged != commit {
+                    transaction.set_target(
+                        &session_reference,
+                        merged,
+                        Some(&signature),
+                        "Align Joe session with merged changes",
+                    )?;
+                    transaction.set_target(
+                        &record.reference,
+                        merged,
+                        Some(&signature),
+                        "Record Joe session merge",
                     )?;
                 }
                 transaction.set_target(

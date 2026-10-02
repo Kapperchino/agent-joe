@@ -1336,7 +1336,17 @@ async fn approving_a_conflicted_merge_resolves_and_merges_without_another_questi
             .peel_to_commit()
             .unwrap()
             .parent_count(),
-        2
+        1
+    );
+    assert_eq!(
+        h.repo
+            .head()
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .parent_id(0)
+            .unwrap(),
+        target
     );
     assert_eq!(
         h.repo
