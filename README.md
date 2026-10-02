@@ -40,6 +40,11 @@ handoffs read their source worktree until their own first write.
 - `/plan` investigates without changing files; `/implement` enables changes.
 - `/diff` reviews changes; `/sessions` and `/resume` reopen saved conversations.
 - `/questions` opens pending questions; `/compact` condenses older context.
+- `/agent` or `Ctrl+g` opens the agent-thread picker. Each sub-agent has its own
+  live output, tool calls, objective, status, and unread indicator; none of that
+  output is mixed into the main conversation. Select a thread with `↑`/`↓` and
+  `Enter`, scroll with `PgUp`/`PgDn` or `Home`/`End`, and press `Esc` to return to
+  Main. Agent views are read-only and preserve your unsent main-conversation draft.
 - `Ctrl+o` toggles tool history. Run `turbo-code --help` for CLI options.
 
 ## Security

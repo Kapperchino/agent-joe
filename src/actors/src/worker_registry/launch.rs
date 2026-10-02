@@ -4,6 +4,7 @@ use crate::states::runtime::ExecutionRole;
 use crate::worker::{ContextWorker, run_worker};
 use crate::workers::task_worker::TaskWorker;
 use analysis::contexts::{context::Context, rust_context::RustContext};
+use common_models::tui_models::{ActorToTuiPacket, AgentProgress, Lifecycle};
 use futures::FutureExt;
 use std::{
     panic::AssertUnwindSafe,
@@ -149,6 +150,16 @@ pub(crate) fn start(
         execution: execution.clone(),
         session: session.clone(),
     };
+    let reporter = crate::event_reporter::EventReporter::Interactive {
+        actor_id: prepared.dependency.context.get_id(),
+        tui_tx: prepared.dependency.tui_tx.clone(),
+    };
+    reporter.send(ActorToTuiPacket::AgentUpdated(AgentProgress {
+        worker_id: execution.id.clone(),
+        objective: execution.request.objective().to_owned(),
+        state: Lifecycle::Running,
+        detail: None,
+    }));
     let parent = info.actor_ref.get_cell();
     let registry = registry.clone();
     prepared.parent_scope.tasks.clone().spawn(async move {
@@ -194,6 +205,26 @@ pub(crate) fn start(
                 .push(format!("Worker report persistence failed: {error}"));
         }
         drop(prepared.writer);
+        let state = match report.status {
+            WorkerStatus::Completed => Lifecycle::Completed,
+            WorkerStatus::Cancelled => Lifecycle::Cancelled,
+            _ => Lifecycle::Failed,
+        };
+        reporter.send(ActorToTuiPacket::AgentUpdated(AgentProgress {
+            worker_id: execution.id.clone(),
+            objective: execution.request.objective().to_owned(),
+            state,
+            detail: match (state, report.unresolved_issues.as_slice()) {
+                (Lifecycle::Completed, []) => None,
+                (Lifecycle::Completed, issues) => Some(issues.join("\n")),
+                (_, issues) => Some(
+                    std::iter::once(report.findings.as_str())
+                        .chain(issues.iter().map(String::as_str))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                ),
+            },
+        }));
         registry.complete(&owner, report);
     });
     Ok(initial)

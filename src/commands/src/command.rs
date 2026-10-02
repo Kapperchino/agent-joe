@@ -14,6 +14,8 @@ mod tests;
 #[derive(Debug, PartialEq, EnumString, VariantNames, Clone, EnumMessage)]
 #[strum(serialize_all = "lowercase")]
 pub enum Command {
+    #[strum(message = "switches between the main conversation and sub-agent threads")]
+    Agent,
     #[strum(message = "enters read-only planning mode; shows the current plan")]
     Plan,
     #[strum(message = "returns to implementation mode")]

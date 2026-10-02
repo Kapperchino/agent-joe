@@ -179,6 +179,10 @@ impl WorkerRequest {
         self.role
     }
 
+    pub fn objective(&self) -> &str {
+        &self.objective
+    }
+
     pub fn budget(&self) -> BudgetLimits {
         self.budget
     }

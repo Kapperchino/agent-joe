@@ -7,6 +7,7 @@ pub struct ActorToTui {
 }
 #[derive(Debug, Clone)]
 pub enum ActorToTuiPacket {
+    AgentUpdated(AgentProgress),
     ValidationUpdated(ValidationProgress),
     InteractionUpdated(crate::interaction::InteractionView),
     InputAccepted {
@@ -39,6 +40,14 @@ pub enum ActorToTuiPacket {
     ToolUse(Vec<String>),
     CommandResult(Command, String),
     TokensUpdated(TokenCount),
+}
+
+#[derive(Debug, Clone)]
+pub struct AgentProgress {
+    pub worker_id: String,
+    pub objective: String,
+    pub state: Lifecycle,
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone)]

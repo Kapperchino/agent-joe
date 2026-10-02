@@ -354,6 +354,9 @@ impl<C: Context + Clone + 'static> ActorState<C> {
     pub async fn command(&mut self, command: Command) {
         let result = async {
             Ok(match &command {
+                Command::Agent => Some(ActorToTuiPacket::ContextNotice(
+                    "Use /agent or Ctrl+g in the terminal UI to inspect agent threads.".into(),
+                )),
                 Command::Plan
                 | Command::Implement
                 | Command::Questions

@@ -527,6 +527,77 @@ fn latest_result(request: &llm::ClientRequest) -> Value {
     serde_json::from_str(content).unwrap_or_else(|_| json!({"error": content}))
 }
 
+#[tokio::test]
+async fn agent_metadata_identifies_worker_stream_and_final_completion() {
+    let workspace = session::test_support::Workspace::new();
+    let actor = RepositoryActor::new(BaseWorker::new(), workspace.path.clone()).await;
+    let started = StartedWorker::new(&actor, worker_input("find_files", ".")).await;
+    let initial = actor
+        .event(|event| {
+            matches!(
+                &event.packet,
+                ActorToTuiPacket::AgentUpdated(progress)
+                    if progress.worker_id == started.id && progress.state == Lifecycle::Running
+            )
+        })
+        .await;
+    assert_ne!(initial.actor_id, 0);
+    assert!(
+        matches!(&initial.packet, ActorToTuiPacket::AgentUpdated(progress)
+        if progress.objective == "Inspect the assigned files and report evidence")
+    );
+    let mut events = response(vec![text("Isolated worker response")]);
+    events.splice(
+        1..1,
+        [
+            StreamEvent::ContentBlockStart {
+                index: 0,
+                content_block: llm::ContentBlockInfo::Text {
+                    text: String::new(),
+                },
+            },
+            StreamEvent::ContentBlockDelta {
+                index: 0,
+                delta: llm::Delta::TextDelta {
+                    text: "Isolated worker response".into(),
+                },
+            },
+        ],
+    );
+    answer(started.child.1, events);
+    let streamed = actor
+        .event(|event| {
+            matches!(
+                &event.packet,
+                ActorToTuiPacket::Data(data) if data.contains("Isolated worker response")
+            )
+        })
+        .await;
+    assert_eq!(streamed.actor_id, initial.actor_id);
+    let completed = actor
+        .event(|event| {
+            matches!(
+                &event.packet,
+                ActorToTuiPacket::AgentUpdated(progress)
+                    if progress.worker_id == started.id && progress.state == Lifecycle::Completed
+            )
+        })
+        .await;
+    assert_eq!(completed.actor_id, initial.actor_id);
+    answer(
+        started.parent.1,
+        response(vec![tool(
+            "worker_status",
+            "collect",
+            json!({"action":"wait", "worker_id":started.id, "seconds":2}),
+        )]),
+    );
+    let (parent, reply) = actor.request().await;
+    assert_eq!(latest_result(&parent)["workers"][0]["status"], "completed");
+    completed_root(&actor, reply).await;
+    actor.stop().await;
+}
+
 struct StartedWorker {
     parent: Request,
     child: Request,
@@ -1420,6 +1491,20 @@ async fn timeout_failure_and_tool_budget_are_reported_with_cleanup() {
                 .unwrap();
         let expected = serde_json::to_value(failure).unwrap();
         assert_eq!(latest_result(&parent)["workers"][0]["status"], expected);
+        let terminal = actor
+            .event(|event| {
+                matches!(
+                    &event.packet,
+                    ActorToTuiPacket::AgentUpdated(progress)
+                        if progress.worker_id == started.id && progress.state == Lifecycle::Failed
+                )
+            })
+            .await;
+        assert_ne!(terminal.actor_id, 0);
+        assert!(
+            matches!(terminal.packet, ActorToTuiPacket::AgentUpdated(progress)
+            if progress.detail.is_some())
+        );
         completed_root(&actor, reply).await;
         actor.stop().await;
     }
@@ -1431,6 +1516,16 @@ async fn parent_interrupt_cancels_and_journals_children_without_replaying_them()
     let actor = RepositoryActor::new(BaseWorker::new(), workspace.path.clone()).await;
     let started = StartedWorker::new(&actor, worker_input("find_files", ".")).await;
     actor.actor.send_message(Message::Interrupt).unwrap();
+    let cancelled = actor
+        .event(|event| {
+            matches!(
+                &event.packet,
+                ActorToTuiPacket::AgentUpdated(progress)
+                    if progress.worker_id == started.id && progress.state == Lifecycle::Cancelled
+            )
+        })
+        .await;
+    assert_ne!(cancelled.actor_id, 0);
     actor
         .event(|event| {
             event.actor_id == 0

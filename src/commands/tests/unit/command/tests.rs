@@ -1,6 +1,13 @@
 use super::*;
 
 #[test]
+fn agent_command_is_discoverable_and_accepts_no_arguments() {
+    assert_eq!(Command::parse("agent"), Ok(Command::Agent));
+    assert!(Command::print_all().contains(&"agent".to_owned()));
+    assert!(Command::parse("agent extra").is_err());
+}
+
+#[test]
 fn session_commands_accept_only_their_expected_arguments() {
     assert_eq!(Command::parse("diff"), Ok(Command::Diff));
     assert_eq!(
