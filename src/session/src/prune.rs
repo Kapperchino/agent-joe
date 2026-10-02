@@ -72,7 +72,7 @@ impl SessionStore {
         let owner = self.update(Some(id), |database| {
             let mut transaction = database.env.write_txn()?;
             let snapshot = database.snapshot(&transaction, id)?;
-            match snapshot.workspace == self.storage.workspace_identity()
+            match project.matches_workspace_identity(&snapshot.workspace)?
                 && snapshot.parent.is_none()
             {
                 true => Ok(()),

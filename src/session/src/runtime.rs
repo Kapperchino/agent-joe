@@ -126,7 +126,7 @@ impl SessionWorkspace {
             None => WorkspacePolicy::workspace(self.project.root().to_path_buf())?,
         };
         match changes.snapshot()?.baseline {
-            Some(baseline) if baseline.workspace != workspace.workspace_identity()? => {
+            Some(baseline) if !workspace.matches_workspace_identity(&baseline.workspace)? => {
                 *changes = self.session.change_tracker(Default::default());
                 changes.start(&workspace)?;
             }

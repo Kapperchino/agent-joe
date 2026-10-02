@@ -184,6 +184,46 @@ fn process_workspace_hard_links_require_every_alias_to_be_inside_the_project() {
 }
 
 #[test]
+fn persisted_workspace_identity_ignores_device_numbers_but_not_paths_or_inodes() {
+    let fixture = Fixture::new();
+    let root = fixture.root.join("project:42");
+    std::fs::create_dir(&root).unwrap();
+    let policy = WorkspacePolicy::workspace(root).unwrap();
+    let identity = policy.workspace_identity().unwrap();
+    let (path_and_device, inode) = identity.rsplit_once(':').unwrap();
+    let (path, device) = path_and_device.rsplit_once(':').unwrap();
+    let remapped = format!("{path}:{}:{inode}", device.parse::<i128>().unwrap() ^ 1);
+    assert!(policy.matches_workspace_identity(&identity).unwrap());
+    assert!(policy.matches_workspace_identity(&remapped).unwrap());
+    for invalid in [
+        format!("{path}/other:{device}:{inode}"),
+        format!("{path}:{device}:{}", inode.parse::<u64>().unwrap() ^ 1),
+        format!("{path}:invalid:{inode}"),
+        format!("{path}:{device}:invalid"),
+        format!("{path}:{inode}"),
+        String::new(),
+    ] {
+        assert!(!policy.matches_workspace_identity(&invalid).unwrap());
+    }
+}
+
+#[test]
+fn persisted_workspace_identity_still_rejects_replaced_roots() {
+    let fixture = Fixture::new();
+    let policy = fixture.policy();
+    let identity = policy.workspace_identity().unwrap();
+    std::fs::rename(&fixture.root, fixture.directory.join("original")).unwrap();
+    std::fs::create_dir(&fixture.root).unwrap();
+    assert!(policy.matches_workspace_identity(&identity).is_err());
+    assert!(
+        !fixture
+            .policy()
+            .matches_workspace_identity(&identity)
+            .unwrap()
+    );
+}
+
+#[test]
 fn session_storage_is_private_and_inaccessible_to_file_tools() {
     use std::os::unix::fs::PermissionsExt;
     let fixture = Fixture::new();

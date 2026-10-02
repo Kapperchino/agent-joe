@@ -1443,6 +1443,80 @@ fn stale_handles_cannot_read_write_or_release_a_replacement_owner() {
 }
 
 #[test]
+fn sessions_resume_after_device_renumbering_without_losing_change_journals() {
+    use utils::changes::FileEdit;
+
+    let workspace = Workspace::new();
+    let policy = WorkspacePolicy::workspace(workspace.path.clone()).unwrap();
+    let path = std::path::Path::new("file");
+    policy.write(path, "original\n").unwrap();
+    let store = workspace.store();
+    let session = store
+        .create(SessionProvider::Injected, None, history())
+        .unwrap();
+    let changes = session.change_tracker(Default::default());
+    changes.start(&policy).unwrap();
+    let before = policy.file_version(path).unwrap();
+    let edit = FileEdit::new(
+        &policy,
+        path,
+        before.clone(),
+        before.with_text("updated\n".into()),
+    )
+    .unwrap();
+    let record = changes.apply(&policy, vec![edit]).unwrap();
+    let mut snapshot = session.snapshot().unwrap();
+    let (path_and_device, inode) = snapshot.workspace.rsplit_once(':').unwrap();
+    let (root, device) = path_and_device.rsplit_once(':').unwrap();
+    let saved_identity = format!("{root}:{}:{inode}", device.parse::<i128>().unwrap() ^ 1);
+    snapshot.workspace = saved_identity.clone();
+    snapshot.changes.baseline.as_mut().unwrap().workspace = saved_identity;
+    let baseline = serde_json::to_value(&snapshot.changes.baseline).unwrap();
+    let id = session.id.clone();
+    drop(changes);
+    drop(session);
+    let access = store.access().unwrap();
+    let database = &access.current;
+    let mut transaction = database.env.write_txn().unwrap();
+    database
+        .snapshots
+        .put(
+            &mut transaction,
+            &id,
+            &serde_json::to_vec(&snapshot).unwrap(),
+        )
+        .unwrap();
+    transaction.commit().unwrap();
+    drop(access);
+    drop(store);
+
+    let mut runtime =
+        crate::runtime::SessionRuntime::for_workspace(workspace.path.clone()).unwrap();
+    let session = workspace
+        .resume(
+            runtime.sessions.as_ref().unwrap(),
+            &id,
+            &SessionProvider::Injected,
+        )
+        .unwrap();
+    runtime.scope.changes = session.change_tracker(session.snapshot().unwrap().changes);
+    runtime.session = Some(session.clone());
+    runtime.activate_session(None).unwrap();
+    let changes = &runtime.scope.changes;
+    changes.start(&policy).unwrap();
+    let restored = changes.snapshot().unwrap();
+    assert_eq!(serde_json::to_value(&restored.baseline).unwrap(), baseline);
+    assert_eq!(restored.records.len(), 1);
+    assert_eq!(restored.records[0].id, record.id);
+    assert_eq!(
+        serde_json::to_value(session.snapshot().unwrap().history).unwrap(),
+        serde_json::to_value(snapshot.history).unwrap()
+    );
+    changes.undo(&policy, &record.id).unwrap();
+    assert_eq!(policy.read(path).unwrap(), "original\n");
+}
+
+#[test]
 fn ownership_schema_provider_and_workspace_are_revalidated() {
     let workspace = Workspace::new();
     let store = workspace.store();

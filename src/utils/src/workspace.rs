@@ -79,6 +79,24 @@ struct ResolvedPath<'a> {
     access: Access,
 }
 
+#[derive(PartialEq, Eq)]
+struct StoredWorkspaceIdentity<'a> {
+    path: &'a str,
+    inode: u64,
+}
+
+impl<'a> StoredWorkspaceIdentity<'a> {
+    fn new(identity: &'a str) -> Option<Self> {
+        let (path_and_device, inode) = identity.rsplit_once(':')?;
+        let (path, device) = path_and_device.rsplit_once(':')?;
+        device.parse::<i128>().ok()?;
+        Some(Self {
+            path,
+            inode: inode.parse().ok()?,
+        })
+    }
+}
+
 impl WorkspacePolicy {
     pub fn workspace(path: PathBuf) -> anyhow::Result<Self> {
         Self::new(
@@ -116,6 +134,18 @@ impl WorkspacePolicy {
 
     pub fn root(&self) -> &Path {
         &self.base
+    }
+
+    pub fn matches_workspace_identity(&self, saved: &str) -> anyhow::Result<bool> {
+        let current = self.workspace_identity()?;
+        let matches = match (
+            StoredWorkspaceIdentity::new(saved),
+            StoredWorkspaceIdentity::new(&current),
+        ) {
+            (Some(saved), Some(current)) => saved == current,
+            _ => false,
+        };
+        Ok(matches)
     }
 
     pub fn relocated(&self, base: PathBuf) -> anyhow::Result<Self> {

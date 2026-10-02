@@ -85,7 +85,7 @@ impl ResumableSession {
             let owner = match snapshot {
                 Snapshot {
                     workspace: saved, ..
-                } if saved != identity => Err(anyhow::anyhow!(
+                } if !workspace.matches_workspace_identity(&saved)? => Err(anyhow::anyhow!(
                     "Session workspace identity does not match the current project"
                 )),
                 Snapshot {

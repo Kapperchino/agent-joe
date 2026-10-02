@@ -502,7 +502,7 @@ impl ChangeTracker {
             .lock()
             .map_err(|_| anyhow::anyhow!("Change journal lock poisoned"))?;
         match &state.snapshot.baseline {
-            Some(baseline) => match baseline.workspace == workspace.workspace_identity()? {
+            Some(baseline) => match workspace.matches_workspace_identity(&baseline.workspace)? {
                 true => Ok(()),
                 false => Err(anyhow::anyhow!(
                     "The task baseline belongs to another workspace"
