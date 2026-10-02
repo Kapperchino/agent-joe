@@ -59,7 +59,7 @@ impl<C: Context + Clone> SessionActivation<C> {
         context: &C,
         runtime: &SessionRuntime,
         client: &LLmClient,
-        handoff: &crate::plan::PlanHandoff,
+        handoff: &workflows::plan::PlanHandoff,
     ) -> anyhow::Result<Self> {
         let mut context = context.clone();
         context.clear_task_context();

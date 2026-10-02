@@ -58,7 +58,7 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for ValidateRust {
     ) -> anyhow::Result<Self::Output> {
         super::delegated::run(
             input.context,
-            worker_registry::workflow::BuiltinAgent::ValidateRust,
+            workflows::BuiltinAgent::ValidateRust,
             context,
             actor,
         )

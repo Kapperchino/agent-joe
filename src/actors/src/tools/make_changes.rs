@@ -58,7 +58,7 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for MakeChanges {
     ) -> anyhow::Result<Self::Output> {
         super::delegated::run(
             input.context,
-            worker_registry::workflow::BuiltinAgent::MakeChanges,
+            workflows::BuiltinAgent::MakeChanges,
             context,
             actor,
         )

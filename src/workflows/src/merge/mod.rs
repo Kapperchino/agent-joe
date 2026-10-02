@@ -210,5 +210,5 @@ impl MergeApproval {
 }
 
 #[cfg(test)]
-#[path = "../tests/unit/tests.rs"]
+#[path = "../../tests/unit/merge/tests.rs"]
 mod tests;

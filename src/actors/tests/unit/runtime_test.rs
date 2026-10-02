@@ -358,7 +358,7 @@ impl ErasedToolTrait<TestContext, ActorContext<TestContext>> for GateTool {
         let _active = Active(self.active.clone());
         let (tx, rx) = oneshot::channel();
         self.entered
-            .send((input["id"].as_str().unwrap().into(), tx))
+            .send((input["id"].as_str().unwrap_or(self.name).into(), tx))
             .unwrap();
         let _ = rx.await;
         match (self.outcome, actor) {

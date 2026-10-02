@@ -15,7 +15,7 @@ commands = { path = "../commands" }
 common-models = { path = "../common-models" }
 conversation = { path = "../conversation" }
 interaction = { path = "../interaction" }
-merge-workflow = { path = "../merge-workflow" }
+workflows = { path = "../workflows" }
 tools = { path = "../tools" }
 turn-engine = { path = "../turn-engine" }
 utils = { path = "../utils" }

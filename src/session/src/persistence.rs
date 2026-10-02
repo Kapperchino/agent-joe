@@ -135,9 +135,9 @@ impl InteractionPersistence for SessionPersistence<'_> {
     }
 }
 
-impl merge_workflow::execution::MergePersistence for SessionPersistence<'_> {
-    fn worktree_cleanup(&self) -> anyhow::Result<merge_workflow::execution::WorktreeCleanup> {
-        use merge_workflow::execution::WorktreeCleanup;
+impl workflows::merge::execution::MergePersistence for SessionPersistence<'_> {
+    fn worktree_cleanup(&self) -> anyhow::Result<workflows::merge::execution::WorktreeCleanup> {
+        use workflows::merge::execution::WorktreeCleanup;
         match self.session {
             Some(session) if session.store.has_worktree_readers(&session.id)? => {
                 Ok(WorktreeCleanup::Retain)
@@ -146,8 +146,8 @@ impl merge_workflow::execution::MergePersistence for SessionPersistence<'_> {
         }
     }
 
-    fn worktree(&self) -> anyhow::Result<merge_workflow::execution::MergeWorktree> {
-        use merge_workflow::execution::MergeWorktree;
+    fn worktree(&self) -> anyhow::Result<workflows::merge::execution::MergeWorktree> {
+        use workflows::merge::execution::MergeWorktree;
         match self.session {
             Some(session) => Ok(match session.snapshot()?.worktree {
                 Some(worktree) => MergeWorktree::Isolated(worktree),
@@ -157,7 +157,7 @@ impl merge_workflow::execution::MergePersistence for SessionPersistence<'_> {
         }
     }
 
-    fn record_approval(&mut self, approval: merge_workflow::MergeApproval) -> anyhow::Result<()> {
+    fn record_approval(&mut self, approval: workflows::merge::MergeApproval) -> anyhow::Result<()> {
         self.commit(Event::MergeApproval(approval))
     }
 

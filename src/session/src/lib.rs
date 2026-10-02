@@ -19,7 +19,6 @@ mod control_tests;
 mod generations;
 mod ownership;
 pub mod persistence;
-pub mod plan;
 mod prune;
 pub mod runtime;
 pub mod state;
@@ -130,7 +129,7 @@ pub struct Snapshot {
     #[serde(default)]
     pub worktree_source: Option<utils::git::worktrees::session::SessionWorktree>,
     #[serde(default)]
-    pub merge_approval: merge_workflow::MergeApproval,
+    pub merge_approval: workflows::merge::MergeApproval,
     pub id: String,
     workspace: String,
     provider: SessionProvider,
@@ -224,6 +223,11 @@ pub use common_models::interaction::Question as PendingQuestion;
 pub struct QueuedInput {
     pub turn: String,
     pub prompt: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "turn_engine::turn::TurnStart::is_provider"
+    )]
+    pub start: turn_engine::turn::TurnStart,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -251,7 +255,7 @@ pub enum Event {
     Worktree(Option<utils::git::worktrees::session::SessionWorktree>),
     WorktreeSource(utils::git::worktrees::session::SessionWorktree),
     WorktreePruned,
-    MergeApproval(merge_workflow::MergeApproval),
+    MergeApproval(workflows::merge::MergeApproval),
     Planning(common_models::interaction::Planning),
     Worker(Box<worker_registry::report::WorkerView>),
     Created,

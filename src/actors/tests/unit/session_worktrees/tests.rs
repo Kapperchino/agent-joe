@@ -1,4 +1,5 @@
 use super::*;
+use crate::worker::ContextWorker;
 use analysis::contexts::rust_context::RustContext;
 use commands::command::{Answer, Command, PruneMode, QuestionAnswer, ResumeTarget};
 use common_models::interaction::QuestionPurpose;
@@ -72,23 +73,14 @@ impl GitHarness {
                 context,
                 runtime,
                 client: llm::LLmClient::Injected(Arc::new(Provider(tx))),
-                tools: vec![
-                    tools::tool_defs::erased_tool::<
-                        tools::apply_patch::ApplyPatch,
+                tools: crate::workers::simple_worker::SimpleWorker::<RustContext>::tools()
+                    .into_iter()
+                    .chain([tools::tool_defs::erased_tool::<
+                        crate::tools::run_workflow::RunWorkflow,
                         RustContext,
                         ActorContext<RustContext>,
-                    >(),
-                    tools::tool_defs::erased_tool::<
-                        crate::tools::knowledge::Knowledge,
-                        RustContext,
-                        ActorContext<RustContext>,
-                    >(),
-                    tools::tool_defs::erased_tool::<
-                        tools::review_changes::ReviewChanges,
-                        RustContext,
-                        ActorContext<RustContext>,
-                    >(),
-                ],
+                    >()])
+                    .collect(),
                 tui_tx,
                 debug_mode: false,
             },
@@ -113,6 +105,45 @@ impl GitHarness {
             .into_iter()
             .find(|snapshot| snapshot.id == id)
             .unwrap()
+    }
+
+    async fn finish_resolution_workflow(&self) {
+        let (request, reply) = within(self.requests.recv_async()).await.unwrap();
+        let result = request
+            .messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .find_map(|block| match block {
+                ContentBlock::ToolResult {
+                    tool_id,
+                    content,
+                    is_error,
+                    ..
+                } if tool_id.id.as_ref().starts_with("fc_workflow_") => Some((content, is_error)),
+                _ => None,
+            })
+            .unwrap();
+        assert_ne!(*result.1, Some(true));
+        let report: workflows::WorkflowReport = serde_json::from_str(result.0).unwrap();
+        assert_eq!(report.status, workflows::WorkflowStatus::Completed);
+        assert_eq!(report.steps.len(), 1);
+        assert!(
+            matches!(&report.steps[0].output, workflows::StepOutput::Agent { report } if report.status == worker_registry::report::WorkerStatus::Completed)
+        );
+        answer(
+            reply,
+            response(vec![review_call(
+                "Resolve conflicting return values by returning 5",
+                "root-review-resolution",
+            )]),
+        );
+        let (_, reply) = within(self.requests.recv_async()).await.unwrap();
+        answer(
+            reply,
+            response(vec![text(
+                "Assessed the workflow report and reviewed the resolution",
+            )]),
+        );
     }
 
     async fn event(&self, predicate: impl Fn(&ActorToTuiPacket) -> bool) -> ActorToTuiPacket {
@@ -716,11 +747,18 @@ async fn plan_handoff_uses_a_fresh_worktree_with_the_planned_files() {
     assert_eq!(state.planning.requirements_revision, 0);
     assert!(state.questions.is_empty());
     let sessions = h.store.list().unwrap();
-    assert_eq!(sessions.len(), 2);
+    assert_eq!(sessions.len(), 3);
     let new = sessions
         .iter()
-        .find(|snapshot| snapshot.id != original.id)
+        .find(|snapshot| snapshot.id != original.id && snapshot.parent.is_none())
         .unwrap();
+    assert_eq!(
+        sessions
+            .iter()
+            .filter(|snapshot| snapshot.parent.as_deref() == Some(new.id.as_str()))
+            .count(),
+        1
+    );
     assert!(new.worktree.is_none());
     assert!(h.repo.find_worktree(&new.id).is_err());
     assert!(
@@ -908,7 +946,7 @@ async fn force_prune_discards_inactive_worktrees_preserves_history_and_allows_re
     assert!(pruned.questions.pending().is_empty());
     assert!(matches!(
         pruned.merge_approval,
-        merge_workflow::MergeApproval::None
+        workflows::merge::MergeApproval::None
     ));
     assert_eq!(
         serde_json::to_value(&pruned.history[..saved.history.len()]).unwrap(),
@@ -1067,7 +1105,7 @@ async fn prune_recovers_interrupted_cleanup_and_clears_saved_worktree_state() {
     assert!(snapshot.worktree.is_none());
     assert!(matches!(
         snapshot.merge_approval,
-        merge_workflow::MergeApproval::None
+        workflows::merge::MergeApproval::None
     ));
     assert!(h.repo.find_reference(&reference).is_err());
     assert!(
@@ -1302,7 +1340,7 @@ async fn unchanged_tasks_do_not_request_a_commit_subject_or_merge() {
     assert!(h.snapshot(&id).questions.pending().is_empty());
     assert!(matches!(
         h.snapshot(&id).merge_approval,
-        merge_workflow::MergeApproval::None
+        workflows::merge::MergeApproval::None
     ));
     h.stop().await;
 }
@@ -1376,6 +1414,7 @@ async fn approving_a_conflicted_merge_resolves_and_merges_without_another_questi
     );
     let (_, reply) = within(h.requests.recv_async()).await.unwrap();
     answer(reply, response(vec![text("Conflicts resolved")]));
+    h.finish_resolution_workflow().await;
     let packet = h
         .event(|packet| match packet {
             ActorToTuiPacket::ContextNotice(message) => {
@@ -1397,7 +1436,7 @@ async fn approving_a_conflicted_merge_resolves_and_merges_without_another_questi
     );
     assert!(matches!(
         h.snapshot(&id).merge_approval,
-        merge_workflow::MergeApproval::None
+        workflows::merge::MergeApproval::None
     ));
     assert!(h.snapshot(&id).worktree.is_none());
     assert!(!worktree.path.exists());
@@ -1461,6 +1500,7 @@ async fn incomplete_conflict_resolution_cannot_merge_even_after_model_completion
     );
     let (_, reply) = within(h.requests.recv_async()).await.unwrap();
     answer(reply, response(vec![text("Conflicts resolved")]));
+    h.finish_resolution_workflow().await;
     let packet = h
         .event(|packet| matches!(packet, ActorToTuiPacket::SessionError(_)))
         .await;
@@ -1505,10 +1545,62 @@ async fn interrupting_conflict_resolution_keeps_main_unchanged() {
     assert_eq!(h.repo.refname_to_id("HEAD").unwrap(), target);
     assert!(matches!(
         h.snapshot(&id).merge_approval,
-        merge_workflow::MergeApproval::Resolving {
-            activity: merge_workflow::ResolutionActivity::Paused,
+        workflows::merge::MergeApproval::Resolving {
+            activity: workflows::merge::ResolutionActivity::Paused,
             ..
         }
+    ));
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn failed_resolution_workflow_cannot_merge_after_root_model_completion() {
+    let h = GitHarness::new().await;
+    let id = h.store.list().unwrap()[0].id.clone();
+    let question = h.complete(Some(PATCH)).await;
+    let target = h.commit_main("pub fn value() -> u32 { 3 }\n");
+    assert!(
+        h.answer_merge(&question, "merge")
+            .await
+            .contains("Resolving merge conflicts")
+    );
+    let (_, reply) = within(h.requests.recv_async()).await.unwrap();
+    assert!(
+        reply
+            .send(Err(Failure::new(
+                FailureKind::Authentication,
+                "Resolution worker failed"
+            )
+            .into()))
+            .is_ok()
+    );
+    let (request, reply) = within(h.requests.recv_async()).await.unwrap();
+    assert!(request.messages.iter().flat_map(|message| &message.content).any(|block| matches!(block, ContentBlock::ToolResult { tool_id, is_error: Some(true), .. } if tool_id.id.as_ref().starts_with("fc_workflow_"))));
+    answer(
+        reply,
+        response(vec![review_call(
+            "Review blocked conflict resolution",
+            "review-blocked-resolution",
+        )]),
+    );
+    let (_, reply) = within(h.requests.recv_async()).await.unwrap();
+    answer(
+        reply,
+        response(vec![text(
+            "Claimed completion despite failed resolution worker",
+        )]),
+    );
+    let packet = h
+        .event(|packet| matches!(packet, ActorToTuiPacket::SessionError(_)))
+        .await;
+    assert!(
+        matches!(packet, ActorToTuiPacket::SessionError(message) if message.contains("workflow stopped or failed"))
+    );
+    assert_eq!(h.repo.refname_to_id("HEAD").unwrap(), target);
+    assert!(h.snapshot(&id).worktree.is_some());
+    assert!(matches!(
+        h.snapshot(&id).merge_approval,
+        workflows::merge::MergeApproval::Resolving { .. }
     ));
     h.stop().await;
 }
@@ -1574,7 +1666,7 @@ async fn merge_questions_survive_session_switches_and_failed_tasks_revoke_approv
     .await;
     assert!(matches!(
         h.snapshot(&id).merge_approval,
-        merge_workflow::MergeApproval::None
+        workflows::merge::MergeApproval::None
     ));
     assert!(h.snapshot(&id).questions.pending().is_empty());
     assert_eq!(h.repo.refname_to_id("HEAD").unwrap(), base);
@@ -1677,7 +1769,7 @@ async fn successful_tasks_prompt_and_only_explicit_acceptance_updates_main() {
     );
     assert!(matches!(
         h.snapshot(&id).merge_approval,
-        merge_workflow::MergeApproval::None
+        workflows::merge::MergeApproval::None
     ));
     h.stop().await;
 }
@@ -1742,7 +1834,7 @@ async fn forks_withdraw_merge_questions_without_affecting_the_parent() {
     assert!(fork.questions.pending().is_empty());
     assert!(matches!(
         fork.merge_approval,
-        merge_workflow::MergeApproval::None
+        workflows::merge::MergeApproval::None
     ));
     assert_eq!(
         h.snapshot(&original).questions.pending(),
@@ -1758,8 +1850,8 @@ async fn forks_withdraw_merge_questions_without_affecting_the_parent() {
 
 #[tokio::test]
 async fn legacy_and_interrupted_merge_approvals_restore_as_shared_questions() {
-    use merge_workflow::MergeApproval;
     use session::{Event, ResumableSession};
+    use workflows::merge::MergeApproval;
     enum SavedApproval {
         Legacy,
         Interrupted,
@@ -1904,7 +1996,7 @@ async fn new_fork_and_resume_keep_distinct_workspaces_and_switch_context() {
     drop(reply);
     assert!(matches!(
         h.snapshot(&original).merge_approval,
-        merge_workflow::MergeApproval::None
+        workflows::merge::MergeApproval::None
     ));
     assert!(
         std::fs::read_to_string(h.workspace.path.join("lib.rs"))
@@ -1944,7 +2036,7 @@ async fn another_task_after_merge_gets_a_fresh_isolated_workspace() {
     );
     assert!(matches!(
         h.snapshot(&id).merge_approval,
-        merge_workflow::MergeApproval::None
+        workflows::merge::MergeApproval::None
     ));
     let merged = h.repo.refname_to_id("HEAD").unwrap();
     let history = h.snapshot(&id).history.len();

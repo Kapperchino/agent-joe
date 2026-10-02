@@ -1,4 +1,4 @@
-use crate::{MergeApproval, MergeDecision, MergeEvent, MergeProposal, MergeReadiness};
+use super::{MergeApproval, MergeDecision, MergeEvent, MergeProposal, MergeReadiness};
 use clients::response::RequestMode;
 use common_models::{
     interaction::{Answer, QuestionPurpose},
@@ -353,13 +353,12 @@ impl<P: MergePersistence> SessionMerge<'_, P> {
         })
     }
 
-    pub fn merge_input(&self, turn: TurnId) -> Option<FollowUp> {
+    pub fn merge_input(&self, turn: TurnId) -> anyhow::Result<Option<FollowUp>> {
         self.approval
             .resolution(turn)
             .filter(|_| matches!(self.activity, MergeActivity::Idle))
-            .map(|conflict| FollowUp {
-                id: turn,
-                prompt: Some(format!(
+            .map(|conflict| {
+                let prompt = format!(
                     "The user approved merging this session into main, including resolving merge conflicts. Resolve the conflicts in the current session worktree, preserving the intended changes from both branches. The worktree includes main's nonconflicting changes and conflict markers where applicable. Session commit: {}. Main commit: {}. Conflicting paths: {}. Read the current conflicting files with knowledge action read and inspect the original versions with git show as needed, edit the affected files, remove all conflict markers, and run focused validation. Do not ask for merge approval again. When this task completes successfully, the runtime will commit the resolution and retry merging into main automatically. If resolution is blocked, explain the blocker instead of claiming success.",
                     conflict.approved,
                     conflict.target,
@@ -369,8 +368,11 @@ impl<P: MergePersistence> SessionMerge<'_, P> {
                         .map(|path| path.display().to_string())
                         .collect::<Vec<_>>()
                         .join(", ")
-                )),
+                );
+                crate::WorkflowInput::single(crate::BuiltinAgent::MakeChanges, prompt.clone())
+                    .follow_up(turn, Some(prompt))
             })
+            .transpose()
     }
 
     pub fn record_merge(&mut self, event: MergeEvent) -> anyhow::Result<()> {
@@ -410,5 +412,5 @@ impl<P: MergePersistence> SessionMerge<'_, P> {
 }
 
 #[cfg(test)]
-#[path = "../tests/unit/execution.rs"]
+#[path = "../../tests/unit/merge/execution.rs"]
 mod tests;

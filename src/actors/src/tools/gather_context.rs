@@ -58,7 +58,7 @@ impl ToolTrait<RustContext, ActorContext<RustContext>> for GatherContext {
     ) -> anyhow::Result<Self::Output> {
         super::delegated::run(
             input.context,
-            worker_registry::workflow::BuiltinAgent::GatherContext,
+            workflows::BuiltinAgent::GatherContext,
             context,
             actor,
         )

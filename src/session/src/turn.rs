@@ -9,11 +9,11 @@ use common_models::interaction::QuestionPurpose;
 use common_models::runtime_ids::TurnId;
 use interaction::access::InteractionReadiness;
 use interaction::control::{InteractionAction, InteractionControl};
-use merge_workflow::MergeEvent;
-use merge_workflow::execution::{MergeActivity, MergeCompletion, MergeEnvironment, SessionMerge};
 use tools::tool_error::{FailureImpact, ToolFailure, ToolFailureKind};
 use turn_engine::machine::{Event, SessionEvent, TurnMachine};
 use turn_engine::turn::{FollowUp, ToolJob};
+use workflows::merge::MergeEvent;
+use workflows::merge::execution::{MergeActivity, MergeCompletion, MergeEnvironment, SessionMerge};
 
 pub struct SessionTurn<'a> {
     pub state: &'a mut SessionState,
@@ -134,6 +134,12 @@ impl SessionTurn<'_> {
         mode: RequestMode,
     ) -> anyhow::Result<Option<MergeCompletion>> {
         let mode = self.state.conversation.request_mode(turn, mode);
+        if self.state.merge_approval.resolution(turn).is_some() {
+            workflows::continuation::WorkflowCompletion::new(
+                turn,
+                self.state.conversation.history(),
+            )?;
+        }
         self.merge().offer_merge(turn, mode).await
     }
 

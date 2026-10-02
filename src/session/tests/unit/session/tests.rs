@@ -8,6 +8,31 @@ use tools::tool_defs::{ToolId, ToolInvocation};
 
 use crate::test_support::{Workspace, invalidate, open};
 
+#[test]
+fn queued_inputs_accept_legacy_records_and_preserve_workflow_startup() {
+    let legacy = serde_json::json!({"turn":"saved-turn", "prompt":"saved prompt"});
+    let saved: QueuedInput = serde_json::from_value(legacy.clone()).unwrap();
+    assert!(saved.start.is_provider());
+    assert_eq!(serde_json::to_value(saved).unwrap(), legacy);
+    let turn = common_models::runtime_ids::TurnId::new();
+    let follow_up = workflows::WorkflowInput::single(
+        workflows::BuiltinAgent::MakeChanges,
+        "Approved merge resolution".into(),
+    )
+    .follow_up(turn, None)
+    .unwrap();
+    let saved = QueuedInput {
+        turn: turn.to_string(),
+        prompt: follow_up.prompt,
+        start: follow_up.start,
+    };
+    let decoded: QueuedInput =
+        serde_json::from_value(serde_json::to_value(saved).unwrap()).unwrap();
+    assert!(
+        matches!(decoded.start, turn_engine::turn::TurnStart::Tool { call } if call.name.as_ref() == "run_workflow")
+    );
+}
+
 pub(super) fn history() -> Vec<Message> {
     vec![
         Message::new("workspace".into()),
@@ -107,7 +132,7 @@ fn merge_answers_preserve_the_plan_and_record_durable_evidence() {
         validation: None,
     });
     session.record(Event::Planning(planning.clone())).unwrap();
-    let approval = merge_workflow::MergeApproval::Awaiting {
+    let approval = workflows::merge::MergeApproval::Awaiting {
         question: "merge-fixture".into(),
         commit: "approved-commit".into(),
     };
@@ -754,6 +779,7 @@ fn forkable_snapshot_requires_idle_status_without_pending_or_queued_work() {
                     candidate.queued.push(QueuedInput {
                         turn: "queued-turn".into(),
                         prompt: Some("next input".into()),
+                        start: Default::default(),
                     });
                 }
                 let result = ForkableSnapshot::try_from(candidate.clone());
@@ -1051,6 +1077,7 @@ fn recovery_pairs_all_calls_and_never_reexecutes_uncertain_operations() {
         .record(Event::Queued(QueuedInput {
             turn: "follow-up".into(),
             prompt: Some("Also preserve API compatibility".into()),
+            start: Default::default(),
         }))
         .unwrap();
     let id = session.id.clone();

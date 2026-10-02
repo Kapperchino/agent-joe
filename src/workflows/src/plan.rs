@@ -1,5 +1,5 @@
-use crate::state::SessionState;
-use clients::llm::Role;
+use crate::{BuiltinAgent, StepInput, WorkflowInput};
+use clients::llm::{Message, Role};
 use common_models::interaction::{
     Answer, Choice, Investigation, PlanReview, Planning, Question, QuestionInput, QuestionPurpose,
     WorkMode,
@@ -33,9 +33,15 @@ pub struct PlanHandoff {
     pub prompt: String,
 }
 
+pub struct PlanContext<'a> {
+    pub planning: &'a Planning,
+    pub history: &'a [Message],
+    pub requirements: String,
+}
+
 impl PlanHandoff {
-    pub fn new(state: &SessionState) -> anyhow::Result<Self> {
-        let planning = state.interaction.planning();
+    pub fn new(context: PlanContext<'_>) -> anyhow::Result<Self> {
+        let planning = context.planning;
         match (
             planning.mode,
             planning.review(),
@@ -46,9 +52,8 @@ impl PlanHandoff {
                 "Finish and reconcile the planning investigation before implementing it"
             )),
         }?;
-        let plan = state
-            .conversation
-            .history()
+        let plan = context
+            .history
             .iter()
             .rev()
             .find(|message| matches!(message.role, Role::Assistant) && !message.text().is_empty())
@@ -56,11 +61,7 @@ impl PlanHandoff {
             .ok_or_else(|| {
                 anyhow::anyhow!("The completed plan is missing from the conversation")
             })?;
-        let requirements = state
-            .conversation
-            .constraints()
-            .collect::<Vec<_>>()
-            .join("\n\n");
+        let requirements = context.requirements;
         Ok(Self {
             planning: Planning {
                 mode: WorkMode::Implement,
@@ -70,6 +71,26 @@ impl PlanHandoff {
                 "Implement the plan approved by the user below. Preserve its requirements and decisions, continue the tracked implementation steps, and run the planned validation. Investigation evidence is historical context, not proof of implementation or validation in this session; re-read source files as needed. Artifacts from the planning session may not be available here.\n\nPlanning requirements and user answers:\n{requirements}\n\nApproved plan:\n{plan}"
             ),
         })
+    }
+
+    pub fn workflow(&self) -> anyhow::Result<WorkflowInput> {
+        let mut input = WorkflowInput::single(
+            BuiltinAgent::MakeChanges,
+            "Implement the approved plan. Preserve its requirements and decisions, add focused regression coverage, and report implementation evidence and any blockers. The root coordinator owns tracked-plan updates.".into(),
+        );
+        input.context = format!(
+            "{}\n\nTracked plan and exact requested validation:\n{}",
+            self.prompt,
+            serde_json::to_string(&self.planning)?
+        );
+        input.steps.push(StepInput::Agent {
+            id: "validate_rust".into(),
+            agent: "validate_rust".into(),
+            objective: "Run the approved plan's exact requested Cargo checks against the current workspace, then relevant focused regression checks. Assess the previous implementation report. Report actual results, failures and checks that could not run; do not infer success from compilation.".into(),
+            context: String::new(),
+            completion_criteria: "Every requested check has observed evidence, or is explicitly reported as blocked or failed. Do not claim completion when required validation fails.".into(),
+        });
+        Ok(input)
     }
 
     pub fn question(turn: TurnId) -> anyhow::Result<Question> {

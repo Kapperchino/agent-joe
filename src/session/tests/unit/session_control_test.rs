@@ -11,9 +11,9 @@ use conversation::Conversation;
 use interaction::InteractionState;
 use interaction::access::{InteractionReadiness, InteractionRole};
 use interaction::policy::InteractionPolicy;
-use merge_workflow::execution::{MergeActivity, MergeEnvironment};
-use merge_workflow::{MergeApproval, MergeEvent};
 use turn_engine::turn::FollowUp;
+use workflows::merge::execution::{MergeActivity, MergeEnvironment};
+use workflows::merge::{MergeApproval, MergeEvent};
 
 #[test]
 fn interaction_publishes_only_committed_changes_without_an_actor() {

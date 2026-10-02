@@ -7,8 +7,8 @@ use interaction::InteractionState;
 use interaction::access::InteractionRole;
 use interaction::control::InteractionControl;
 use interaction::policy::InteractionPolicy;
-use merge_workflow::MergeApproval;
-use merge_workflow::execution::{MergeActivity, MergeEnvironment, SessionMerge};
+use workflows::merge::MergeApproval;
+use workflows::merge::execution::{MergeActivity, MergeEnvironment, SessionMerge};
 
 pub struct SessionState {
     pub conversation: Conversation,

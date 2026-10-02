@@ -34,12 +34,31 @@ impl Tag {
 pub struct FollowUp {
     pub id: TurnId,
     pub prompt: Option<String>,
+    pub start: TurnStart,
 }
+
+#[derive(Default, Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TurnStart {
+    #[default]
+    Provider,
+    Tool {
+        call: Box<ToolCall>,
+    },
+}
+
+impl TurnStart {
+    pub fn is_provider(&self) -> bool {
+        matches!(self, Self::Provider)
+    }
+}
+
 impl FollowUp {
     pub fn new(prompt: Option<String>) -> Self {
         Self {
             id: TurnId::new(),
             prompt,
+            start: TurnStart::Provider,
         }
     }
 }

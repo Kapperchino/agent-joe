@@ -30,6 +30,121 @@ async fn start_pipeline(actor: &RepositoryActor, input: Value) {
 }
 
 #[tokio::test]
+async fn approved_plan_automatically_launches_the_shared_bounded_agent_pipeline() {
+    use commands::command::{Answer, Command, QuestionAnswer};
+    use common_models::interaction::{QuestionPurpose, StepState, WorkMode};
+    let workspace = session::test_support::Workspace::new();
+    std::fs::write(
+        workspace.path.join("behavior.txt"),
+        "Preserve the public API",
+    )
+    .unwrap();
+    let actor = RepositoryActor::new(BaseWorker::new(), workspace.path.clone()).await;
+    interaction_command(&actor, Command::Plan).await;
+    actor
+        .actor
+        .send_message(Message::StartWork(Some("Plan the library change".into())))
+        .unwrap();
+    let mut plan = json!({
+        "revision":0, "requirements_revision":0,
+        "steps":[
+            {"id":"inspect", "kind":"investigation", "description":"Understand the public API",
+             "dependencies":[], "acceptance":"Inspect the current requirements", "state":"in_progress", "evidence":[], "blocked_reason":null},
+            {"id":"implement", "kind":"implementation", "description":"Implement and check the library",
+             "dependencies":["inspect"], "acceptance":"Preserve the public API", "state":"pending", "evidence":[], "blocked_reason":null,
+             "validation":{"operation":"check", "package":"planned-library"}}
+        ]
+    });
+    answer(
+        actor.request().await.1,
+        response(vec![
+            tool("update_plan", "plan", plan.clone()),
+            tool(
+                "knowledge",
+                "inspect-source",
+                json!({"action":"read", "file_path":"behavior.txt"}),
+            ),
+        ]),
+    );
+    plan["revision"] = json!(1);
+    plan["steps"][0]["state"] = json!("completed");
+    plan["steps"][0]["evidence"] = json!([{"source":"tool:inspect-source", "explanation":"Inspected public API requirements"}]);
+    answer(
+        actor.request().await.1,
+        response(vec![tool("update_plan", "ready", plan)]),
+    );
+    answer(
+        actor.request().await.1,
+        response(vec![text(
+            "Approved design: preserve the public API and run the planned checks",
+        )]),
+    );
+    let event = actor.event(|event| event.actor_id == 0 && matches!(&event.packet,
+        ActorToTuiPacket::InteractionUpdated(view) if view.questions.iter().any(|question| question.purpose == QuestionPurpose::PlanContinuation)
+    )).await;
+    let question = match event.packet {
+        ActorToTuiPacket::InteractionUpdated(view) => view.questions[0].clone(),
+        _ => panic!("Expected explicit plan approval"),
+    };
+    interaction_command(
+        &actor,
+        Command::Answer(QuestionAnswer {
+            id: question.id,
+            answer: Answer::Choice {
+                choice_id: "implement".into(),
+            },
+        }),
+    )
+    .await;
+    let (request, reply) = actor.request().await;
+    let prompt = serde_json::to_string(&request.messages).unwrap();
+    assert!(prompt.contains("Implement the approved plan"));
+    assert!(prompt.contains("planned-library"));
+    assert!(prompt.contains("preserve the public API"));
+    assert!(request.tools.iter().all(|tool| !matches!(tool, ToolDefinition::Client { name, .. } if name == "run_workflow" || name == "start_worker" || name == "update_plan")));
+    answer(
+        reply,
+        response(vec![text(
+            "Implementation report; no edits required by the fixture",
+        )]),
+    );
+    let (request, reply) = actor.request().await;
+    assert!(
+        request
+            .tools
+            .iter()
+            .all(|tool| matches!(tool, ToolDefinition::Client { name, .. } if name == "cargo"))
+    );
+    let prompt = serde_json::to_string(&request.messages).unwrap();
+    assert!(prompt.contains("Implementation report"));
+    assert!(prompt.contains("planned-library"));
+    answer(
+        reply,
+        response(vec![text(
+            "Validation was not executed by this fixture; root must not infer success",
+        )]),
+    );
+    let (request, _reply) = actor.request().await;
+    let report = latest_result(&request);
+    assert_eq!(report["status"], "completed");
+    assert_eq!(report["steps"].as_array().unwrap().len(), 2);
+    assert_ne!(
+        report["steps"][0]["output"]["report"]["worker_id"],
+        report["steps"][1]["output"]["report"]["worker_id"]
+    );
+    let state = runtime_snapshot(&request.messages);
+    assert_eq!(state.planning.mode, WorkMode::Implement);
+    assert_eq!(state.planning.plan.steps[1].state, StepState::Pending);
+    assert!(
+        report["steps"][1]["output"]["report"]["validation"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    actor.stop().await;
+}
+
+#[tokio::test]
 async fn workflow_runtime_starts_separate_agents_and_passes_prior_findings() {
     let workspace = session::test_support::Workspace::new();
     let actor = RepositoryActor::new(BaseWorker::new(), workspace.path.clone()).await;
@@ -187,7 +302,7 @@ async fn workflow_runtime_parent_interrupt_cancels_the_active_agent_and_skips_la
 
 #[tokio::test]
 async fn workflow_runtime_composes_existing_workflows_as_ordered_steps() {
-    use worker_registry::workflow::BuiltinAgent;
+    use workflows::BuiltinAgent;
 
     let builtins = [
         BuiltinAgent::GatherContext,
@@ -245,9 +360,9 @@ async fn workflow_runtime_composes_existing_workflows_as_ordered_steps() {
 #[tokio::test]
 async fn workflow_runtime_existing_tools_keep_their_worker_report_interface() {
     for builtin in [
-        worker_registry::workflow::BuiltinAgent::GatherContext,
-        worker_registry::workflow::BuiltinAgent::MakeChanges,
-        worker_registry::workflow::BuiltinAgent::ValidateRust,
+        workflows::BuiltinAgent::GatherContext,
+        workflows::BuiltinAgent::MakeChanges,
+        workflows::BuiltinAgent::ValidateRust,
     ] {
         let definition = builtin.definition();
         let workspace = session::test_support::Workspace::new();

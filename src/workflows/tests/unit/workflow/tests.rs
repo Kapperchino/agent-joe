@@ -32,7 +32,7 @@ fn report(request: &WorkerRequest, status: WorkerStatus) -> WorkerReport {
         artifacts: Vec::new(),
         budget: Default::default(),
         duration_ms: 0,
-        completion_criteria: request.completion_criteria.clone(),
+        completion_criteria: request.completion_criteria().into(),
     }
 }
 
@@ -84,7 +84,7 @@ async fn workflow_runs_three_distinct_agents_in_order_with_handoffs() {
         requests[0].allowed_paths(),
         [std::path::PathBuf::from("src")]
     );
-    assert_eq!(requests[0].completion_criteria, "Behavior implemented");
+    assert_eq!(requests[0].completion_criteria(), "Behavior implemented");
     let handoff: Value = serde_json::from_str(requests[2].context()).unwrap();
     assert_eq!(
         handoff["workflow_context"],

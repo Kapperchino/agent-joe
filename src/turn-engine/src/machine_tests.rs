@@ -109,6 +109,76 @@ fn launches_provider(effects: &[Effect]) -> bool {
         .any(|effect| matches!(effect, Effect::LaunchProvider { .. }))
 }
 
+fn workflow_input() -> FollowUp {
+    let mut input = FollowUp::new(None);
+    input.start = TurnStart::Tool {
+        call: Box::new(ToolCall {
+            id: ToolId {
+                id: "workflow".to_string().try_into().unwrap(),
+                call_id: None,
+            },
+            name: "run_workflow".to_string().try_into().unwrap(),
+            input: Default::default(),
+        }),
+    };
+    input
+}
+
+#[test]
+fn trusted_workflow_starts_with_a_persisted_tool_batch_then_resumes_provider() {
+    let mut machine = machine();
+    let input = workflow_input();
+    let id = input.id;
+    let effects = machine.transition(SessionEvent::Start(input));
+    assert!(!launches_provider(&effects));
+    assert!(effects.iter().any(|effect| matches!(effect, Effect::BeginTurn(input) if matches!(input.start, TurnStart::Tool { .. }))));
+    let batch = effects
+        .into_iter()
+        .find_map(|effect| match effect {
+            Effect::LaunchTools { tag, jobs, .. } => Some(ToolBatchFixture { tag, jobs }),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(batch.tag.turn, id);
+    assert_eq!(batch.jobs.len(), 1);
+    assert_eq!(batch.jobs[0].call.name.as_ref(), "run_workflow");
+    complete_tool(&mut machine, batch.tag, &batch.jobs[0]);
+    let effects = tool(&mut machine, batch.tag, ToolEvent::Finished(Ok(())));
+    assert!(launches_provider(&effects));
+    assert!(effects.iter().any(|effect| matches!(effect, Effect::AppendHistory(messages) if messages.iter().flat_map(|message| &message.content).any(|block| matches!(block, llm::ContentBlock::ToolBlock { name, .. } if name.as_ref() == "run_workflow")))));
+}
+
+#[test]
+fn trusted_workflow_obeys_required_question_gate_and_text_only_modes() {
+    let mut machine = machine();
+    machine.transition(SessionEvent::QuestionsChanged(QuestionGate::Required));
+    let effects = machine.transition(SessionEvent::Start(workflow_input()));
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LaunchTools { .. }))
+    );
+    let effects = machine.transition(SessionEvent::QuestionsChanged(QuestionGate::Open));
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LaunchTools { .. }))
+    );
+    for mode in [RequestMode::SingleResponse, RequestMode::Compact] {
+        let mut machine = TurnMachine::new(ExecutionScope::default(), mode);
+        let effects = machine.transition(SessionEvent::Start(workflow_input()));
+        assert!(!effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LaunchTools { .. } | Effect::LaunchProvider { .. }
+        )));
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::Cleanup { .. }))
+        );
+    }
+}
+
 #[test]
 fn required_answer_during_cleanup_continues_once_after_cleanup_and_interrupt_stops_it() {
     for interrupt in [false, true] {

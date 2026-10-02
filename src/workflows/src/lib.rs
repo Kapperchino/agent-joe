@@ -1,11 +1,15 @@
-use crate::report::{WorkerReport, WorkerStatus};
-use crate::request::{WorkerRequest, WorkerRequestInput, WorkerRole};
+pub mod continuation;
+pub mod merge;
+pub mod plan;
+
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::time::Duration;
 use tools::tool_defs::{LenientDeserialize, ToolOpKind};
 use turbo_code_macros::ToolSchema;
+use worker_registry::report::{WorkerReport, WorkerStatus};
+use worker_registry::request::{WorkerRequest, WorkerRequestInput, WorkerRole};
 
 const COMPLETION_CRITERIA: &str = "Complete the stated objective; report findings, requested versus executed validation, and every remaining limitation";
 const CONSTRAINTS: &str = "Preserve all inherited constraints and unrelated user changes";
@@ -29,6 +33,22 @@ pub struct WorkflowInput {
         max_items = 16
     )]
     pub steps: Vec<StepInput>,
+}
+
+impl WorkflowInput {
+    pub fn single(agent: BuiltinAgent, objective: String) -> Self {
+        let name = agent.definition().name;
+        Self {
+            steps: vec![StepInput::Agent {
+                id: name.clone(),
+                agent: name,
+                objective,
+                context: String::new(),
+                completion_criteria: completion_criteria(),
+            }],
+            ..Default::default()
+        }
+    }
 }
 
 impl LenientDeserialize for WorkflowInput {
@@ -305,20 +325,7 @@ impl Workflow {
         objective: String,
         available: impl Fn(&str) -> Option<ToolOpKind>,
     ) -> anyhow::Result<Self> {
-        let name = agent.definition().name;
-        Self::new(
-            WorkflowInput {
-                steps: vec![StepInput::Agent {
-                    id: name.clone(),
-                    agent: name,
-                    objective,
-                    context: String::new(),
-                    completion_criteria: completion_criteria(),
-                }],
-                ..Default::default()
-            },
-            available,
-        )
+        Self::new(WorkflowInput::single(agent, objective), available)
     }
 
     pub fn effect(&self) -> ToolOpKind {

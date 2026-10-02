@@ -103,8 +103,8 @@ impl Runtime {
         }
     }
 
-    pub fn merge_environment(&self) -> merge_workflow::execution::MergeEnvironment<'_> {
-        merge_workflow::execution::MergeEnvironment {
+    pub fn merge_environment(&self) -> workflows::merge::execution::MergeEnvironment<'_> {
+        workflows::merge::execution::MergeEnvironment {
             project: self.project.as_ref(),
             workspace: &self.workspace,
             scope: &self.scope,

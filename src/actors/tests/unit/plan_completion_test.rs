@@ -5,6 +5,32 @@ use common_models::interaction::{Question, QuestionPurpose, ValidationRequiremen
 const REQUIREMENTS: &str = "Plan the library change, preserving the public API";
 const FINAL_PLAN: &str = "Update the library implementation without changing its public API, then run the planned library tests.";
 
+fn assert_plan_workflow(request: &clients::llm::ClientRequest) {
+    let input = request
+        .messages
+        .iter()
+        .flat_map(|message| &message.content)
+        .find_map(|block| match block {
+            ContentBlock::ToolBlock { name, input, .. } if name.as_ref() == "run_workflow" => {
+                Some(input)
+            }
+            _ => None,
+        })
+        .unwrap();
+    let workflow: workflows::WorkflowInput =
+        serde_json::from_value(Value::Object(input.clone())).unwrap();
+    assert!(workflow.context.contains(REQUIREMENTS));
+    assert!(workflow.context.contains(FINAL_PLAN));
+    assert!(workflow.context.contains("planned-library"));
+    assert_eq!(workflow.steps.len(), 2);
+    assert!(
+        matches!(&workflow.steps[0], workflows::StepInput::Agent { agent, .. } if agent == "make_changes")
+    );
+    assert!(
+        matches!(&workflow.steps[1], workflows::StepInput::Agent { agent, .. } if agent == "validate_rust")
+    );
+}
+
 async fn finish_plan(
     h: &Harness,
     entered: &flume::Receiver<(String, oneshot::Sender<()>)>,
@@ -102,7 +128,8 @@ async fn completed_plan_implements_here_only_after_explicit_choice() {
     let store = runtime.sessions.clone().unwrap();
     let (read, entered) = gate("read", ToolOpKind::Read);
     let (write, writing) = gate("write", ToolOpKind::Write);
-    let h = Harness::with_runtime(vec![read, write], runtime).await;
+    let (workflow, workflows) = gate("run_workflow", ToolOpKind::DelegateWrite);
+    let h = Harness::with_runtime(vec![read, write, workflow], runtime).await;
     let question = finish_plan(&h, &entered).await;
     let saved = store.list().unwrap().remove(0);
     assert_eq!(saved.questions.pending(), std::slice::from_ref(&question));
@@ -118,7 +145,14 @@ async fn completed_plan_implements_here_only_after_explicit_choice() {
             .await
             .contains("this session")
     );
+    within(workflows.recv_async())
+        .await
+        .unwrap()
+        .1
+        .send(())
+        .unwrap();
     let (request, reply) = h.request().await;
+    assert_plan_workflow(&request);
     let state = runtime_snapshot(&request.messages);
     assert_eq!(state.planning.mode, WorkMode::Implement);
     assert_eq!(state.planning.plan, saved.planning.plan);
@@ -158,7 +192,8 @@ async fn completed_plan_starts_a_fresh_agent_with_durable_plan_and_requirements(
     let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
     let store = runtime.sessions.clone().unwrap();
     let (read, entered) = gate("read", ToolOpKind::Read);
-    let h = Harness::with_runtime(vec![read], runtime.clone()).await;
+    let (workflow, workflows) = gate("run_workflow", ToolOpKind::DelegateWrite);
+    let h = Harness::with_runtime(vec![read, workflow], runtime.clone()).await;
     let question = finish_plan(&h, &entered).await;
     let original = store.list().unwrap().remove(0);
     assert!(
@@ -166,7 +201,14 @@ async fn completed_plan_starts_a_fresh_agent_with_durable_plan_and_requirements(
             .await
             .contains("new agent")
     );
+    within(workflows.recv_async())
+        .await
+        .unwrap()
+        .1
+        .send(())
+        .unwrap();
     let (request, _reply) = h.request().await;
+    assert_plan_workflow(&request);
     let state = runtime_snapshot(&request.messages);
     assert_eq!(state.planning.mode, WorkMode::Implement);
     assert_eq!(state.planning.plan, original.planning.plan);
@@ -193,7 +235,7 @@ async fn completed_plan_starts_a_fresh_agent_with_durable_plan_and_requirements(
             .flat_map(|message| &message.content)
             .any(|block| matches!(
                 block,
-                ContentBlock::ToolBlock { .. } | ContentBlock::ToolResult { .. }
+                ContentBlock::ToolBlock { name, .. } if name.as_ref() != "run_workflow"
             ))
     );
     let sessions = store.list().unwrap();

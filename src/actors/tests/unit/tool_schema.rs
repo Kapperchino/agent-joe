@@ -195,13 +195,13 @@ fn workflow_schema_exposes_typed_agents_and_composable_steps() {
     assert_eq!(choices[1]["properties"]["kind"]["enum"], json!(["context"]));
     assert_eq!(choices[0]["additionalProperties"], false);
     assert!(
-        worker_registry::workflow::WorkflowInput::deserialize_lenient(json!({
+        workflows::WorkflowInput::deserialize_lenient(json!({
             "steps":[{"kind":"agent", "id":"read", "agent":"gather_context", "objective":"Inspect"}]
         }))
         .is_ok()
     );
     assert!(
-        worker_registry::workflow::WorkflowInput::deserialize_lenient(json!({
+        workflows::WorkflowInput::deserialize_lenient(json!({
             "steps":[{"kind":"context", "id":"missing-content"}]
         }))
         .is_err()

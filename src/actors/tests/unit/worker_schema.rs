@@ -46,7 +46,7 @@ fn workflow_permissions_and_deadlines_follow_the_configured_steps() {
     use crate::tools::run_workflow::RunWorkflow;
     use analysis::contexts::rust_context::RustContext;
     use tools::tool_defs::{ToolOpKind, ToolTrait};
-    use worker_registry::workflow::WorkflowInput;
+    use workflows::WorkflowInput;
 
     let read: WorkflowInput = serde_json::from_value(serde_json::json!({"steps":[
         {"kind":"agent", "id":"read", "agent":"gather_context", "objective":"Inspect"}

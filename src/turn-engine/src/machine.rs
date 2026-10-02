@@ -2,7 +2,8 @@ use crate::ToolEvent;
 use crate::WorkerFailure;
 use crate::turn::{
     AcceptedResponse, Cleanup, CleanupWork, Continuation, FollowUp, HistoryDisposition,
-    ProviderRun, ResponseState, Tag, ToolJob, Turn, TurnOutcome, TurnState, tool_failure,
+    ProviderRun, ResponseState, Tag, ToolBatch, ToolJob, Turn, TurnOutcome, TurnStart, TurnState,
+    tool_failure,
 };
 use clients::response::RequestMode;
 use clients::response::StreamNextStep;
@@ -484,12 +485,29 @@ impl Session {
 
     fn begin(&mut self, follow_up: FollowUp, effects: &mut Vec<Effect>) {
         let id = follow_up.id;
+        let start = follow_up.start.clone();
         effects.push(Effect::BeginTurn(follow_up));
         effects.push(Effect::Report(ActorToTuiPacket::InputAccepted {
             turn_id: id,
             kind: common_models::tui_models::InputKind::Active,
         }));
-        self.launch_provider(Turn::new(id, self.scope.child()), None, effects);
+        let turn = Turn::new(id, self.scope.child());
+        match (start, self.mode) {
+            (TurnStart::Provider, _) => self.launch_provider(turn, None, effects),
+            (TurnStart::Tool { call }, RequestMode::Continue) => {
+                let batch = ToolBatch::new(id, vec![clients::response::ProcessedItem::Tool(*call)]);
+                self.launch_tools(turn.map(|_| batch), effects);
+            }
+            (TurnStart::Tool { .. }, _) => self.stop(
+                turn,
+                TurnOutcome::Failed(Failure::new(
+                    FailureKind::InvalidInput,
+                    "Tool-started turns require continue mode",
+                )),
+                HistoryDisposition::Retain,
+                effects,
+            ),
+        }
     }
 
     fn launch_provider(
@@ -546,17 +564,7 @@ impl Session {
             }
             AcceptedResponse::Tools(batch) => {
                 turn.plan_reconciliations = 0;
-                effects.extend([
-                    Effect::turn(turn.id, Lifecycle::WaitingForTools, None),
-                    Effect::operation(batch.tag, Lifecycle::WaitingForTools, "Tool batch"),
-                    Effect::ChangeState(State::ToolStart),
-                    Effect::LaunchTools {
-                        jobs: batch.jobs(),
-                        tag: batch.tag,
-                        scope: turn.scope.clone(),
-                    },
-                ]);
-                self.state = TurnState::Tools(turn.map(|_| batch));
+                self.launch_tools(turn.map(|_| batch), effects);
             }
             AcceptedResponse::Complete(message) => {
                 effects.push(Effect::AppendHistory(vec![message]));
@@ -568,6 +576,20 @@ impl Session {
                 );
             }
         }
+    }
+
+    fn launch_tools(&mut self, turn: Turn<ToolBatch>, effects: &mut Vec<Effect>) {
+        effects.extend([
+            Effect::turn(turn.id, Lifecycle::WaitingForTools, None),
+            Effect::operation(turn.phase.tag, Lifecycle::WaitingForTools, "Tool batch"),
+            Effect::ChangeState(State::ToolStart),
+            Effect::LaunchTools {
+                jobs: turn.phase.jobs(),
+                tag: turn.phase.tag,
+                scope: turn.scope.clone(),
+            },
+        ]);
+        self.state = TurnState::Tools(turn);
     }
 
     fn reconcile_plan(

@@ -187,6 +187,10 @@ impl WorkerRequest {
         &self.context
     }
 
+    pub fn completion_criteria(&self) -> &str {
+        &self.completion_criteria
+    }
+
     pub fn budget(&self) -> BudgetLimits {
         self.budget
     }

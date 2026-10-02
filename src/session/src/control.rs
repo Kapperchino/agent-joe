@@ -82,6 +82,7 @@ impl SessionControl<'_> {
             self.persistence.record(Event::Queued(QueuedInput {
                 turn: session.key(input.id),
                 prompt: input.prompt.clone(),
+                start: input.start.clone(),
             }));
         }
     }
@@ -91,6 +92,7 @@ impl SessionControl<'_> {
             self.persistence.record(Event::Began(QueuedInput {
                 turn: session.key(input.id),
                 prompt: input.prompt.clone(),
+                start: input.start.clone(),
             }));
         }
         if let Some(prompt) = input.prompt {

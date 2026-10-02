@@ -16,7 +16,6 @@ use commands::command::Command;
 use common_models::runtime_ids::TurnId;
 use common_models::tui_models::{ActorToTuiPacket, TokenCount};
 use interaction::control::{InteractionAction, InteractionControl};
-use merge_workflow::execution::{MergeAction, MergeCompletion};
 use ractor::ActorRef;
 use session::activation::SessionActivation;
 use session::changes::SessionChanges;
@@ -30,6 +29,7 @@ use turn_engine::machine::{Event, SessionEvent, TurnMachine};
 use turn_engine::turn::{HistoryDisposition, Tag};
 use utils::execution::ExecutionScope;
 use utils::power::SleepInhibitor;
+use workflows::merge::execution::{MergeAction, MergeCompletion};
 
 pub struct ActorState<C: Context> {
     pub session: SessionState,

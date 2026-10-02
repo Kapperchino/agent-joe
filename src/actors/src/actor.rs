@@ -160,8 +160,14 @@ impl<W: ContextWorker> Worker for W {
                             .await
                     }
                     Message::ResolveMerge { turn } => {
-                        if let Some(input) = state.session_turn().merge().merge_input(turn) {
-                            state.dispatch(SessionEvent::Start(input)).await;
+                        match state.session_turn().merge().merge_input(turn) {
+                            Ok(Some(input)) => state.dispatch(SessionEvent::Start(input)).await,
+                            Ok(None) => {}
+                            Err(error) => state.reporter.send(
+                                common_models::tui_models::ActorToTuiPacket::SessionError(format!(
+                                    "{error:#}"
+                                )),
+                            ),
                         }
                     }
                     Message::RunWorker(reply) => {

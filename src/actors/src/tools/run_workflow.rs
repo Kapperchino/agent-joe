@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use tools::tool_defs::{ToolDefTrait, ToolId, ToolOpKind, ToolTrait, ToolType};
 use turbo_code_macros::ToolDef;
 use utils::utils::FnvHashMap;
-use worker_registry::workflow::{Workflow, WorkflowInput, WorkflowReport, WorkflowStatus};
+use workflows::{Workflow, WorkflowInput, WorkflowReport, WorkflowStatus};
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize, ToolDef)]
 #[tool(

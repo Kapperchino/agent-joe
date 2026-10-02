@@ -35,7 +35,7 @@ rejected batches without running tools.
 | `turn-engine` | Turn lifecycle, tool batches, retries, cleanup sequencing | Consumes events and produces effects; worker replies carry request IDs |
 | `worker-registry` | Worker lifecycle, request limits, accounting, evidence, reports | Accepts cancellation tokens, token usage updates, and supplied report evidence |
 | `workspace-access` | Reader limits, write leases, workspace revisions | Acquires leases using tool effects and execution scopes |
-| `merge-workflow` | Merge approval, Git execution, commit descriptions, conflict resolution, recovery | `SessionMerge` uses `MergePersistence` and returns relocation or resolution actions |
+| `workflows` | Generalized pipelines, built-in task workflows, merge approval and execution, approved-plan handoff | Compiles bounded agent steps; `SessionMerge` uses `MergePersistence` for deterministic Git operations |
 | `session` | Session storage, artifacts, persistence, activation, transitions, commands | Owns `SessionRuntime`; implements interaction and merge persistence interfaces |
 
 These eight crates do not depend on `actors`. `session` composes the conversation,
@@ -73,7 +73,7 @@ coordinates actor lifecycle operations. The actor maps its runtime into
 `common_models::tui_models::EventSink` for UI delivery.
 
 Merge approval does not inspect the turn machine, runtime, or session store.
-`merge_workflow::execution::SessionMerge` maps activity and persistence state into
+`workflows::merge::execution::SessionMerge` maps activity and persistence state into
 `MergeReadiness`, records approval transitions, and performs Git operations.
 The workflow decides whether
 a proposal needs approval and whether a saved question must be restored. Saved
@@ -214,7 +214,7 @@ with editing or Cargo steps require implementation mode.
 
 ### Extension boundaries
 
-`worker_registry::workflow` owns the configuration, validated ordered steps,
+`workflows` owns the configuration, validated ordered steps,
 handoff construction and running/stopped state machine. `Workflow::run` accepts
 an asynchronous worker executor, so its ordering and failure behavior can be
 tested without actors or providers. `actors::tools::delegated` supplies the
@@ -227,6 +227,31 @@ belongs in `StepInput`, its validated `StepAction`, and the runner dispatch, wit
 a corresponding report variant and regression coverage. No new lifecycle or
 worker-launch implementation is needed. Pipelines are sequential; they do not
 add branching, parallel execution or automatic pipeline resumption.
+
+### Built-in task workflows
+
+Merge resolution and approved-plan implementation use the same `WorkflowInput`
+and `run_workflow` executor as user-configured pipelines. Runtime-approved
+continuations start with a trusted workflow tool call through the ordinary turn
+machine and scheduler, so permissions, persistence, cancellation, writer
+exclusion and report collection are not bypassed.
+
+`workflows::merge` keeps approval, proposal checks, native Git operations and
+cleanup deterministic. Conflict resolution uses a bounded `make_changes` step;
+the root coordinator assesses its report and reviews the aggregate changes.
+A failed or missing workflow result cannot authorize automatic merging. The
+existing approval covers conflict resolution without a second approval question;
+interrupted saved resolutions still restore paused.
+
+`workflows::plan` converts an explicitly approved plan into a `make_changes` →
+`validate_rust` pipeline, carrying its requirements, historical evidence and exact
+requested Cargo checks. The existing session or a fresh root session remains the
+coordinator, responsible for tracked-plan updates and final review. Keeping plan
+mode starts no implementation work.
+
+Compaction and frozen snapshot/knowledge queries remain tool-free context
+infrastructure, not editable task pipelines. The asynchronous `start_worker`
+primitive remains available for independent bounded work.
 
 ## Repository knowledge integration
 

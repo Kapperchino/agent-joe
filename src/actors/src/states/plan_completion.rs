@@ -8,11 +8,24 @@ use common_models::interaction::{QuestionPurpose, WorkMode};
 use common_models::runtime_ids::TurnId;
 use common_models::tui_models::ActorToTuiPacket;
 use session::activation::SessionActivation;
-use session::plan::{PlanContinuation, PlanHandoff};
 use turn_engine::machine::SessionEvent;
 use turn_engine::turn::FollowUp;
+use workflows::plan::{PlanContext, PlanContinuation, PlanHandoff};
 
 impl<C: Context + Clone + 'static> ActorState<C> {
+    fn plan_handoff(&self) -> anyhow::Result<PlanHandoff> {
+        PlanHandoff::new(PlanContext {
+            planning: self.session.interaction.planning(),
+            history: self.session.conversation.history(),
+            requirements: self
+                .session
+                .conversation
+                .constraints()
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        })
+    }
+
     pub(super) fn offer_plan_continuation(&mut self, turn: TurnId) -> anyhow::Result<()> {
         match (
             &self.runtime.role,
@@ -24,7 +37,7 @@ impl<C: Context + Clone + 'static> ActorState<C> {
             self.session.interaction.questions().pending(),
         ) {
             (ExecutionRole::Root, RequestMode::Continue, WorkMode::Plan, true, []) => {
-                PlanHandoff::new(&self.session)?;
+                self.plan_handoff()?;
                 self.interaction_control()
                     .ask_question(PlanHandoff::question(turn)?)
             }
@@ -60,7 +73,10 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                 Ok("Kept plan mode. Send a follow-up to refine the plan.".into())
             }
             PlanContinuation::Implement | PlanContinuation::NewAgent => {
-                let handoff = PlanHandoff::new(&self.session)?;
+                let handoff = self.plan_handoff()?;
+                let follow_up = handoff
+                    .workflow()?
+                    .follow_up(FollowUp::new(None).id, None)?;
                 let activation = match continuation {
                     PlanContinuation::NewAgent => Some(
                         SessionActivation::from_plan(
@@ -85,14 +101,12 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                     }
                     None => {
                         self.session_turn().command(&Command::Implement)?;
-                        self.session_control().append_history(vec![Message::new(
-                            "Implement the approved plan in this session. Continue its tracked implementation steps and run the planned validation.".into(),
-                        )]);
+                        self.session_control()
+                            .append_history(vec![Message::new(handoff.prompt)]);
                         "Implementing the approved plan in this session."
                     }
                 };
-                self.dispatch(SessionEvent::Start(FollowUp::new(None)))
-                    .await;
+                self.dispatch(SessionEvent::Start(follow_up)).await;
                 Ok(message.into())
             }
         }

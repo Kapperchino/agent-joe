@@ -18,7 +18,6 @@ dependencies = [
  "git2",
  "interaction",
  "itertools 0.15.0",
- "merge-workflow",
  "notify-types",
  "ra_ap_vfs",
  "ractor",
@@ -38,6 +37,7 @@ dependencies = [
  "utils",
  "uuid",
  "worker-registry",
+ "workflows",
  "workspace-access",
 ]
 
@@ -2975,23 +2975,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "merge-workflow"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clients",
- "common-models",
- "interaction",
- "serde",
- "serde_json",
- "tokio",
- "tools",
- "turn-engine",
- "utils",
- "workspace-access",
-]
-
-[[package]]
 name = "mimalloc"
 version = "0.1.52"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5098,7 +5081,6 @@ dependencies = [
  "heed",
  "interaction",
  "libc",
- "merge-workflow",
  "sandbox",
  "serde",
  "serde_json",
@@ -5108,6 +5090,7 @@ dependencies = [
  "turn-engine",
  "utils",
  "worker-registry",
+ "workflows",
  "workspace-access",
  "zstd",
 ]
@@ -6112,6 +6095,7 @@ dependencies = [
  "anyhow",
  "clients",
  "common-models",
+ "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
@@ -6958,6 +6942,25 @@ dependencies = [
  "tools",
  "turbo-code-macros",
  "utils",
+]
+
+[[package]]
+name = "workflows"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clients",
+ "common-models",
+ "interaction",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tools",
+ "turbo-code-macros",
+ "turn-engine",
+ "utils",
+ "worker-registry",
+ "workspace-access",
 ]
 
 [[package]]
