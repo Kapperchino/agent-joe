@@ -354,13 +354,265 @@ fn divergent_merge_summarizes_all_session_changes_but_not_main_only_changes() {
     let target = fixture.commit("main-only.txt", "main work\n");
     session.merge(&fixture.workspace, &approved).unwrap();
     let commit = fixture.repo.head().unwrap().peel_to_commit().unwrap();
-    assert_eq!(commit.parent_count(), 2);
+    assert_eq!(commit.parent_count(), 1);
     assert_eq!(commit.parent_id(0).unwrap(), target);
-    assert_eq!(commit.parent_id(1).unwrap().to_string(), approved);
+    assert!(
+        !fixture
+            .repo
+            .graph_descendant_of(commit.id(), Oid::from_str(&approved).unwrap())
+            .unwrap()
+    );
     assert_eq!(
         commit.message().unwrap(),
         "Add added.txt; update file.txt; remove removed.txt"
     );
+}
+
+#[test]
+fn multiple_checkpoints_land_as_one_commit_without_target_changes() {
+    let fixture = Fixture::new();
+    let main = fixture.repo.refname_to_id("HEAD").unwrap();
+    let session = fixture.session();
+    std::fs::write(session.path.join("first.txt"), "first\n").unwrap();
+    let first = session.proposal(&fixture.workspace).unwrap().unwrap();
+    std::fs::write(session.path.join("file.txt"), "session\n").unwrap();
+    let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+    session.merge(&fixture.workspace, &approved).unwrap();
+    let merged = fixture.repo.head().unwrap().peel_to_commit().unwrap();
+    assert_eq!(merged.parent_count(), 1);
+    assert_eq!(merged.parent_id(0).unwrap(), main);
+    for checkpoint in [&first, &approved] {
+        assert!(
+            !fixture
+                .repo
+                .graph_descendant_of(merged.id(), Oid::from_str(checkpoint).unwrap())
+                .unwrap()
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(fixture.root.join("first.txt")).unwrap(),
+        "first\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.root.join("file.txt")).unwrap(),
+        "session\n"
+    );
+    session.cleanup(&fixture.workspace, &approved).unwrap();
+}
+
+#[test]
+fn squashed_merge_retries_survive_reload_and_target_advancement() {
+    let fixture = Fixture::new();
+    let session = fixture.session();
+    std::fs::write(session.path.join("file.txt"), "session\n").unwrap();
+    let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+    fixture.commit("main-only.txt", "main work\n");
+    session.merge(&fixture.workspace, &approved).unwrap();
+    let record = MergeRecord::new(&session, &fixture.repo, &approved).unwrap();
+    assert_ne!(record.commit.to_string(), approved);
+    let worktree = fixture.repo.find_worktree(session.id()).unwrap();
+    worktree.lock(Some("retain for retry")).unwrap();
+    assert!(session.cleanup(&fixture.workspace, &approved).is_err());
+    let restored: SessionWorktree =
+        serde_json::from_str(&serde_json::to_string(&session).unwrap()).unwrap();
+    let main = fixture.commit("later.txt", "later main work\n");
+    let index = std::fs::read(fixture.repo.path().join("index")).unwrap();
+    assert!(matches!(
+        restored.merge(&fixture.workspace, &approved).unwrap(),
+        MergeOutcome::Unchanged
+    ));
+    assert!(restored.proposal(&fixture.workspace).unwrap().is_none());
+    assert_eq!(fixture.repo.refname_to_id("HEAD").unwrap(), main);
+    assert_eq!(
+        std::fs::read(fixture.repo.path().join("index")).unwrap(),
+        index
+    );
+    worktree.unlock().unwrap();
+    restored.cleanup(&fixture.workspace, &approved).unwrap();
+    assert!(!restored.path.exists());
+    assert!(fixture.repo.find_reference(&record.reference).is_err());
+}
+
+#[test]
+fn retained_squashed_sessions_merge_only_new_changes() {
+    let fixture = Fixture::new();
+    let session = fixture.session();
+    std::fs::write(session.path.join("file.txt"), "session\n").unwrap();
+    let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+    fixture.commit("main-only.txt", "main work\n");
+    session.merge(&fixture.workspace, &approved).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(session.path.join("main-only.txt")).unwrap(),
+        "main work\n"
+    );
+    fixture.commit("file.txt", "new main behavior\n");
+    std::fs::write(session.path.join("new.txt"), "new session work\n").unwrap();
+    let newer = session.proposal(&fixture.workspace).unwrap().unwrap();
+    assert!(session.merge(&fixture.workspace, &approved).is_err());
+    assert!(session.cleanup(&fixture.workspace, &approved).is_err());
+    assert!(session.cleanup(&fixture.workspace, &newer).is_err());
+    let main = fixture.repo.refname_to_id("HEAD").unwrap();
+    session.merge(&fixture.workspace, &newer).unwrap();
+    let merged = fixture.repo.head().unwrap().peel_to_commit().unwrap();
+    assert_eq!(merged.parent_count(), 1);
+    assert_eq!(merged.parent_id(0).unwrap(), main);
+    assert_eq!(
+        std::fs::read_to_string(fixture.root.join("file.txt")).unwrap(),
+        "new main behavior\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.root.join("new.txt")).unwrap(),
+        "new session work\n"
+    );
+    session.cleanup(&fixture.workspace, &newer).unwrap();
+    assert_eq!(
+        fixture
+            .repo
+            .references_glob(&format!("{}*", session.merge_prefix()))
+            .unwrap()
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn prune_removes_squashed_sessions_and_merge_records_after_target_advances() {
+    let fixture = Fixture::new();
+    let session = fixture.session();
+    std::fs::write(session.path.join("file.txt"), "session\n").unwrap();
+    let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+    fixture.commit("main-only.txt", "main work\n");
+    session.merge(&fixture.workspace, &approved).unwrap();
+    let record = MergeRecord::new(&session, &fixture.repo, &approved).unwrap();
+    let main = fixture.commit("later.txt", "later main work\n");
+    assert_eq!(
+        session
+            .prune(&fixture.workspace, PruneMode::Merged)
+            .unwrap(),
+        PruneOutcome::Pruned
+    );
+    assert_eq!(fixture.repo.refname_to_id("HEAD").unwrap(), main);
+    assert!(!session.path.exists());
+    assert!(fixture.repo.find_reference(&record.reference).is_err());
+}
+
+#[test]
+fn squashed_merges_preflight_ignored_file_collisions_in_both_workspaces() {
+    enum Collision {
+        Main,
+        Session,
+    }
+
+    for collision in [Collision::Main, Collision::Session] {
+        let fixture = Fixture::new();
+        fixture.commit(".gitignore", "local.txt\n");
+        let session = fixture.session();
+        std::fs::write(session.path.join("file.txt"), "session\n").unwrap();
+        let private = match collision {
+            Collision::Main => {
+                std::fs::write(session.path.join("added.txt"), "added\n").unwrap();
+                fixture.commit(".gitignore", "local.txt\nadded.txt\n");
+                fixture.root.join("added.txt")
+            }
+            Collision::Session => {
+                fixture.commit("local.txt", "incoming\n");
+                session.path.join("local.txt")
+            }
+        };
+        std::fs::write(&private, "private data\n").unwrap();
+        let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+        let main = fixture.repo.refname_to_id("HEAD").unwrap();
+        let child = git2::Repository::open(&session.path).unwrap();
+        let source_index = std::fs::read(child.path().join("index")).unwrap();
+        let main_index = std::fs::read(fixture.repo.path().join("index")).unwrap();
+        assert!(session.merge(&fixture.workspace, &approved).is_err());
+        assert_eq!(fixture.repo.refname_to_id("HEAD").unwrap(), main);
+        assert_eq!(child.refname_to_id("HEAD").unwrap().to_string(), approved);
+        assert_eq!(
+            std::fs::read(fixture.repo.path().join("index")).unwrap(),
+            main_index
+        );
+        assert_eq!(
+            std::fs::read(child.path().join("index")).unwrap(),
+            source_index
+        );
+        assert_eq!(std::fs::read_to_string(&private).unwrap(), "private data\n");
+        assert_eq!(
+            std::fs::read_to_string(session.path.join(".gitignore")).unwrap(),
+            "local.txt\n"
+        );
+        assert_eq!(
+            fixture
+                .repo
+                .references_glob(&format!("{}*", session.merge_prefix()))
+                .unwrap()
+                .count(),
+            0
+        );
+    }
+}
+
+#[test]
+fn squashed_merges_preserve_session_branches_checked_out_elsewhere() {
+    let fixture = Fixture::new();
+    let session = fixture.session();
+    let other = fixture.session();
+    std::fs::write(session.path.join("file.txt"), "session\n").unwrap();
+    let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+    let main = fixture.commit("main-only.txt", "main work\n");
+    let child = git2::Repository::open(&session.path).unwrap();
+    let linked = git2::Repository::open(&other.path).unwrap();
+    let reference = format!("refs/heads/{}", session.branch());
+    std::fs::write(linked.path().join("HEAD"), format!("ref: {reference}\n")).unwrap();
+    assert!(session.merge(&fixture.workspace, &approved).is_err());
+    linked
+        .set_head(&format!("refs/heads/{}", other.branch()))
+        .unwrap();
+    std::fs::write(
+        fixture.repo.path().join("HEAD"),
+        format!("ref: {reference}\n"),
+    )
+    .unwrap();
+    assert!(session.merge(&fixture.workspace, &approved).is_err());
+    fixture.repo.set_head("refs/heads/main").unwrap();
+    assert_eq!(fixture.repo.refname_to_id("HEAD").unwrap(), main);
+    assert_eq!(child.refname_to_id("HEAD").unwrap().to_string(), approved);
+    assert!(!session.path.join("main-only.txt").exists());
+    session.merge(&fixture.workspace, &approved).unwrap();
+    session.cleanup(&fixture.workspace, &approved).unwrap();
+}
+
+#[test]
+fn resolved_sessions_land_one_commit_when_main_has_not_advanced_again() {
+    let fixture = Fixture::new();
+    let session = fixture.session();
+    std::fs::write(session.path.join("file.txt"), "session\n").unwrap();
+    let approved = session.proposal(&fixture.workspace).unwrap().unwrap();
+    let main = fixture.commit("file.txt", "main\n");
+    let error = session.merge(&fixture.workspace, &approved).err().unwrap();
+    let conflict = error.downcast_ref::<MergeConflict>().unwrap();
+    session
+        .prepare_resolution(&fixture.workspace, conflict)
+        .unwrap();
+    std::fs::write(session.path.join("file.txt"), "combined\n").unwrap();
+    let resolved = session
+        .finish_resolution(&fixture.workspace, conflict)
+        .unwrap();
+    session.merge(&fixture.workspace, &resolved).unwrap();
+    let merged = fixture.repo.head().unwrap().peel_to_commit().unwrap();
+    assert_eq!(merged.parent_count(), 1);
+    assert_eq!(merged.parent_id(0).unwrap(), main);
+    assert!(
+        !fixture
+            .repo
+            .graph_descendant_of(merged.id(), Oid::from_str(&approved).unwrap())
+            .unwrap()
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.root.join("file.txt")).unwrap(),
+        "combined\n"
+    );
+    session.cleanup(&fixture.workspace, &resolved).unwrap();
 }
 
 #[test]
@@ -495,7 +747,8 @@ fn descriptive_messages_survive_fast_forward_and_divergent_merges() {
         session.merge(&fixture.workspace, &described).unwrap();
         let merged = fixture.repo.head().unwrap().peel_to_commit().unwrap();
         assert_eq!(merged.message().unwrap(), subject.as_str());
-        assert_eq!(merged.parent_count(), if diverged { 2 } else { 1 });
+        assert_eq!(merged.parent_count(), 1);
+        assert_eq!(merged.parent_id(0).unwrap(), main);
         session.cleanup(&fixture.workspace, &described).unwrap();
         assert!(!session.path.exists());
     }
@@ -645,7 +898,7 @@ fn sessions_are_isolated_and_proposals_do_not_merge_without_approval() {
 }
 
 #[test]
-fn concurrent_sessions_merge_with_two_parents_and_preserve_both_changes() {
+fn concurrent_sessions_merge_linearly_and_preserve_both_changes() {
     let fixture = Fixture::new();
     let first = fixture.session();
     let second = fixture.session();
@@ -663,7 +916,7 @@ fn concurrent_sessions_merge_with_two_parents_and_preserve_both_changes() {
             .peel_to_commit()
             .unwrap()
             .parent_count(),
-        2
+        1
     );
     assert!(fixture.root.join("first.txt").exists());
     assert!(!fixture.root.join("file.txt").exists());
@@ -832,7 +1085,17 @@ fn conflicts_are_resolved_in_the_session_and_record_both_parents_before_merging(
     assert_eq!(commit.parent_id(1).unwrap(), target);
     assert_eq!(commit.message().unwrap(), "Update file.txt");
     fixture.commit("later.txt", "later main work\n");
+    let main = fixture.repo.refname_to_id("HEAD").unwrap();
     session.merge(&fixture.workspace, &resolved).unwrap();
+    let merged = fixture.repo.head().unwrap().peel_to_commit().unwrap();
+    assert_eq!(merged.parent_count(), 1);
+    assert_eq!(merged.parent_id(0).unwrap(), main);
+    assert!(
+        !fixture
+            .repo
+            .graph_descendant_of(merged.id(), commit.id())
+            .unwrap()
+    );
     assert_eq!(
         fixture
             .repo
