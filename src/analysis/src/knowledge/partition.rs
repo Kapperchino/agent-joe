@@ -175,11 +175,25 @@ impl Cutter<'_> {
 
     fn finish(&mut self, parts: Vec<OwnedSpan>) -> anyhow::Result<()> {
         if !parts.is_empty() {
-            match self.finished.len() < MAX_SHARDS {
-                true => self.finished.push(parts),
-                false => Err(anyhow::anyhow!(
-                    "Knowledge preparation requires more than 256 shards; use a larger context or reduce discoverable inputs"
-                ))?,
+            let combined = self
+                .finished
+                .last()
+                .into_iter()
+                .flatten()
+                .chain(&parts)
+                .cloned()
+                .collect::<Vec<_>>();
+            match self.fits(&combined)? {
+                true => match self.finished.last_mut() {
+                    Some(previous) => *previous = combined,
+                    None => self.finished.push(parts),
+                },
+                false => match self.finished.len() < MAX_SHARDS {
+                    true => self.finished.push(parts),
+                    false => Err(anyhow::anyhow!(
+                        "Knowledge preparation requires more than 256 shards; use a larger context or reduce discoverable inputs"
+                    ))?,
+                },
             }
         }
         Ok(())

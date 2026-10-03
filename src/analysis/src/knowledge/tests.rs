@@ -244,6 +244,61 @@ fn knowledge_many_small_disconnected_files_pack_without_exhausting_actors() {
 }
 
 #[test]
+fn knowledge_connected_children_pack_without_exhausting_actors() {
+    let main = source("main.rs", "fn main() {}");
+    let mut symbols = vec![symbol("main", &main, SymbolKind::Function)];
+    let mut sources = vec![main];
+    let mut relations = Vec::new();
+    for number in 0..300 {
+        let id = format!("child{number}");
+        let child = source(
+            &format!("{id}.rs"),
+            format!("pub fn {id}() {{ {} }}", "let value = 1;".repeat(30)),
+        );
+        symbols.push(symbol(&id, &child, SymbolKind::Function));
+        sources.push(child);
+        relations.push(relation("main", &id));
+    }
+    let graph = graph(sources, symbols, relations);
+    let first = index(graph.clone());
+    let second = index(graph);
+    assert_coverage(&first);
+    assert!(first.shards.len() < 50);
+    assert_eq!(
+        first
+            .shards
+            .iter()
+            .map(|shard| &shard.context)
+            .collect::<Vec<_>>(),
+        second
+            .shards
+            .iter()
+            .map(|shard| &shard.context)
+            .collect::<Vec<_>>()
+    );
+    for number in 0..300 {
+        let route = first.inspect(&SymbolId(format!("child{number}"))).unwrap();
+        assert_eq!(route.primary_shards.len(), 1);
+        assert_eq!(route.relations.len(), 1);
+    }
+}
+
+#[test]
+fn knowledge_packed_shards_still_enforce_the_actor_limit() {
+    let sources = (0..=MAX_SHARDS)
+        .map(|number| source(&format!("docs/{number}.md"), "x".repeat(16_000)))
+        .collect();
+    let result = KnowledgeIndex::new(
+        graph(sources, Vec::new(), Vec::new()),
+        "generation".into(),
+        KnowledgeBudget::new(8192, 8192, 1024).unwrap(),
+        &measure,
+    );
+    let error = result.err().unwrap();
+    assert!(error.to_string().contains("more than 256 shards"));
+}
+
+#[test]
 fn knowledge_budget_accounts_for_rendered_metadata_and_request_reserves() {
     let graph = graph(vec![source("single.rs", "🦀")], Vec::new(), Vec::new());
     let budget = KnowledgeBudget::new(4096, 8192, 16000).unwrap();
