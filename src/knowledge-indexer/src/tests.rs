@@ -353,3 +353,99 @@ fn caller() { generated(); }
         symbol.name == "generated" && matches!(symbol.origin, SymbolOrigin::Expansion { .. })
     }));
 }
+
+#[test]
+fn tuple_projections_preserve_reference_sites_without_inventing_definitions() {
+    let source = r#"
+struct Wrapped(u32, u32);
+fn first(value: (u32, u32)) -> u32 { value.0 + value.1 }
+fn second(value: (bool, bool)) -> bool { value.0 && value.1 }
+fn mixed(number: (u32,), flag: (bool,)) { let _ = number.0; let _ = flag.0; }
+fn wrapped(value: Wrapped) -> u32 { value.0 }
+"#;
+    let first = graph(source);
+    let second = graph(source);
+    assert_eq!(
+        serde_json::to_value(&first).unwrap(),
+        serde_json::to_value(&second).unwrap()
+    );
+    let data = first.data();
+    let projections = data.relations.iter().filter(|relation| {
+        relation.kind == RelationKind::References
+            && matches!(&relation.target, RelationTarget::Unresolved(name) if name.starts_with("tuple field "))
+    }).collect::<Vec<_>>();
+    assert_eq!(projections.len(), 6);
+    for relation in projections {
+        let site = relation.site.as_ref().unwrap();
+        let text = data
+            .sources
+            .iter()
+            .find(|source| source.path() == &site.path)
+            .unwrap()
+            .text();
+        assert!(matches!(site.span.text(text).unwrap(), "0" | "1"));
+        assert!(data.diagnostics.iter().any(|diagnostic| {
+            diagnostic.location.as_ref() == Some(site) && diagnostic.message.contains("Tuple field")
+        }));
+    }
+    assert!(
+        edges(&first, "wrapped", RelationKind::References)
+            .iter()
+            .any(|symbol| { symbol.kind == SymbolKind::Field && symbol.name == "0" })
+    );
+}
+
+#[test]
+fn crate_self_alias_reuses_the_root_module_identity() {
+    let graph = graph("extern crate self as app; pub fn run() {} fn main() { app::run(); }");
+    let roots = graph
+        .data()
+        .symbols
+        .iter()
+        .filter(|symbol| symbol.kind == SymbolKind::Module)
+        .collect::<Vec<_>>();
+    assert_eq!(roots.len(), 1);
+    assert_eq!(edges(&graph, "main", RelationKind::Calls)[0].name, "run");
+}
+
+#[test]
+fn repeated_macro_methods_keep_distinct_portable_identities() {
+    let source = r#"
+trait Run { fn run<T>(value: T); }
+macro_rules! methods {
+    ($($ty:ty),*) => { $(impl Run for $ty { fn run<T>(value: T) { let local = value; } })* };
+}
+methods!(u8, u16, u32);
+"#;
+    let first = graph(source);
+    let second = graph(source);
+    assert_eq!(
+        serde_json::to_value(&first).unwrap(),
+        serde_json::to_value(&second).unwrap()
+    );
+    let methods = first
+        .data()
+        .symbols
+        .iter()
+        .filter(|symbol| {
+            symbol.name == "run" && matches!(symbol.origin, SymbolOrigin::Expansion { .. })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(methods.len(), 3);
+    assert_eq!(
+        methods
+            .iter()
+            .map(|symbol| &symbol.id)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        3
+    );
+    for method in methods {
+        assert!(first.data().relations.iter().any(|relation| {
+            relation.source == method.id && relation.kind == RelationKind::AssociatedItemOf
+        }));
+        assert!(first.data().relations.iter().any(|relation| {
+            relation.source == method.id && relation.kind == RelationKind::Overrides
+        }));
+    }
+}

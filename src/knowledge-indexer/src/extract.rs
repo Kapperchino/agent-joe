@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use anyhow::Context;
-use ra_ap_hir::{AsAssocItem, AssocItem, AssocItemContainer, CallableKind, Semantics};
+use ra_ap_hir::{AsAssocItem, AssocItem, AssocItemContainer, CallableKind, HasSource, Semantics};
 use ra_ap_ide::{NavigationTarget, TryToNav};
 use ra_ap_ide_db::{
     RootDatabase,
@@ -211,6 +211,10 @@ impl<'db> Index<'db> {
     }
 
     fn definition(&mut self, definition: Definition<'db>) -> anyhow::Result<SymbolId> {
+        let definition = match definition {
+            Definition::Crate(krate) => Definition::Module(krate.root_module(self.sema.db)),
+            definition => definition,
+        };
         match self.definitions.get(&definition) {
             Some(id) => Ok(id.clone()),
             None => self.insert_definition(definition),
@@ -298,7 +302,8 @@ impl<'db> Index<'db> {
             qualified_name,
             kind,
             origin,
-            focus
+            focus,
+            self.expansion_identity(definition)
         ]))?;
         let symbol = Symbol {
             id: id.clone(),
@@ -324,6 +329,46 @@ impl<'db> Index<'db> {
         self.associations(definition, &id)?;
         self.limits()?;
         Ok(id)
+    }
+
+    fn expansion_identity(&self, definition: Definition<'db>) -> Vec<ByteSpan> {
+        let db = self.sema.db;
+        let source = match definition {
+            Definition::Function(item) => syntax_source(item, db),
+            Definition::Adt(item) => syntax_source(item, db),
+            Definition::Field(item) => syntax_source(item, db),
+            Definition::EnumVariant(item) => syntax_source(item, db),
+            Definition::Const(item) => syntax_source(item, db),
+            Definition::Static(item) => syntax_source(item, db),
+            Definition::Trait(item) => syntax_source(item, db),
+            Definition::TypeAlias(item) => syntax_source(item, db),
+            Definition::SelfType(item) => syntax_source(item, db),
+            Definition::Macro(item) => syntax_source(item, db),
+            Definition::Local(item) => syntax_source(item.primary_source(db), db),
+            Definition::Label(item) => syntax_source(item, db),
+            Definition::ExternCrateDecl(item) => syntax_source(item, db),
+            Definition::InlineAsmOperand(item) => syntax_source(item, db),
+            Definition::Module(item) => Some(item.definition_source(db).map(|node| node.node())),
+            Definition::GenericParam(ra_ap_hir::GenericParam::TypeParam(item)) => {
+                syntax_source(item.merge(), db)
+            }
+            Definition::GenericParam(ra_ap_hir::GenericParam::ConstParam(item)) => {
+                syntax_source(item.merge(), db)
+            }
+            Definition::GenericParam(ra_ap_hir::GenericParam::LifetimeParam(item)) => {
+                syntax_source(item, db)
+            }
+            _ => None,
+        };
+        source
+            .filter(|source| source.file_id.macro_file().is_some())
+            .into_iter()
+            .flat_map(|source| self.sema.ancestors_with_macros_file(source))
+            .filter_map(|source| {
+                let range = source.value.text_range();
+                ByteSpan::new(range.start().into(), range.end().into()).ok()
+            })
+            .collect()
     }
 
     fn associations(
@@ -518,13 +563,17 @@ impl<'db> Index<'db> {
             ),
             false => {
                 for (definition, _) in definitions {
-                    let target = self.definition(definition)?;
-                    self.relate(
-                        owner,
-                        RelationKind::References,
-                        RelationTarget::Resolved(target),
-                        site.clone(),
-                    );
+                    let target = match definition {
+                        Definition::TupleField(field) => {
+                            self.diagnostics.push(IndexDiagnostic {
+                                message: "Tuple field has no standalone source definition; its reference site is preserved without a symbol target".into(),
+                                location: site.clone(),
+                            });
+                            RelationTarget::Unresolved(format!("tuple field {}", field.index))
+                        }
+                        _ => RelationTarget::Resolved(self.definition(definition)?),
+                    };
+                    self.relate(owner, RelationKind::References, target, site.clone());
                 }
             }
         }
@@ -585,6 +634,14 @@ impl<'db> Index<'db> {
             )),
         }
     }
+}
+
+fn syntax_source<T: HasSource>(item: T, db: &RootDatabase) -> Option<ra_ap_hir::InFile<SyntaxNode>>
+where
+    T::Ast: AstNode,
+{
+    item.source(db)
+        .map(|source| source.map(|node| node.syntax().clone()))
 }
 
 fn associated_definition(item: AssocItem) -> Definition<'static> {
