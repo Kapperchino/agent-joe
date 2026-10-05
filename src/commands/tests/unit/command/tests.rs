@@ -1,6 +1,15 @@
 use super::*;
 
 #[test]
+fn fast_toggle_is_discoverable_and_accepts_no_arguments() {
+    assert_eq!(Command::parse("fast"), Ok(Command::Fast));
+    assert_eq!(Command::parse(" fast "), Ok(Command::Fast));
+    assert!(Command::print_all().contains(&"fast".to_owned()));
+    assert!(Command::parse("fast on").is_err());
+    assert!(Command::parse("fast off").is_err());
+}
+
+#[test]
 fn agent_command_is_discoverable_and_accepts_no_arguments() {
     assert_eq!(Command::parse("agent"), Ok(Command::Agent));
     assert!(Command::print_all().contains(&"agent".to_owned()));

@@ -40,6 +40,8 @@ handoffs read their source worktree until their own first write.
 - `/plan` investigates without changing files; `/implement` enables changes.
 - `/diff` reviews changes; `/sessions` and `/resume` reopen saved conversations.
 - `/questions` opens pending questions; `/compact` condenses older context.
+- `/fast` toggles fast processing for OpenAI/Codex without changing the model or
+  reasoning effort. The setting is saved; higher costs or quota usage may apply.
 - `/agent` or `Ctrl+g` opens the agent-thread picker. Each sub-agent has its own
   live output, tool calls, objective, status, and unread indicator; none of that
   output is mixed into the main conversation. Select a thread with `↑`/`↓` and

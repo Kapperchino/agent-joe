@@ -159,6 +159,8 @@ enum ResponseMode {
 #[derive(Debug, Serialize)]
 struct ResponseRequest {
     pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<&'static str>,
     pub input: Vec<InputItem>,
     pub instructions: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -200,6 +202,7 @@ impl ResponseRequest {
             .collect();
         Self {
             model,
+            service_tier: config.service_tier(),
             input,
             instructions: req.instructions.unwrap_or_default(),
             prompt_cache_key: req

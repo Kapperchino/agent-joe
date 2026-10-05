@@ -11,7 +11,7 @@ mod openai_mappings;
 
 pub use claude_config::{ClaudeAuthConfig, ClaudeConfig, ClaudeEffort, ClaudeKeyConfig};
 pub use openai_config::{
-    LocalOpenAIConfig, OpenAIAuthConfig, OpenAICodexConfig, OpenAIConfig, OpenAIEffort,
+    FastMode, LocalOpenAIConfig, OpenAIAuthConfig, OpenAICodexConfig, OpenAIConfig, OpenAIEffort,
     OpenAIKeyConfig, OpenRouterConfig,
 };
 

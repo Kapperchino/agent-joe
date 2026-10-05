@@ -53,6 +53,15 @@ fn step(id: &str) -> PlanStep {
     }
 }
 
+#[tokio::test]
+async fn fast_toggle_reports_unsupported_providers_without_starting_a_request() {
+    let h = Harness::new(vec![], Duration::from_secs(10)).await;
+    let message = command(&h, Command::Fast).await;
+    assert!(message.contains("Fast mode is unavailable for injected providers"));
+    assert!(h.requests.is_empty());
+    h.stop().await;
+}
+
 #[test]
 fn structured_questions_reject_invalid_ids_choices_answers_and_extra_permissions() {
     use common_models::interaction::{Answer, Question};

@@ -14,6 +14,7 @@ fn config(auth: OpenAIAuthConfig) -> OpenAIConfig {
         model: "fixture".into(),
         effort: OpenAIEffort::Low,
         request_encrypted_reasoning: None,
+        fast_mode: Default::default(),
     }
 }
 
@@ -36,6 +37,84 @@ fn codex_auth() -> OpenAIAuthConfig {
         last_refresh: Duration::ZERO,
         expires_at_ms: 0,
     })
+}
+
+#[test]
+fn fast_mode_selects_fast_or_standard_tiers_in_both_request_modes() {
+    use crate::{FastMode, config::Config};
+
+    for auth in [
+        codex_auth(),
+        OpenAIAuthConfig::APIKey(OpenAIKeyConfig {
+            api_key: "fixture".into(),
+            url: None,
+        }),
+        OpenAIAuthConfig::APIKey(OpenAIKeyConfig {
+            api_key: "fixture".into(),
+            url: Some("https://api.openai.com/v1/".into()),
+        }),
+    ] {
+        let mut provider = Config::OpenAI(config(auth));
+        assert_eq!(provider.toggle_fast_mode().unwrap(), FastMode::Enabled);
+        let Config::OpenAI(enabled) = provider.clone() else {
+            panic!("Expected OpenAI config")
+        };
+        for mode in [ResponseMode::Complete, ResponseMode::Streaming] {
+            let body = wire_request(&enabled, mode);
+            assert_eq!(body["service_tier"], "priority");
+            assert_eq!(body["model"], "fixture");
+            assert_eq!(body["reasoning"]["effort"], "low");
+        }
+        assert_eq!(provider.toggle_fast_mode().unwrap(), FastMode::Disabled);
+        let Config::OpenAI(disabled) = provider else {
+            panic!("Expected OpenAI config")
+        };
+        for mode in [ResponseMode::Complete, ResponseMode::Streaming] {
+            assert_eq!(wire_request(&disabled, mode)["service_tier"], "default");
+        }
+    }
+}
+
+#[test]
+fn fast_mode_never_leaks_service_tiers_to_compatible_endpoints() {
+    for auth in [
+        OpenAIAuthConfig::APIKey(OpenAIKeyConfig {
+            api_key: "fixture".into(),
+            url: Some("https://compatible.invalid/v1".into()),
+        }),
+        OpenAIAuthConfig::Local(LocalOpenAIConfig {
+            api_key: None,
+            url: "http://localhost:1234/v1".into(),
+        }),
+        OpenAIAuthConfig::OpenRouter(OpenRouterConfig {
+            api_key: "fixture".into(),
+            url: None,
+        }),
+    ] {
+        let mut config = config(auth);
+        for mode in [crate::FastMode::Disabled, crate::FastMode::Enabled] {
+            config.fast_mode = mode;
+            for request_mode in [ResponseMode::Complete, ResponseMode::Streaming] {
+                assert!(
+                    wire_request(&config, request_mode)
+                        .get("service_tier")
+                        .is_none()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn fast_mode_is_applied_to_codex_compaction_requests() {
+    let mut config = config(codex_auth());
+    config.fast_mode = crate::FastMode::Enabled;
+    let body = serde_json::to_value(ResponseRequest::compaction(
+        &config,
+        ClientRequest::new(vec![InputItem::user("task".into())]),
+    ))
+    .unwrap();
+    assert_eq!(body["service_tier"], "priority");
 }
 
 #[test]

@@ -166,6 +166,7 @@ async fn native_endpoint_uses_the_configured_route_and_preserves_the_canonical_w
         model: "fixture".into(),
         effort: OpenAIEffort::Low,
         request_encrypted_reasoning: None,
+        fast_mode: Default::default(),
     });
     let response = client
         .compact(

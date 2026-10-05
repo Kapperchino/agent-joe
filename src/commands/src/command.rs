@@ -20,6 +20,8 @@ pub enum Command {
     Plan,
     #[strum(message = "returns to implementation mode")]
     Implement,
+    #[strum(message = "toggles fast mode for OpenAI/Codex; may increase cost or quota usage")]
+    Fast,
     #[strum(
         message = "lists pending questions; /answer <id> choice <id> or /answer <id> text <answer>"
     )]

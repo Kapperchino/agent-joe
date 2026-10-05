@@ -399,6 +399,18 @@ impl<C: Context + Clone + 'static> ActorState<C> {
                         "Logged out. Removed config".into(),
                     ))
                 }
+                Command::Fast => {
+                    let message = match self.llm.toggle_fast_mode().await? {
+                        clients::FastMode::Enabled => {
+                            "Fast mode enabled. Model and reasoning effort are unchanged. Higher costs or quota usage may apply."
+                        }
+                        clients::FastMode::Disabled => "Fast mode disabled.",
+                    };
+                    Some(ActorToTuiPacket::CommandResult(
+                        command.clone(),
+                        message.into(),
+                    ))
+                }
                 Command::ChangeModel(name, effort) => {
                     self.llm
                         .change_model_and_effort(name.clone(), effort.clone())

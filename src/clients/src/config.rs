@@ -1,7 +1,7 @@
 use crate::claude_config::ClaudeConfig;
 use crate::openai_codex_auth::refresh_codex_tokens;
 use crate::openai_config::OpenAIConfig;
-use crate::{ClaudeEffort, OpenAIEffort};
+use crate::{ClaudeEffort, FastMode, OpenAIEffort};
 use anyhow::Context;
 use figment::Figment;
 use figment::providers::{Format, Toml};
@@ -39,12 +39,9 @@ impl ConfigContext {
     }
 
     pub async fn update_config(&mut self, new_conf: Config) -> anyhow::Result<()> {
-        let config = {
-            let mut c = self.config.lock().unwrap();
-            *c = new_conf.clone();
-            new_conf
-        };
-        config.save().await
+        new_conf.save().await?;
+        *self.config.lock().unwrap() = new_conf;
+        Ok(())
     }
 }
 
@@ -88,6 +85,25 @@ impl Config {
         match self {
             Config::Claude(conf) => conf.model.clone(),
             Config::OpenAI(conf) => conf.model.clone(),
+        }
+    }
+
+    pub fn fast_mode(&self) -> FastMode {
+        match self {
+            Self::OpenAI(config) if config.supports_fast_mode() => config.fast_mode,
+            _ => FastMode::Disabled,
+        }
+    }
+
+    pub fn toggle_fast_mode(&mut self) -> anyhow::Result<FastMode> {
+        match self {
+            Self::OpenAI(config) if config.supports_fast_mode() => {
+                config.fast_mode = config.fast_mode.toggled();
+                Ok(config.fast_mode)
+            }
+            _ => Err(anyhow::anyhow!(
+                "Fast mode is only available with OpenAI or Codex, not this provider."
+            )),
         }
     }
 

@@ -1,7 +1,7 @@
 use crate::claude::{ClaudeClient, Usage};
 use crate::config::{Config, ConfigContext};
 use crate::openai::OpenAIClient;
-use crate::{ClaudeEffort, OpenAIEffort};
+use crate::{ClaudeEffort, FastMode, OpenAIEffort};
 use futures::Stream;
 use futures::StreamExt;
 use futures::stream::BoxStream;
@@ -168,6 +168,15 @@ impl LLmClient {
 
     async fn send_request(&self, request: ClientRequest) -> anyhow::Result<ClientResponse> {
         todo!()
+    }
+
+    pub async fn toggle_fast_mode(&mut self) -> anyhow::Result<FastMode> {
+        let mut config = self
+            .get_config()
+            .ok_or_else(|| anyhow::anyhow!("Fast mode is unavailable for injected providers."))?;
+        let mode = config.toggle_fast_mode()?;
+        self.save_config(config).await?;
+        Ok(mode)
     }
 
     pub async fn change_model_and_effort(

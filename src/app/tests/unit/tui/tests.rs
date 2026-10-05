@@ -153,6 +153,52 @@ impl Fixture {
 }
 
 #[tokio::test]
+async fn fast_toggle_dispatches_a_command_and_displays_its_confirmation() {
+    let mut fixture = Fixture::new().await;
+    for message in ["Fast mode enabled.", "Fast mode disabled."] {
+        fixture
+            .app
+            .update_input_mode(InputMode::HomeMenu(HomeMenu::InputCommand));
+        fixture.app.input_box.paste("fast");
+        fixture.app.submit_command();
+        assert_eq!(fixture.command().await, Command::Fast);
+        fixture.packet(ActorToTuiPacket::CommandResult(
+            Command::Fast,
+            message.into(),
+        ));
+        assert!(fixture.render().contains(message));
+        assert!(fixture.app.input_box.is_empty());
+    }
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn fast_mode_is_visible_in_the_footer_only_when_enabled() {
+    let mut fixture = Fixture::new().await;
+    for mode in [clients::FastMode::Enabled, clients::FastMode::Disabled] {
+        let config = Config::OpenAI(clients::OpenAIConfig {
+            auth: clients::OpenAIAuthConfig::APIKey(clients::OpenAIKeyConfig {
+                api_key: "fixture".into(),
+                url: None,
+            }),
+            model: "fixture".into(),
+            effort: clients::OpenAIEffort::High,
+            fast_mode: mode,
+            request_encrypted_reasoning: None,
+        });
+        fixture.app.config_context = ConfigContext::new(config);
+        for width in [60, 100] {
+            let output = fixture.render_size(width, 30);
+            assert_eq!(
+                output.contains("· fast"),
+                mode == clients::FastMode::Enabled
+            );
+        }
+    }
+    fixture.stop().await;
+}
+
+#[tokio::test]
 async fn agent_threads_isolate_interleaved_responses_and_tool_output() {
     for mode in [ToolDisplay::Grouped, ToolDisplay::Expanded] {
         let mut fixture = Fixture::with_tool_display(mode).await;

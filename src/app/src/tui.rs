@@ -488,6 +488,7 @@ impl TUIApp {
                     | Command::Agent
                     | Command::Plan
                     | Command::Implement
+                    | Command::Fast
                     | Command::Questions
                     | Command::Answer(..)
                     | Command::Steer(_)

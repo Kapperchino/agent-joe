@@ -38,6 +38,7 @@ async fn startup_without_sandbox<W: ContextWorker<C = RustContext>>(worker: W) -
         model: "fixture".into(),
         effort: OpenAIEffort::None,
         request_encrypted_reasoning: None,
+        fast_mode: Default::default(),
     }));
     let (tx, _rx) = flume::unbounded();
     let running = tokio::time::timeout(

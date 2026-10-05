@@ -11,11 +11,46 @@ pub struct OpenAIConfig {
     pub auth: OpenAIAuthConfig,
     pub model: String,
     pub effort: OpenAIEffort,
+    #[serde(default)]
+    pub fast_mode: FastMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_encrypted_reasoning: Option<bool>,
 }
 
+#[derive(Debug, Default, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FastMode {
+    #[default]
+    Disabled,
+    Enabled,
+}
+
+impl FastMode {
+    pub fn toggled(self) -> Self {
+        match self {
+            Self::Disabled => Self::Enabled,
+            Self::Enabled => Self::Disabled,
+        }
+    }
+}
+
 impl OpenAIConfig {
+    pub fn supports_fast_mode(&self) -> bool {
+        match &self.auth {
+            OpenAIAuthConfig::Codex(_) => true,
+            OpenAIAuthConfig::APIKey(_) => self.get_url().trim_end_matches('/') == CHATGPT_BASE_URL,
+            OpenAIAuthConfig::Local(_) | OpenAIAuthConfig::OpenRouter(_) => false,
+        }
+    }
+
+    pub fn service_tier(&self) -> Option<&'static str> {
+        match (self.supports_fast_mode(), self.fast_mode, &self.auth) {
+            (true, FastMode::Enabled, _) => Some("priority"),
+            (true, FastMode::Disabled, _) => Some("default"),
+            _ => None,
+        }
+    }
+
     pub fn reasoning_include(&self) -> Vec<ResponseInclude> {
         if self
             .request_encrypted_reasoning

@@ -88,10 +88,13 @@ impl TUIApp {
         let [status, hints] =
             Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(area);
         let config = self.config_context.get_config();
-        let model_label = match area.width {
+        let mut model_label = match area.width {
             0..64 => format!(" {} ", config.get_model()),
             _ => format!(" {}  ·  {} ", config.get_model(), config.get_effort()),
         };
+        if config.fast_mode() == clients::FastMode::Enabled {
+            model_label.push_str("· fast ");
+        }
         let model_line = Line::from(theme::muted(model_label)).right_aligned();
         let [context, model] = Layout::horizontal([
             Constraint::Min(0),
