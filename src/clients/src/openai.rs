@@ -159,6 +159,8 @@ enum ResponseMode {
 #[derive(Debug, Serialize)]
 struct ResponseRequest {
     pub model: String,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<&'static str>,
     pub input: Vec<InputItem>,
@@ -176,8 +178,6 @@ struct ResponseRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<ReasoningConfig>,
     pub parallel_tool_calls: bool,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub stream: bool,
     pub store: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub include: Vec<ResponseInclude>,
@@ -990,7 +990,7 @@ impl OpenAIClient {
         let response = self
             .client
             .post(&url)
-            .headers(self.routing_headers(inner.prompt_cache_key.as_deref())?)
+            .headers(self.response_headers(&inner)?)
             .json(&inner)
             .send()
             .await
@@ -1060,7 +1060,8 @@ impl OpenAIClient {
         let response = self
             .client
             .post(&url)
-            .headers(self.routing_headers(request.prompt_cache_key.as_deref())?)
+            .headers(self.response_headers(&request)?)
+            .header(header::ACCEPT, "text/event-stream")
             .json(&request)
             .send()
             .await?;

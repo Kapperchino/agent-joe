@@ -8,6 +8,9 @@ mod cache_tests;
 #[path = "routing_tests.rs"]
 mod routing_tests;
 
+#[path = "sse_tests.rs"]
+mod sse_tests;
+
 fn config(auth: OpenAIAuthConfig) -> OpenAIConfig {
     OpenAIConfig {
         auth,
@@ -70,7 +73,11 @@ fn fast_mode_selects_fast_or_standard_tiers_in_both_request_modes() {
             panic!("Expected OpenAI config")
         };
         for mode in [ResponseMode::Complete, ResponseMode::Streaming] {
-            assert_eq!(wire_request(&disabled, mode)["service_tier"], "default");
+            let body = wire_request(&disabled, mode);
+            match disabled.auth {
+                OpenAIAuthConfig::Codex(_) => assert!(body.get("service_tier").is_none()),
+                _ => assert_eq!(body["service_tier"], "default"),
+            }
         }
     }
 }
@@ -109,11 +116,16 @@ fn fast_mode_never_leaks_service_tiers_to_compatible_endpoints() {
 fn fast_mode_is_applied_to_codex_compaction_requests() {
     let mut config = config(codex_auth());
     config.fast_mode = crate::FastMode::Enabled;
-    let body = serde_json::to_value(ResponseRequest::compaction(
+    let request = ResponseRequest::compaction(
         &config,
-        ClientRequest::new(vec![InputItem::user("task".into())]),
-    ))
-    .unwrap();
+        ClientRequest::new(vec![InputItem::user("task".into())]).with_model("gpt-6-astra".into()),
+    );
+    let client = OpenAIClient::new(config).unwrap();
+    assert_eq!(
+        client.response_headers(&request).unwrap()["x-codex-routing-hint"],
+        "model=gpt-6-astra;tier=priority"
+    );
+    let body = serde_json::to_value(request).unwrap();
     assert_eq!(body["service_tier"], "priority");
 }
 

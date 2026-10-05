@@ -46,7 +46,7 @@ impl OpenAIConfig {
     pub fn service_tier(&self) -> Option<&'static str> {
         match (self.supports_fast_mode(), self.fast_mode, &self.auth) {
             (true, FastMode::Enabled, _) => Some("priority"),
-            (true, FastMode::Disabled, _) => Some("default"),
+            (true, FastMode::Disabled, OpenAIAuthConfig::APIKey(_)) => Some("default"),
             _ => None,
         }
     }

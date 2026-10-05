@@ -103,5 +103,53 @@ fn codex_routing_headers_do_not_leak_to_other_providers() {
                 .unwrap()
                 .is_empty()
         );
+        let request = ResponseRequest::new(
+            &client.config,
+            ClientRequest::new(vec![]).with_model("invalid\nmodel".into()),
+            ResponseMode::Streaming,
+        );
+        assert!(client.response_headers(&request).unwrap().is_empty());
     }
+}
+
+#[test]
+fn codex_routing_hint_tracks_request_model_and_fast_toggles_with_pinned_turn_state() {
+    let mut client = OpenAIClient::new(config(codex_auth())).unwrap();
+    client.observe_routing(Some("session-1"), &headers("route-1"));
+    for mode in [crate::FastMode::Enabled, crate::FastMode::Disabled] {
+        client.config.fast_mode = mode;
+        let expected = match mode {
+            crate::FastMode::Enabled => "model=gpt-6-astra;tier=priority",
+            crate::FastMode::Disabled => "model=gpt-6-astra",
+        };
+        for response_mode in [ResponseMode::Complete, ResponseMode::Streaming] {
+            let mut input = ClientRequest::new(vec![]).with_model("gpt-6-astra".into());
+            input.prompt_cache_key = Some("session-1".into());
+            let request = ResponseRequest::new(&client.config, input, response_mode);
+            let actual = client.response_headers(&request).unwrap();
+            assert_eq!(actual["x-codex-routing-hint"], expected);
+            assert_eq!(actual["session-id"], "session-1");
+            assert_eq!(actual["x-codex-turn-state"], "route-1");
+        }
+    }
+}
+
+#[test]
+fn codex_routing_hint_does_not_require_a_cache_key_and_rejects_invalid_models() {
+    let client = OpenAIClient::new(config(codex_auth())).unwrap();
+    let mut request = ResponseRequest::new(
+        &client.config,
+        ClientRequest::new(vec![]),
+        ResponseMode::Streaming,
+    );
+    let actual = client.response_headers(&request).unwrap();
+    assert_eq!(actual["x-codex-routing-hint"], "model=fixture");
+    assert!(!actual.contains_key("session-id"));
+    request.service_tier = Some("priority");
+    assert_eq!(
+        client.response_headers(&request).unwrap()["x-codex-routing-hint"],
+        "model=fixture;tier=priority"
+    );
+    request.model = "invalid\nmodel".into();
+    assert!(client.response_headers(&request).is_err());
 }

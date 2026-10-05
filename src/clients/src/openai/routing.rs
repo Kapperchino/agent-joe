@@ -1,8 +1,9 @@
-use super::{OpenAIAuthConfig, OpenAIClient};
+use super::{OpenAIAuthConfig, OpenAIClient, ResponseRequest};
 use reqwest::header::{HeaderMap, HeaderValue};
 use std::sync::{Arc, Mutex};
 
 const TURN_STATE: &str = "x-codex-turn-state";
+const ROUTING_HINT: &str = "x-codex-routing-hint";
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct CodexRouting {
@@ -63,6 +64,29 @@ impl OpenAIClient {
                 .map_err(|_| super::OpenAIError::Config("Invalid Codex session ID".into())),
             _ => Ok(HeaderMap::new()),
         }
+    }
+
+    pub(super) fn response_headers(
+        &self,
+        request: &ResponseRequest,
+    ) -> super::OpenAIResult<HeaderMap> {
+        let mut headers = self.routing_headers(request.prompt_cache_key.as_deref())?;
+        match &self.config.auth {
+            OpenAIAuthConfig::Codex(_) => {
+                let hint = match request.service_tier {
+                    Some(tier) => format!("model={};tier={tier}", request.model),
+                    None => format!("model={}", request.model),
+                };
+                headers.insert(
+                    ROUTING_HINT,
+                    HeaderValue::from_str(&hint).map_err(|_| {
+                        super::OpenAIError::Config("Invalid Codex routing hint".into())
+                    })?,
+                );
+            }
+            _ => {}
+        }
+        Ok(headers)
     }
 
     pub(super) fn observe_routing(&self, session: Option<&str>, headers: &HeaderMap) {
