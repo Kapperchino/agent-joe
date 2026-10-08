@@ -39,6 +39,50 @@ fn fill(store: &SessionStore, bytes: usize) {
 }
 
 #[test]
+fn indexed_resume_choices_preserve_current_generation_precedence() {
+    let workspace = Workspace::new();
+    let store = store(&workspace);
+    let session = create(&store);
+    let id = session.id.clone();
+    drop(session);
+    rotate(&store);
+    let session = workspace
+        .resume(&store, &id, &SessionProvider::Injected)
+        .unwrap();
+    session
+        .record(Event::OutputsArchived(vec![
+            Message::new("context".into()),
+            Message::new("Updated title".into()),
+            Message::new_assistant("Updated preview".into()),
+        ]))
+        .unwrap();
+    let choices = store
+        .resume_choices(&SessionProvider::Injected, None)
+        .unwrap();
+    assert_eq!(choices.len(), 1);
+    assert_eq!(choices[0].title, "Updated title");
+    assert_eq!(choices[0].preview, "Updated preview");
+    session
+        .record(Event::OutputsArchived(vec![Message::new("context".into())]))
+        .unwrap();
+    assert!(
+        store
+            .resume_choices(&SessionProvider::Injected, None)
+            .unwrap()
+            .is_empty()
+    );
+    drop(session);
+    drop(store);
+    let reopened = self::store(&workspace);
+    assert!(
+        reopened
+            .resume_choices(&SessionProvider::Injected, None)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn default_capacity_is_one_hundred_gib_with_ten_percent_headroom() {
     let workspace = Workspace::new();
     let store = workspace.store();
@@ -268,6 +312,25 @@ fn an_oversized_write_keeps_the_last_snapshot_and_event_sequence() {
     assert_eq!(access.current.events.len(&transaction).unwrap(), 1);
     assert_eq!(access.current.snapshots.len(&transaction).unwrap(), 1);
     assert_eq!(access.current.owners.len(&transaction).unwrap(), 1);
+    assert_eq!(
+        access
+            .current
+            .session_index
+            .list(&transaction)
+            .unwrap()
+            .len(),
+        1
+    );
+    let summary = access
+        .current
+        .session_index
+        .list(&transaction)
+        .unwrap()
+        .pop()
+        .unwrap()
+        .summary
+        .unwrap();
+    assert_eq!(summary.preview, history()[1].text());
 }
 
 #[test]

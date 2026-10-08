@@ -1036,6 +1036,10 @@ fn resume_choices_use_recency_and_exclude_workers_empty_current_and_other_provid
             &serde_json::to_vec(&saved).unwrap(),
         )
         .unwrap();
+    database
+        .session_index
+        .record(&mut transaction, &serde_json::from_value(saved).unwrap())
+        .unwrap();
     transaction.commit().unwrap();
     drop(access);
     let choices = store

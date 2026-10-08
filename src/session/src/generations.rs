@@ -1,4 +1,4 @@
-use super::{SchemaVersion, Snapshot, artifact_index::ArtifactIndex};
+use super::{SchemaVersion, Snapshot, artifact_index::ArtifactIndex, session_index::SessionIndex};
 use anyhow::Context;
 use heed::{
     Database, Env, EnvOpenOptions,
@@ -135,6 +135,7 @@ pub(super) struct SessionDatabase {
     pub owners: Database<Str, Bytes>,
     pub artifacts: Database<Str, Bytes>,
     pub artifact_index: ArtifactIndex,
+    pub session_index: SessionIndex,
     pub storage: Arc<PrivateStorage>,
 }
 
@@ -149,7 +150,7 @@ impl SessionDatabase {
         let env = unsafe {
             EnvOpenOptions::new()
                 .map_size(capacity.map_size)
-                .max_dbs(5)
+                .max_dbs(6)
                 .open(storage.path())?
         };
         let mut transaction = env.write_txn()?;
@@ -158,6 +159,7 @@ impl SessionDatabase {
         let owners = env.create_database(&mut transaction, Some("session_owners"))?;
         let artifacts = env.create_database(&mut transaction, Some("session_artifacts"))?;
         let artifact_index = ArtifactIndex::open(&env, &mut transaction, snapshots)?;
+        let session_index = SessionIndex::open(&env, &mut transaction, snapshots)?;
         transaction.commit()?;
         storage.sync()?;
         Ok(Self {
@@ -167,6 +169,7 @@ impl SessionDatabase {
             owners,
             artifacts,
             artifact_index,
+            session_index,
             storage,
         })
     }
@@ -210,6 +213,7 @@ impl SessionDatabase {
         destination
             .snapshots
             .put(transaction, id, &serde_json::to_vec(&snapshot)?)?;
+        destination.session_index.record(transaction, &snapshot)?;
         if let Some(owner) = self.owners.get(&source, id)? {
             destination.owners.put(transaction, id, owner)?;
         }
@@ -270,6 +274,32 @@ impl Catalog {
                 Ok(sessions)
             },
         )
+    }
+
+    pub fn resume_choices(
+        &self,
+        provider: &clients::llm::SessionProvider,
+        current: Option<&str>,
+    ) -> anyhow::Result<Vec<common_models::tui_models::SessionSummary>> {
+        let listings = self.old.iter().chain([&self.current]).try_fold(
+            utils::utils::FnvHashMap::default(),
+            |mut listings, database| {
+                let transaction = database.env.read_txn()?;
+                listings.extend(
+                    database
+                        .session_index
+                        .list(&transaction)?
+                        .into_iter()
+                        .map(|listing| (listing.id.clone(), listing)),
+                );
+                Ok::<_, anyhow::Error>(listings)
+            },
+        )?;
+        Ok(listings
+            .into_values()
+            .filter(|listing| &listing.provider == provider && current != Some(listing.id.as_str()))
+            .filter_map(|listing| listing.summary)
+            .collect())
     }
 
     fn migrate(&self, id: Option<&str>) -> anyhow::Result<()> {

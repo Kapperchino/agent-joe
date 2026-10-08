@@ -76,7 +76,7 @@ pub struct RequestContext {
     pub response_reserve: u32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SessionSummary {
     pub id: String,
     pub title: String,

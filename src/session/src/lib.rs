@@ -21,6 +21,7 @@ mod ownership;
 pub mod persistence;
 mod prune;
 pub mod runtime;
+mod session_index;
 pub mod state;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
@@ -372,16 +373,7 @@ impl SessionStore {
         provider: &SessionProvider,
         current: Option<&str>,
     ) -> anyhow::Result<Vec<SessionSummary>> {
-        let mut choices = self
-            .list()?
-            .into_iter()
-            .filter(|snapshot| {
-                snapshot.parent.is_none()
-                    && &snapshot.provider == provider
-                    && current != Some(snapshot.id.as_str())
-            })
-            .filter_map(|snapshot| snapshot.summary())
-            .collect::<Vec<_>>();
+        let mut choices = self.access()?.resume_choices(provider, current)?;
         choices.sort_by(|left, right| {
             right
                 .updated_at
@@ -451,6 +443,7 @@ impl SessionDatabase {
             .put(transaction, &key, &serde_json::to_vec(&record)?)?;
         self.snapshots
             .put(transaction, &snapshot.id, &serde_json::to_vec(snapshot)?)?;
+        self.session_index.record(transaction, snapshot)?;
         Ok(())
     }
 }
