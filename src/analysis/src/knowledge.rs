@@ -1,10 +1,9 @@
 use anyhow::Context;
 use common_models::knowledge::*;
+use itertools::Itertools;
 use serde::Serialize;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Arc,
-};
+use std::{collections::BTreeSet, sync::Arc};
+use utils::utils::FnvHashMap;
 
 mod ownership;
 mod partition;
@@ -198,9 +197,9 @@ struct Rendering<'a> {
     generation: &'a str,
     budget: KnowledgeBudget,
     measure: &'a dyn Fn(&str) -> anyhow::Result<usize>,
-    sources: BTreeMap<&'a SourcePath, &'a SourceFile>,
-    symbols: BTreeMap<&'a SymbolId, &'a Symbol>,
-    neighbors: BTreeMap<&'a SymbolId, BTreeSet<&'a SymbolId>>,
+    sources: FnvHashMap<&'a SourcePath, &'a SourceFile>,
+    symbols: FnvHashMap<&'a SymbolId, &'a Symbol>,
+    neighbors: FnvHashMap<&'a SymbolId, BTreeSet<&'a SymbolId>>,
 }
 
 impl<'a> Rendering<'a> {
@@ -210,7 +209,7 @@ impl<'a> Rendering<'a> {
         budget: KnowledgeBudget,
         measure: &'a dyn Fn(&str) -> anyhow::Result<usize>,
     ) -> Self {
-        let mut neighbors: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
+        let mut neighbors: FnvHashMap<_, BTreeSet<_>> = FnvHashMap::default();
         for relation in &graph.data().relations {
             for target in relation.target.symbols() {
                 neighbors

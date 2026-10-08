@@ -1,3 +1,4 @@
+use crate::utils::FnvHashMap;
 use crate::{
     changes::FileVersion, execution::ExecutionScope, inventory::Inventory,
     workspace::WorkspacePolicy,
@@ -5,17 +6,14 @@ use crate::{
 use anyhow::Context;
 use common_models::knowledge::*;
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::BTreeMap,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 pub use knowledge_indexer::native_target;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Fingerprint {
     workspace: String,
-    files: BTreeMap<SourcePath, String>,
+    files: FnvHashMap<SourcePath, String>,
 }
 
 impl Fingerprint {
@@ -30,7 +28,7 @@ impl Fingerprint {
 
 struct Capture {
     fingerprint: Fingerprint,
-    files: BTreeMap<SourcePath, FileVersion>,
+    files: FnvHashMap<SourcePath, FileVersion>,
 }
 
 impl Capture {
@@ -48,7 +46,7 @@ impl Capture {
                 "Knowledge capture requires whole-workspace access and no unreadable discoverable files"
             )),
         }?;
-        let mut files = BTreeMap::new();
+        let mut files = FnvHashMap::default();
         let mut bytes = 0usize;
         for path in inventory.files {
             check()?;
@@ -91,7 +89,7 @@ impl Capture {
     }
 
     fn check_graph(&self, graph: &SemanticGraph, profile: &SemanticProfile) -> anyhow::Result<()> {
-        let sources: BTreeMap<_, _> = graph
+        let sources: FnvHashMap<_, _> = graph
             .data()
             .sources
             .iter()
@@ -103,7 +101,7 @@ impl Capture {
                 "Knowledge graph has a different semantic profile"
             )),
         }?;
-        let expected: BTreeMap<_, _> = self
+        let expected: FnvHashMap<_, _> = self
             .files
             .iter()
             .filter_map(|(path, file)| {

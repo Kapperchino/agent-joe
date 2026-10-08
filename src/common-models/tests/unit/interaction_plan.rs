@@ -1,5 +1,23 @@
 use super::*;
 
+#[test]
+fn evidence_eviction_remains_ordered_and_preserves_plan_references() {
+    let mut planning = crate::interaction::Planning::default();
+    let mut retained = step("retain", StepKind::Implementation);
+    retained.evidence.push(PlanEvidence {
+        source: "tool:000".into(),
+        explanation: "Referenced evidence".into(),
+    });
+    planning.plan.steps.push(retained);
+    for index in (0..257).rev() {
+        planning.record_evidence(format!("tool:{index:03}"), "Observed".into());
+    }
+    assert_eq!(planning.evidence.len(), 256);
+    assert!(planning.evidence.contains_key("tool:000"));
+    assert!(!planning.evidence.contains_key("tool:001"));
+    assert!(planning.evidence.contains_key("tool:002"));
+}
+
 fn step(id: &str, kind: StepKind) -> PlanStep {
     PlanStep {
         id: id.into(),
@@ -30,7 +48,9 @@ fn investigation_requires_all_research_but_leaves_implementation_pending() {
     assert!(matches!(plan.investigation(), Investigation::Missing));
     plan.steps.push(step("source", StepKind::Investigation));
     plan.steps.push(step("design", StepKind::Investigation));
-    let evidence = BTreeMap::from([("tool:read".into(), "Inspected source and tests".into())]);
+    let evidence = [("tool:read".into(), "Inspected source and tests".into())]
+        .into_iter()
+        .collect();
     for state in [
         StepState::Pending,
         StepState::InProgress,
@@ -75,13 +95,13 @@ fn investigation_completion_requires_recorded_evidence_and_reopening_after_chang
         .update(
             update(&plan, vec![step("source", StepKind::Investigation)]),
             0,
-            &BTreeMap::new(),
+            &FnvHashMap::default(),
         )
         .unwrap();
     let mut steps = plan.steps.clone();
     steps[0].state = StepState::Completed;
     assert!(
-        plan.update(update(&plan, steps.clone()), 0, &BTreeMap::new())
+        plan.update(update(&plan, steps.clone()), 0, &FnvHashMap::default())
             .is_err()
     );
     steps[0].evidence.push(PlanEvidence {
@@ -89,10 +109,12 @@ fn investigation_completion_requires_recorded_evidence_and_reopening_after_chang
         explanation: "Read source and checked assumptions".into(),
     });
     assert!(
-        plan.update(update(&plan, steps.clone()), 0, &BTreeMap::new())
+        plan.update(update(&plan, steps.clone()), 0, &FnvHashMap::default())
             .is_err()
     );
-    let evidence = BTreeMap::from([("tool:read".into(), "Read source".into())]);
+    let evidence = [("tool:read".into(), "Read source".into())]
+        .into_iter()
+        .collect();
     let plan = plan.update(update(&plan, steps), 0, &evidence).unwrap();
     let changed = PlanUpdate {
         requirements_revision: 1,
@@ -107,7 +129,9 @@ fn investigation_completion_requires_recorded_evidence_and_reopening_after_chang
 
 #[test]
 fn changing_step_kind_requires_reopening_and_investigation_cannot_run_cargo() {
-    let evidence = BTreeMap::from([("tool:read".into(), "Read source".into())]);
+    let evidence = [("tool:read".into(), "Read source".into())]
+        .into_iter()
+        .collect();
     let mut initial = step("source", StepKind::Implementation);
     initial.state = StepState::Completed;
     initial.evidence.push(PlanEvidence {

@@ -140,7 +140,7 @@ pub struct Snapshot {
     pub status: Lifecycle,
     pub usage: TokenCount,
     #[serde(default)]
-    pub workers: std::collections::BTreeMap<String, worker_registry::report::WorkerView>,
+    pub workers: utils::utils::FnvHashMap<String, worker_registry::report::WorkerView>,
     #[serde(default)]
     pub artifacts: Vec<artifacts::ArtifactReference>,
     #[serde(default)]
@@ -156,7 +156,7 @@ pub struct Snapshot {
     #[serde(default)]
     pub updated_at: Option<std::time::SystemTime>,
     #[serde(default)]
-    pub processes: std::collections::BTreeMap<String, utils::cargo::CargoResult>,
+    pub processes: utils::utils::FnvHashMap<String, utils::cargo::CargoResult>,
     #[serde(default)]
     process_reports: std::collections::BTreeSet<String>,
 }

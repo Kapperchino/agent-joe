@@ -1,10 +1,11 @@
+use crate::utils::FnvHashMap;
 use crate::{
     git::{DiffTarget, GitRepository, GitStatus},
     workspace::{Access, WorkspacePolicy},
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -311,7 +312,7 @@ pub struct ValidationEvidence {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Baseline {
     pub workspace: String,
-    pub files: BTreeMap<PathBuf, FileVersion>,
+    pub files: FnvHashMap<PathBuf, FileVersion>,
     pub git: Option<GitStatus>,
     pub staged: String,
     pub unstaged: String,
@@ -330,7 +331,7 @@ pub struct ChangeTracker {
 #[derive(Default)]
 struct TrackerState {
     snapshot: ChangeSnapshot,
-    observed: BTreeMap<PathBuf, FileVersion>,
+    observed: FnvHashMap<PathBuf, FileVersion>,
     store: Option<Arc<dyn ChangeStore>>,
 }
 
@@ -392,7 +393,8 @@ impl ChangeTracker {
 
     pub fn workspace_fingerprint(workspace: &WorkspacePolicy) -> anyhow::Result<String> {
         let baseline = Baseline::capture(workspace)?;
-        Ok(blake3::hash(&serde_json::to_vec(&(baseline.workspace, baseline.files))?).to_string())
+        let canonical = serde_json::to_value((baseline.workspace, baseline.files))?;
+        Ok(blake3::hash(&serde_json::to_vec(&canonical)?).to_string())
     }
 
     pub fn record_validation(
@@ -532,7 +534,7 @@ impl ChangeTracker {
         Ok(())
     }
 
-    pub fn observed_versions(&self) -> anyhow::Result<BTreeMap<PathBuf, FileVersion>> {
+    pub fn observed_versions(&self) -> anyhow::Result<FnvHashMap<PathBuf, FileVersion>> {
         Ok(self
             .state
             .lock()
@@ -706,12 +708,12 @@ impl ChangeTracker {
             .index
             .iter()
             .map(|entry| (entry.key(), entry))
-            .collect::<BTreeMap<_, _>>();
+            .collect::<FnvHashMap<_, _>>();
         let after_index = current
             .index
             .iter()
             .map(|entry| (entry.key(), entry))
-            .collect::<BTreeMap<_, _>>();
+            .collect::<FnvHashMap<_, _>>();
         let keys = before_index
             .keys()
             .chain(after_index.keys())
@@ -804,7 +806,7 @@ impl Baseline {
                     false => Err(anyhow::anyhow!("Task baseline exceeds 64 MiB")),
                 }
             })
-            .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+            .collect::<anyhow::Result<FnvHashMap<_, _>>>()?;
         let index = git
             .as_ref()
             .map(|git| git.index(workspace))

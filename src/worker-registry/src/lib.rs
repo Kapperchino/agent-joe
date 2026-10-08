@@ -7,12 +7,10 @@ use budget::WorkerBudget;
 use report::{Evidence, WorkerReport, WorkerStatus, WorkerView};
 use request::WorkerRequest;
 use state::{WorkerState, WorkerUpdate};
-use std::{
-    collections::BTreeMap,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
+use utils::utils::FnvHashMap;
 
 #[derive(Default)]
 pub struct WorkerRegistry {
@@ -22,8 +20,8 @@ pub struct WorkerRegistry {
 #[derive(Default)]
 struct RegistryState {
     next_id: u64,
-    entries: BTreeMap<String, Entry>,
-    allocations: BTreeMap<String, Allocation>,
+    entries: FnvHashMap<String, Entry>,
+    allocations: FnvHashMap<String, Allocation>,
 }
 
 #[derive(Default)]
@@ -113,7 +111,7 @@ impl WorkerRegistry {
         }))
     }
 
-    pub fn restore(&self, owner: &str, workers: BTreeMap<String, WorkerView>) {
+    pub fn restore(&self, owner: &str, workers: FnvHashMap<String, WorkerView>) {
         let mut state = self.state.lock().unwrap();
         let allocation = Allocation {
             workers: workers.len(),
@@ -136,14 +134,17 @@ impl WorkerRegistry {
     }
 
     pub fn list(&self, owner: &str) -> Vec<WorkerView> {
-        self.state
+        let mut workers = self
+            .state
             .lock()
             .unwrap()
             .entries
             .values()
             .filter(|entry| entry.owner == owner)
             .map(Entry::view)
-            .collect()
+            .collect::<Vec<_>>();
+        workers.sort_by(|left, right| left.worker_id.cmp(&right.worker_id));
+        workers
     }
 
     pub fn status(&self, owner: &str, id: &str) -> anyhow::Result<WorkerView> {
@@ -152,14 +153,17 @@ impl WorkerRegistry {
     }
 
     pub fn collect(&self, owner: &str) -> Vec<WorkerView> {
-        self.state
+        let mut workers = self
+            .state
             .lock()
             .unwrap()
             .entries
             .values()
             .filter(|entry| entry.owner == owner)
             .map(Entry::collect)
-            .collect()
+            .collect::<Vec<_>>();
+        workers.sort_by(|left, right| left.worker_id.cmp(&right.worker_id));
+        workers
     }
 
     pub async fn wait(&self, owner: &str, id: &str, seconds: u64) -> anyhow::Result<WorkerView> {
@@ -201,7 +205,8 @@ impl WorkerRegistry {
     }
 
     pub fn pending(&self, owner: &str) -> Vec<String> {
-        self.state
+        let mut workers = self
+            .state
             .lock()
             .unwrap()
             .entries
@@ -215,7 +220,9 @@ impl WorkerRegistry {
                     entry.updates.borrow().status()
                 )
             })
-            .collect()
+            .collect::<Vec<_>>();
+        workers.sort();
+        workers
     }
 
     fn entry<'a>(state: &'a RegistryState, owner: &str, id: &str) -> anyhow::Result<&'a Entry> {

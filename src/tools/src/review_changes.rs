@@ -2,7 +2,6 @@ use crate::tool_defs::{ToolId, ToolOpKind, ToolTrait, ToolType};
 use analysis::contexts::context::Context;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use turbo_code_macros::{ToolDef, ToolInput};
 use utils::utils::FnvHashMap;
@@ -99,7 +98,7 @@ enum ReviewDiff<'a> {
 
 #[derive(Default)]
 struct ReviewDiffs<'a> {
-    locations: BTreeMap<&'a str, String>,
+    locations: FnvHashMap<&'a str, String>,
 }
 
 impl<'a> ReviewDiffs<'a> {

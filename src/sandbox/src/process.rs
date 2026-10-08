@@ -1,6 +1,6 @@
+use fnv::FnvHashMap;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
     sync::{Arc, Mutex},
     time::Instant,
 };
@@ -11,7 +11,7 @@ use tokio_util::sync::CancellationToken;
 pub struct ProcessCommand {
     pub program: String,
     pub args: Vec<String>,
-    pub environment: BTreeMap<String, String>,
+    pub environment: FnvHashMap<String, String>,
 }
 
 impl ProcessCommand {
@@ -94,7 +94,7 @@ impl ProcessOutput {
 }
 
 #[derive(Default)]
-pub struct ProcessRegistry(Mutex<BTreeMap<String, Arc<ProcessHandle>>>);
+pub struct ProcessRegistry(Mutex<FnvHashMap<String, Arc<ProcessHandle>>>);
 
 impl ProcessRegistry {
     pub fn insert(&self, handle: Arc<ProcessHandle>) -> anyhow::Result<String> {

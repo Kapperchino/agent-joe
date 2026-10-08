@@ -1,16 +1,17 @@
+use crate::utils::FnvHashMap;
 use crate::{
     changes::{Baseline, FileVersion},
     git::{GitRepository, excluded},
     workspace::{Access, DirectoryEntry, WorkspacePolicy},
 };
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     path::{Path, PathBuf},
 };
 
 #[derive(Debug)]
 pub(super) struct WorktreeSnapshot {
-    pub files: BTreeMap<PathBuf, FileVersion>,
+    pub files: FnvHashMap<PathBuf, FileVersion>,
     pub head: String,
 }
 
@@ -100,7 +101,7 @@ impl WorktreeSnapshot {
 
 #[derive(Default)]
 struct SnapshotFiles {
-    files: BTreeMap<PathBuf, FileVersion>,
+    files: FnvHashMap<PathBuf, FileVersion>,
     bytes: usize,
 }
 
@@ -219,8 +220,8 @@ impl DirectoryScan {
 }
 
 pub(super) fn changed_paths(
-    before: &BTreeMap<PathBuf, FileVersion>,
-    after: &BTreeMap<PathBuf, FileVersion>,
+    before: &FnvHashMap<PathBuf, FileVersion>,
+    after: &FnvHashMap<PathBuf, FileVersion>,
 ) -> BTreeSet<PathBuf> {
     before
         .keys()

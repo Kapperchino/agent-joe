@@ -14,7 +14,7 @@ struct Candidate {
 }
 
 pub(super) fn ownership(graph: &SemanticGraph) -> anyhow::Result<Vec<OwnedSpan>> {
-    let mut events: BTreeMap<&SourcePath, BTreeMap<u32, Boundary>> = graph
+    let mut events: FnvHashMap<&SourcePath, FnvHashMap<u32, Boundary>> = graph
         .data()
         .sources
         .iter()
@@ -25,7 +25,8 @@ pub(super) fn ownership(graph: &SemanticGraph) -> anyhow::Result<Vec<OwnedSpan>>
                     (0, Boundary::default()),
                     (source.span().end(), Boundary::default()),
                 ]
-                .into(),
+                .into_iter()
+                .collect(),
             )
         })
         .collect();
@@ -66,6 +67,8 @@ pub(super) fn ownership(graph: &SemanticGraph) -> anyhow::Result<Vec<OwnedSpan>>
         for (position, boundary) in events
             .remove(source.path())
             .context("Missing source boundaries")?
+            .into_iter()
+            .sorted_by_key(|(position, _)| *position)
         {
             if position > previous {
                 let owner = active
@@ -111,7 +114,7 @@ pub(super) struct Coverage;
 
 impl Coverage {
     pub fn new(graph: &SemanticGraph, shards: &[KnowledgeShard]) -> anyhow::Result<Self> {
-        let mut by_file: BTreeMap<&SourcePath, Vec<ByteSpan>> = BTreeMap::new();
+        let mut by_file: FnvHashMap<&SourcePath, Vec<ByteSpan>> = FnvHashMap::default();
         for part in shards.iter().flat_map(|shard| &shard.owned) {
             by_file
                 .entry(&part.location.path)

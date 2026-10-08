@@ -2,6 +2,28 @@ use super::*;
 use crate::git::tests::Fixture;
 
 #[test]
+fn workspace_fingerprints_use_canonical_file_order() {
+    let fixture = Fixture::new();
+    for index in (0..32).rev() {
+        fixture.write(&format!("file-{index:02}"), "original\n");
+    }
+    let baseline = Baseline::capture(&fixture.workspace).unwrap();
+    let canonical = serde_json::json!([baseline.workspace, baseline.files]);
+    let expected = blake3::hash(&serde_json::to_vec(&canonical).unwrap()).to_string();
+    let first = ChangeTracker::workspace_fingerprint(&fixture.workspace).unwrap();
+    assert_eq!(first, expected);
+    assert_eq!(
+        first,
+        ChangeTracker::workspace_fingerprint(&fixture.workspace).unwrap()
+    );
+    fixture.write("file-00", "updated\n");
+    assert_ne!(
+        first,
+        ChangeTracker::workspace_fingerprint(&fixture.workspace).unwrap()
+    );
+}
+
+#[test]
 fn commit_subjects_are_bound_to_current_reviews_and_survive_restore() {
     use crate::git::worktrees::session::CommitMessage;
 

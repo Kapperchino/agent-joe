@@ -1,6 +1,7 @@
 use super::{PlanReview, bounded_text, valid_id};
+use fnv::FnvHashMap;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use turbo_code_macros::ToolSchema;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToolSchema)]
@@ -86,7 +87,7 @@ pub struct PlanUpdate<V = ValidationRequirement> {
 }
 
 impl PlanStep {
-    fn supported(&self, graph: &PlanGraph<'_>, evidence: &BTreeMap<String, String>) -> bool {
+    fn supported(&self, graph: &PlanGraph<'_>, evidence: &FnvHashMap<String, String>) -> bool {
         let ready = self.dependencies.iter().all(|id| {
             graph
                 .by_id
@@ -158,11 +159,11 @@ impl PlanStep {
 
 struct PlanGraph<'a> {
     ordered: &'a [PlanStep],
-    by_id: BTreeMap<&'a str, &'a PlanStep>,
+    by_id: FnvHashMap<&'a str, &'a PlanStep>,
 }
 
 impl<'a> PlanGraph<'a> {
-    fn new(steps: &'a [PlanStep], evidence: &BTreeMap<String, String>) -> anyhow::Result<Self> {
+    fn new(steps: &'a [PlanStep], evidence: &FnvHashMap<String, String>) -> anyhow::Result<Self> {
         let graph = Self {
             ordered: steps,
             by_id: steps.iter().map(|step| (step.id.as_str(), step)).collect(),
@@ -248,7 +249,7 @@ impl Plan {
         &self,
         update: PlanUpdate,
         requirements_revision: u64,
-        evidence: &BTreeMap<String, String>,
+        evidence: &FnvHashMap<String, String>,
     ) -> anyhow::Result<Self> {
         let graph = match update.revision == self.revision
             && update.requirements_revision == requirements_revision

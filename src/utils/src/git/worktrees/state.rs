@@ -1,7 +1,8 @@
 use super::snapshot::WorktreeSnapshot;
+use crate::utils::FnvHashMap;
 use crate::{changes::FileVersion, git::GitRepository};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, path::PathBuf};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
@@ -9,7 +10,7 @@ pub enum WorktreeState {
     Creating,
     Active,
     Integrated {
-        files: BTreeMap<PathBuf, FileVersion>,
+        files: FnvHashMap<PathBuf, FileVersion>,
         head: String,
     },
     Removing,
@@ -52,7 +53,7 @@ impl WorktreeState {
     pub(super) fn integration_files<'a>(
         &'a self,
         base: &'a WorktreeSnapshot,
-    ) -> anyhow::Result<&'a BTreeMap<PathBuf, FileVersion>> {
+    ) -> anyhow::Result<&'a FnvHashMap<PathBuf, FileVersion>> {
         match self {
             Self::Active => Ok(&base.files),
             Self::Integrated { files, .. } => Ok(files),

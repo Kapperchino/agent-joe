@@ -1,6 +1,24 @@
 use super::*;
 
 #[test]
+fn merged_enum_fields_remain_alphabetical_after_the_tag() {
+    let input = syn::parse_quote! {
+        #[serde(tag = "operation")]
+        enum Input {
+            First { zebra: String, shared: String },
+            Second { alpha: String, shared: String },
+        }
+    };
+    let schema = InputSchema::new(&input).unwrap();
+    let names = schema
+        .fields
+        .iter()
+        .map(|field| field.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["operation", "alpha", "shared", "zebra"]);
+}
+
+#[test]
 fn unsupported_shapes_and_invalid_attributes_report_errors() {
     for source in [
         "struct Input(String);",

@@ -2,12 +2,12 @@ use anyhow::anyhow;
 use clients::llm::PendingToolId;
 use clients::llm::{ContentBlock as MessageContent, ContentBlockInfo, Delta};
 use clients::response::{ProcessedItem, ToolCall};
-use std::collections::BTreeMap;
+use fnv::FnvHashMap;
 use tools::tool_defs::NonEmptyString;
 
 #[derive(Default)]
 pub struct Batch {
-    blocks: BTreeMap<usize, ContentBlock>,
+    blocks: FnvHashMap<usize, ContentBlock>,
 }
 
 impl Batch {
@@ -16,9 +16,11 @@ impl Batch {
     }
 
     pub fn completed_content(&self) -> Vec<MessageContent> {
-        self.blocks
-            .values()
-            .filter_map(|block| match block {
+        let mut blocks = self.blocks.iter().collect::<Vec<_>>();
+        blocks.sort_by_key(|(index, _)| **index);
+        blocks
+            .into_iter()
+            .filter_map(|(_, block)| match block {
                 ContentBlock::Complete(content)
                     if !matches!(
                         content,
@@ -47,9 +49,10 @@ impl Batch {
     }
 
     pub fn extract_and_pre_process(&mut self) -> anyhow::Result<Vec<ProcessedItem>> {
-        let result = self
-            .blocks
-            .iter()
+        let mut blocks = self.blocks.iter().collect::<Vec<_>>();
+        blocks.sort_by_key(|(index, _)| **index);
+        let result = blocks
+            .into_iter()
             .map(|(&index, block)| match block {
                 ContentBlock::Pending(_) => Err(anyhow!("Content block {index} is incomplete")),
                 ContentBlock::Complete(content) => {

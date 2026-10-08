@@ -9,10 +9,10 @@ use ratatui::{
     text::{Line, Span},
     widgets::Paragraph,
 };
-use std::collections::BTreeMap;
+use utils::utils::FnvHashMap;
 
 pub(super) struct AgentThreads {
-    threads: BTreeMap<u64, AgentThread>,
+    threads: FnvHashMap<u64, AgentThread>,
     view: AgentView,
     tool_display: ToolDisplay,
     width: u16,
@@ -131,7 +131,7 @@ impl AgentThread {
 impl AgentThreads {
     pub(super) fn new(tool_display: ToolDisplay) -> Self {
         Self {
-            threads: BTreeMap::new(),
+            threads: FnvHashMap::default(),
             view: AgentView::Main,
             tool_display,
             width: 80,
@@ -170,9 +170,7 @@ impl AgentThreads {
 
     pub(super) fn open(&mut self) {
         let selected = match self.view {
-            AgentView::Thread(id) => {
-                self.threads.keys().position(|key| *key == id).unwrap_or(0) + 1
-            }
+            AgentView::Thread(id) => self.threads.keys().filter(|key| **key < id).count() + 1,
             AgentView::Picker { selected } => selected,
             AgentView::Main => 0,
         };
@@ -240,7 +238,9 @@ impl AgentThreads {
             }
             (AgentView::Picker { selected: 0 }, KeyCode::Enter) => self.show_main(),
             (AgentView::Picker { selected }, KeyCode::Enter) => {
-                let id = self.threads.keys().nth(selected - 1).copied();
+                let mut ids = self.threads.keys().copied().collect::<Vec<_>>();
+                ids.sort();
+                let id = ids.get(selected - 1).copied();
                 if let Some(id) = id {
                     self.view = AgentView::Thread(id);
                     self.threads
@@ -334,11 +334,13 @@ impl AgentThreads {
                 let panel = theme::panel("Agent threads · select to inspect", theme::ACCENT);
                 let inner = panel.inner(area);
                 frame.render_widget(panel, area);
+                let mut threads = self.threads.iter().collect::<Vec<_>>();
+                threads.sort_by_key(|(id, _)| **id);
                 let rows = std::iter::once((
                     "Main conversation".to_owned(),
                     "Your messages and the main agent's response".to_owned(),
                 ))
-                .chain(self.threads.iter().map(|(id, thread)| {
+                .chain(threads.into_iter().map(|(id, thread)| {
                     let unread = match thread.attention {
                         Attention::Read => "",
                         Attention::Unread => " · unread",

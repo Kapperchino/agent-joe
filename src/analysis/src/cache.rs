@@ -1,7 +1,8 @@
 use crate::analysis::SymbolInfo;
-use std::collections::BTreeMap;
+use itertools::Itertools;
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
+use utils::utils::FnvHashMap;
 
 pub trait CacheKey {
     fn get_key(&self) -> String;
@@ -19,7 +20,7 @@ impl CacheVal for SymbolInfo {}
 
 #[derive(Clone)]
 pub struct TypedCache<K: CacheKey, V: CacheVal> {
-    entries: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
+    entries: Arc<Mutex<FnvHashMap<String, Vec<u8>>>>,
     key: PhantomData<K>,
     value: PhantomData<V>,
 }
@@ -67,13 +68,13 @@ impl<K: CacheKey, V: CacheVal> TypedCache<K, V> {
 }
 
 pub struct TypedCacheDb<'a, K: CacheKey, V: CacheVal> {
-    entries: &'a mut BTreeMap<String, Vec<u8>>,
+    entries: &'a mut FnvHashMap<String, Vec<u8>>,
     key: PhantomData<K>,
     value: PhantomData<V>,
 }
 
 pub struct TypedCacheDbRo<'a, V: CacheVal> {
-    entries: &'a BTreeMap<String, Vec<u8>>,
+    entries: &'a FnvHashMap<String, Vec<u8>>,
     value: PhantomData<V>,
 }
 
@@ -106,6 +107,7 @@ impl<K: CacheKey, V: CacheVal> TypedCacheDb<'_, K, V> {
             .entries
             .iter()
             .filter(|(key, _)| key.starts_with(&prefix))
+            .sorted_by(|(left, _), (right, _)| left.cmp(right))
             .map(|(key, value)| {
                 Ok(CacheEntry {
                     key: key.clone(),
@@ -125,8 +127,9 @@ impl<V: CacheVal> TypedCacheDbRo<'_, V> {
     pub fn iter(&self) -> anyhow::Result<impl Iterator<Item = V>> {
         let values = self
             .entries
-            .values()
-            .map(|value| serde_json::from_slice(value))
+            .iter()
+            .sorted_by(|(left, _), (right, _)| left.cmp(right))
+            .map(|(_, value)| serde_json::from_slice(value))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(values.into_iter())
     }

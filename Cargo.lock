@@ -771,6 +771,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "commands",
+ "fnv",
  "serde",
  "serde_json",
  "turbo-code-macros",
@@ -2508,6 +2509,7 @@ dependencies = [
  "cargo-platform",
  "cargo_toml",
  "common-models",
+ "fnv",
  "ra_ap_cfg",
  "ra_ap_hir",
  "ra_ap_ide",
@@ -4667,6 +4669,7 @@ dependencies = [
  "anyhow",
  "clients",
  "common-models",
+ "fnv",
  "serde_json",
  "tools",
 ]
@@ -4929,6 +4932,7 @@ dependencies = [
  "base64 0.22.1",
  "dirs",
  "flate2",
+ "fnv",
  "futures",
  "libc",
  "libkrun",
@@ -6083,6 +6087,7 @@ dependencies = [
 name = "turbo-code-macros"
 version = "0.1.0"
 dependencies = [
+ "fnv",
  "proc-macro2",
  "quote",
  "syn 3.0.3",

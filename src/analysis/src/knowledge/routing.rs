@@ -63,16 +63,16 @@ struct LocatedShard {
 }
 
 pub(super) struct Routing {
-    symbols: BTreeMap<SymbolId, usize>,
-    symbol_shards: BTreeMap<SymbolId, BTreeSet<usize>>,
-    file_shards: BTreeMap<SourcePath, BTreeSet<usize>>,
-    neighbors: BTreeMap<SymbolId, BTreeSet<SymbolId>>,
+    symbols: FnvHashMap<SymbolId, usize>,
+    symbol_shards: FnvHashMap<SymbolId, BTreeSet<usize>>,
+    file_shards: FnvHashMap<SourcePath, BTreeSet<usize>>,
+    neighbors: FnvHashMap<SymbolId, BTreeSet<SymbolId>>,
 }
 
 impl Routing {
     pub fn new(graph: &SemanticGraph, shards: &[KnowledgeShard]) -> anyhow::Result<Self> {
-        let mut files: BTreeMap<SourcePath, Vec<LocatedShard>> = BTreeMap::new();
-        let mut file_shards: BTreeMap<SourcePath, BTreeSet<usize>> = BTreeMap::new();
+        let mut files: FnvHashMap<SourcePath, Vec<LocatedShard>> = FnvHashMap::default();
+        let mut file_shards: FnvHashMap<SourcePath, BTreeSet<usize>> = FnvHashMap::default();
         for shard in shards {
             for part in &shard.owned {
                 files
@@ -91,7 +91,7 @@ impl Routing {
         for parts in files.values_mut() {
             parts.sort_by_key(|part| part.span);
         }
-        let mut symbol_shards = BTreeMap::new();
+        let mut symbol_shards = FnvHashMap::default();
         let mut assignments = 0usize;
         for symbol in &graph.data().symbols {
             let mut ownership = BTreeSet::new();
@@ -128,7 +128,7 @@ impl Routing {
                 ))?,
             }
         }
-        let mut neighbors: BTreeMap<SymbolId, BTreeSet<SymbolId>> = BTreeMap::new();
+        let mut neighbors: FnvHashMap<SymbolId, BTreeSet<SymbolId>> = FnvHashMap::default();
         for relation in &graph.data().relations {
             for target in relation.target.symbols() {
                 for (from, to) in [(&relation.source, target), (target, &relation.source)] {
@@ -236,7 +236,7 @@ impl KnowledgeIndex {
         path: &SourcePath,
         range: Option<LineSpan>,
     ) -> anyhow::Result<FileContext> {
-        let sources: BTreeMap<_, _> = self
+        let sources: FnvHashMap<_, _> = self
             .graph
             .data()
             .sources
@@ -342,7 +342,7 @@ impl KnowledgeIndex {
 
     pub fn search(&self, text: &str, offset: usize, limit: usize) -> anyhow::Result<RoutePage> {
         let query = Query::new(text, offset, limit)?;
-        let sources: BTreeMap<_, _> = self
+        let sources: FnvHashMap<_, _> = self
             .graph
             .data()
             .sources

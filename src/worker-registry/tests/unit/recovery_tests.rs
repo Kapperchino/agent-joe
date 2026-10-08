@@ -34,11 +34,27 @@ fn recovery_exposes_uncertain_work_and_preserves_limits_across_forks() {
                 },
             )
         })
-        .collect::<BTreeMap<_, _>>();
+        .collect::<FnvHashMap<_, _>>();
     registry.restore("source", saved.clone());
     registry.restore("fork", saved);
     assert_eq!(registry.list("source").len(), 32);
     assert_eq!(registry.list("fork").len(), 32);
+    let mut expected = (0..32)
+        .map(|index| format!("saved-{index}"))
+        .collect::<Vec<_>>();
+    expected.sort();
+    let listed = registry
+        .list("source")
+        .into_iter()
+        .map(|worker| worker.worker_id)
+        .collect::<Vec<_>>();
+    let collected = registry
+        .collect("fork")
+        .into_iter()
+        .map(|worker| worker.worker_id)
+        .collect::<Vec<_>>();
+    assert_eq!(listed, expected);
+    assert_eq!(collected, expected);
     assert!(
         registry
             .register("source", CancellationToken::new(), request.clone())

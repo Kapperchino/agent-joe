@@ -5,7 +5,7 @@ use petgraph::{
 };
 use ra_ap_syntax::{AstNode, Edition};
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum Node {
     Symbol(SymbolId),
     File(SourcePath),
@@ -38,7 +38,7 @@ enum Visit {
 impl Forest {
     fn new(graph: &SemanticGraph, owned: Vec<OwnedSpan>) -> anyhow::Result<Self> {
         let mut dependencies = DiGraph::<Node, ()>::new();
-        let mut nodes = BTreeMap::new();
+        let mut nodes = FnvHashMap::default();
         for node in graph
             .data()
             .symbols
@@ -64,7 +64,7 @@ impl Forest {
             }
         }
         let mut components = kosaraju_scc(&dependencies);
-        let symbols: BTreeMap<_, _> = graph
+        let symbols: FnvHashMap<_, _> = graph
             .data()
             .symbols
             .iter()
@@ -148,7 +148,7 @@ struct Cutter<'a> {
     rendering: &'a Rendering<'a>,
     budget: KnowledgeBudget,
     measure: &'a dyn Fn(&str) -> anyhow::Result<usize>,
-    boundaries: BTreeMap<SourcePath, BTreeSet<u32>>,
+    boundaries: FnvHashMap<SourcePath, BTreeSet<u32>>,
     measurements: usize,
     finished: Vec<Vec<OwnedSpan>>,
 }
@@ -274,7 +274,7 @@ pub(super) fn partition(
         rendering,
         budget,
         measure,
-        boundaries: BTreeMap::new(),
+        boundaries: FnvHashMap::default(),
         measurements: 0,
         finished: Vec::new(),
     };
@@ -284,11 +284,15 @@ pub(super) fn partition(
         let groups = match cutter.fits(&own)? {
             true => vec![own],
             false => {
-                let mut by_owner: BTreeMap<Node, Vec<OwnedSpan>> = BTreeMap::new();
+                let mut by_owner: FnvHashMap<Node, Vec<OwnedSpan>> = FnvHashMap::default();
                 for part in own {
                     by_owner.entry(Node::from(&part)).or_default().push(part);
                 }
-                by_owner.into_values().collect()
+                by_owner
+                    .into_iter()
+                    .sorted_by(|(left, _), (right, _)| left.cmp(right))
+                    .map(|(_, parts)| parts)
+                    .collect()
             }
         };
         let mut bag = Vec::new();

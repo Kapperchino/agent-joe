@@ -1,6 +1,7 @@
 use super::{Event, Session, SessionDatabase, Snapshot};
 use serde::{Deserialize, Serialize};
 use tools::tool_defs::ToolResult;
+use utils::utils::FnvHashMap;
 
 pub const INLINE_BYTES: usize = 8 * 1024;
 pub const ARTIFACT_PAGE_BYTES: usize = 32 * 1024;
@@ -93,7 +94,7 @@ impl Session {
                     }
                     _ => None,
                 })
-                .collect::<std::collections::BTreeMap<_, _>>();
+                .collect::<FnvHashMap<_, _>>();
             let previous_artifacts = snapshot.artifacts.len();
             history
                 .iter_mut()

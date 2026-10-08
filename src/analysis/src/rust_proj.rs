@@ -1,11 +1,13 @@
 use crate::analysis::{AnalysisSession, FileInfo};
 use crate::symbol_info::SymbolInfo;
+use itertools::Itertools;
 use ra_ap_ide::{AnalysisHost, SourceRoot};
 use ra_ap_ide_db::ChangeWithProcMacros;
 use ra_ap_vfs::file_set::FileSet;
 use ra_ap_vfs::{Change, FileId, Vfs, VfsPath};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use utils::utils::FnvHashMap;
 use utils::workspace::WorkspacePolicy;
 
 #[derive(Clone)]
@@ -53,7 +55,7 @@ impl RustProject {
                     )
                 })
             })
-            .collect::<std::collections::BTreeMap<_, _>>();
+            .collect::<FnvHashMap<_, _>>();
         let _sync = self.sync_lock.lock().unwrap();
         {
             let mut vfs = self.vfs.lock().unwrap();
@@ -65,7 +67,10 @@ impl RustProject {
             for path in removed {
                 vfs.set_file_contents(path, None);
             }
-            for (path, content) in files {
+            for (path, content) in files
+                .into_iter()
+                .sorted_by(|(left, _), (right, _)| left.cmp(right))
+            {
                 vfs.set_file_contents(path, Some(content));
             }
         }

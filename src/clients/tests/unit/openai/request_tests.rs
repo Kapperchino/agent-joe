@@ -2,6 +2,42 @@ use super::*;
 use crate::{LocalOpenAIConfig, OpenAICodexConfig, OpenAIKeyConfig, OpenRouterConfig};
 use serde_json::json;
 
+#[test]
+fn tool_properties_keep_canonical_serialization_across_map_layouts() {
+    let property = ToolProperty::Schema(json!({"type": "string"}));
+    let mut first = FnvHashMap::default();
+    first.insert("zebra".into(), property.clone());
+    first.insert("alpha".into(), property.clone());
+    let mut second = FnvHashMap::default();
+    second.reserve(64);
+    second.insert("alpha".into(), property.clone());
+    second.insert("zebra".into(), property);
+    let parameters = |properties| FunctionParameters {
+        param_type: "object".into(),
+        properties,
+        required: Vec::new(),
+    };
+    let encoded = serde_json::to_string(&parameters(first.clone())).unwrap();
+    assert_eq!(
+        encoded,
+        serde_json::to_string(&parameters(second.clone())).unwrap()
+    );
+    assert_eq!(
+        encoded,
+        r#"{"type":"object","properties":{"alpha":{"type":"string"},"zebra":{"type":"string"}},"required":[]}"#
+    );
+    let object = |properties| ToolProperty::Object {
+        name: "nested".into(),
+        prop_type: "object".into(),
+        description: "Nested properties".into(),
+        properties,
+    };
+    assert_eq!(
+        serde_json::to_string(&object(first)).unwrap(),
+        serde_json::to_string(&object(second)).unwrap()
+    );
+}
+
 #[path = "cache_tests.rs"]
 mod cache_tests;
 

@@ -116,7 +116,9 @@ fn program_values_cannot_change_the_executor() {
         "RUSTC_WRAPPER",
         "DYLD_INSERT_LIBRARIES",
     ] {
-        assert!(ProgramEnvironment::new(BTreeMap::from([(key.into(), "value".into())])).is_err());
+        assert!(
+            ProgramEnvironment::new([(key.into(), "value".into())].into_iter().collect()).is_err()
+        );
     }
     let operation = CargoOperation::new(
         CargoAction::Run,
@@ -128,7 +130,9 @@ fn program_values_cannot_change_the_executor() {
                 "--config=net.offline=false".into(),
                 "$(touch injected)".into(),
             ],
-            environment: BTreeMap::from([("JOE_RUN_MODE".into(), "test".into())]),
+            environment: [("JOE_RUN_MODE".into(), "test".into())]
+                .into_iter()
+                .collect(),
             ..Default::default()
         },
     )

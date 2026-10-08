@@ -1,5 +1,5 @@
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 pub trait ToolSchema {
     fn schema() -> Value;
@@ -35,12 +35,6 @@ impl<T: ToolSchema> ToolSchema for Option<T> {
 impl<T: ToolSchema> ToolSchema for Vec<T> {
     fn schema() -> Value {
         json!({"type": "array", "items": T::schema()})
-    }
-}
-
-impl<T: ToolSchema> ToolSchema for BTreeMap<String, T> {
-    fn schema() -> Value {
-        json!({"type": "object", "additionalProperties": T::schema()})
     }
 }
 

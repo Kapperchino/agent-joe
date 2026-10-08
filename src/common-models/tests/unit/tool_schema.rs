@@ -1,7 +1,7 @@
 use crate::tool_schema::{ToolSchema, input_schema};
+use fnv::FnvHashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::BTreeMap;
 use turbo_code_macros::ToolSchema;
 
 #[derive(Serialize, Deserialize, ToolSchema)]
@@ -21,7 +21,7 @@ struct Options {
     #[tool(max_items = 4, items(min_length = 1, max_length = 16))]
     names: Vec<String>,
     #[tool(max_properties = 3, additional_properties(max_length = 32))]
-    environment: BTreeMap<String, String>,
+    environment: FnvHashMap<String, String>,
 }
 
 #[derive(Serialize, Deserialize, ToolSchema)]

@@ -1,4 +1,5 @@
-use std::collections::{BTreeMap, HashMap};
+use fnv::FnvHashMap;
+use std::collections::HashMap;
 
 use anyhow::Context;
 use ra_ap_hir::{AsAssocItem, AssocItem, AssocItemContainer, CallableKind, HasSource, Semantics};
@@ -52,7 +53,7 @@ fn extract_attached(
             .filter_map(|source| source.file_id.map(|id| (id, source.source.path().clone())))
             .collect(),
         definitions: HashMap::new(),
-        symbols: BTreeMap::new(),
+        symbols: FnvHashMap::default(),
         relations: Vec::new(),
         diagnostics: Vec::new(),
         configuration,
@@ -155,9 +156,9 @@ enum ScopeTransition {
 
 struct Index<'db> {
     sema: Semantics<'db, RootDatabase>,
-    paths: BTreeMap<FileId, SourcePath>,
+    paths: FnvHashMap<FileId, SourcePath>,
     definitions: HashMap<Definition<'db>, SymbolId>,
-    symbols: BTreeMap<SymbolId, Symbol>,
+    symbols: FnvHashMap<SymbolId, Symbol>,
     relations: Vec<Relation>,
     diagnostics: Vec<IndexDiagnostic>,
     configuration: Configuration,

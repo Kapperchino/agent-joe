@@ -3,8 +3,9 @@ use clients::{
     llm::{ClientRequest, ContentBlock, Message, Role},
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use tools::tool_defs::ToolDefinition;
+use utils::utils::FnvHashMap;
 
 pub use clients::response::RequestMode;
 
@@ -516,7 +517,7 @@ fn protected(history: &[Message], through: usize) -> anyhow::Result<Vec<Message>
             ContentBlock::MessageBlock { text, .. } => Some(Message::new(text.clone())),
             _ => None,
         });
-    let mut calls = BTreeMap::new();
+    let mut calls = FnvHashMap::default();
     let mut evidence = Vec::new();
     for block in prefix.iter().flat_map(|message| &message.content) {
         match block {

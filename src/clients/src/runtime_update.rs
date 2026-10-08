@@ -1,6 +1,6 @@
 use common_models::interaction::{Plan, Planning, Question, WorkMode};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use utils::utils::FnvHashMap;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanningState {
@@ -22,7 +22,7 @@ impl From<&Planning> for PlanningState {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeSnapshot {
     pub planning: PlanningState,
-    pub evidence: BTreeMap<String, String>,
+    pub evidence: FnvHashMap<String, String>,
     pub questions: Vec<Question>,
     pub workers: Vec<String>,
 }
@@ -31,8 +31,8 @@ pub struct RuntimeSnapshot {
 pub struct RuntimeChanges {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub planning: Option<PlanningState>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub evidence: BTreeMap<String, Option<String>>,
+    #[serde(default, skip_serializing_if = "FnvHashMap::is_empty")]
+    pub evidence: FnvHashMap<String, Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub questions: Option<Vec<Question>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

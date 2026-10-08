@@ -9,12 +9,12 @@ use reqwest_retry::RetryTransientMiddleware;
 use reqwest_retry::policies::ExponentialBackoff;
 use reqwest_tracing::TracingMiddleware;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use std::future::ready;
 use std::str::FromStr;
 use std::time::Duration;
 use thiserror::Error;
 use tools::tool_defs::NonEmptyString;
+use utils::utils::FnvHashMap;
 
 const HTTP_MAX_RETRIES: u32 = 5;
 
@@ -119,7 +119,8 @@ pub enum Tool {
 pub struct FunctionParameters {
     #[serde(rename = "type")]
     pub param_type: String,
-    pub properties: BTreeMap<String, ToolProperty>,
+    #[serde(serialize_with = "serialize_properties")]
+    pub properties: FnvHashMap<String, ToolProperty>,
     pub required: Vec<String>,
 }
 
@@ -140,8 +141,24 @@ pub enum ToolProperty {
         #[serde(rename = "type")]
         prop_type: String,
         description: String,
-        properties: BTreeMap<String, ToolProperty>,
+        #[serde(serialize_with = "serialize_properties")]
+        properties: FnvHashMap<String, ToolProperty>,
     },
+}
+
+fn serialize_properties<S: serde::Serializer>(
+    properties: &FnvHashMap<String, ToolProperty>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeMap;
+
+    let mut properties = properties.iter().collect::<Vec<_>>();
+    properties.sort_by(|(left, _), (right, _)| left.cmp(right));
+    let mut map = serializer.serialize_map(Some(properties.len()))?;
+    for (name, property) in properties {
+        map.serialize_entry(name, property)?;
+    }
+    map.end()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

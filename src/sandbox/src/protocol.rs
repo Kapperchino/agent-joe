@@ -2,9 +2,9 @@ use crate::process::OutputStream;
 use crate::workspace::Workspace;
 use anyhow::Context;
 use base64::{Engine, engine::general_purpose::STANDARD};
+use fnv::FnvHashMap;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
     ffi::OsStr,
     path::{Component, Path, PathBuf},
 };
@@ -14,7 +14,7 @@ use std::{
 pub struct GuestCommand {
     pub program: String,
     pub args: Vec<String>,
-    pub environment: BTreeMap<String, String>,
+    pub environment: FnvHashMap<String, String>,
 }
 
 #[derive(Serialize, Deserialize)]

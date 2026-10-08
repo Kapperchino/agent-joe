@@ -121,7 +121,10 @@ fn recovery_requires_a_matching_terminal_report_and_preserves_completed_evidence
     let mut restored: WorkerView = serde_json::from_value(encoded.clone()).unwrap();
     restored.recover();
     assert_eq!(serde_json::to_value(&restored).unwrap(), encoded);
-    registry.restore("resumed", BTreeMap::from([(worker.id.clone(), restored)]));
+    registry.restore(
+        "resumed",
+        [(worker.id.clone(), restored)].into_iter().collect(),
+    );
     assert_eq!(
         registry.list("resumed")[0]
             .report

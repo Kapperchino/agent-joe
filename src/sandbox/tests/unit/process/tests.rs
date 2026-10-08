@@ -6,7 +6,7 @@ fn completion_freezes_status_and_retained_output() {
         ProcessCommand {
             program: "cargo".into(),
             args: vec!["check".into()],
-            environment: BTreeMap::new(),
+            environment: FnvHashMap::default(),
         },
         CancellationToken::new(),
     );

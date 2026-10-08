@@ -1,10 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     io::Read,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
+use utils::utils::FnvHashMap;
 use utils::workspace::{Access, WorkspacePolicy};
 
 const MAX_INSTRUCTION_BYTES: usize = 64 * 1024;
@@ -28,7 +29,7 @@ pub struct Instructions {
 #[derive(Default, Clone)]
 struct InstructionState {
     paths: BTreeSet<PathBuf>,
-    delivered: BTreeMap<PathBuf, InstructionSource>,
+    delivered: FnvHashMap<PathBuf, InstructionSource>,
 }
 
 impl Instructions {
@@ -49,7 +50,7 @@ impl Instructions {
     pub fn fork(&self) -> Self {
         let state = InstructionState {
             paths: self.state.lock().unwrap().paths.clone(),
-            delivered: BTreeMap::new(),
+            delivered: FnvHashMap::default(),
         };
         Self {
             workspace: self.workspace.clone(),

@@ -1,7 +1,7 @@
+use crate::utils::FnvHashMap;
 use anyhow::anyhow;
 use cargo_metadata::{CompilerMessage, Message, diagnostic::DiagnosticLevel};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use tokio::process::Command;
 use turbo_code_macros::ToolSchema;
 
@@ -75,7 +75,7 @@ pub struct CargoInput {
         max_properties = 16,
         additional_properties(max_length = 4096)
     )]
-    pub environment: BTreeMap<String, String>,
+    pub environment: FnvHashMap<String, String>,
     #[tool(description = "Sandbox process deadline including build time; defaults to 1800 seconds, at most 3600. Sandbox preparation has a separate tool budget.", minimum = 1, maximum = CargoOperation::MAX_TIMEOUT_SECONDS, default = CargoOperation::DEFAULT_TIMEOUT_SECONDS)]
     pub timeout_seconds: Option<u64>,
 }
@@ -166,9 +166,9 @@ impl CargoSelector {
 
 pub use sandbox::process::ProcessCommand as CargoCommand;
 
-pub struct ProgramEnvironment(BTreeMap<String, String>);
+pub struct ProgramEnvironment(FnvHashMap<String, String>);
 impl ProgramEnvironment {
-    pub fn new(values: BTreeMap<String, String>) -> anyhow::Result<Self> {
+    pub fn new(values: FnvHashMap<String, String>) -> anyhow::Result<Self> {
         let allowed = values.len() <= 16
             && values.iter().all(|(key, value)| {
                 let name = matches!(key.as_str(), "RUST_LOG" | "RUST_BACKTRACE" | "NO_COLOR")

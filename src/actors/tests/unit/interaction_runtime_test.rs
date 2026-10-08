@@ -302,7 +302,9 @@ fn new_plan_steps_can_start_in_progress_when_dependencies_are_complete() {
 #[test]
 fn plan_transitions_require_dependencies_real_evidence_and_reconciliation() {
     use common_models::interaction::PlanEvidence;
-    let evidence = [("tool:read".into(), "read_file".into())].into();
+    let evidence = [("tool:read".into(), "read_file".into())]
+        .into_iter()
+        .collect();
     let mut input = PlanUpdate {
         revision: 0,
         requirements_revision: 0,
@@ -380,7 +382,9 @@ fn plan_transitions_require_dependencies_real_evidence_and_reconciliation() {
 #[test]
 fn pending_plan_steps_complete_together_with_evidence_and_unchanged_requirements() {
     use common_models::interaction::PlanEvidence;
-    let evidence = [("tool:read".into(), "read_file".into())].into();
+    let evidence = [("tool:read".into(), "read_file".into())]
+        .into_iter()
+        .collect();
     let plan = Plan::default()
         .update(
             PlanUpdate {

@@ -3,11 +3,12 @@ pub mod merge;
 pub mod plan;
 
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::future::Future;
 use std::time::Duration;
 use tools::tool_defs::{LenientDeserialize, ToolOpKind};
 use turbo_code_macros::ToolSchema;
+use utils::utils::FnvHashMap;
 use worker_registry::report::{WorkerReport, WorkerStatus};
 use worker_registry::request::{WorkerRequest, WorkerRequestInput, WorkerRole};
 
@@ -258,7 +259,7 @@ impl Workflow {
         .into_iter()
         .map(BuiltinAgent::definition)
         .map(|agent| (agent.name.clone(), agent))
-        .collect::<BTreeMap<_, _>>();
+        .collect::<FnvHashMap<_, _>>();
         for agent in input.agents {
             match (agent.name.trim(), agents.contains_key(&agent.name)) {
                 ("", _) | (_, true) => Err(anyhow::anyhow!(

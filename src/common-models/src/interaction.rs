@@ -1,6 +1,7 @@
 mod plan;
 mod question;
 
+use fnv::FnvHashMap;
 pub use plan::{
     Investigation, Plan, PlanEvidence, PlanStep, PlanUpdate, StepKind, StepState,
     ValidationRequirement,
@@ -10,7 +11,7 @@ pub use question::{
     Questions,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -32,7 +33,7 @@ pub struct Planning {
     pub mode: WorkMode,
     pub plan: Plan,
     pub requirements_revision: u64,
-    pub evidence: BTreeMap<String, String>,
+    pub evidence: FnvHashMap<String, String>,
 }
 
 impl Planning {
@@ -75,13 +76,14 @@ impl Planning {
             .flat_map(|step| step.evidence.iter().map(|item| item.source.as_str()))
             .collect::<BTreeSet<_>>();
         let excess = self.evidence.len().saturating_sub(256);
-        let evicted = self
+        let mut evicted = self
             .evidence
             .keys()
             .filter(|id| !retained.contains(id.as_str()))
-            .take(excess)
             .cloned()
             .collect::<Vec<_>>();
+        evicted.sort();
+        evicted.truncate(excess);
         self.evidence.retain(|id, _| !evicted.contains(id));
     }
 }

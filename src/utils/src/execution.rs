@@ -1,5 +1,5 @@
+use crate::utils::FnvHashMap;
 use std::{
-    collections::BTreeMap,
     future::Future,
     sync::{
         Arc, Mutex,
@@ -13,7 +13,7 @@ pub struct ExecutionScope {
     pub changes: Arc<crate::changes::ChangeTracker>,
     pub cancel: CancellationToken,
     pub tasks: TaskTracker,
-    resources: Arc<Mutex<BTreeMap<u64, Resource>>>,
+    resources: Arc<Mutex<FnvHashMap<u64, Resource>>>,
     workspace: WorkspaceAccess,
     sandbox: Option<sandbox::Sandbox>,
     pub processes: Arc<sandbox::process::ProcessRegistry>,
@@ -172,7 +172,7 @@ pub struct Resource {
 
 pub struct Registration {
     id: u64,
-    resources: Arc<Mutex<BTreeMap<u64, Resource>>>,
+    resources: Arc<Mutex<FnvHashMap<u64, Resource>>>,
 }
 impl Drop for Registration {
     fn drop(&mut self) {
@@ -196,7 +196,15 @@ impl ExecutionScope {
         }
     }
     pub fn resources(&self) -> Vec<Resource> {
-        self.resources.lock().unwrap().values().cloned().collect()
+        let mut resources = self
+            .resources
+            .lock()
+            .unwrap()
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        resources.sort_by_key(|resource| resource.id);
+        resources
     }
 }
 

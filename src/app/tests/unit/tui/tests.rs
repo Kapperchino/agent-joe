@@ -497,7 +497,7 @@ async fn agent_header_preserves_objective_and_shows_contextual_empty_states() {
 #[tokio::test]
 async fn agent_picker_keeps_selected_threads_visible_and_wraps_navigation() {
     let mut fixture = Fixture::new().await;
-    for id in 1..=12 {
+    for id in (1..=12).rev() {
         fixture.agent_progress(id, Lifecycle::Completed);
     }
     fixture.app.agents.open();

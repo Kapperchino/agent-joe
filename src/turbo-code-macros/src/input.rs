@@ -1,7 +1,7 @@
 use crate::attributes::Attributes;
+use fnv::FnvHashMap;
 use proc_macro2::TokenStream;
 use quote::quote;
-use std::collections::BTreeMap;
 use syn::{Data, DeriveInput, Field, Fields, GenericArgument, PathArguments, Type, ext::IdentExt};
 
 pub struct InputSchema {
@@ -78,7 +78,7 @@ impl InputSchema {
                     })),
                 };
                 let fields = variants.into_iter().flat_map(|variant| variant.fields)
-                    .try_fold(BTreeMap::<String, FieldSchema>::new(), |mut fields, field| {
+                    .try_fold(FnvHashMap::<String, FieldSchema>::default(), |mut fields, field| {
                         match fields.get(&field.name) {
                             _ if field.name == tag => Err(syn::Error::new_spanned(input, "Enum field conflicts with the Serde tag")),
                             Some(existing) if existing.schema.to_string() != field.schema.to_string() => {
@@ -92,10 +92,10 @@ impl InputSchema {
                             }
                         }
                     })?;
+                let mut fields = fields.into_values().collect::<Vec<_>>();
+                fields.sort_by(|left, right| left.name.cmp(&right.name));
                 Ok(Self {
-                    fields: std::iter::once(tag_schema)
-                        .chain(fields.into_values())
-                        .collect(),
+                    fields: std::iter::once(tag_schema).chain(fields).collect(),
                     required: vec![tag],
                 })
             }

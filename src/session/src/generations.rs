@@ -6,7 +6,7 @@ use heed::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     fs::File,
     io::{BufReader, Read},
     ops::Deref,
@@ -257,9 +257,9 @@ impl Catalog {
         }
     }
 
-    fn sessions(&self) -> anyhow::Result<BTreeMap<String, Snapshot>> {
+    fn sessions(&self) -> anyhow::Result<utils::utils::FnvHashMap<String, Snapshot>> {
         self.old.iter().chain([&self.current]).try_fold(
-            BTreeMap::new(),
+            utils::utils::FnvHashMap::default(),
             |mut sessions, database| {
                 sessions.extend(
                     database
@@ -364,7 +364,7 @@ struct Conversation {
 
 impl Conversation {
     fn new<'a>(
-        sessions: &BTreeMap<String, Snapshot>,
+        sessions: &utils::utils::FnvHashMap<String, Snapshot>,
         selected: impl IntoIterator<Item = &'a str>,
     ) -> anyhow::Result<Self> {
         let root = |id: &str| -> anyhow::Result<String> {

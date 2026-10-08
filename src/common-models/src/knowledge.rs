@@ -1,6 +1,7 @@
 use anyhow::Context;
+use fnv::FnvHashMap;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 pub const KNOWLEDGE_PROTOCOL_VERSION: u32 = 1;
 pub const MAX_SOURCE_BYTES: usize = 64 * 1024 * 1024;
@@ -384,12 +385,12 @@ impl TryFrom<GraphData> for SemanticGraph {
             .sources
             .iter()
             .map(|source| (&source.path, source))
-            .collect::<BTreeMap<_, _>>();
+            .collect::<FnvHashMap<_, _>>();
         let symbols = data
             .symbols
             .iter()
             .map(|symbol| (&symbol.id, symbol))
-            .collect::<BTreeMap<_, _>>();
+            .collect::<FnvHashMap<_, _>>();
         let unique = sources.len() == data.sources.len()
             && symbols.len() == data.symbols.len()
             && symbols.keys().all(|id| !id.0.is_empty());
@@ -479,7 +480,7 @@ struct CheckedLocation;
 impl CheckedLocation {
     fn new(
         location: &SourceLocation,
-        sources: &BTreeMap<&SourcePath, &SourceFile>,
+        sources: &FnvHashMap<&SourcePath, &SourceFile>,
     ) -> anyhow::Result<Self> {
         let source = sources
             .get(&location.path)

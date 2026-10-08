@@ -7,8 +7,9 @@ use clients::llm::{LLmClient, Message};
 use common_models::tui_models::TokenCount;
 use conversation::{Conversation, SavedConversation};
 use interaction::InteractionState;
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 use utils::git::worktrees::session::SessionWorktree;
+use utils::utils::FnvHashMap;
 use worker_registry::WorkerRegistry;
 use worker_registry::report::WorkerView;
 
@@ -23,7 +24,7 @@ pub struct SessionActivation<C: Context> {
 pub enum WorkerRecovery {
     Fresh,
     Saved {
-        workers: BTreeMap<String, WorkerView>,
+        workers: FnvHashMap<String, WorkerView>,
     },
 }
 

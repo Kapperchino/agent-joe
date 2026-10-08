@@ -7,7 +7,7 @@ use itertools::Itertools;
 use ra_ap_ide::LineIndex;
 use ra_ap_ide_db::SymbolKind;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
@@ -407,7 +407,7 @@ impl ProjMeta {
     }
 
     fn add_symbol_entry(
-        entries: &mut BTreeMap<String, Vec<SymbolDisplayItem>>,
+        entries: &mut FnvHashMap<String, Vec<SymbolDisplayItem>>,
         rpath: &RPath,
         range: &Range,
         kind_order: u8,
@@ -429,7 +429,7 @@ impl ProjMeta {
     }
 
     fn add_function_entry(
-        entries: &mut BTreeMap<String, Vec<SymbolDisplayItem>>,
+        entries: &mut FnvHashMap<String, Vec<SymbolDisplayItem>>,
         func: &FunctionMeta,
     ) {
         let mut details = Vec::new();
@@ -452,8 +452,8 @@ impl ProjMeta {
         );
     }
 
-    fn symbol_display_entries(&self) -> BTreeMap<String, Vec<SymbolDisplayItem>> {
-        let mut entries: BTreeMap<String, Vec<SymbolDisplayItem>> = BTreeMap::new();
+    fn symbol_display_entries(&self) -> FnvHashMap<String, Vec<SymbolDisplayItem>> {
+        let mut entries: FnvHashMap<String, Vec<SymbolDisplayItem>> = FnvHashMap::default();
 
         for func in &self.functions {
             Self::add_function_entry(&mut entries, func);
@@ -798,7 +798,11 @@ impl Display for ProjMeta {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         writeln!(f, "# Repo Symbols")?;
 
-        for (rpath, items) in self.symbol_display_entries() {
+        for (rpath, items) in self
+            .symbol_display_entries()
+            .into_iter()
+            .sorted_by(|(left, _), (right, _)| left.cmp(right))
+        {
             writeln!(f)?;
             writeln!(f, "## {rpath}")?;
 

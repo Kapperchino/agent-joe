@@ -1,8 +1,8 @@
-use std::collections::BTreeMap;
+use fnv::FnvHashMap;
 use syn::{Attribute, Expr, ExprLit, Lit, LitStr, Meta, Token, punctuated::Punctuated};
 
 pub struct Attributes {
-    values: BTreeMap<String, Meta>,
+    values: FnvHashMap<String, Meta>,
 }
 
 impl Attributes {
@@ -10,7 +10,7 @@ impl Attributes {
         let values = attrs
             .iter()
             .filter(|attr| attr.path().is_ident(namespace))
-            .try_fold(BTreeMap::new(), |values, attr| {
+            .try_fold(FnvHashMap::default(), |values, attr| {
                 attr.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)?
                     .into_iter()
                     .try_fold(values, |mut values, meta| {
@@ -59,7 +59,7 @@ impl Attributes {
     pub fn nested(&self, name: &str, allowed: &[&str]) -> syn::Result<Self> {
         match self.values.get(name) {
             None => Ok(Self {
-                values: BTreeMap::new(),
+                values: FnvHashMap::default(),
             }),
             Some(Meta::List(list)) => {
                 let tokens = &list.tokens;

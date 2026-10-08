@@ -4,7 +4,8 @@ use heed::{
     types::{Bytes, Str},
 };
 use serde::Deserialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
+use utils::utils::FnvHashMap;
 
 const DATABASE: &str = "conversation_artifacts";
 
@@ -30,8 +31,10 @@ impl ArtifactIndex {
                         let (id, bytes) = entry?;
                         Ok((id.to_owned(), super::decode::<ArtifactSession>(bytes)?))
                     })
-                    .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
-                for (id, session) in &sessions {
+                    .collect::<anyhow::Result<FnvHashMap<_, _>>>()?;
+                let mut ordered_sessions = sessions.iter().collect::<Vec<_>>();
+                ordered_sessions.sort_by(|(left, _), (right, _)| left.cmp(right));
+                for (id, session) in ordered_sessions {
                     let lineage = ArtifactLineage::new(id, |id| {
                         sessions
                             .get(id)

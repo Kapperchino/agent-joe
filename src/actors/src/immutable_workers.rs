@@ -5,10 +5,10 @@ use anyhow::Context as _;
 use ractor::{Actor, ActorRef, RpcReplyPort};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
     sync::{Arc, Mutex},
     time::Duration,
 };
+use utils::utils::FnvHashMap;
 
 #[derive(Debug)]
 pub enum ImmutableMessage {
@@ -155,8 +155,8 @@ pub struct ImmutableWorkerRegistry {
 
 #[derive(Default)]
 pub(crate) struct RegistryState {
-    pub(crate) workers: BTreeMap<String, Vec<ImmutableWorker>>,
-    pub(crate) knowledge: BTreeMap<String, crate::knowledge::Slot>,
+    pub(crate) workers: FnvHashMap<String, Vec<ImmutableWorker>>,
+    pub(crate) knowledge: FnvHashMap<String, crate::knowledge::Slot>,
 }
 
 impl Default for ImmutableWorkerRegistry {

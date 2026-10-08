@@ -148,7 +148,7 @@ pub struct IndexEntry {
     pub extended_flags: u16,
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct IndexKey {
     path: PathBuf,
     stage: u16,

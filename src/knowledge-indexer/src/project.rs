@@ -1,5 +1,6 @@
+use fnv::FnvHashMap;
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
+    collections::{BTreeSet, HashSet},
     path::{Component, Path, PathBuf},
 };
 
@@ -53,10 +54,12 @@ pub fn load_sources(
     let platform = NativeCfg::new(&profile)?;
     let files = CapturedFiles::new(sources)?;
     let packages = files.packages(&profile.manifest, checkpoint)?;
+    let mut ordered_sources = files.sources.values().collect::<Vec<_>>();
+    ordered_sources.sort_by(|left, right| left.path().cmp(right.path()));
     let mut output = GraphData {
         version: KNOWLEDGE_PROTOCOL_VERSION,
         profile: profile.clone(),
-        sources: files.sources.values().cloned().collect(),
+        sources: ordered_sources.iter().copied().cloned().collect(),
         symbols: Vec::new(),
         relations: Vec::new(),
         diagnostics: vec![IndexDiagnostic {
@@ -73,8 +76,8 @@ pub fn load_sources(
         let features = resolved_features(&packages, &dependencies, &profile.features, checkpoint)?;
         let mut change = ChangeWithProcMacros::default();
         let mut file_set = FileSet::default();
-        let mut ids = BTreeMap::new();
-        for (index, source) in files.sources.values().enumerate() {
+        let mut ids = FnvHashMap::default();
+        for (index, source) in ordered_sources.iter().enumerate() {
             checkpoint()?;
             let id = FileId::from_raw(index as u32);
             ids.insert(source.path().clone(), id);
@@ -125,7 +128,7 @@ pub fn load_sources(
         }
         for root in &graph.roots {
             checkpoint()?;
-            let mut linked = BTreeMap::new();
+            let mut linked = FnvHashMap::default();
             for dependency in dependencies[root.package]
                 .iter()
                 .filter(|dep| dep.applies(root.kind) && features[root.package].active(dep))
@@ -178,16 +181,15 @@ pub fn load_sources(
         let mut db = RootDatabase::default();
         change.apply(&mut db);
         checkpoint()?;
-        let indexed = files
-            .sources
-            .values()
+        let indexed = ordered_sources
+            .iter()
             .map(|source| IndexedSource {
                 file_id: source
                     .path()
                     .as_str()
                     .ends_with(".rs")
                     .then(|| ids[source.path()]),
-                source: source.clone(),
+                source: (*source).clone(),
             })
             .collect();
         let data = GraphData::from(crate::extract::extract_checked(
@@ -212,8 +214,8 @@ pub fn load_sources(
 }
 
 struct CapturedFiles {
-    sources: BTreeMap<SourcePath, SourceFile>,
-    directories: BTreeMap<PathBuf, HashSet<Box<str>>>,
+    sources: FnvHashMap<SourcePath, SourceFile>,
+    directories: FnvHashMap<PathBuf, HashSet<Box<str>>>,
 }
 
 impl CapturedFiles {
@@ -222,7 +224,7 @@ impl CapturedFiles {
             true => {}
             false => Err(anyhow::anyhow!("Too many captured files"))?,
         }
-        let mut directories: BTreeMap<PathBuf, HashSet<Box<str>>> = BTreeMap::new();
+        let mut directories: FnvHashMap<PathBuf, HashSet<Box<str>>> = FnvHashMap::default();
         for source in &sources {
             let mut path = Path::new(source.path().as_str());
             while let (Some(parent), Some(name)) = (path.parent(), path.file_name()) {
@@ -263,12 +265,14 @@ impl CapturedFiles {
                         .with_context(|| format!("Invalid manifest {}", source.path().as_str()))?,
                 ))
             })
-            .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+            .collect::<anyhow::Result<FnvHashMap<_, _>>>()?;
         manifests
             .get(entry)
             .context("Selected Cargo manifest was not captured")?;
-        manifests
-            .iter()
+        let mut ordered_manifests = manifests.iter().collect::<Vec<_>>();
+        ordered_manifests.sort_by(|(left, _), (right, _)| left.cmp(right));
+        ordered_manifests
+            .into_iter()
             .filter(|(_, manifest)| manifest.package.is_some())
             .map(|(path, manifest)| {
                 checkpoint()?;
@@ -415,7 +419,7 @@ impl Target {
         &self,
         package: &Package,
         features: &EnabledFeatures,
-        files: &BTreeMap<SourcePath, FileId>,
+        files: &FnvHashMap<SourcePath, FileId>,
     ) -> anyhow::Result<TargetSource> {
         match self
             .product
@@ -704,7 +708,7 @@ impl LocalDependency {
         &self,
         packages: &[Package],
         roots: &[CrateRoot],
-        linked: &mut BTreeMap<String, CrateBuilderId>,
+        linked: &mut FnvHashMap<String, CrateBuilderId>,
     ) -> anyhow::Result<DependencyLink> {
         let target = self.destination(packages)?.and_then(|index| {
             roots.iter().find(|candidate| {
@@ -801,7 +805,7 @@ impl<'a> FeatureRequest<'a> {
 struct EnabledFeatures {
     enabled: BTreeSet<String>,
     dependencies: BTreeSet<String>,
-    requested: BTreeMap<String, BTreeSet<String>>,
+    requested: FnvHashMap<String, BTreeSet<String>>,
 }
 
 impl EnabledFeatures {
