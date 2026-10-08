@@ -4,6 +4,10 @@ use commands::command::{Answer, QuestionAnswer};
 use common_models::interaction::{Choice, InteractionView, Question, QuestionInput};
 use common_models::tui_models::{Lifecycle, RequestContext, SessionSummary};
 use ractor::{Actor, ActorProcessingErr};
+use std::time::Duration;
+
+#[path = "event_loop.rs"]
+mod event_loop;
 
 struct Capture;
 
@@ -150,6 +154,40 @@ impl Fixture {
         self.app.actor_ref.stop(None);
         self.handle.await.unwrap();
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn only_visible_busy_indicators_schedule_animation_redraws() {
+    let mut fixture = Fixture::new().await;
+    fixture.packet(ActorToTuiPacket::StateChanged(State::ThinkingStart));
+    fixture.app.message_box.advance_busy_indicator();
+    assert!(fixture.app.redraw_deadline().is_some());
+    for id in [1, 2] {
+        fixture.agent_progress(id, Lifecycle::Running);
+        fixture.agent_packet(id, ActorToTuiPacket::StateChanged(State::ThinkingStart));
+    }
+    fixture.app.agents.open();
+    fixture.app.agents.advance();
+    assert_eq!(fixture.app.redraw_deadline(), None);
+    fixture.inspect_agent(1);
+    fixture.app.agents.advance();
+    assert!(fixture.app.redraw_deadline().is_some());
+    fixture.agent_progress(1, Lifecycle::Completed);
+    assert_eq!(fixture.app.redraw_deadline(), None);
+    fixture.app.agents.show_main();
+    assert!(fixture.app.redraw_deadline().is_some());
+    fixture.packet(ActorToTuiPacket::ToolUse(vec![
+        "- read `fixture.rs`".into(),
+    ]));
+    fixture
+        .app
+        .handle_key_event(&KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+    assert_eq!(fixture.app.redraw_deadline(), None);
+    fixture.app.message_box.close_tool_history();
+    assert!(fixture.app.redraw_deadline().is_some());
+    fixture.packet(ActorToTuiPacket::StateChanged(State::Stopped));
+    assert_eq!(fixture.app.redraw_deadline(), None);
+    fixture.stop().await;
 }
 
 #[tokio::test]

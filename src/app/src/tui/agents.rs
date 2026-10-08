@@ -203,9 +203,23 @@ impl AgentThreads {
     }
 
     pub(super) fn advance(&mut self) {
-        self.threads
-            .values_mut()
-            .for_each(|thread| thread.messages.advance_busy_indicator());
+        let thread = match self.view {
+            AgentView::Thread(id) => self.threads.get_mut(&id),
+            AgentView::Main | AgentView::Picker { .. } => None,
+        };
+        if let Some(thread) = thread {
+            thread.messages.advance_busy_indicator();
+        }
+    }
+
+    pub(super) fn animation_deadline(&self) -> Option<tokio::time::Instant> {
+        match self.view {
+            AgentView::Thread(id) => self
+                .threads
+                .get(&id)
+                .and_then(|thread| thread.messages.animation_deadline()),
+            AgentView::Main | AgentView::Picker { .. } => None,
+        }
     }
 
     pub(super) fn key(&mut self, key: &KeyEvent) {

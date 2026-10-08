@@ -9,11 +9,11 @@ use crossterm::cursor::MoveTo;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{Clear, ClearType};
-use ratatui::DefaultTerminal;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::{Line, StatefulWidget};
 use ratatui::widgets::{Paragraph, Widget};
+use ratatui::{DefaultTerminal, Terminal, backend::Backend};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Msg {
@@ -157,30 +157,25 @@ impl MessageBoxState {
         }
     }
 
-    pub fn flush_scrollback(
+    pub fn flush_scrollback<B: Backend>(
         &mut self,
-        terminal: &mut DefaultTerminal,
-        do_clear: bool,
-    ) -> color_eyre::Result<()> {
-        if do_clear {
-            self.clear_terminal(terminal)?;
-            return Ok(());
-        }
-
+        terminal: &mut Terminal<B>,
+    ) -> color_eyre::Result<()>
+    where
+        B::Error: std::error::Error + Send + Sync + 'static,
+    {
         let formatter = self.formatter();
         let flushed_lines = self
             .transcript
             .take_scrollback_rows(self.live_line_capacity(), &formatter);
-        if flushed_lines.is_empty() {
-            return Ok(());
+        if !flushed_lines.is_empty() {
+            let rendered_lines = self.scrollback.render_flushed_lines(&flushed_lines);
+            terminal.insert_before(rendered_lines.len() as u16, |buf| {
+                Paragraph::new(rendered_lines)
+                    .style(theme::base())
+                    .render(buf.area, buf);
+            })?;
         }
-
-        let rendered_lines = self.scrollback.render_flushed_lines(&flushed_lines);
-        terminal.insert_before(rendered_lines.len() as u16, |buf| {
-            Paragraph::new(rendered_lines)
-                .style(theme::base())
-                .render(buf.area, buf);
-        })?;
 
         Ok(())
     }
@@ -203,6 +198,13 @@ impl MessageBoxState {
 
     pub fn advance_busy_indicator(&mut self) {
         self.busy_indicator.advance(&self.actor_state);
+    }
+
+    pub fn animation_deadline(&self) -> Option<tokio::time::Instant> {
+        match self.tool_history {
+            ToolHistoryView::Collapsed => self.busy_indicator.deadline(&self.actor_state),
+            ToolHistoryView::Expanded { .. } => None,
+        }
     }
 
     pub fn render_history(&self, area: Rect, buf: &mut Buffer, offset: usize) {
@@ -254,7 +256,7 @@ impl MessageBoxState {
         MessageFormatter::new(self.viewport.wrap_width())
     }
 
-    fn clear_terminal(&mut self, terminal: &mut DefaultTerminal) -> color_eyre::Result<()> {
+    pub fn clear_terminal(&mut self, terminal: &mut DefaultTerminal) -> color_eyre::Result<()> {
         self.scrollback.reset();
         execute!(
             terminal.backend_mut(),

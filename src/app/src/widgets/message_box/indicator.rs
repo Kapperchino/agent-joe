@@ -1,8 +1,10 @@
 use crate::{branding, theme};
 use common_models::tui_models::State;
 use ratatui::prelude::{Line, Modifier, Span, Style};
+use std::time::Duration;
+use tokio::time::Instant;
 
-const FERRIS_FRAME_TICKS: usize = 36;
+const FERRIS_FRAME_DURATION: Duration = Duration::from_millis(300);
 
 #[derive(Clone, Copy, Default)]
 enum FerrisFrame {
@@ -45,7 +47,7 @@ impl FerrisFrame {
 #[derive(Default)]
 pub(super) struct BusyIndicator {
     frame: FerrisFrame,
-    ticks: usize,
+    next_frame: Option<Instant>,
     steps: usize,
 }
 
@@ -61,10 +63,15 @@ impl BusyIndicator {
             | State::ToolStart
             | State::ThinkingStop
             | State::ToolStop => {
-                self.ticks = (self.ticks + 1) % FERRIS_FRAME_TICKS;
-                if self.ticks == 0 {
-                    self.frame = self.frame.next();
-                    self.steps = self.steps.wrapping_add(1);
+                let now = Instant::now();
+                match self.next_frame {
+                    Some(deadline) if now >= deadline => {
+                        self.frame = self.frame.next();
+                        self.steps = self.steps.wrapping_add(1);
+                        self.next_frame = Some(now + FERRIS_FRAME_DURATION);
+                    }
+                    None => self.next_frame = Some(now + FERRIS_FRAME_DURATION),
+                    Some(_) => {}
                 }
             }
             _ => self.reset(),
@@ -73,6 +80,10 @@ impl BusyIndicator {
 
     pub(super) fn reset(&mut self) {
         *self = Self::default();
+    }
+
+    pub(super) fn deadline(&self, actor_state: &State) -> Option<Instant> {
+        Self::label(actor_state).and(self.next_frame)
     }
 
     pub(super) fn render_line(&self, actor_state: &State, width: u16) -> Option<Line<'static>> {

@@ -9,7 +9,7 @@ use ratatui::{
     text::Line,
     widgets::{Paragraph, Row, StatefulWidget, Table, TableState, Widget, Wrap},
 };
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 pub struct SessionBox;
 
@@ -98,6 +98,23 @@ impl SessionPickerState {
             PickerAction::Resume { .. } => *self = Self::Resuming,
         }
         action
+    }
+
+    pub fn refresh_deadline(&self) -> Option<tokio::time::Instant> {
+        self.refresh_delay(SystemTime::now())
+            .and_then(|delay| tokio::time::Instant::now().checked_add(delay))
+    }
+
+    fn refresh_delay(&self, now: SystemTime) -> Option<Duration> {
+        match self {
+            Self::Selecting(selection) => selection
+                .matches
+                .iter()
+                .filter_map(|index| selection.sessions[*index].updated_at)
+                .filter_map(|updated| updated_refresh_delay(updated, now))
+                .min(),
+            Self::Closed | Self::Loading | Self::Resuming | Self::Failed(_) => None,
+        }
     }
 }
 
@@ -308,6 +325,18 @@ fn updated_label(updated: Option<SystemTime>, now: SystemTime) -> String {
         Some(seconds @ 3600..86400) => format!("{}h ago", seconds / 3600),
         Some(seconds) => format!("{}d ago", seconds / 86400),
     }
+}
+
+fn updated_refresh_delay(updated: SystemTime, now: SystemTime) -> Option<Duration> {
+    let age = now.duration_since(updated).unwrap_or_default();
+    let interval = match age.as_secs() {
+        0..3600 => 60,
+        3600..86400 => 3600,
+        _ => 86400,
+    };
+    let remainder = Duration::new(age.as_secs() % interval, age.subsec_nanos());
+    let next_age = age.checked_add(Duration::from_secs(interval) - remainder)?;
+    updated.checked_add(next_age)?.duration_since(now).ok()
 }
 
 #[cfg(test)]

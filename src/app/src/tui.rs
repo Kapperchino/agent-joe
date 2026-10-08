@@ -5,7 +5,6 @@ use actors::actor::Message;
 use common_models::tui_models::State;
 use common_models::tui_models::TokenCount;
 use common_models::tui_models::{ActorToTui, ActorToTuiPacket, SessionMessage, SessionTranscript};
-use std::time::Duration;
 
 use crate::widgets::input_box::{InputBox, InputBoxState};
 use crate::widgets::message_box::message_box::{MessageBox, MessageBoxState, Msg, ToolDisplay};
@@ -21,12 +20,13 @@ use crossterm::{
     queue,
 };
 use flume::Receiver;
-use futures::StreamExt;
+use futures::Stream;
 use ractor::ActorRef;
 use ratatui::{
-    DefaultTerminal, Frame,
+    DefaultTerminal, Frame, Terminal,
+    backend::Backend,
     crossterm::event::{Event, KeyCode},
-    layout::{Constraint, Layout},
+    layout::{Constraint, Layout, Rect},
     widgets::Block,
 };
 use tracing::error;
@@ -50,6 +50,14 @@ pub struct TUIApp {
     do_clear_terminal: bool,
     config_context: ConfigContext,
     cursor_style: Option<SetCursorStyle>,
+}
+
+struct UiLayout {
+    messages: Rect,
+    agents: Rect,
+    progress: Rect,
+    input: Rect,
+    footer: Rect,
 }
 
 enum Progress {
@@ -78,6 +86,7 @@ impl std::fmt::Display for Progress {
 
 mod agents;
 mod chrome;
+mod render_schedule;
 
 #[cfg(test)]
 #[path = "../tests/unit/tui/tests.rs"]
@@ -300,35 +309,75 @@ impl TUIApp {
     pub async fn run(
         mut self,
         mut terminal: DefaultTerminal,
-        mut actor_rx: Receiver<ActorToTui>,
+        actor_rx: Receiver<ActorToTui>,
     ) -> Result<()> {
         let mut events = EventStream::new();
+        self.run_events(&mut events, &actor_rx, |app| {
+            if app.do_clear_terminal {
+                app.message_box.clear_terminal(&mut terminal)?;
+            }
+            app.update_cursor_style(&mut terminal)?;
+            app.render_frame(&mut terminal)
+        })
+        .await
+    }
 
-        let period = Duration::from_secs_f32(1.0 / 120.0);
-        let mut interval = tokio::time::interval(period);
+    async fn run_events(
+        &mut self,
+        events: &mut (impl Stream<Item = std::io::Result<Event>> + Unpin),
+        actor_rx: &Receiver<ActorToTui>,
+        mut render: impl FnMut(&mut Self) -> Result<()>,
+    ) -> Result<()> {
+        let mut schedule = render_schedule::RenderSchedule::new();
 
         while !self.do_quit {
-            tokio::select! {
-                _ = interval.tick() => {
+            match schedule.next_event(events, actor_rx).await? {
+                render_schedule::UiEvent::Render => {
                     self.message_box.advance_busy_indicator();
                     self.agents.advance();
-                },
-                Some(Ok(event)) = events.next() => self.handle_term_event(&event),
-                Ok(actor_msg) = actor_rx.recv_async() => self.handle_actor_msg(actor_msg),
-            }
-
-            if self.agents.is_main() || self.do_clear_terminal {
-                self.message_box
-                    .flush_scrollback(&mut terminal, self.do_clear_terminal)?;
-            }
-            self.update_cursor_style(&mut terminal)?;
-            terminal.draw(|frame| self.draw(frame))?;
-
-            if self.do_clear_terminal {
-                self.do_clear_terminal = false;
+                    render(self)?;
+                    schedule.rendered(self.redraw_deadline());
+                }
+                render_schedule::UiEvent::Terminal(event) => {
+                    self.handle_term_event(&event);
+                    schedule.request();
+                }
+                render_schedule::UiEvent::Actor(message) => {
+                    self.handle_actor_msg(message);
+                    schedule.request();
+                }
+                render_schedule::UiEvent::Closed => self.kill(),
             }
         }
+        render(self)
+    }
+
+    fn render_frame<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> Result<()>
+    where
+        B::Error: std::error::Error + Send + Sync + 'static,
+    {
+        terminal.autoresize()?;
+        self.layout(terminal.get_frame().area());
+        if self.agents.is_main() || self.do_clear_terminal {
+            self.message_box.flush_scrollback(terminal)?;
+        }
+        terminal.draw(|frame| self.draw(frame))?;
+        self.do_clear_terminal = false;
         Ok(())
+    }
+
+    fn redraw_deadline(&self) -> Option<tokio::time::Instant> {
+        let animation = match self.agents.is_main() {
+            true => self.message_box.animation_deadline(),
+            false => self.agents.animation_deadline(),
+        };
+        let sessions = match self.input_mode {
+            InputMode::CommandMenu(CommandMenu::SessionSelector) if self.agents.is_main() => {
+                self.input_box.session_picker.refresh_deadline()
+            }
+            _ => None,
+        };
+        animation.into_iter().chain(sessions).min()
     }
 
     fn update_cursor_style(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
@@ -744,9 +793,7 @@ impl TUIApp {
         self.validation = None;
     }
 
-    fn draw(&mut self, frame: &mut Frame) {
-        let area = frame.area();
-        frame.render_widget(Block::new().style(theme::base()), area);
+    fn layout(&mut self, area: Rect) -> UiLayout {
         let input_height = match self.agents.is_main() {
             true => self.input_box.get_height(area.width),
             false => 3,
@@ -761,11 +808,30 @@ impl TUIApp {
         ])
         .areas(area);
 
+        self.message_box
+            .update_width_height(msg_area.width, msg_area.height);
+        UiLayout {
+            messages: msg_area,
+            agents: agent_status,
+            progress,
+            input: input_area,
+            footer,
+        }
+    }
+
+    fn draw(&mut self, frame: &mut Frame) {
+        let area = frame.area();
+        let UiLayout {
+            messages: msg_area,
+            agents: agent_status,
+            progress,
+            input: input_area,
+            footer,
+        } = self.layout(area);
+        frame.render_widget(Block::new().style(theme::base()), area);
         frame.render_widget(self.progress_line(progress.width), progress);
         self.draw_footer(frame, footer);
         frame.render_widget(self.agents.summary(), agent_status);
-        self.message_box
-            .update_width_height(msg_area.width, msg_area.height);
         self.agents.draw(frame, msg_area);
         match self.agents.is_main() {
             true => {

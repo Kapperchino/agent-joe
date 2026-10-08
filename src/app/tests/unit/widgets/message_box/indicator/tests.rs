@@ -57,17 +57,22 @@ fn mini_ferris_uses_the_theme_accent_on_the_normal_background_in_every_frame() {
     }
 }
 
-#[test]
-fn mini_ferris_holds_each_frame_for_thirty_six_ticks() {
+#[tokio::test(start_paused = true)]
+async fn mini_ferris_holds_each_frame_for_three_hundred_milliseconds() {
     for state in [State::StreamStart, State::ThinkingStart, State::ToolStart] {
         let mut indicator = BusyIndicator::default();
+        indicator.advance(&state);
         for step in 0..4 {
             let initial = indicator.render_line(&state, 40).unwrap();
-            for _ in 0..35 {
+            for _ in 0..100 {
                 indicator.advance(&state);
                 assert_eq!(indicator.render_line(&state, 40), Some(initial.clone()));
                 assert_eq!(indicator.steps, step);
             }
+            tokio::time::advance(FERRIS_FRAME_DURATION - Duration::from_millis(1)).await;
+            indicator.advance(&state);
+            assert_eq!(indicator.render_line(&state, 40), Some(initial.clone()));
+            tokio::time::advance(Duration::from_millis(1)).await;
             indicator.advance(&state);
             assert_ne!(indicator.render_line(&state, 40), Some(initial));
             assert_eq!(indicator.steps, step + 1);
@@ -75,12 +80,13 @@ fn mini_ferris_holds_each_frame_for_thirty_six_ticks() {
     }
 }
 
-#[test]
-fn ferris_runs_to_both_ends_at_a_fixed_cadence_without_shifting_the_label() {
+#[tokio::test(start_paused = true)]
+async fn ferris_runs_to_both_ends_at_a_fixed_cadence_without_shifting_the_label() {
     let mut indicator = BusyIndicator::default();
+    indicator.advance(&State::ThinkingStart);
     for (step, offset) in [0, 1, 2, 3, 4, 5, 4, 3, 2, 1, 0].into_iter().enumerate() {
         let glyphs = ["⋎(◕ᴗ◕)⋎", "⋏(◕ᴗ◕)⋎", "⋎(◡ᴗ◡)⋎", "⋎(◕ᴗ◕)⋏"][step % 4];
-        for _ in 0..FERRIS_FRAME_TICKS {
+        for _ in 0..3 {
             let line = indicator.render_line(&State::ThinkingStart, 34).unwrap();
             assert_eq!(
                 line.to_string(),
@@ -93,13 +99,14 @@ fn ferris_runs_to_both_ends_at_a_fixed_cadence_without_shifting_the_label() {
             assert_eq!(line.spans[3].width(), 7);
             assert_eq!(line.width(), 34);
             assert_eq!(indicator.render_line(&State::ThinkingStart, 34), Some(line));
+            tokio::time::advance(FERRIS_FRAME_DURATION / 3).await;
             indicator.advance(&State::ThinkingStart);
         }
     }
 }
 
-#[test]
-fn inactive_states_hide_ferris_and_reset_the_animation() {
+#[tokio::test(start_paused = true)]
+async fn inactive_states_hide_ferris_and_reset_the_animation() {
     for state in [
         State::Ready,
         State::StreamStop,
@@ -108,29 +115,30 @@ fn inactive_states_hide_ferris_and_reset_the_animation() {
         State::Stopped,
     ] {
         let mut indicator = BusyIndicator::default();
-        for _ in 0..FERRIS_FRAME_TICKS + 3 {
-            indicator.advance(&State::ToolStart);
-        }
+        indicator.advance(&State::ToolStart);
+        tokio::time::advance(FERRIS_FRAME_DURATION).await;
+        indicator.advance(&State::ToolStart);
         assert_ne!(indicator.frame.glyphs(), branding::MARK);
         assert_eq!(indicator.render_line(&state, 40), None);
         assert_eq!(indicator.reserved_lines(&state), 0);
         indicator.advance(&state);
         assert_eq!(indicator.frame.glyphs(), branding::MARK);
-        assert_eq!(indicator.ticks, 0);
+        assert_eq!(indicator.next_frame, None);
         assert_eq!(indicator.steps, 0);
     }
 }
 
-#[test]
-fn hidden_busy_transitions_keep_the_animation_moving() {
+#[tokio::test(start_paused = true)]
+async fn hidden_busy_transitions_preserve_animation_without_scheduling_frames() {
     let mut indicator = BusyIndicator::default();
+    indicator.advance(&State::ThinkingStart);
     for state in [State::ThinkingStop, State::ToolStop] {
         let previous = indicator.steps;
         assert_eq!(indicator.render_line(&state, 40), None);
         assert_eq!(indicator.reserved_lines(&state), 0);
-        for _ in 0..FERRIS_FRAME_TICKS {
-            indicator.advance(&state);
-        }
+        assert_eq!(indicator.deadline(&state), None);
+        tokio::time::advance(FERRIS_FRAME_DURATION).await;
+        indicator.advance(&state);
         assert_eq!(indicator.steps, previous + 1);
     }
     let frame = indicator.frame.glyphs();
@@ -152,8 +160,8 @@ fn row(buffer: &Buffer, y: u16) -> String {
         .collect()
 }
 
-#[test]
-fn message_box_moves_ferris_across_the_line_and_clears_it_when_idle() {
+#[tokio::test(start_paused = true)]
+async fn message_box_moves_ferris_across_the_line_and_clears_it_when_idle() {
     let mut state = MessageBoxState::new();
     state.update_width_height(40, 2);
     state.append(Msg::Message("Hello".into()));
@@ -168,9 +176,9 @@ fn message_box_moves_ferris_across_the_line_and_clears_it_when_idle() {
         assert_eq!(first[(x, 3)].fg, theme::ACCENT);
         assert_eq!(first[(x, 3)].bg, theme::BACKGROUND);
     }
-    for _ in 0..FERRIS_FRAME_TICKS {
-        state.advance_busy_indicator();
-    }
+    state.advance_busy_indicator();
+    tokio::time::advance(FERRIS_FRAME_DURATION).await;
+    state.advance_busy_indicator();
     let next = render(area, &mut state);
     assert_eq!(row(&next, 2), row(&first, 2));
     assert_eq!(row(&next, 3), "Working on it…   ⋏(◕ᴗ◕)⋎                ");
@@ -190,15 +198,15 @@ fn message_box_moves_ferris_across_the_line_and_clears_it_when_idle() {
     assert_eq!(row(&restarted, 3), row(&first, 3));
 }
 
-#[test]
-fn clearing_messages_resets_ferris_before_the_next_conversation() {
+#[tokio::test(start_paused = true)]
+async fn clearing_messages_resets_ferris_before_the_next_conversation() {
     let mut state = MessageBoxState::new();
     state.update_width_height(40, 2);
     state.append(Msg::Message("Before".into()));
     state.actor_state = State::StreamStart;
-    for _ in 0..FERRIS_FRAME_TICKS + 3 {
-        state.advance_busy_indicator();
-    }
+    state.advance_busy_indicator();
+    tokio::time::advance(FERRIS_FRAME_DURATION).await;
+    state.advance_busy_indicator();
     state.clear();
     state.append(Msg::Message("After".into()));
     let buffer = render(Rect::new(0, 0, 40, 2), &mut state);
@@ -238,10 +246,29 @@ fn ferris_stays_on_one_line_in_tiny_viewports() {
     }
 }
 
-#[test]
-fn running_ferris_fits_after_resizing_and_changing_busy_states() {
+#[tokio::test(start_paused = true)]
+async fn delayed_animation_advances_once_without_catch_up_work() {
     let mut indicator = BusyIndicator::default();
-    for _ in 0..FERRIS_FRAME_TICKS * 83 {
+    indicator.advance(&State::ToolStart);
+    tokio::time::advance(Duration::from_secs(60)).await;
+    indicator.advance(&State::ToolStart);
+    assert_eq!(indicator.steps, 1);
+    assert_eq!(
+        indicator.deadline(&State::ToolStart),
+        Some(Instant::now() + FERRIS_FRAME_DURATION)
+    );
+    for _ in 0..100 {
+        indicator.advance(&State::ToolStart);
+    }
+    assert_eq!(indicator.steps, 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn running_ferris_fits_after_resizing_and_changing_busy_states() {
+    let mut indicator = BusyIndicator::default();
+    indicator.advance(&State::ThinkingStart);
+    for _ in 0..83 {
+        tokio::time::advance(FERRIS_FRAME_DURATION).await;
         indicator.advance(&State::ThinkingStart);
     }
     for state in [State::StreamStart, State::ThinkingStart, State::ToolStart] {

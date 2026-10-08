@@ -107,3 +107,51 @@ fn picker_renders_results_empty_and_error_states_at_small_sizes() {
         }
     }
 }
+
+#[test]
+fn refresh_delay_matches_each_updated_label_boundary() {
+    let updated = SystemTime::UNIX_EPOCH + Duration::from_secs(86400);
+    for (age, expected_delay) in [
+        (Duration::ZERO, Duration::from_secs(60)),
+        (Duration::from_millis(59_500), Duration::from_millis(500)),
+        (Duration::from_secs(60), Duration::from_secs(60)),
+        (Duration::from_secs(3599), Duration::from_secs(1)),
+        (Duration::from_secs(3600), Duration::from_secs(3600)),
+        (Duration::from_secs(86399), Duration::from_secs(1)),
+        (Duration::from_secs(86400), Duration::from_secs(86400)),
+        (Duration::from_secs(172799), Duration::from_secs(1)),
+    ] {
+        let now = updated + age;
+        let delay = updated_refresh_delay(updated, now).unwrap();
+        assert_eq!(delay, expected_delay);
+        let label = updated_label(Some(updated), now);
+        assert_eq!(
+            updated_label(Some(updated), now + delay - Duration::from_nanos(1)),
+            label
+        );
+        assert_ne!(updated_label(Some(updated), now + delay), label);
+    }
+    assert_eq!(
+        updated_refresh_delay(updated, updated - Duration::from_secs(30)),
+        Some(Duration::from_secs(90))
+    );
+}
+
+#[test]
+fn only_matching_dated_sessions_request_refreshes() {
+    let now = SystemTime::UNIX_EPOCH + Duration::from_secs(86400);
+    let mut picker = SessionPickerState::Loading;
+    assert_eq!(picker.refresh_delay(now), None);
+    let mut recent = summary("recent", "Recent session");
+    recent.updated_at = Some(now - Duration::from_secs(59));
+    let mut older = summary("older", "Older session");
+    older.updated_at = Some(now - Duration::from_secs(3600));
+    picker.load(Ok(vec![recent, older, summary("unknown", "Unknown age")]));
+    assert_eq!(picker.refresh_delay(now), Some(Duration::from_secs(1)));
+    picker.paste("older");
+    assert_eq!(picker.refresh_delay(now), Some(Duration::from_secs(3600)));
+    picker.paste("no match");
+    assert_eq!(picker.refresh_delay(now), None);
+    picker.key(&key(KeyCode::Esc));
+    assert_eq!(picker.refresh_delay(now), None);
+}
