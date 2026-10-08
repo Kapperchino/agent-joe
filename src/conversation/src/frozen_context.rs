@@ -15,15 +15,21 @@ pub struct SnapshotBudget {
 
 impl SnapshotBudget {
     pub fn new(context: ContextLimits) -> anyhow::Result<Self> {
+        let context_tokens = context
+            .ceiling()
+            .checked_add(context.ceiling().div_ceil(10))
+            .ok_or_else(|| {
+                anyhow::anyhow!("Snapshot context limit leaves no room for capture headroom")
+            })?;
         let question_bytes = (context.input() / 64).min(MAX_QUESTION_BYTES);
         let extra = question_bytes * JSON_BYTES_PER_INPUT_BYTE
             + QUESTION_OVERHEAD_TOKENS
             + context.response() as usize;
-        let ceiling = context.ceiling().checked_add(extra).ok_or_else(|| {
+        let ceiling = context_tokens.checked_add(extra).ok_or_else(|| {
             anyhow::anyhow!("Snapshot context limit leaves no room for questions and answers")
         })?;
         Ok(Self {
-            context_tokens: context.ceiling(),
+            context_tokens,
             question_bytes,
             limits: ContextLimits::new(ceiling, context.response())?,
         })

@@ -24,12 +24,15 @@ fn compaction_trigger_uses_the_parent_budget_without_snapshot_reservations() {
         ContextLimits::new(272_000, 16_000).unwrap(),
     ] {
         let snapshot = crate::frozen_context::SnapshotBudget::new(limits.snapshot()).unwrap();
-        assert_eq!(snapshot.context_tokens(), limits.ceiling());
+        assert_eq!(
+            snapshot.context_tokens(),
+            limits.ceiling() + limits.ceiling().div_ceil(10)
+        );
         assert_eq!(
             limits.trigger(),
             (limits.ceiling() * 9 / 10).min(limits.input())
         );
-        assert!(snapshot.limits().input() > limits.ceiling());
+        assert!(snapshot.limits().input() > snapshot.context_tokens());
     }
 }
 
@@ -43,7 +46,8 @@ fn snapshot_at_its_context_boundary_fits_every_admitted_question() {
         let mut request = ClientRequest::new(vec![Message::new("parent context".into())]);
         let padding = budget.context_tokens() - estimated_tokens(&request).unwrap();
         request.system = Some(" word".repeat(padding));
-        assert_eq!(estimated_tokens(&request).unwrap(), limits.ceiling());
+        assert_eq!(estimated_tokens(&request).unwrap(), budget.context_tokens());
+        assert!(estimated_tokens(&request).unwrap() > limits.ceiling());
         let parent = serde_json::to_value(&request.messages).unwrap();
         let frozen = FrozenContext::new(request.clone(), limits).unwrap();
         let allowance = frozen.max_question_bytes();
@@ -61,7 +65,7 @@ fn snapshot_at_its_context_boundary_fits_every_admitted_question() {
         ] {
             assert_eq!(question.len(), allowance);
             let asked = frozen.question_request(question).unwrap();
-            assert!(estimated_tokens(&asked).unwrap() > limits.ceiling());
+            assert!(estimated_tokens(&asked).unwrap() > budget.context_tokens());
             assert!(estimated_tokens(&asked).unwrap() <= frozen.limits().input());
             assert_eq!(
                 serde_json::to_value(&asked.messages[..request.messages.len()]).unwrap(),
@@ -81,9 +85,11 @@ fn snapshot_at_its_context_boundary_fits_every_admitted_question() {
 }
 
 #[test]
-fn snapshot_budget_rejects_overflow_when_adding_question_and_answer_space() {
-    let limits = ContextLimits::new(usize::MAX, 1024).unwrap();
-    assert!(crate::frozen_context::SnapshotBudget::new(limits).is_err());
+fn snapshot_budget_rejects_overflow_when_adding_headroom_and_question_space() {
+    for ceiling in [usize::MAX, usize::MAX / 11 * 10] {
+        let limits = ContextLimits::new(ceiling, 1024).unwrap();
+        assert!(crate::frozen_context::SnapshotBudget::new(limits).is_err());
+    }
 }
 
 #[test]

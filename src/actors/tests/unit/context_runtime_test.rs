@@ -119,7 +119,7 @@ async fn oversized_snapshot_blocks_automatic_and_manual_compaction_before_provid
 }
 
 #[tokio::test]
-async fn snapshot_question_reservations_do_not_block_parent_compaction() {
+async fn snapshot_headroom_allows_parent_compaction_after_context_overshoot() {
     use crate::states::provider_task::{ProviderTarget, ProviderTask};
     use conversation::context::{Checkpoint, ContextInput, NativeCompaction, RequestMode};
     use conversation::frozen_context::SnapshotBudget;
@@ -140,7 +140,7 @@ async fn snapshot_question_reservations_do_not_block_parent_compaction() {
             .chain((0..8).map(|index| {
                 llm::Message::new_assistant(format!(
                     "Investigation {index}: {}",
-                    "older context ".repeat(1000)
+                    " word".repeat(32_000)
                 ))
             }))
             .collect(),
@@ -151,10 +151,11 @@ async fn snapshot_question_reservations_do_not_block_parent_compaction() {
         native: NativeCompaction::Auto,
         mode: RequestMode::Continue,
     };
-    let padding = 247_450 - estimated_tokens(&input.request(&input.checkpoint).unwrap()).unwrap();
+    let padding = 282_775 - estimated_tokens(&input.request(&input.checkpoint).unwrap()).unwrap();
     input.instructions.push_str(&" word".repeat(padding));
     let captured = input.request(&input.checkpoint).unwrap();
-    assert_eq!(estimated_tokens(&captured).unwrap(), 247_450);
+    assert_eq!(estimated_tokens(&captured).unwrap(), 282_775);
+    assert!(estimated_tokens(&captured).unwrap() > limits.ceiling());
     assert_eq!(limits.trigger(), 244_800);
     for mode in [RequestMode::Continue, RequestMode::Compact] {
         input.mode = mode;
