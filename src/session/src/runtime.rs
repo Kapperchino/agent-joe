@@ -36,7 +36,7 @@ pub enum WorkspaceRecovery {
 
 impl SessionWorkspace {
     pub fn checkpoint(&self, effect: ToolOpKind) -> anyhow::Result<Option<WorkspaceCheckpoint>> {
-        let snapshot = self.session.snapshot()?;
+        let snapshot = self.session.workspace_snapshot()?;
         match (snapshot.worktree, effect) {
             (None, ToolOpKind::Write) => Ok(Some(WorkspaceCheckpoint {
                 source: snapshot.worktree_source,
@@ -60,7 +60,7 @@ impl SessionWorkspace {
             .map_err(|_| anyhow::anyhow!("Session workspace lock poisoned"))?;
         let snapshot = changes.snapshot()?;
         match (
-            self.session.snapshot()?.worktree,
+            self.session.workspace_snapshot()?.worktree,
             snapshot.records.is_empty(),
         ) {
             (Some(worktree), true) => {
@@ -92,7 +92,7 @@ impl SessionWorkspace {
             .changes
             .lock()
             .map_err(|_| anyhow::anyhow!("Session workspace lock poisoned"))?;
-        let snapshot = self.session.snapshot()?;
+        let snapshot = self.session.workspace_snapshot()?;
         let worktree = match (snapshot.worktree, effect) {
             (None, ToolOpKind::Write) => {
                 let worktree = SessionWorktree::create(
@@ -128,8 +128,8 @@ impl SessionWorkspace {
             Some(worktree) => worktree.workspace(&self.project)?,
             None => WorkspacePolicy::workspace(self.project.root().to_path_buf())?,
         };
-        match changes.snapshot()?.baseline {
-            Some(baseline) if !workspace.matches_workspace_identity(&baseline.workspace)? => {
+        match changes.baseline_workspace() {
+            Some(identity) if !workspace.matches_workspace_identity(identity)? => {
                 *changes = self.session.change_tracker(Default::default());
                 changes.start(&workspace)?;
             }

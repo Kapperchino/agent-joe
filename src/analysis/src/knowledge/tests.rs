@@ -1,5 +1,22 @@
 use super::*;
 
+#[test]
+fn rendered_context_reuses_its_token_measurement() {
+    let source = source("source.rs", "pub fn example() {}\n");
+    let graph = graph(vec![source], vec![], vec![]);
+    let budget = KnowledgeBudget::new(8192, 8192, 1024).unwrap();
+    let calls = std::cell::Cell::new(0usize);
+    let measure = |text: &str| {
+        calls.set(calls.get() + 1);
+        Ok(1024 + text.len().div_ceil(4))
+    };
+    let rendering = Rendering::new(&graph, "generation", budget, &measure);
+    let owned = ownership::ownership(&graph).unwrap();
+    let rendered = rendering.render(&owned).unwrap();
+    assert_eq!(calls.get(), 1);
+    assert_eq!(rendered.tokens, 1024 + rendered.text.len().div_ceil(4));
+}
+
 fn source(path: &str, text: impl Into<String>) -> SourceFile {
     SourceFile::new(SourcePath::try_from(path.to_owned()).unwrap(), text.into()).unwrap()
 }

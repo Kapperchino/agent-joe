@@ -62,6 +62,30 @@ impl Drop for Fixture {
     }
 }
 
+#[test]
+fn worktree_safety_snapshots_retain_archives_filtered_from_source_scans() {
+    let fixture = Fixture::new();
+    fixture.commit("bundle.zip", "committed archive\n");
+    let session = fixture.session();
+    let workspace = session.workspace(&fixture.workspace).unwrap();
+    let git = GitRepository::required(&workspace).unwrap();
+    let head = git.head().unwrap().unwrap();
+    let base = WorktreeSnapshot::base(&git, &head).unwrap();
+    let current = WorktreeSnapshot::current(&workspace, &git).unwrap();
+    assert_eq!(base.files, current.files);
+    assert!(current.files.contains_key(Path::new("bundle.zip")));
+    std::fs::File::create(session.path.join("profile.json.gz"))
+        .unwrap()
+        .set_len(16 * 1024 * 1024 + 1)
+        .unwrap();
+    let error = WorktreeSnapshot::for_cleanup(&workspace, &git, &base)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("Cleanup conflict"), "{error}");
+    assert!(error.contains("profile.json.gz"), "{error}");
+    assert!(session.path.join("profile.json.gz").exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn session_merge_normalizes_file_permissions() {

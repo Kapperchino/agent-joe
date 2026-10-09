@@ -1431,6 +1431,7 @@ fn stale_handles_cannot_read_write_or_release_a_replacement_owner() {
     transaction.commit().unwrap();
     drop(access);
     assert!(session.snapshot().is_err());
+    assert!(session.workspace_snapshot().is_err());
     assert!(
         session
             .read_artifact(&artifact, artifacts::ArtifactRange::new(0, 4096).unwrap())

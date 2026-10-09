@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use clients::llm::{self, StreamEvent, StreamProvider};
 use common_models::knowledge::*;
 use conversation::context::ContextLimits;
+use conversation::context::estimated_tokens;
 use futures::{StreamExt, future::BoxFuture, stream::BoxStream};
 use ractor::{Actor, ActorProcessingErr};
 use tokio::sync::oneshot;

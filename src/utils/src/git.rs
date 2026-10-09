@@ -1,3 +1,4 @@
+use crate::inventory::FileKind;
 use crate::workspace::{Access, WorkspacePolicy};
 use control::{ControlDirectory, RepositoryLayout, initialize};
 use git2::{Repository, RepositoryOpenFlags, StatusOptions};
@@ -364,7 +365,11 @@ impl GitRepository {
     ) -> anyhow::Result<String> {
         let paths = match path {
             Some(path) => vec![GitPath::new(workspace, path)?.path],
-            None => self.paths(workspace)?,
+            None => self
+                .paths(workspace)?
+                .into_iter()
+                .filter(|path| matches!(FileKind::from_path(path), FileKind::Source))
+                .collect(),
         };
         let mut options = paths.iter().try_fold(diff_options(), |mut options, path| {
             workspace.file_version(path)?;
@@ -480,6 +485,7 @@ impl GitPath {
         let path = Self::new(workspace, path)?;
         match workspace.file_size(&path.path) {
             Ok(size) if size <= 16 * 1024 * 1024 => Ok(path),
+            Ok(_) if matches!(FileKind::from_path(&path.path), FileKind::Archive) => Ok(path),
             Ok(_) => Err(anyhow::anyhow!(
                 "Tracked Git input exceeds the 16 MiB file limit"
             )),

@@ -107,15 +107,16 @@ impl KnowledgeIndex {
         }?;
         let owned = ownership::ownership(&graph)?;
         let rendering = Rendering::new(&graph, &generation, budget, measure);
-        let groups = partition::partition(&graph, owned, &rendering, budget, measure)?;
+        let groups = partition::partition(&graph, owned, &rendering, budget)?;
         let mut total_bytes = 0usize;
         let shards = groups
             .into_iter()
             .enumerate()
             .map(|(index, mut owned)| {
                 owned.sort_by(|left, right| left.location.cmp(&right.location));
-                let context = rendering.render(&owned)?;
-                let estimated_tokens = measure(&context)?;
+                let rendered = rendering.render(&owned)?;
+                let context = rendered.text;
+                let estimated_tokens = rendered.tokens;
                 total_bytes = total_bytes.saturating_add(context.len());
                 match estimated_tokens <= budget.context()
                     && total_bytes <= MAX_CONTEXT_BYTES
@@ -202,6 +203,18 @@ struct Rendering<'a> {
     neighbors: FnvHashMap<&'a SymbolId, BTreeSet<&'a SymbolId>>,
 }
 
+struct RenderedContext {
+    text: String,
+    tokens: usize,
+}
+
+impl RenderedContext {
+    fn new(text: String, measure: &dyn Fn(&str) -> anyhow::Result<usize>) -> anyhow::Result<Self> {
+        let tokens = measure(&text)?;
+        Ok(Self { text, tokens })
+    }
+}
+
 impl<'a> Rendering<'a> {
     fn new(
         graph: &'a SemanticGraph,
@@ -243,7 +256,7 @@ impl<'a> Rendering<'a> {
         }
     }
 
-    fn render(&self, owned: &[OwnedSpan]) -> anyhow::Result<String> {
+    fn render(&self, owned: &[OwnedSpan]) -> anyhow::Result<RenderedContext> {
         #[derive(Serialize)]
         struct Fragment<'a> {
             path: &'a SourcePath,
@@ -302,13 +315,14 @@ impl<'a> Rendering<'a> {
                 "owned": fragments,
             }))
         };
-        let mut context = render(&primary_headers, &secondary)?;
+        let mut context =
+            RenderedContext::new(render(&primary_headers, &secondary)?, self.measure)?;
         while (!primary_headers.is_empty() || !secondary.is_empty())
-            && (self.measure)(&context)? > self.budget.context()
+            && context.tokens > self.budget.context()
         {
             primary_headers.truncate(primary_headers.len() / 2);
             secondary.truncate(secondary.len() / 2);
-            context = render(&primary_headers, &secondary)?;
+            context = RenderedContext::new(render(&primary_headers, &secondary)?, self.measure)?;
         }
         Ok(context)
     }

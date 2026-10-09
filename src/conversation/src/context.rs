@@ -572,7 +572,29 @@ struct EvidenceCall<'a> {
 mod tests;
 
 pub fn estimated_tokens(request: &ClientRequest) -> anyhow::Result<usize> {
-    let tokenizer = tiktoken_rs::o200k_base_singleton();
+    count_tokens(request, tiktoken_rs::o200k_base_singleton())
+}
+
+pub struct TokenCounter {
+    tokenizer: tiktoken_rs::CoreBPE,
+}
+
+impl TokenCounter {
+    pub fn new() -> anyhow::Result<Self> {
+        Ok(Self {
+            tokenizer: tiktoken_rs::o200k_base()?,
+        })
+    }
+
+    pub fn estimated_tokens(&self, request: &ClientRequest) -> anyhow::Result<usize> {
+        count_tokens(request, &self.tokenizer)
+    }
+}
+
+fn count_tokens(
+    request: &ClientRequest,
+    tokenizer: &tiktoken_rs::CoreBPE,
+) -> anyhow::Result<usize> {
     let messages = request.messages.iter().try_fold(0, |total, message| {
         Ok::<_, anyhow::Error>(
             total

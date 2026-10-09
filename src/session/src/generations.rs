@@ -1,4 +1,7 @@
-use super::{SchemaVersion, Snapshot, artifact_index::ArtifactIndex, session_index::SessionIndex};
+use super::{
+    SchemaVersion, Snapshot, artifact_index::ArtifactIndex, session_index::SessionIndex,
+    workspace_index::WorkspaceIndex,
+};
 use anyhow::Context;
 use heed::{
     Database, Env, EnvOpenOptions,
@@ -125,7 +128,7 @@ impl StorageState {
 pub struct SessionStore {
     pub(super) storage: Arc<PrivateStorage>,
     capacity: Capacity,
-    catalog: Mutex<Option<Catalog>>,
+    catalog: Mutex<Option<Arc<Catalog>>>,
 }
 
 pub(super) struct SessionDatabase {
@@ -136,6 +139,7 @@ pub(super) struct SessionDatabase {
     pub artifacts: Database<Str, Bytes>,
     pub artifact_index: ArtifactIndex,
     pub session_index: SessionIndex,
+    pub workspace_index: WorkspaceIndex,
     pub storage: Arc<PrivateStorage>,
 }
 
@@ -150,7 +154,7 @@ impl SessionDatabase {
         let env = unsafe {
             EnvOpenOptions::new()
                 .map_size(capacity.map_size)
-                .max_dbs(6)
+                .max_dbs(7)
                 .open(storage.path())?
         };
         let mut transaction = env.write_txn()?;
@@ -160,6 +164,7 @@ impl SessionDatabase {
         let artifacts = env.create_database(&mut transaction, Some("session_artifacts"))?;
         let artifact_index = ArtifactIndex::open(&env, &mut transaction, snapshots)?;
         let session_index = SessionIndex::open(&env, &mut transaction, snapshots)?;
+        let workspace_index = WorkspaceIndex::open(&env, &mut transaction, snapshots)?;
         transaction.commit()?;
         storage.sync()?;
         Ok(Self {
@@ -170,6 +175,7 @@ impl SessionDatabase {
             artifacts,
             artifact_index,
             session_index,
+            workspace_index,
             storage,
         })
     }
@@ -214,6 +220,7 @@ impl SessionDatabase {
             .snapshots
             .put(transaction, id, &serde_json::to_vec(&snapshot)?)?;
         destination.session_index.record(transaction, &snapshot)?;
+        destination.workspace_index.record(transaction, &snapshot)?;
         if let Some(owner) = self.owners.get(&source, id)? {
             destination.owners.put(transaction, id, owner)?;
         }
@@ -470,8 +477,31 @@ fn archive(storage: &Arc<PrivateStorage>, id: u64) -> anyhow::Result<()> {
 }
 
 pub(super) struct StoreAccess<'a> {
-    catalog: MutexGuard<'a, Option<Catalog>>,
+    catalog: MutexGuard<'a, Option<Arc<Catalog>>>,
     _lock: File,
+}
+
+pub(super) struct SharedAccess {
+    catalog: Arc<Catalog>,
+    _lock: File,
+}
+
+enum ReadState {
+    Ready(SharedAccess),
+    Reload,
+}
+
+enum UpdateState<T> {
+    Complete(anyhow::Result<T>),
+    Rotate(Layout),
+}
+
+impl Deref for SharedAccess {
+    type Target = Catalog;
+
+    fn deref(&self) -> &Self::Target {
+        &self.catalog
+    }
 }
 
 impl Deref for StoreAccess<'_> {
@@ -500,7 +530,11 @@ impl StoreAccess<'_> {
                 layout
             }
         };
-        *self.catalog = Some(Catalog::open(&store.storage, store.capacity, layout)?);
+        *self.catalog = Some(Arc::new(Catalog::open(
+            &store.storage,
+            store.capacity,
+            layout,
+        )?));
         Ok(())
     }
 
@@ -578,12 +612,12 @@ impl SessionStore {
     }
 
     pub(super) fn access(&self) -> anyhow::Result<StoreAccess<'_>> {
+        let lock = self.storage.open_file("rotation.lock")?;
+        lock.lock()?;
         let catalog = self
             .catalog
             .lock()
             .map_err(|_| anyhow::anyhow!("Session storage lock poisoned"))?;
-        let lock = self.storage.open_file("rotation.lock")?;
-        lock.lock()?;
         let mut access = StoreAccess {
             catalog,
             _lock: lock,
@@ -596,12 +630,40 @@ impl SessionStore {
         Ok(access)
     }
 
+    pub(super) fn shared_access(&self) -> anyhow::Result<SharedAccess> {
+        let state = {
+            let lock = self.storage.open_file("rotation.lock")?;
+            lock.lock_shared()?;
+            let state = StorageState::load(&self.storage)?;
+            let catalog = self
+                .catalog
+                .lock()
+                .map_err(|_| anyhow::anyhow!("Session storage lock poisoned"))?;
+            match (state, catalog.as_ref()) {
+                (StorageState::Ready(layout), Some(catalog)) if catalog.layout == layout => {
+                    ReadState::Ready(SharedAccess {
+                        catalog: catalog.clone(),
+                        _lock: lock,
+                    })
+                }
+                _ => ReadState::Reload,
+            }
+        };
+        match state {
+            ReadState::Ready(access) => Ok(access),
+            ReadState::Reload => {
+                drop(self.access()?);
+                self.shared_access()
+            }
+        }
+    }
+
     pub(super) fn read<T>(
         &self,
         id: &str,
         action: impl FnOnce(&SessionDatabase) -> anyhow::Result<T>,
     ) -> anyhow::Result<T> {
-        let access = self.access()?;
+        let access = self.shared_access()?;
         action(access.database(id)?)
     }
 
@@ -610,17 +672,38 @@ impl SessionStore {
         id: Option<&str>,
         action: impl Fn(&SessionDatabase) -> anyhow::Result<T>,
     ) -> anyhow::Result<T> {
-        let mut access = self.access()?;
-        WriteState::new(access.current.used_bytes(), self.capacity).commit(
-            &mut access,
-            self,
-            id,
-            &action,
-        )
+        let state = {
+            let access = self.shared_access()?;
+            match WriteState::new(access.current.used_bytes(), self.capacity) {
+                WriteState::Current => match access.write(id, &action) {
+                    Err(error)
+                        if matches!(
+                            error.downcast_ref::<heed::Error>(),
+                            Some(heed::Error::Mdb(heed::MdbError::MapFull))
+                        ) =>
+                    {
+                        UpdateState::Rotate(access.layout)
+                    }
+                    result => UpdateState::Complete(result),
+                },
+                WriteState::Rotating => UpdateState::Rotate(access.layout),
+            }
+        };
+        match state {
+            UpdateState::Complete(result) => result,
+            UpdateState::Rotate(layout) => {
+                let mut access = self.access()?;
+                let state = match access.layout == layout {
+                    true => WriteState::Rotating,
+                    false => WriteState::new(access.current.used_bytes(), self.capacity),
+                };
+                state.commit(&mut access, self, id, &action)
+            }
+        }
     }
 
     pub fn list(&self) -> anyhow::Result<Vec<Snapshot>> {
-        Ok(self.access()?.sessions()?.into_values().collect())
+        Ok(self.shared_access()?.sessions()?.into_values().collect())
     }
 }
 

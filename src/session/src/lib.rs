@@ -27,6 +27,7 @@ pub mod state;
 pub mod test_support;
 pub mod transition;
 pub mod turn;
+mod workspace_index;
 use generations::SessionDatabase;
 pub use generations::SessionStore;
 use ownership::Owner;
@@ -305,12 +306,6 @@ struct Record {
 }
 
 fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> anyhow::Result<T> {
-    #[derive(Deserialize)]
-    struct Header {
-        #[serde(rename = "version")]
-        _version: SchemaVersion,
-    }
-    let _: Header = serde_json::from_slice(bytes)?;
     serde_json::from_slice(bytes).map_err(Into::into)
 }
 
@@ -373,7 +368,7 @@ impl SessionStore {
         provider: &SessionProvider,
         current: Option<&str>,
     ) -> anyhow::Result<Vec<SessionSummary>> {
-        let mut choices = self.access()?.resume_choices(provider, current)?;
+        let mut choices = self.shared_access()?.resume_choices(provider, current)?;
         choices.sort_by(|left, right| {
             right
                 .updated_at
@@ -444,11 +439,24 @@ impl SessionDatabase {
         self.snapshots
             .put(transaction, &snapshot.id, &serde_json::to_vec(snapshot)?)?;
         self.session_index.record(transaction, snapshot)?;
+        self.workspace_index.record(transaction, snapshot)?;
         Ok(())
     }
 }
 
 impl Session {
+    fn workspace_snapshot(&self) -> anyhow::Result<workspace_index::WorkspaceSnapshot> {
+        self.store.read(&self.id, |database| {
+            let transaction = database.env.read_txn()?;
+            match database.owner(&transaction, &self.id)? {
+                Some(owner) if owner == self.owner => {
+                    database.workspace_index.get(&transaction, &self.id)
+                }
+                _ => Err(anyhow::anyhow!("Session {} ownership was lost", self.id)),
+            }
+        })
+    }
+
     pub fn fork(&self) -> anyhow::Result<Arc<Session>> {
         self.store.update(Some(&self.id), |database| {
             let mut transaction = database.env.write_txn()?;

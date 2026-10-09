@@ -1,14 +1,17 @@
 use crate::utils::FnvHashMap;
 use crate::{
     git::{DiffTarget, GitRepository, GitStatus},
+    inventory::FileKind,
     workspace::{Access, WorkspacePolicy},
 };
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
 };
+
+mod file_content;
 
 const SNAPSHOT_LIMIT: usize = 64 * 1024 * 1024;
 
@@ -16,7 +19,11 @@ const SNAPSHOT_LIMIT: usize = 64 * 1024 * 1024;
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum FileVersion {
     Missing,
-    File { content: Vec<u8>, mode: u32 },
+    File {
+        #[serde(with = "file_content")]
+        content: Vec<u8>,
+        mode: u32,
+    },
 }
 
 impl FileVersion {
@@ -326,6 +333,7 @@ pub trait ChangeStore: Send + Sync {
 #[derive(Default)]
 pub struct ChangeTracker {
     state: Mutex<TrackerState>,
+    baseline_workspace: OnceLock<String>,
 }
 
 #[derive(Default)]
@@ -374,12 +382,21 @@ pub enum ChangeOwnership {
 impl ChangeTracker {
     pub fn restored(snapshot: ChangeSnapshot, store: Option<Arc<dyn ChangeStore>>) -> Self {
         Self {
+            baseline_workspace: snapshot
+                .baseline
+                .as_ref()
+                .map(|baseline| OnceLock::from(baseline.workspace.clone()))
+                .unwrap_or_default(),
             state: Mutex::new(TrackerState {
                 snapshot,
                 store,
                 ..TrackerState::default()
             }),
         }
+    }
+
+    pub fn baseline_workspace(&self) -> Option<&str> {
+        self.baseline_workspace.get().map(String::as_str)
     }
 
     pub fn snapshot(&self) -> anyhow::Result<ChangeSnapshot> {
@@ -512,9 +529,12 @@ impl ChangeTracker {
             },
             None => {
                 let baseline = Baseline::capture(workspace)?;
+                let identity = baseline.workspace.clone();
                 let mut snapshot = state.snapshot.clone();
                 snapshot.baseline = Some(baseline);
-                state.commit(snapshot)
+                state.commit(snapshot)?;
+                self.baseline_workspace.get_or_init(|| identity);
+                Ok(())
             }
         }
     }
@@ -643,6 +663,7 @@ impl ChangeTracker {
             .files
             .keys()
             .chain(current.files.keys())
+            .filter(|path| matches!(FileKind::from_path(path), FileKind::Source))
             .chain(
                 snapshot
                     .records
@@ -798,6 +819,7 @@ impl Baseline {
         let mut total = 0usize;
         let files = paths
             .into_iter()
+            .filter(|path| matches!(FileKind::from_path(path), FileKind::Source))
             .map(|path| {
                 let version = workspace.file_version(&path)?;
                 total += version.bytes().len();

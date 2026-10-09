@@ -7,6 +7,104 @@ use crate::{
 };
 use clients::llm::{Message, SessionProvider};
 
+#[test]
+fn session_reads_allow_writes_and_keep_a_consistent_transaction() {
+    let workspace = Workspace::new();
+    let store = store(&workspace);
+    let session = create(&store);
+    let before = session.snapshot().unwrap().sequence;
+    let reader_store = store.clone();
+    let id = session.id.clone();
+    let (started, ready) = std::sync::mpsc::channel();
+    let (release, continue_reading) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        reader_store.read(&id, |database| {
+            let transaction = database.env.read_txn()?;
+            started.send(())?;
+            continue_reading.recv()?;
+            database.snapshot(&transaction, &id)
+        })
+    });
+    ready.recv().unwrap();
+    let writer_session = session.clone();
+    let (finished, result) = std::sync::mpsc::channel();
+    let writer = std::thread::spawn(move || {
+        finished
+            .send(writer_session.record(Event::History(vec![Message::new("updated".into())])))
+            .unwrap();
+    });
+    let written = result.recv_timeout(std::time::Duration::from_secs(5));
+    release.send(()).unwrap();
+    let snapshot = reader.join().unwrap().unwrap();
+    writer.join().unwrap();
+    written.unwrap().unwrap();
+    assert_eq!(snapshot.sequence, before);
+    assert_eq!(session.snapshot().unwrap().sequence, before + 1);
+}
+
+#[test]
+fn rotation_waits_for_active_shared_access() {
+    let workspace = Workspace::new();
+    let store = store(&workspace);
+    let session = create(&store);
+    let read = store.shared_access().unwrap();
+    let rotation_store = store.clone();
+    let (started, ready) = std::sync::mpsc::channel();
+    let (finished, rotated) = std::sync::mpsc::channel();
+    let rotation = std::thread::spawn(move || {
+        started.send(()).unwrap();
+        rotate(&rotation_store);
+        finished.send(()).unwrap();
+    });
+    ready.recv().unwrap();
+    assert!(
+        rotated
+            .recv_timeout(std::time::Duration::from_millis(50))
+            .is_err()
+    );
+    drop(read);
+    rotated
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    rotation.join().unwrap();
+    assert_eq!(store.access().unwrap().layout.current, 1);
+    assert!(session.workspace_snapshot().is_ok());
+}
+
+#[test]
+fn workspace_metadata_reads_continue_during_a_session_write() {
+    let workspace = Workspace::new();
+    let store = store(&workspace);
+    let session = create(&store);
+    let writing_store = store.clone();
+    let id = session.id.clone();
+    let (started, ready) = std::sync::mpsc::channel();
+    let (release, continue_writing) = std::sync::mpsc::channel();
+    let writer = std::thread::spawn(move || {
+        writing_store.update(Some(&id), |database| {
+            let mut transaction = database.env.write_txn()?;
+            let mut snapshot = database.snapshot(&transaction, &id)?;
+            started.send(())?;
+            continue_writing.recv()?;
+            snapshot.sequence += 1;
+            database.write(&mut transaction, &snapshot, Event::Recovered)?;
+            transaction.commit()?;
+            Ok(())
+        })
+    });
+    ready.recv().unwrap();
+    let reading_session = session.clone();
+    let (finished, result) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        finished.send(reading_session.workspace_snapshot()).unwrap();
+    });
+    let read = result.recv_timeout(std::time::Duration::from_secs(5));
+    release.send(()).unwrap();
+    writer.join().unwrap().unwrap();
+    reader.join().unwrap();
+    assert!(read.unwrap().unwrap().worktree.is_none());
+}
+
 fn store(workspace: &Workspace) -> Arc<SessionStore> {
     SessionStore::open_with_capacity(
         &WorkspacePolicy::workspace(workspace.path.clone()).unwrap(),

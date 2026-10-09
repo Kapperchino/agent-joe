@@ -1,6 +1,6 @@
 use crate::utils::FnvHashMap;
 use crate::{
-    changes::{Baseline, FileVersion},
+    changes::FileVersion,
     git::{GitRepository, excluded},
     workspace::{Access, DirectoryEntry, WorkspacePolicy},
 };
@@ -37,12 +37,15 @@ impl WorktreeSnapshot {
     }
 
     pub fn current(workspace: &WorkspacePolicy, git: &GitRepository) -> anyhow::Result<Self> {
+        let contents = git.paths(workspace)?.into_iter().try_fold(
+            SnapshotFiles::default(),
+            |files, path| match workspace.file_version(&path)? {
+                FileVersion::Missing => Ok(files),
+                version => files.with_file(path, version),
+            },
+        )?;
         Ok(Self {
-            files: Baseline::capture(workspace)?
-                .files
-                .into_iter()
-                .filter(|(_, version)| *version != FileVersion::Missing)
-                .collect(),
+            files: contents.files,
             head: git
                 .head()?
                 .ok_or_else(|| anyhow::anyhow!("Worktree HEAD is missing"))?,

@@ -15,6 +15,48 @@ use turn_engine::turn::FollowUp;
 use workflows::merge::execution::{MergeActivity, MergeEnvironment};
 use workflows::merge::{MergeApproval, MergeEvent};
 
+#[tokio::test]
+async fn a_single_session_filters_oversized_archives_on_start_and_resume() {
+    let workspace = Workspace::new();
+    std::fs::File::create(workspace.path.join("profile.json.gz"))
+        .unwrap()
+        .set_len(16 * 1024 * 1024 + 1)
+        .unwrap();
+    std::fs::write(workspace.path.join("source.rs"), "original\n").unwrap();
+    let runtime = SessionRuntime::for_workspace(workspace.path.clone()).unwrap();
+    let store = runtime.sessions.as_ref().unwrap();
+    let session = store
+        .create(SessionProvider::Injected, None, vec![])
+        .unwrap();
+    let mut scope = runtime.scope.clone();
+    scope.changes = session.change_tracker(Default::default());
+    crate::changes::SessionChanges::begin_turn(&scope, clients::response::RequestMode::Continue)
+        .await
+        .unwrap();
+    assert_eq!(store.list().unwrap().len(), 1);
+    let baseline = session.snapshot().unwrap().changes.baseline.unwrap();
+    assert_eq!(baseline.files.len(), 1);
+    assert!(
+        baseline
+            .files
+            .contains_key(std::path::Path::new("source.rs"))
+    );
+    let id = session.id.clone();
+    drop(scope);
+    drop(session);
+    let resumed = workspace
+        .resume(store, &id, &SessionProvider::Injected)
+        .unwrap();
+    let changes = resumed.change_tracker(resumed.snapshot().unwrap().changes);
+    assert!(
+        changes
+            .review(&runtime.scope.workspace().unwrap())
+            .unwrap()
+            .changes
+            .is_empty()
+    );
+}
+
 #[test]
 fn interaction_publishes_only_committed_changes_without_an_actor() {
     let workspace = Workspace::new();

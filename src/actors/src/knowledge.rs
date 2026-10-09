@@ -10,7 +10,7 @@ use analysis::knowledge::{
 };
 use clients::llm::{LLmClient, SessionProvider};
 use common_models::knowledge::{LineSpan, SemanticProfile, SourcePath, SymbolId};
-use conversation::context::{ContextBudget, estimated_tokens};
+use conversation::context::{ContextBudget, TokenCounter};
 use ractor::ActorRef;
 use serde::Serialize;
 use std::{
@@ -599,13 +599,14 @@ impl ImmutableWorkerRegistry {
         let cancel = preparation.cancel.clone();
         let scope = ExecutionScope::current();
         let operation = move || {
+            let counter = TokenCounter::new()?;
             KnowledgeIndex::new(
                 Arc::new(prepared.graph),
                 ticket,
                 budget,
                 &|text| match cancel.is_cancelled() {
                     true => Err(anyhow::anyhow!("Knowledge partitioning cancelled")),
-                    false => estimated_tokens(&request(text, budget)),
+                    false => counter.estimated_tokens(&request(text, budget)),
                 },
             )
         };

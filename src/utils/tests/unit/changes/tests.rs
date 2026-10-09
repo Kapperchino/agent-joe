@@ -2,6 +2,173 @@ use super::*;
 use crate::git::tests::Fixture;
 
 #[test]
+fn file_versions_write_base64_and_read_legacy_byte_arrays() {
+    let legacy = serde_json::json!({
+        "kind": "file",
+        "content": [0, 10, 128, 255],
+        "mode": 493,
+    });
+    let version: FileVersion = serde_json::from_value(legacy).unwrap();
+    assert_eq!(version.bytes(), &[0, 10, 128, 255]);
+    let saved = serde_json::to_value(&version).unwrap();
+    assert_eq!(saved["content"], "AAqA/w==");
+    assert_eq!(saved["mode"], 493);
+    assert_eq!(
+        serde_json::from_value::<FileVersion>(saved).unwrap(),
+        version
+    );
+    for content in [serde_json::json!("!invalid!"), serde_json::json!([256])] {
+        assert!(
+            serde_json::from_value::<FileVersion>(serde_json::json!({
+                "kind": "file", "content": content, "mode": 420,
+            }))
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn baseline_identity_remains_readable_while_the_journal_is_locked() {
+    let fixture = Fixture::new();
+    fixture.write("file", "original\n");
+    let tracker = ChangeTracker::default();
+    assert_eq!(tracker.baseline_workspace(), None);
+    tracker.start(&fixture.workspace).unwrap();
+    let snapshot = tracker.snapshot().unwrap();
+    let expected = snapshot.baseline.as_ref().unwrap().workspace.clone();
+    let restored = ChangeTracker::restored(snapshot, None);
+    let _writing = tracker.state.lock().unwrap();
+    assert_eq!(tracker.baseline_workspace(), Some(expected.as_str()));
+    assert_eq!(restored.baseline_workspace(), Some(expected.as_str()));
+}
+
+#[test]
+fn oversized_archives_are_filtered_from_baselines_and_reviews_after_restore() {
+    use std::io::{Seek, SeekFrom, Write};
+
+    let fixture = Fixture::new();
+    fixture.write("file", "original\n");
+    fixture.stage("file");
+    fixture.commit();
+    let path = fixture.root.join("profile.json.gz");
+    let mut file = std::fs::File::create(&path).unwrap();
+    file.set_len(16 * 1024 * 1024 + 1).unwrap();
+    let tracker = ChangeTracker::default();
+    tracker.start(&fixture.workspace).unwrap();
+    assert!(
+        tracker
+            .review(&fixture.workspace)
+            .unwrap()
+            .changes
+            .is_empty()
+    );
+    let saved = serde_json::to_vec(&tracker.snapshot().unwrap()).unwrap();
+    assert!(saved.len() < 16 * 1024);
+    assert!(
+        !tracker
+            .snapshot()
+            .unwrap()
+            .baseline
+            .unwrap()
+            .files
+            .contains_key(Path::new("profile.json.gz"))
+    );
+    let restored = ChangeTracker::restored(serde_json::from_slice(&saved).unwrap(), None);
+    let fingerprint = ChangeTracker::workspace_fingerprint(&fixture.workspace).unwrap();
+    file.seek(SeekFrom::End(-1)).unwrap();
+    file.write_all(b"x").unwrap();
+    assert_eq!(
+        fingerprint,
+        ChangeTracker::workspace_fingerprint(&fixture.workspace).unwrap()
+    );
+    assert!(
+        restored
+            .review(&fixture.workspace)
+            .unwrap()
+            .changes
+            .is_empty()
+    );
+    fixture.write("file", "updated\n");
+    assert_ne!(
+        fingerprint,
+        ChangeTracker::workspace_fingerprint(&fixture.workspace).unwrap()
+    );
+    let review = restored.review(&fixture.workspace).unwrap();
+    assert_eq!(review.changes.len(), 1);
+    assert_eq!(review.changes[0].path, Path::new("file"));
+    assert!(matches!(
+        review.changes[0].ownership,
+        ChangeOwnership::External
+    ));
+    assert!(review.changes[0].task_diff.contains("+updated"));
+    assert!(!review.unstaged.contains("profile.json.gz"));
+    assert!(review.render().len() < 16 * 1024);
+    std::fs::remove_file(path).unwrap();
+    assert_eq!(
+        restored.review(&fixture.workspace).unwrap().changes.len(),
+        1
+    );
+}
+
+#[test]
+fn tracked_archives_are_filtered_without_hiding_source_changes() {
+    let fixture = Fixture::new();
+    for path in ["bundle.ZIP", "source.rs"] {
+        fixture.write(path, "original\n");
+        fixture.stage(path);
+    }
+    fixture.commit();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(fixture.root.join("bundle.ZIP"))
+        .unwrap()
+        .set_len(16 * 1024 * 1024 + 1)
+        .unwrap();
+    let tracker = ChangeTracker::default();
+    tracker.start(&fixture.workspace).unwrap();
+    let baseline = tracker.snapshot().unwrap().baseline.unwrap();
+    assert_eq!(baseline.files.len(), 1);
+    assert!(baseline.files.contains_key(Path::new("source.rs")));
+    fixture.write("source.rs", "updated\n");
+    let review = tracker.review(&fixture.workspace).unwrap();
+    assert_eq!(review.changes.len(), 1);
+    assert_eq!(review.changes[0].path, Path::new("source.rs"));
+    assert!(review.unstaged.contains("+updated"));
+    assert!(!review.unstaged.contains("bundle.ZIP"));
+}
+
+#[test]
+fn legacy_baselines_filter_archives_that_have_grown_past_the_read_limit() {
+    let fixture = Fixture::new();
+    fixture.write("profile.json.gz", "legacy archive\n");
+    let tracker = ChangeTracker::default();
+    tracker.start(&fixture.workspace).unwrap();
+    let mut snapshot = tracker.snapshot().unwrap();
+    snapshot.baseline.as_mut().unwrap().files.insert(
+        PathBuf::from("profile.json.gz"),
+        fixture
+            .workspace
+            .file_version(Path::new("profile.json.gz"))
+            .unwrap(),
+    );
+    let saved = serde_json::to_vec(&snapshot).unwrap();
+    let restored = ChangeTracker::restored(serde_json::from_slice(&saved).unwrap(), None);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(fixture.root.join("profile.json.gz"))
+        .unwrap()
+        .set_len(16 * 1024 * 1024 + 1)
+        .unwrap();
+    assert!(
+        restored
+            .review(&fixture.workspace)
+            .unwrap()
+            .changes
+            .is_empty()
+    );
+}
+
+#[test]
 fn workspace_fingerprints_use_canonical_file_order() {
     let fixture = Fixture::new();
     for index in (0..32).rev() {

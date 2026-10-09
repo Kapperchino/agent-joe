@@ -147,7 +147,6 @@ impl Forest {
 struct Cutter<'a> {
     rendering: &'a Rendering<'a>,
     budget: KnowledgeBudget,
-    measure: &'a dyn Fn(&str) -> anyhow::Result<usize>,
     boundaries: FnvHashMap<SourcePath, BTreeSet<u32>>,
     measurements: usize,
     finished: Vec<Vec<OwnedSpan>>,
@@ -169,7 +168,7 @@ impl Cutter<'_> {
         match parts.is_empty() {
             true => Ok(true),
             false if bytes > self.budget.window() * 16 => Ok(false),
-            false => Ok((self.measure)(&self.rendering.render(parts)?)? <= self.budget.context()),
+            false => Ok(self.rendering.render(parts)?.tokens <= self.budget.context()),
         }
     }
 
@@ -267,13 +266,11 @@ pub(super) fn partition(
     owned: Vec<OwnedSpan>,
     rendering: &Rendering<'_>,
     budget: KnowledgeBudget,
-    measure: &dyn Fn(&str) -> anyhow::Result<usize>,
 ) -> anyhow::Result<Vec<Vec<OwnedSpan>>> {
     let mut forest = Forest::new(graph, owned)?;
     let mut cutter = Cutter {
         rendering,
         budget,
-        measure,
         boundaries: FnvHashMap::default(),
         measurements: 0,
         finished: Vec::new(),

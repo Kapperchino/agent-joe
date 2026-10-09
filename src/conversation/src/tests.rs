@@ -1,6 +1,37 @@
 use super::*;
 use tools::tool_defs::ToolId;
 
+#[test]
+fn worker_token_counters_preserve_request_token_counts() {
+    let requests = [
+        "ordinary text and 123456789",
+        "🦀 résumé 世界 \n\t whitespace",
+        r#"fn main() { println!("escaped text"); }"#,
+        "<|endoftext|> stays ordinary text",
+    ]
+    .into_iter()
+    .map(|text| {
+        let mut request = ClientRequest::new(vec![Message::new(text.repeat(16))]);
+        request.system = Some("Tokenizer equivalence".into());
+        request
+    })
+    .collect::<Vec<_>>();
+    let expected = requests
+        .iter()
+        .map(|request| estimated_tokens(request).unwrap())
+        .collect::<Vec<_>>();
+    let actual = std::thread::spawn(move || {
+        let counter = TokenCounter::new().unwrap();
+        requests
+            .iter()
+            .map(|request| counter.estimated_tokens(request).unwrap())
+            .collect::<Vec<_>>()
+    })
+    .join()
+    .unwrap();
+    assert_eq!(actual, expected);
+}
+
 fn input() -> ContextInput {
     ContextInput {
         runtime: None,

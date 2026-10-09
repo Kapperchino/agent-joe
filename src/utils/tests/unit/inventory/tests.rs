@@ -29,6 +29,52 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn inventory_filters_archives_and_retains_source_files_inside_archive_named_directories() {
+    let fixture = Fixture::new();
+    let archives = [
+        "profile.json.gz",
+        "bundle.ZIP",
+        "data.tar.bz2",
+        "data.tar.xz",
+        "data.zst",
+        "data.lz4",
+        "data.lzma",
+        "data.br",
+        "data.7z",
+        "data.rar",
+        "data.tar",
+        "data.tgz",
+        "data.tbz2",
+        "data.txz",
+        "data.tzst",
+    ];
+    for path in archives {
+        std::fs::File::create(fixture.root.join(path))
+            .unwrap()
+            .set_len(16 * 1024 * 1024 + 1)
+            .unwrap();
+    }
+    for path in ["profile.json", "README.md", "fixtures.gz/source.rs"] {
+        fixture.write(path, "source\n");
+    }
+    for inventory in [
+        Inventory::scan(&fixture.workspace).unwrap(),
+        Inventory::scan_git(&fixture.workspace).unwrap(),
+    ] {
+        assert_eq!(
+            inventory.files,
+            vec![
+                PathBuf::from("README.md"),
+                PathBuf::from("fixtures.gz/source.rs"),
+                PathBuf::from("profile.json"),
+            ]
+        );
+        assert_eq!(inventory.skipped, 0);
+    }
+    assert!(fixture.root.join("profile.json.gz").exists());
+}
+
+#[test]
 fn inventory_covers_non_rust_empty_hidden_and_new_files_with_nested_ignore_rules() {
     let fixture = Fixture::new();
     for path in [

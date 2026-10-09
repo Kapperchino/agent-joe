@@ -6,6 +6,28 @@ use std::path::{Path, PathBuf};
 const MAX_ENTRIES: usize = 250_000;
 const MAX_PATH_BYTES: usize = 32 * 1024 * 1024;
 
+pub(crate) enum FileKind {
+    Source,
+    Archive,
+}
+
+impl FileKind {
+    pub fn from_path(path: &Path) -> Self {
+        let archive = path.extension().is_some_and(|extension| {
+            [
+                "gz", "gzip", "zip", "bz2", "xz", "zst", "zstd", "lz4", "lz", "lzma", "br", "7z",
+                "rar", "tar", "tgz", "tbz", "tbz2", "txz", "tzst",
+            ]
+            .iter()
+            .any(|archive| extension.eq_ignore_ascii_case(archive))
+        });
+        match archive {
+            true => Self::Archive,
+            false => Self::Source,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Inventory {
     pub files: Vec<PathBuf>,
@@ -96,6 +118,11 @@ impl Inventory {
                                     path: entry.path,
                                     rules: directory.rules.clone(),
                                 }),
+                                (false, false)
+                                    if matches!(
+                                        FileKind::from_path(&entry.path),
+                                        FileKind::Archive
+                                    ) => {}
                                 (false, false) if workspace.file_size(&entry.path).is_err() => {
                                     inventory.skipped += 1
                                 }
