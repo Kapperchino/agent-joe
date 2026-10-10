@@ -566,6 +566,11 @@ impl Session {
                 turn.plan_reconciliations = 0;
                 self.launch_tools(turn.map(|_| batch), effects);
             }
+            AcceptedResponse::Continue(message) => {
+                effects.push(Effect::AppendHistory(vec![message]));
+                let previous = turn.phase.scope.clone();
+                self.launch_provider(turn.provider(), Some(previous), effects);
+            }
             AcceptedResponse::Complete(message) => {
                 effects.push(Effect::AppendHistory(vec![message]));
                 self.stop(

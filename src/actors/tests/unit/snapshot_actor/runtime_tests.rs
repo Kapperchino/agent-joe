@@ -610,6 +610,10 @@ async fn malformed_tool_refused_and_empty_answers_leave_snapshot_reusable() {
             signature: "signature".into(),
             reasoning_id: None,
         }]),
+        response(vec![ContentBlock::MessageBlock {
+            text: "I will look through the captured context.".into(),
+            phase: Some(llm::MessagePhase::Commentary),
+        }]),
         response(vec![call("apply_patch", "forbidden")]),
     ];
     for reason in [

@@ -1,6 +1,92 @@
 use super::*;
 use commands::command::{Command, ResumeTarget};
 
+fn phased_response(phase: llm::MessagePhase, text: &str) -> Vec<StreamEvent> {
+    let item = json!({
+        "type":"message", "id":"msg_fixture", "phase":phase,
+        "content":[{"type":"output_text", "text":text}]
+    });
+    [
+        json!({"type":"response.created", "response":{"id":"resp_fixture", "model":"fixture"}}),
+        json!({"type":"response.output_item.done", "output_index":0, "item":item}),
+        json!({"type":"response.completed", "response":{"id":"resp_fixture", "output":[item]}}),
+    ]
+    .into_iter()
+    .map(|event| serde_json::from_value::<clients::openai::StreamEvent>(event).unwrap())
+    .filter_map(Option::<StreamEvent>::from)
+    .collect()
+}
+
+#[tokio::test]
+async fn commentary_only_responses_continue_the_same_turn_until_a_final_answer() {
+    let workspace = session::test_support::Workspace::new();
+    let runtime = Runtime::for_workspace(workspace.path.clone()).unwrap();
+    let store = runtime.sessions.clone().unwrap();
+    let h = Harness::with_runtime(vec![], runtime).await;
+    h.start("Investigate and finish the task");
+    let (mut previous, mut reply) = h.request().await;
+    let turn = match h
+        .event(|packet| matches!(packet, ActorToTuiPacket::InputAccepted { .. }))
+        .await
+    {
+        ActorToTuiPacket::InputAccepted { turn_id, .. } => turn_id,
+        packet => panic!("Expected an accepted turn: {packet:?}"),
+    };
+    for progress in [
+        "I will inspect the relevant files.",
+        "I found the cause and will finish the fix.",
+        "I will verify the result.",
+    ] {
+        answer(
+            reply,
+            phased_response(llm::MessagePhase::Commentary, progress),
+        );
+        let (next, next_reply) = h.request().await;
+        assert_eq!(next.prompt_cache_key, previous.prompt_cache_key);
+        assert_eq!(
+            serde_json::to_value(&next.messages[..previous.messages.len()]).unwrap(),
+            serde_json::to_value(&previous.messages).unwrap()
+        );
+        assert_eq!(
+            transcript(&next.messages).len(),
+            transcript(&previous.messages).len() + 1
+        );
+        let replay = clients::openai::ClientRequest::try_from(next.clone()).unwrap();
+        let input = serde_json::to_value(replay.input).unwrap();
+        assert_eq!(
+            input.as_array().unwrap().last().unwrap()["phase"],
+            "commentary"
+        );
+        assert_eq!(store.list().unwrap()[0].status, Lifecycle::Running);
+        for event in h.events.try_iter() {
+            if let ActorToTuiPacket::TurnChanged { turn_id, state, .. } = event.packet {
+                assert_eq!(turn_id, turn);
+                assert!(!state.terminal());
+            }
+        }
+        previous = next;
+        reply = next_reply;
+    }
+    answer(
+        reply,
+        phased_response(llm::MessagePhase::FinalAnswer, "Finished and verified."),
+    );
+    let completed = h
+        .event(|packet| matches!(packet, ActorToTuiPacket::TurnChanged { state, .. } if state.terminal()))
+        .await;
+    assert!(matches!(completed, ActorToTuiPacket::TurnChanged {
+        turn_id, state: Lifecycle::Completed, ..
+    } if turn_id == turn));
+    assert!(h.requests.is_empty());
+    let saved = store.list().unwrap().remove(0);
+    assert_eq!(saved.status, Lifecycle::Completed);
+    assert_eq!(
+        saved.history.last().unwrap().text(),
+        "Finished and verified."
+    );
+    h.stop().await;
+}
+
 #[tokio::test]
 async fn tool_cycles_resume_and_forks_keep_runtime_history_and_isolate_cache_keys() {
     let workspace = session::test_support::Workspace::new();

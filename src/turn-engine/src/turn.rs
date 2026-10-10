@@ -241,10 +241,26 @@ pub enum ResponseState {
 }
 pub enum AcceptedResponse {
     Compacted,
+    Continue(Message),
     Complete(Message),
     Tools(ToolBatch),
 }
 impl AcceptedResponse {
+    fn from_message(message: Message) -> Self {
+        let phase = message
+            .content
+            .iter()
+            .rev()
+            .find_map(|content| match content {
+                ContentBlock::MessageBlock { phase, .. } => Some(*phase),
+                _ => None,
+            });
+        match phase {
+            Some(Some(clients::llm::MessagePhase::Commentary)) => Self::Continue(message),
+            _ => Self::Complete(message),
+        }
+    }
+
     pub fn text_only(self) -> Result<Self, Failure> {
         match &self {
             Self::Complete(message)
@@ -333,7 +349,7 @@ impl ResponseCompletion {
                 })
                 .collect::<Result<Vec<_>, _>>()
                 .map(|content| {
-                    AcceptedResponse::Complete(Message {
+                    AcceptedResponse::from_message(Message {
                         role: Role::Assistant,
                         content,
                     })

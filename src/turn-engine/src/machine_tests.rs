@@ -216,6 +216,58 @@ fn required_answer_during_cleanup_continues_once_after_cleanup_and_interrupt_sto
 }
 
 #[test]
+fn commentary_continues_without_cleanup_and_can_be_interrupted() {
+    let mut machine = machine();
+    let initial = start(&mut machine);
+    let accepted = crate::turn::ResponseCompletion::Message
+        .finish(
+            initial.turn,
+            vec![ProcessedItem::Content(llm::ContentBlock::MessageBlock {
+                text: "I will continue the investigation.".into(),
+                phase: Some(llm::MessagePhase::Commentary),
+            })],
+        )
+        .unwrap();
+    let effects = response(&mut machine, initial, Ok(accepted));
+    assert!(launches_provider(&effects));
+    assert!(effects.iter().any(|effect| matches!(effect,
+        Effect::AppendHistory(messages) if messages.len() == 1 && messages[0].text() == "I will continue the investigation."
+    )));
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::BeginTurn(_) | Effect::Cleanup { .. }))
+    );
+    let next = provider(&machine).tag;
+    assert_eq!(next.turn, initial.turn);
+    assert_ne!(next.operation, initial.operation);
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::LaunchProvider {
+            previous: Some(_),
+            ..
+        }
+    )));
+    assert!(response(&mut machine, initial, Ok(complete_response())).is_empty());
+    let effects = machine.transition(SessionEvent::Interrupt(HistoryDisposition::Retain));
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::Cleanup { .. }))
+    );
+    assert!(response(&mut machine, next, Ok(complete_response())).is_empty());
+    let effects = machine.transition(SessionEvent::CleanupFinished(initial.turn));
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::Report(ActorToTuiPacket::TurnChanged {
+            state: Lifecycle::Cancelled,
+            ..
+        })
+    )));
+    assert!(!launches_provider(&effects));
+}
+
+#[test]
 fn single_response_preserves_transport_failures_without_retrying() {
     let mut machine = TurnMachine::new(ExecutionScope::default(), RequestMode::SingleResponse);
     let tag = start(&mut machine);

@@ -2,6 +2,46 @@ use super::*;
 use tools::{tool_defs::ToolId, tool_error::FailureImpact};
 
 #[test]
+fn commentary_requires_continuation_and_is_not_a_single_response_answer() {
+    let accepted = ResponseCompletion::Message
+        .finish(
+            TurnId::new(),
+            vec![ProcessedItem::Content(ContentBlock::MessageBlock {
+                text: "I will inspect the code.".into(),
+                phase: Some(clients::llm::MessagePhase::Commentary),
+            })],
+        )
+        .unwrap();
+    assert!(
+        matches!(&accepted, AcceptedResponse::Continue(message) if message.text() == "I will inspect the code.")
+    );
+    assert!(accepted.text_only().is_err());
+}
+
+#[test]
+fn final_answers_and_legacy_messages_complete_after_commentary() {
+    for phase in [Some(clients::llm::MessagePhase::FinalAnswer), None] {
+        let items = vec![
+            ProcessedItem::Content(ContentBlock::MessageBlock {
+                text: "I will inspect the code.".into(),
+                phase: Some(clients::llm::MessagePhase::Commentary),
+            }),
+            ProcessedItem::Content(ContentBlock::MessageBlock {
+                text: "Finished.".into(),
+                phase,
+            }),
+        ];
+        let accepted = ResponseCompletion::Message
+            .finish(TurnId::new(), items)
+            .unwrap();
+        assert!(
+            matches!(&accepted, AcceptedResponse::Complete(message) if message.content.len() == 2)
+        );
+        assert!(accepted.text_only().is_ok());
+    }
+}
+
+#[test]
 fn provider_retry_delay_is_exponential_and_capped() {
     let mut run = ProviderRun::new(TurnId::new(), ExecutionScope::default(), 0);
     for (attempt, millis) in [0, 100, 200, 400, 800, 1600, 3200].into_iter().enumerate() {
