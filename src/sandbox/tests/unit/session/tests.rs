@@ -235,7 +235,7 @@ async fn dropped_commands_keep_the_cache_lease_until_guest_completion() {
     .unwrap();
     let id = process.id();
     drop(process);
-    assert!(session.commands.lock().unwrap().contains_key(&id));
+    assert!(session.commands.contains_key(&id));
     assert!(
         tokio::time::timeout(std::time::Duration::from_millis(75), session.lease(&[]))
             .await
@@ -244,12 +244,65 @@ async fn dropped_commands_keep_the_cache_lease_until_guest_completion() {
     session
         .dispatch(id, CommandEvent::Exited { exit_code: None })
         .await;
-    assert!(session.commands.lock().unwrap().is_empty());
+    assert!(session.commands.is_empty());
     let lease = tokio::time::timeout(std::time::Duration::from_secs(1), session.lease(&[]))
         .await
         .unwrap()
         .unwrap();
     drop(lease);
+    session.cancel.cancel();
+    tasks.close();
+    tasks.wait().await;
+}
+
+#[tokio::test]
+async fn dispatch_retains_output_entries_and_removes_terminal_entries() {
+    let fixture = Fixture::new();
+    let tasks = TaskTracker::new();
+    std::fs::write(fixture.root.join("ready"), "ready").unwrap();
+    let session = Session::start(fixture.command(), CancellationToken::new(), &tasks).unwrap();
+    session.ready().await.unwrap();
+    for terminal in [
+        CommandEvent::Exited { exit_code: Some(0) },
+        CommandEvent::Failed {
+            error: "failed".into(),
+        },
+    ] {
+        let id = Uuid::new_v4();
+        let (events, mut receiver) = mpsc::channel(2);
+        session.commands.insert(
+            id,
+            CommandEntry {
+                events,
+                _lease: std::fs::File::open(fixture.root.join("ready")).unwrap(),
+            },
+        );
+        session
+            .dispatch(
+                id,
+                CommandEvent::Output {
+                    stream: crate::process::OutputStream::Stdout,
+                    bytes: b"output".to_vec(),
+                },
+            )
+            .await;
+        assert!(session.commands.contains_key(&id));
+        session.dispatch(id, terminal).await;
+        assert!(!session.commands.contains_key(&id));
+        assert!(matches!(
+            receiver.recv().await,
+            Some(CommandEvent::Output { bytes, .. }) if bytes == b"output"
+        ));
+        assert!(matches!(
+            receiver.recv().await,
+            Some(CommandEvent::Exited { .. } | CommandEvent::Failed { .. })
+        ));
+        assert!(receiver.recv().await.is_none());
+        session
+            .dispatch(id, CommandEvent::Exited { exit_code: None })
+            .await;
+    }
+    assert!(session.commands.is_empty());
     session.cancel.cancel();
     tasks.close();
     tasks.wait().await;

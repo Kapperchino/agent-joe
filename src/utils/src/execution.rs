@@ -1,8 +1,8 @@
-use crate::utils::FnvHashMap;
+use dashmap::DashMap;
 use std::{
     future::Future,
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicU64, Ordering},
     },
 };
@@ -13,7 +13,7 @@ pub struct ExecutionScope {
     pub changes: Arc<crate::changes::ChangeTracker>,
     pub cancel: CancellationToken,
     pub tasks: TaskTracker,
-    resources: Arc<Mutex<FnvHashMap<u64, Resource>>>,
+    resources: Arc<DashMap<u64, Resource>>,
     workspace: WorkspaceAccess,
     sandbox: Option<sandbox::Sandbox>,
     pub processes: Arc<sandbox::process::ProcessRegistry>,
@@ -172,17 +172,17 @@ pub struct Resource {
 
 pub struct Registration {
     id: u64,
-    resources: Arc<Mutex<FnvHashMap<u64, Resource>>>,
+    resources: Arc<DashMap<u64, Resource>>,
 }
 impl Drop for Registration {
     fn drop(&mut self) {
-        self.resources.lock().unwrap().remove(&self.id);
+        self.resources.remove(&self.id);
     }
 }
 impl ExecutionScope {
     pub fn register(&self, kind: ResourceKind, description: String) -> Registration {
         let id = next_id();
-        self.resources.lock().unwrap().insert(
+        self.resources.insert(
             id,
             Resource {
                 id,
@@ -198,10 +198,8 @@ impl ExecutionScope {
     pub fn resources(&self) -> Vec<Resource> {
         let mut resources = self
             .resources
-            .lock()
-            .unwrap()
-            .values()
-            .cloned()
+            .iter()
+            .map(|entry| entry.value().clone())
             .collect::<Vec<_>>();
         resources.sort_by_key(|resource| resource.id);
         resources
@@ -230,3 +228,7 @@ impl Drop for OwnedScope {
         self.0.cancel.cancel();
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/execution/tests.rs"]
+mod tests;

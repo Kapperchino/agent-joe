@@ -4930,6 +4930,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "dashmap",
  "dirs",
  "flate2",
  "fnv",
@@ -6240,6 +6241,7 @@ dependencies = [
  "cargo_metadata",
  "common-models",
  "core-foundation 0.9.4",
+ "dashmap",
  "dirs",
  "fnv",
  "futures",

@@ -1,4 +1,5 @@
 use crate::analysis::SymbolInfo;
+use dashmap::DashMap;
 use itertools::Itertools;
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
@@ -20,15 +21,30 @@ impl CacheVal for SymbolInfo {}
 
 #[derive(Clone)]
 pub struct TypedCache<K: CacheKey, V: CacheVal> {
-    entries: Arc<Mutex<FnvHashMap<String, Vec<u8>>>>,
+    storage: Arc<CacheStorage>,
     key: PhantomData<K>,
     value: PhantomData<V>,
+}
+
+#[derive(Default)]
+struct CacheStorage {
+    entries: DashMap<String, Vec<u8>>,
+    transaction: Mutex<()>,
+}
+
+impl CacheStorage {
+    fn snapshot(&self) -> FnvHashMap<String, Vec<u8>> {
+        self.entries
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect()
+    }
 }
 
 impl<K: CacheKey, V: CacheVal> TypedCache<K, V> {
     pub fn new() -> Self {
         Self {
-            entries: Arc::default(),
+            storage: Arc::default(),
             key: PhantomData,
             value: PhantomData,
         }
@@ -38,17 +54,21 @@ impl<K: CacheKey, V: CacheVal> TypedCache<K, V> {
     where
         F: FnOnce(&mut TypedCacheDb<'_, K, V>) -> anyhow::Result<R>,
     {
-        let mut entries = self
-            .entries
+        let _transaction = self
+            .storage
+            .transaction
             .lock()
             .map_err(|_| anyhow::anyhow!("Cache lock poisoned"))?;
-        let mut pending = entries.clone();
+        let mut pending = self.storage.snapshot();
         let result = f(&mut TypedCacheDb {
             entries: &mut pending,
             key: PhantomData,
             value: PhantomData,
         })?;
-        *entries = pending;
+        self.storage.entries.clear();
+        for (key, value) in pending {
+            self.storage.entries.insert(key, value);
+        }
         Ok(result)
     }
 
@@ -56,10 +76,12 @@ impl<K: CacheKey, V: CacheVal> TypedCache<K, V> {
     where
         F: FnOnce(&TypedCacheDbRo<'_, V>) -> anyhow::Result<R>,
     {
-        let entries = self
-            .entries
+        let _transaction = self
+            .storage
+            .transaction
             .lock()
             .map_err(|_| anyhow::anyhow!("Cache lock poisoned"))?;
+        let entries = self.storage.snapshot();
         f(&TypedCacheDbRo {
             entries: &entries,
             value: PhantomData,

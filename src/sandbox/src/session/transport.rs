@@ -73,7 +73,7 @@ impl Launcher {
         let _ = child.wait().await;
         let errors = error_reader.await.unwrap_or_default();
         let reason = format!("{reason}\n{}", String::from_utf8_lossy(&errors));
-        session.commands.lock().unwrap().clear();
+        session.commands.clear();
         session.temporary.remove();
         state.send_replace(SessionState::Stopped { reason });
     }

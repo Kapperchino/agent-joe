@@ -1,7 +1,11 @@
+use dashmap::DashMap;
 use fnv::FnvHashMap;
 use serde::{Deserialize, Serialize};
 use std::{
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::Instant,
 };
 use tokio::process::Command;
@@ -94,29 +98,34 @@ impl ProcessOutput {
 }
 
 #[derive(Default)]
-pub struct ProcessRegistry(Mutex<FnvHashMap<String, Arc<ProcessHandle>>>);
+pub struct ProcessRegistry {
+    entries: DashMap<String, Arc<ProcessHandle>>,
+    registered: AtomicUsize,
+}
 
 impl ProcessRegistry {
     pub fn insert(&self, handle: Arc<ProcessHandle>) -> anyhow::Result<String> {
-        let mut entries = self.0.lock().unwrap();
-        match entries.len() < 8 {
-            true => {
+        let reservation =
+            self.registered
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                    (count < 8).then_some(count + 1)
+                });
+        match reservation {
+            Ok(_) => {
                 let id = uuid::Uuid::new_v4().to_string();
-                entries.insert(id.clone(), handle);
+                self.entries.insert(id.clone(), handle);
                 Ok(id)
             }
-            false => Err(anyhow::anyhow!(
+            Err(_) => Err(anyhow::anyhow!(
                 "The turn has reached its limit of eight managed targets"
             )),
         }
     }
 
     pub fn get(&self, id: &str) -> anyhow::Result<Arc<ProcessHandle>> {
-        self.0
-            .lock()
-            .unwrap()
+        self.entries
             .get(id)
-            .cloned()
+            .map(|entry| entry.value().clone())
             .ok_or_else(|| anyhow::anyhow!("Unknown process ID in this turn: {id}"))
     }
 }

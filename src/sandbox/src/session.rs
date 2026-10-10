@@ -4,10 +4,8 @@ use crate::{
     workspace::Workspace,
 };
 use anyhow::Context;
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+use dashmap::DashMap;
+use std::sync::Arc;
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, BufReader},
     process::ChildStdout,
@@ -107,7 +105,7 @@ struct CommandEntry {
 
 pub struct Session {
     requests: mpsc::Sender<Request>,
-    commands: Mutex<HashMap<Uuid, CommandEntry>>,
+    commands: DashMap<Uuid, CommandEntry>,
     state: watch::Receiver<SessionState>,
     cancel: CancellationToken,
     temporary: TemporaryDirectory,
@@ -126,7 +124,7 @@ impl Session {
         let (state, status) = watch::channel(SessionState::Starting);
         let session = Arc::new(Self {
             requests,
-            commands: Mutex::new(HashMap::new()),
+            commands: DashMap::new(),
             state: status,
             cancel,
             temporary: prepared.temporary,
@@ -187,14 +185,11 @@ impl Session {
     }
 
     async fn dispatch(&self, id: Uuid, event: CommandEvent) {
-        let sender = {
-            let mut commands = self.commands.lock().unwrap();
-            match event {
-                CommandEvent::Exited { .. } | CommandEvent::Failed { .. } => {
-                    commands.remove(&id).map(|entry| entry.events)
-                }
-                CommandEvent::Output { .. } => commands.get(&id).map(|entry| entry.events.clone()),
+        let sender = match event {
+            CommandEvent::Exited { .. } | CommandEvent::Failed { .. } => {
+                self.commands.remove(&id).map(|(_, entry)| entry.events)
             }
+            CommandEvent::Output { .. } => self.commands.get(&id).map(|entry| entry.events.clone()),
         };
         if let Some(sender) = sender {
             let _ = sender.send(event).await;

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+dashmap = "6.1.0"
 fnv = "1.0.7"
 anyhow = "1"
 base64 = "0.22"

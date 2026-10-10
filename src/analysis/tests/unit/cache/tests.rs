@@ -48,3 +48,107 @@ fn transactions_share_commits_and_discard_failed_changes() {
         vec!["original"]
     );
 }
+
+#[test]
+fn transactions_commit_deletions_and_roll_back_multi_key_changes() {
+    let mut cache = TypedCache::<String, String>::new();
+    cache
+        .transaction(|db| {
+            db.put(&"first".into(), &"first".into())?;
+            db.put(&"second".into(), &"second".into())
+        })
+        .unwrap();
+    let failed: anyhow::Result<()> = cache.transaction(|db| {
+        db.delete(&"first".into())?;
+        db.put(&"second".into(), &"changed".into())?;
+        db.put(&"third".into(), &"third".into())?;
+        Err(anyhow::anyhow!("discard batch"))
+    });
+    assert!(failed.is_err());
+    assert_eq!(
+        cache
+            .read_transaction(|db| Ok(db.iter()?.collect::<Vec<_>>()))
+            .unwrap(),
+        ["first", "second"]
+    );
+    cache
+        .transaction(|db| {
+            db.delete_string_key("first")?;
+            db.delete(&"second".into())
+        })
+        .unwrap();
+    assert!(cache.read_transaction(|db| db.is_empty()).unwrap());
+}
+
+#[test]
+fn concurrent_transactions_do_not_lose_committed_batches() {
+    let cache = TypedCache::<String, String>::new();
+    let barrier = Arc::new(std::sync::Barrier::new(16));
+    let threads = (0..16)
+        .map(|index| {
+            let mut cache = cache.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                cache
+                    .transaction(|db| {
+                        db.put(&format!("{index:02}-a"), &format!("{index:02}-a"))?;
+                        std::thread::yield_now();
+                        db.put(&format!("{index:02}-b"), &format!("{index:02}-b"))
+                    })
+                    .unwrap();
+            })
+        })
+        .collect::<Vec<_>>();
+    for thread in threads {
+        thread.join().unwrap();
+    }
+    let expected = (0..16)
+        .flat_map(|index| [format!("{index:02}-a"), format!("{index:02}-b")])
+        .collect::<Vec<_>>();
+    assert_eq!(
+        cache
+            .read_transaction(|db| Ok(db.iter()?.collect::<Vec<_>>()))
+            .unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn concurrent_read_transactions_observe_complete_batches() {
+    let mut cache = TypedCache::<String, String>::new();
+    cache
+        .transaction(|db| {
+            db.put(&"first".into(), &"0".into())?;
+            db.put(&"second".into(), &"0".into())
+        })
+        .unwrap();
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let writer_barrier = barrier.clone();
+    let mut writer = cache.clone();
+    let thread = std::thread::spawn(move || {
+        writer_barrier.wait();
+        for index in 1..100 {
+            writer
+                .transaction(|db| {
+                    db.put(&"first".into(), &index.to_string())?;
+                    std::thread::yield_now();
+                    db.put(&"second".into(), &index.to_string())
+                })
+                .unwrap();
+        }
+    });
+    barrier.wait();
+    for _ in 0..100 {
+        cache
+            .read_transaction(|db| {
+                let values = db.iter()?.collect::<Vec<_>>();
+                assert_eq!(values.len(), 2);
+                assert_eq!(values[0], values[1]);
+                Ok(())
+            })
+            .unwrap();
+        std::thread::yield_now();
+    }
+    thread.join().unwrap();
+}

@@ -58,7 +58,7 @@ impl RunningProcess {
                 let id = temporary.id();
                 let command = GuestCommand::new(command.as_std())?;
                 let (sender, events) = mpsc::channel(32);
-                session.commands.lock().unwrap().insert(
+                session.commands.insert(
                     id,
                     CommandEntry {
                         events: sender,
@@ -83,7 +83,7 @@ impl RunningProcess {
                 match submitted {
                     Ok(()) => Ok(process),
                     Err(error) => {
-                        session.commands.lock().unwrap().remove(&id);
+                        session.commands.remove(&id);
                         Err(error)
                     }
                 }
@@ -110,7 +110,7 @@ impl RunningProcess {
         if let CommandState::Complete { end, exit_code } = state {
             self.handle.complete(end, exit_code);
         }
-        self.session.commands.lock().unwrap().remove(&self.id());
+        self.session.commands.remove(&self.id());
         self.temporary.remove();
         on_complete();
         self.handle.done.cancel();
@@ -164,18 +164,12 @@ impl RunningProcess {
 
 impl Drop for RunningProcess {
     fn drop(&mut self) {
-        let cancellation = self
-            .session
-            .commands
-            .lock()
-            .unwrap()
-            .contains_key(&self.id())
-            .then(|| {
-                self.session
-                    .requests
-                    .try_send(Request::Cancel { id: self.id() })
-                    .map_err(|_| ())
-            });
+        let cancellation = self.session.commands.contains_key(&self.id()).then(|| {
+            self.session
+                .requests
+                .try_send(Request::Cancel { id: self.id() })
+                .map_err(|_| ())
+        });
         if matches!(cancellation, Some(Err(_))) {
             self.session.cancel.cancel();
         }
