@@ -308,12 +308,16 @@ pub enum RelationTarget {
 }
 
 impl RelationTarget {
-    pub fn symbols(&self) -> Box<dyn Iterator<Item = &SymbolId> + '_> {
-        match self {
-            Self::Resolved(id) => Box::new(std::iter::once(id)),
-            Self::Candidates(ids) => Box::new(ids.iter()),
-            Self::Unresolved(_) => Box::new(std::iter::empty()),
-        }
+    pub fn symbols(&self) -> impl Iterator<Item = &SymbolId> {
+        let resolved = match self {
+            Self::Resolved(id) => Some(id),
+            _ => None,
+        };
+        let candidates = match self {
+            Self::Candidates(ids) => Some(ids),
+            _ => None,
+        };
+        resolved.into_iter().chain(candidates.into_iter().flatten())
     }
 }
 

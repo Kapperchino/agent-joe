@@ -62,8 +62,20 @@ struct LocatedShard {
     shard: usize,
 }
 
+struct SearchSymbol {
+    name: String,
+    qualified: String,
+    signature: Option<String>,
+    source: Option<usize>,
+}
+
 pub(super) struct Routing {
     symbols: FnvHashMap<SymbolId, usize>,
+    sources: FnvHashMap<SourcePath, usize>,
+    file_symbols: Vec<Vec<usize>>,
+    relations: FnvHashMap<SymbolId, Vec<usize>>,
+    search_symbols: Vec<SearchSymbol>,
+    search_paths: Vec<String>,
     symbol_shards: FnvHashMap<SymbolId, BTreeSet<usize>>,
     file_shards: FnvHashMap<SourcePath, BTreeSet<usize>>,
     neighbors: FnvHashMap<SymbolId, BTreeSet<SymbolId>>,
@@ -128,9 +140,44 @@ impl Routing {
                 ))?,
             }
         }
+        let sources: FnvHashMap<_, _> = graph
+            .data()
+            .sources
+            .iter()
+            .enumerate()
+            .map(|(index, source)| (source.path().clone(), index))
+            .collect();
+        let search_symbols: Vec<_> = graph
+            .data()
+            .symbols
+            .iter()
+            .map(|symbol| SearchSymbol {
+                name: symbol.name.to_lowercase(),
+                qualified: symbol.qualified_name.to_lowercase(),
+                signature: symbol.signature.as_deref().map(str::to_lowercase),
+                source: symbol
+                    .origin
+                    .location()
+                    .and_then(|location| sources.get(&location.path).copied()),
+            })
+            .collect();
+        let mut file_symbols = vec![Vec::new(); graph.data().sources.len()];
+        for (index, symbol) in search_symbols.iter().enumerate() {
+            if let Some(source) = symbol.source {
+                file_symbols[source].push(index);
+            }
+        }
+        let mut relations: FnvHashMap<SymbolId, Vec<usize>> = FnvHashMap::default();
         let mut neighbors: FnvHashMap<SymbolId, BTreeSet<SymbolId>> = FnvHashMap::default();
-        for relation in &graph.data().relations {
+        for (index, relation) in graph.data().relations.iter().enumerate() {
+            relations
+                .entry(relation.source.clone())
+                .or_default()
+                .push(index);
             for target in relation.target.symbols() {
+                if target != &relation.source {
+                    relations.entry(target.clone()).or_default().push(index);
+                }
                 for (from, to) in [(&relation.source, target), (target, &relation.source)] {
                     let adjacent = neighbors.entry(from.clone()).or_default();
                     if adjacent.len() < 64 {
@@ -147,10 +194,24 @@ impl Routing {
                 .enumerate()
                 .map(|(index, symbol)| (symbol.id.clone(), index))
                 .collect(),
+            sources,
+            file_symbols,
+            relations,
+            search_symbols,
+            search_paths: graph
+                .data()
+                .sources
+                .iter()
+                .map(|source| source.path().as_str().to_lowercase())
+                .collect(),
             symbol_shards,
             file_shards,
             neighbors,
         })
+    }
+
+    fn relations(&self, id: &SymbolId) -> impl Iterator<Item = usize> + '_ {
+        self.relations.get(id).into_iter().flatten().copied()
     }
 
     fn related(&self, id: &SymbolId) -> BTreeSet<usize> {
@@ -225,7 +286,6 @@ impl Query {
     }
 
     fn matches(&self, text: &str) -> bool {
-        let text = text.to_lowercase();
         self.words.iter().all(|word| text.contains(word))
     }
 }
@@ -236,53 +296,49 @@ impl KnowledgeIndex {
         path: &SourcePath,
         range: Option<LineSpan>,
     ) -> anyhow::Result<FileContext> {
-        let sources: FnvHashMap<_, _> = self
-            .graph
-            .data()
+        let source_index = self
+            .routing
             .sources
-            .iter()
-            .map(|source| (source.path(), source))
-            .collect();
-        let source = sources
             .get(path)
             .context("File is not in the prepared knowledge generation")?;
-        let selected: BTreeSet<_> = self
-            .graph
-            .data()
-            .symbols
+        let source = &self.graph.data().sources[*source_index];
+        let selected: BTreeSet<_> = self.routing.file_symbols[*source_index]
             .iter()
+            .map(|index| &self.graph.data().symbols[*index])
             .filter_map(|symbol| {
                 symbol
                     .origin
                     .location()
                     .filter(|location| {
-                        &location.path == path
-                            && range.is_none_or(|range| {
-                                location.span.lines(source.text()).is_ok_and(|lines| {
-                                    lines.start < range.end && range.start < lines.end
-                                })
+                        range.is_none_or(|range| {
+                            location.span.lines(source.text()).is_ok_and(|lines| {
+                                lines.start < range.end && range.start < lines.end
                             })
+                        })
                     })
                     .map(|_| symbol.id.clone())
             })
             .collect();
-        let mut adjacent = BTreeSet::new();
-        for relation in &self.graph.data().relations {
-            for target in relation.target.symbols() {
-                match (
-                    selected.contains(&relation.source),
-                    selected.contains(target),
-                ) {
-                    (true, false) => {
-                        adjacent.insert(target.clone());
+        let relation_indices: BTreeSet<_> = selected
+            .iter()
+            .flat_map(|id| self.routing.relations(id))
+            .collect();
+        let adjacent: BTreeSet<_> = relation_indices
+            .into_iter()
+            .map(|index| &self.graph.data().relations[index])
+            .flat_map(|relation| {
+                relation.target.symbols().filter_map(|target| {
+                    match (
+                        selected.contains(&relation.source),
+                        selected.contains(target),
+                    ) {
+                        (true, false) => Some(target.clone()),
+                        (false, true) => Some(relation.source.clone()),
+                        _ => None,
                     }
-                    (false, true) => {
-                        adjacent.insert(relation.source.clone());
-                    }
-                    _ => {}
-                }
-            }
-        }
+                })
+            })
+            .collect();
         let mut locations = BTreeSet::new();
         let related: Vec<_> = adjacent
             .iter()
@@ -296,8 +352,11 @@ impl KnowledgeIndex {
             .into_iter()
             .take(8)
             .map(|(symbol, location)| {
-                let source = sources
+                let source = self
+                    .routing
+                    .sources
                     .get(&location.path)
+                    .map(|index| &self.graph.data().sources[*index])
                     .context("Missing related source")?;
                 let original = location.span.text(source.text())?;
                 let text = clipped(original, 2048);
@@ -342,69 +401,77 @@ impl KnowledgeIndex {
 
     pub fn search(&self, text: &str, offset: usize, limit: usize) -> anyhow::Result<RoutePage> {
         let query = Query::new(text, offset, limit)?;
-        let sources: FnvHashMap<_, _> = self
-            .graph
-            .data()
-            .sources
-            .iter()
-            .map(|source| (source.path(), source))
-            .collect();
-        let mut ranked = Vec::new();
-        for (index, symbol) in self.graph.data().symbols.iter().enumerate() {
-            let name = symbol.name.to_lowercase();
-            let qualified = symbol.qualified_name.to_lowercase();
-            let matched = match () {
-                _ if qualified == query.text => Some((120, "exact qualified symbol")),
-                _ if name == query.text => Some((110, "exact symbol name")),
-                _ if qualified.contains(&query.text) => Some((90, "qualified symbol substring")),
-                _ if symbol
-                    .origin
-                    .location()
-                    .is_some_and(|location| query.matches(location.path.as_str())) =>
-                {
-                    Some((70, "symbol source path"))
-                }
-                _ if symbol
-                    .signature
-                    .as_deref()
-                    .is_some_and(|signature| query.matches(signature)) =>
-                {
-                    Some((50, "symbol signature"))
-                }
-                _ => symbol
-                    .origin
-                    .location()
-                    .and_then(|location| {
-                        sources.get(&location.path).map(|source| (location, source))
-                    })
-                    .and_then(|(location, source)| location.span.text(source.text()).ok())
-                    .filter(|text| query.matches(&clipped(text, 512)))
-                    .map(|_| (30, "leading documentation or source excerpt")),
-            };
-            if let Some((score, reason)) = matched {
-                ranked.push(Ranked {
-                    score,
-                    matched: Match::Symbol { index, reason },
+        let symbols =
+            self.routing
+                .search_symbols
+                .iter()
+                .enumerate()
+                .filter_map(|(index, searchable)| {
+                    let symbol = &self.graph.data().symbols[index];
+                    let ranked = |score, reason| Ranked {
+                        score,
+                        matched: Match::Symbol { index, reason },
+                    };
+                    match () {
+                        _ if searchable.qualified == query.text => {
+                            Some(ranked(120, "exact qualified symbol"))
+                        }
+                        _ if searchable.name == query.text => {
+                            Some(ranked(110, "exact symbol name"))
+                        }
+                        _ if searchable.qualified.contains(&query.text) => {
+                            Some(ranked(90, "qualified symbol substring"))
+                        }
+                        _ if searchable.source.is_some_and(|source| {
+                            query.matches(&self.routing.search_paths[source])
+                        }) =>
+                        {
+                            Some(ranked(70, "symbol source path"))
+                        }
+                        _ if searchable
+                            .signature
+                            .as_deref()
+                            .is_some_and(|signature| query.matches(signature)) =>
+                        {
+                            Some(ranked(50, "symbol signature"))
+                        }
+                        _ => searchable
+                            .source
+                            .and_then(|source| {
+                                symbol.origin.location().and_then(|location| {
+                                    location
+                                        .span
+                                        .text(self.graph.data().sources[source].text())
+                                        .ok()
+                                })
+                            })
+                            .filter(|text| query.matches(&clipped(text, 512).to_lowercase()))
+                            .map(|_| ranked(30, "leading documentation or source excerpt")),
+                    }
                 });
-            }
-        }
-        for (index, source) in self.graph.data().sources.iter().enumerate() {
-            let path = source.path().as_str().to_lowercase();
-            let matched = match () {
-                _ if path == query.text => Some((140, "exact source path")),
-                _ if query.matches(&path) => Some((80, "source path")),
-                _ if !path.ends_with(".rs") && query.matches(&clipped(source.text(), 2048)) => {
-                    Some((25, "leading document excerpt"))
-                }
-                _ => None,
-            };
-            if let Some((score, reason)) = matched {
-                ranked.push(Ranked {
+        let files = self
+            .routing
+            .search_paths
+            .iter()
+            .enumerate()
+            .filter_map(|(index, path)| {
+                let source = &self.graph.data().sources[index];
+                let ranked = |score, reason| Ranked {
                     score,
                     matched: Match::File { index, reason },
-                });
-            }
-        }
+                };
+                match () {
+                    _ if path == &query.text => Some(ranked(140, "exact source path")),
+                    _ if query.matches(path) => Some(ranked(80, "source path")),
+                    _ if !path.ends_with(".rs")
+                        && query.matches(&clipped(source.text(), 2048).to_lowercase()) =>
+                    {
+                        Some(ranked(25, "leading document excerpt"))
+                    }
+                    _ => None,
+                }
+            });
+        let mut ranked: Vec<_> = symbols.chain(files).collect();
         ranked.sort_by_key(|hit| std::cmp::Reverse(hit.score));
         let total = ranked.len();
         let hits = ranked
@@ -463,9 +530,10 @@ impl KnowledgeIndex {
             .get(id)
             .map(|index| &self.graph.data().symbols[*index])
             .context("Unknown semantic symbol identity")?;
-        let mut found = self.graph.data().relations.iter().filter(|relation| {
-            &relation.source == id || relation.target.symbols().any(|target| target == id)
-        });
+        let mut found = self
+            .routing
+            .relations(id)
+            .map(|index| &self.graph.data().relations[index]);
         let relations = found
             .by_ref()
             .take(32)

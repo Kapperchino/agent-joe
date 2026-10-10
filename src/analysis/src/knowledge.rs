@@ -265,6 +265,16 @@ impl<'a> Rendering<'a> {
             owner: &'a Option<SymbolId>,
             text: &'a str,
         }
+        #[derive(Serialize)]
+        struct ShardContext<'a> {
+            generation: &'a str,
+            profile: &'a SemanticProfile,
+            coverage: &'a str,
+            diagnostic_count: usize,
+            primary_headers: &'a [SymbolHeader],
+            secondary_headers: &'a [SymbolHeader],
+            owned: &'a [Fragment<'a>],
+        }
         let mut ordered: Vec<_> = owned.iter().collect();
         ordered.sort_by(|left, right| left.location.cmp(&right.location));
         let fragments = ordered
@@ -305,15 +315,15 @@ impl<'a> Rendering<'a> {
             .map(|symbol| SymbolHeader::from(*symbol))
             .collect();
         let render = |primary_headers: &[SymbolHeader], secondary: &[SymbolHeader]| {
-            serde_json::to_string(&serde_json::json!({
-                "generation": self.generation,
-                "profile": self.graph.data().profile,
-                "coverage": "Owned fragments are exhaustive for this shard, not necessarily complete items. Secondary signatures are bounded reference metadata, not owned source. Inactive/unresolved text is retained; resolution covers only the selected profile.",
-                "diagnostic_count": self.graph.data().diagnostics.len(),
-                "primary_headers": primary_headers,
-                "secondary_headers": secondary,
-                "owned": fragments,
-            }))
+            serde_json::to_string(&ShardContext {
+                generation: self.generation,
+                profile: &self.graph.data().profile,
+                coverage: "Owned fragments are exhaustive for this shard, not necessarily complete items. Secondary signatures are bounded reference metadata, not owned source. Inactive/unresolved text is retained; resolution covers only the selected profile.",
+                diagnostic_count: self.graph.data().diagnostics.len(),
+                primary_headers,
+                secondary_headers: secondary,
+                owned: &fragments,
+            })
         };
         let mut context =
             RenderedContext::new(render(&primary_headers, &secondary)?, self.measure)?;

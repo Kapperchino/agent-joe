@@ -1,5 +1,6 @@
 use ra_ap_ide_db::{RootDatabase, base_db::SourceDatabase};
 use ra_ap_test_fixture::WithFixture;
+use std::collections::BTreeSet;
 
 use crate::*;
 
@@ -91,6 +92,73 @@ fn graph_protocol_rejects_invalid_paths_spans_and_relationships() {
     };
     assert!(
         serde_json::from_value::<SemanticGraph>(serde_json::to_value(invalid).unwrap()).is_err()
+    );
+}
+
+#[test]
+fn extraction_compares_captured_source_exactly() {
+    let analyzed = "// 🦀 café\nfn main() {}\n";
+    for captured in [
+        analyzed.to_owned(),
+        analyzed.replace("main", "maid"),
+        analyzed.trim_end_matches('\n').to_owned(),
+        format!("{analyzed}\n"),
+    ] {
+        let (db, files) = RootDatabase::with_many_files(&format!("//- /main.rs\n{analyzed}"));
+        let sources = files
+            .into_iter()
+            .map(|file| IndexedSource {
+                file_id: Some(file.file_id(&db)),
+                source: SourceFile::new("main.rs".to_owned().try_into().unwrap(), captured.clone())
+                    .unwrap(),
+            })
+            .collect();
+        let result = extract(
+            &db,
+            sources,
+            SemanticProfile {
+                manifest: "Cargo.toml".to_owned().try_into().unwrap(),
+                target: "x86_64-unknown-linux-gnu".into(),
+                features: Features::Default,
+                configurations: [Configuration::Normal].into(),
+                analyzer_version: ANALYZER_VERSION.into(),
+            },
+            Configuration::Normal,
+        );
+        match captured == analyzed {
+            true => assert!(result.is_ok()),
+            false => assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Analyzer source differs from captured file main.rs")
+            ),
+        }
+    }
+}
+
+#[test]
+fn relation_targets_iterate_without_changing_resolution_order() {
+    let id = SymbolId("resolved".into());
+    let resolved = RelationTarget::Resolved(id.clone());
+    assert_eq!(resolved.symbols().cloned().collect::<Vec<_>>(), vec![id]);
+    let candidates = BTreeSet::from([SymbolId("z".into()), SymbolId("a".into())]);
+    let target = RelationTarget::Candidates(candidates.clone());
+    assert_eq!(
+        target.symbols().cloned().collect::<Vec<_>>(),
+        candidates.into_iter().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        RelationTarget::Candidates(BTreeSet::new())
+            .symbols()
+            .count(),
+        0
+    );
+    assert_eq!(
+        RelationTarget::Unresolved("missing".into())
+            .symbols()
+            .count(),
+        0
     );
 }
 

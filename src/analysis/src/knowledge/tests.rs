@@ -17,6 +17,49 @@ fn rendered_context_reuses_its_token_measurement() {
     assert_eq!(rendered.tokens, 1024 + rendered.text.len().div_ceil(4));
 }
 
+#[test]
+fn rendered_context_preserves_borrowed_source_and_metadata() {
+    let primary = source("primary.rs", "fn primary() { let café = \"🦀\"; }\n");
+    let secondary = source("secondary.rs", "fn secondary() {}\n");
+    let primary_symbol = symbol("primary", &primary, SymbolKind::Function);
+    let secondary_symbol = symbol("secondary", &secondary, SymbolKind::Function);
+    let graph = graph(
+        vec![primary.clone(), secondary],
+        vec![primary_symbol.clone(), secondary_symbol.clone()],
+        vec![relation("primary", "secondary")],
+    );
+    let budget = KnowledgeBudget::new(8192, 8192, 1024).unwrap();
+    let rendering = Rendering::new(&graph, "generation", budget, &measure);
+    let owned = vec![OwnedSpan {
+        location: SourceLocation {
+            path: primary.path().clone(),
+            span: primary.span(),
+        },
+        owner: Some(primary_symbol.id.clone()),
+    }];
+    let rendered = rendering.render(&owned).unwrap();
+    let context: serde_json::Value = serde_json::from_str(&rendered.text).unwrap();
+    assert_eq!(
+        context,
+        serde_json::json!({
+            "generation": "generation",
+            "profile": graph.data().profile,
+            "coverage": "Owned fragments are exhaustive for this shard, not necessarily complete items. Secondary signatures are bounded reference metadata, not owned source. Inactive/unresolved text is retained; resolution covers only the selected profile.",
+            "diagnostic_count": 0,
+            "primary_headers": [SymbolHeader::from(&primary_symbol)],
+            "secondary_headers": [SymbolHeader::from(&secondary_symbol)],
+            "owned": [{
+                "path": primary.path(),
+                "bytes": primary.span(),
+                "lines": primary.span().lines(primary.text()).unwrap(),
+                "owner": primary_symbol.id,
+                "text": primary.text(),
+            }],
+        })
+    );
+    assert_eq!(rendered.tokens, measure(&rendered.text).unwrap());
+}
+
 fn source(path: &str, text: impl Into<String>) -> SourceFile {
     SourceFile::new(SourcePath::try_from(path.to_owned()).unwrap(), text.into()).unwrap()
 }
@@ -482,4 +525,202 @@ fn knowledge_file_context_bounds_deduplicates_and_preserves_utf8_excerpts() {
         assert_eq!(excerpt.text, "🦀".repeat(2048));
         assert_eq!(excerpt.location.span.len(), excerpt.text.len() as u32);
     }
+}
+
+#[test]
+fn knowledge_inspection_matches_complete_relation_scan() {
+    let source = source("lib.rs", "fn central() {}\n");
+    let symbols = std::iter::once(symbol("central", &source, SymbolKind::Function))
+        .chain(
+            (0..96)
+                .map(|number| symbol(&format!("node{number:03}"), &source, SymbolKind::Function)),
+        )
+        .collect();
+    let relations = (0..96)
+        .map(|number| relation("central", &format!("node{number:03}")))
+        .chain([
+            relation("central", "central"),
+            relation("node095", "central"),
+            Relation {
+                source: SymbolId("central".into()),
+                kind: RelationKind::References,
+                target: RelationTarget::Candidates(BTreeSet::from([
+                    SymbolId("central".into()),
+                    SymbolId("node000".into()),
+                    SymbolId("node095".into()),
+                ])),
+                site: None,
+            },
+            Relation {
+                source: SymbolId("node095".into()),
+                kind: RelationKind::Calls,
+                target: RelationTarget::Unresolved("missing".repeat(100)),
+                site: None,
+            },
+        ])
+        .collect();
+    let index = index(graph(vec![source], symbols, relations));
+    for symbol in &index.graph.data().symbols {
+        let expected: Vec<_> = index
+            .graph
+            .data()
+            .relations
+            .iter()
+            .filter(|relation| {
+                relation.source == symbol.id
+                    || relation.target.symbols().any(|target| target == &symbol.id)
+            })
+            .collect();
+        let inspection = index.inspect(&symbol.id).unwrap();
+        assert_eq!(inspection.relations.len(), expected.len().min(32));
+        assert_eq!(inspection.relations_truncated, expected.len() > 32);
+        for (summary, relation) in inspection.relations.iter().zip(expected) {
+            assert_eq!(summary.source, relation.source);
+            assert_eq!(summary.kind, relation.kind);
+            assert_eq!(summary.site, relation.site);
+            assert_eq!(
+                summary.targets,
+                relation
+                    .target
+                    .symbols()
+                    .take(8)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(summary.target_count, relation.target.symbols().count());
+            assert_eq!(
+                summary.unresolved,
+                match &relation.target {
+                    RelationTarget::Unresolved(reason) => Some(clipped(reason, 256)),
+                    _ => None,
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn knowledge_file_context_keeps_all_neighbors_beyond_routing_limit() {
+    let main = source("main.rs", "fn main() {}\n");
+    let targets: Vec<_> = (0..80)
+        .map(|number| source(&format!("target{number:03}.rs"), "fn target() {}\n"))
+        .collect();
+    let symbols = std::iter::once(symbol("main", &main, SymbolKind::Function))
+        .chain(targets.iter().enumerate().map(|(number, source)| {
+            symbol(&format!("target{number:03}"), source, SymbolKind::Function)
+        }))
+        .collect();
+    let relations = (0..80)
+        .map(|number| match number % 2 {
+            0 => relation("main", &format!("target{number:03}")),
+            _ => relation(&format!("target{number:03}"), "main"),
+        })
+        .collect();
+    let path = main.path().clone();
+    let index = index(graph(
+        std::iter::once(main).chain(targets).collect(),
+        symbols,
+        relations,
+    ));
+    let context = index.file_context(&path, None).unwrap();
+    assert_eq!(context.related_total, 80);
+    assert!(context.related_truncated);
+    assert_eq!(context.related.len(), 8);
+    assert_eq!(context.related[0].symbol.id, SymbolId("target000".into()));
+    assert_eq!(context.related[7].symbol.id, SymbolId("target007".into()));
+}
+
+#[test]
+fn knowledge_file_context_handles_self_and_ambiguous_relations() {
+    let selected = source("selected.rs", "fn selected() {}\n");
+    let caller = source("caller.rs", "fn caller() {}\n");
+    let remote = source("remote.rs", "fn remote() {}\n");
+    let symbols = vec![
+        symbol("selected", &selected, SymbolKind::Function),
+        symbol("caller", &caller, SymbolKind::Function),
+        symbol("remote", &remote, SymbolKind::Function),
+    ];
+    let ambiguous = Relation {
+        source: SymbolId("caller".into()),
+        kind: RelationKind::Calls,
+        target: RelationTarget::Candidates(BTreeSet::from([
+            SymbolId("selected".into()),
+            SymbolId("remote".into()),
+        ])),
+        site: None,
+    };
+    let path = selected.path().clone();
+    let index = index(graph(
+        vec![selected, caller, remote],
+        symbols,
+        vec![ambiguous, relation("selected", "selected")],
+    ));
+    let context = index.file_context(&path, None).unwrap();
+    assert_eq!(context.related_total, 1);
+    assert_eq!(context.related[0].symbol.id, SymbolId("caller".into()));
+    assert_eq!(
+        index
+            .inspect(&SymbolId("selected".into()))
+            .unwrap()
+            .relations
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn knowledge_search_preserves_case_insensitive_ranking_and_pagination() {
+    let code = source("Src/Café.RS", "// NeEdLe documentation\nfn café() {}\n");
+    let docs = source("README.md", "NeEdLe documentation");
+    let mut first = symbol("a", &code, SymbolKind::Function);
+    first.name = "Café".into();
+    first.qualified_name = "Fixture::Café".into();
+    first.signature = Some("pub fn Café(Token: TYPE)".into());
+    let second = Symbol {
+        id: SymbolId("b".into()),
+        ..first.clone()
+    };
+    let index = index(graph(vec![code, docs], vec![second, first], Vec::new()));
+    for (query, reason) in [
+        ("FIXTURE::CAFÉ", "exact qualified symbol"),
+        (" CAFÉ ", "exact symbol name"),
+        ("fixture::", "qualified symbol substring"),
+        ("type token", "symbol signature"),
+        ("NEEDLE", "leading documentation or source excerpt"),
+    ] {
+        let page = index.search(query, 0, 1).unwrap();
+        assert_eq!(
+            page.hits[0].symbol.as_ref().unwrap().id,
+            SymbolId("a".into())
+        );
+        assert_eq!(page.hits[0].reason, reason);
+        assert_eq!(page.next_offset, Some(1));
+        let next = index.search(query, 1, 1).unwrap();
+        assert_eq!(
+            next.hits[0].symbol.as_ref().unwrap().id,
+            SymbolId("b".into())
+        );
+    }
+    let exact_path = index.search("SRC/CAFÉ.RS", 0, 10).unwrap();
+    assert_eq!(exact_path.hits[0].reason, "exact source path");
+    assert!(exact_path.hits[0].symbol.is_none());
+    let paths = index.search("src .rs", 0, 10).unwrap();
+    assert_eq!(paths.hits[0].reason, "source path");
+    assert_eq!(paths.hits[1].reason, "symbol source path");
+    assert_eq!(paths.hits[2].reason, "symbol source path");
+    let excerpts = index.search("needle", 0, 10).unwrap();
+    assert_eq!(excerpts.total, 3);
+    assert_eq!(excerpts.hits[2].reason, "leading document excerpt");
+    assert_eq!(index.search("absent", 0, 10).unwrap().total, 0);
+    assert!(index.search("café", 100, 10).unwrap().hits.is_empty());
+}
+
+#[test]
+fn knowledge_search_clips_unicode_before_normalizing_excerpts() {
+    let code = source("code.rs", format!("{}beyond", "🦀".repeat(512)));
+    let docs = source("notes.md", format!("{}beyond", "🦀".repeat(2048)));
+    let symbols = vec![symbol("code", &code, SymbolKind::Function)];
+    let index = index(graph(vec![code, docs], symbols, Vec::new()));
+    assert_eq!(index.search("beyond", 0, 10).unwrap().total, 0);
+    assert_eq!(index.search("🦀", 0, 10).unwrap().total, 2);
 }

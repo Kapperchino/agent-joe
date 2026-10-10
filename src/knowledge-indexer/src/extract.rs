@@ -86,7 +86,7 @@ fn extract_attached(
                     }
                     None => file,
                 };
-                match root.syntax().text().to_string() == source.source.text() {
+                match root.syntax().text() == source.source.text() {
                     true => index.walk(root.syntax().clone(), owner)?,
                     false => Err(anyhow::anyhow!(
                         "Analyzer source differs from captured file {}",
