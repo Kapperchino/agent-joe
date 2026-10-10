@@ -152,3 +152,35 @@ fn concurrent_read_transactions_observe_complete_batches() {
     }
     thread.join().unwrap();
 }
+
+#[test]
+fn concurrent_read_transactions_can_overlap() {
+    let mut cache = TypedCache::<String, String>::new();
+    cache
+        .transaction(|db| db.put(&"key".into(), &"value".into()))
+        .unwrap();
+    let (started, waiting) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    let reader = cache.clone();
+    let first = std::thread::spawn(move || {
+        reader.read_transaction(|db| {
+            started.send(())?;
+            released.recv_timeout(std::time::Duration::from_secs(10))?;
+            Ok(db.iter()?.collect::<Vec<_>>())
+        })
+    });
+    waiting
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .unwrap();
+    let (completed, completion) = std::sync::mpsc::channel();
+    let second = std::thread::spawn(move || {
+        let values = cache.read_transaction(|db| Ok(db.iter()?.collect::<Vec<_>>()));
+        completed.send(values).unwrap();
+    });
+    let values = completion.recv_timeout(std::time::Duration::from_secs(5));
+    release.send(()).unwrap();
+    let first_values = first.join().unwrap().unwrap();
+    second.join().unwrap();
+    assert_eq!(values.unwrap().unwrap(), ["value"]);
+    assert_eq!(first_values, ["value"]);
+}

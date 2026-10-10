@@ -91,7 +91,6 @@ dependencies = [
  "async-trait",
  "blake3",
  "common-models",
- "dashmap",
  "futures",
  "itertools 0.15.0",
  "libc",
